@@ -86,61 +86,132 @@ static void run_user_session(const char *username)
 		return;
 	}
 
+	/* pick a fresh display for the session server */
+	int display_num = find_free_display();
+	if(display_num < 0)
+	{
+		fprintf(stderr, "dvlogin: no free display for session\n");
+		return;
+	}
+
+	char session_display[16];
+	snprintf(session_display, sizeof(session_display), ":%d", display_num);
+
+	char authfile[64];
+	snprintf(authfile, sizeof(authfile), "/run/dvlogin/auth-%d",
+		(int)pw->pw_uid);
+
+	if(make_session_xauth(authfile, session_display,
+		pw->pw_uid, pw->pw_gid) != 0)
+	{
+		fprintf(stderr, "dvlogin: failed to build session xauth\n");
+		return;
+	}
+
+	/*	The root parent needs the cookie too, so its XOpenDisplay
+		probe in wait_for_xserver can authenticate against the
+		-auth server.  Root can read the file regardless of the
+		chown above.
+	*/
+	setenv("XAUTHORITY", authfile, 1);
+
+	/*	Start the session X server ourselves, as root, on the
+		login VT.  Root opens the DRM/input devices and the VT,
+		so the rootless-Xorg ACL and Xorg.wrap console gates
+		that killed the startx path never come into play.
+	*/
+	pid_t xpid = start_xserver(session_display, g_vt_str, authfile);
+	if(xpid < 0)
+	{
+		fprintf(stderr, "dvlogin: session X server failed to start\n");
+		unsetenv("XAUTHORITY");
+		unlink(authfile);
+		return;
+	}
+	g_xserver_pid = xpid;
+
+	if(!wait_for_xserver(session_display, XSERVER_TIMEOUT))
+	{
+		fprintf(stderr, "dvlogin: session X not responding on %s\n",
+			session_display);
+		stop_xserver(xpid);
+		g_xserver_pid = 0;
+		unsetenv("XAUTHORITY");
+		unlink(authfile);
+		return;
+	}
+
+	/* fork the unprivileged session client */
 	pid_t pid = fork();
 
 	if(pid < 0)
 	{
 		perror("dvlogin: fork (session)");
+		stop_xserver(xpid);
+		g_xserver_pid = 0;
+		unsetenv("XAUTHORITY");
+		unlink(authfile);
 		return;
 	}
 
 	if(pid == 0)
 	{
-		/* set up supplementary groups */
+		/* drop privileges: groups, then gid, then uid (uid last) */
 		if(initgroups(username, pw->pw_gid) < 0)
 		{
 			perror("dvlogin: initgroups");
 			_exit(1);
 		}
-
 		if(setgid(pw->pw_gid) < 0)
 		{
 			perror("dvlogin: setgid");
 			_exit(1);
 		}
-
 		if(setuid(pw->pw_uid) < 0)
 		{
 			perror("dvlogin: setuid");
 			_exit(1);
 		}
 
-		/* move into user's home directory */
+		/* paranoia: confirm we cannot climb back to root */
+		if(setuid(0) != -1)
+		{
+			fprintf(stderr, "dvlogin: privilege drop incomplete\n");
+			_exit(1);
+		}
+
 		if(chdir(pw->pw_dir) < 0)
 		{
 			fprintf(stderr, "dvlogin: chdir to '%s' failed: %s\n",
 				pw->pw_dir, strerror(errno));
-			/* fall back to / rather than failing */
-			chdir("/");
+			if(chdir("/") < 0)
+			{
+				_exit(1);
+			}
 		}
 
-		/* set up a clean environment */
+		/* clean environment for the session */
 		clearenv();
-		setenv("HOME",    pw->pw_dir,   1);
-		setenv("USER",    pw->pw_name,  1);
-		setenv("LOGNAME", pw->pw_name,  1);
-		setenv("SHELL",   pw->pw_shell, 1);
-		setenv("PATH",    "/usr/local/bin:/usr/bin:/bin", 1);
+		setenv("HOME",       pw->pw_dir,                     1);
+		setenv("USER",       pw->pw_name,                    1);
+		setenv("LOGNAME",    pw->pw_name,                    1);
+		setenv("SHELL",      pw->pw_shell,                   1);
+		setenv("PATH",       "/usr/local/bin:/usr/bin:/bin", 1);
+		setenv("DISPLAY",    session_display,                1);
+		setenv("XAUTHORITY", authfile,                       1);
 
-		/* launch the desktop session */
-		execlp("startx", "startx", USER_SESSION_CMD,
-			(char *)NULL);
+		/*	Connect to the server we already started.  The cookie
+			lets this uid in; no startx, no xinit, no wrapper.
+			USER_SESSION_CMD must be a plain session client that
+			blocks until logout and does NOT start its own X.
+		*/
+		execlp(USER_SESSION_CMD, USER_SESSION_CMD, (char *)NULL);
 
-		perror("dvlogin: execlp (startx)");
+		perror("dvlogin: execlp (session)");
 		_exit(1);
 	}
 
-	/* parent: wait for session to end */
+	/* parent: wait for the session client to exit */
 	int status;
 	while(waitpid(pid, &status, 0) < 0)
 	{
@@ -152,7 +223,6 @@ static void run_user_session(const char *username)
 			}
 			continue;
 		}
-		/* unexpected waitpid error */
 		break;
 	}
 
@@ -166,6 +236,11 @@ static void run_user_session(const char *username)
 		fprintf(stdout, "dvlogin: session killed by signal %d\n",
 			WTERMSIG(status));
 	}
-
 	fflush(stdout);
+
+	/* tear down the session X server and its cookie */
+	stop_xserver(xpid);
+	g_xserver_pid = 0;
+	unsetenv("XAUTHORITY");
+	unlink(authfile);
 }
