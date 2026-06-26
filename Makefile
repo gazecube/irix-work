@@ -1,7 +1,7 @@
 COMPILER = cc
 SOURCE = main.c
 #CFLAGS = -g -ggdb -O0 -Wall -Werror -std=gnu99 -pedantic
-CFLAGS = -O3
+CFLAGS = -O2
 LDFLAGS = -lXm -lX11 -lXt -lXpm -lXcursor -lXinerama -lpthread -lpam
 TARGET = ./dvlogin
 INSTDIR = /usr/local/bin
