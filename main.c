@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #ifdef __linux__
 #include <linux/kd.h>
@@ -168,7 +169,7 @@ int main(int argc, char *argv[])
 		fflush(stdout);
 
 		/* start X server for the login screen */
-		pid_t xpid = start_xserver(g_display_str, g_vt_str);
+		pid_t xpid = start_xserver(g_display_str, g_vt_str, NULL);
 		if(xpid < 0)
 		{
 			fprintf(stderr, "dvlogin: X server failed to start, retrying...\n");
