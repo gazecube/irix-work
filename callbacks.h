@@ -30,20 +30,19 @@ void toggleHostnameCB(Widget w, XtPointer client_data, XtPointer call_data)
 
 /*	Shadow password buffer
 
-	The real password is always stored here. When masking is
-	active, the XmText widget displays asterisks while the
-	shadow buffer holds the actual characters.
+	The real password is always stored here. The XmText widget
+	always displays asterisks; there is intentionally no UI path
+	that can reveal the password in clear text.
 */
 static char g_shadow_password[MAX_PASSWORD_LEN + 1];
 static int g_shadow_len = 0;
-static Boolean g_mask_password = True;   /* True = show asterisks */
 static Boolean g_pw_internal = False;    /* suppresses modifyVerify during programmatic updates */
 
 
 /*	clear_password_field
 	
 	zeroes the shadow buffer and clears the textBox2 
-	widget without triggering the odifyVerify callback.
+	widget without triggering the modifyVerify callback.
 */
 static void clear_password_field(void)
 {
@@ -58,8 +57,8 @@ static void clear_password_field(void)
 /*	passwordModifyVerifyCB
 	
 	Fires BEFORE a change is applied to the widget. Keeps the
-	shadow buffer in sync with every insert/delete, and replaces
-	displayed characters with '*' when masking is active.
+	shadow buffer in sync with every insert/delete, and always
+	replaces displayed characters with '*'.
 */
 void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data)
 {
@@ -101,48 +100,12 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 		g_shadow_len += new_len;
 		g_shadow_password[g_shadow_len] = '\0';
 
-		/* replace displayed characters with asterisks */
-		if(g_mask_password)
+		/* password text is never displayed in clear text */
+		for(i = 0; i < new_len; i++)
 		{
-			for(i = 0; i < new_len; i++)
-			{
-				cbs->text->ptr[i] = '*';
-			}
+			cbs->text->ptr[i] = '*';
 		}
 	}
-}
-
-
-/*	togglePasswordCB
-
-	"Use plain text password" toggle:
-	checked   (set=1) -> plain text
-	unchecked (set=0) -> asterisks
-*/
-void togglePasswordCB(Widget w, XtPointer client_data, XtPointer call_data)
-{
-	g_mask_password = (XmToggleButtonGetState(w) == 0);
-
-	/* re-render the password field to match the new mode */
-	g_pw_internal = True;
-
-	if(g_mask_password)
-	{
-		/* build a string of asterisks matching the real password length */
-		char stars[MAX_PASSWORD_LEN + 1];
-		int i;
-		for(i = 0; i < g_shadow_len; i++) { stars[i] = '*'; }
-		stars[g_shadow_len] = '\0';
-		XmTextSetString(textBox2, stars);
-	}
-	else
-	{
-		/* show the real password */
-		XmTextSetString(textBox2, g_shadow_password);
-	}
-
-	XmTextSetInsertionPosition(textBox2, XmTextGetLastPosition(textBox2));
-	g_pw_internal = False;
 }
 
 
