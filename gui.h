@@ -547,33 +547,6 @@ void run_motif_gui(int argc, char *argv[])
 		mouseLeftPushButton, (XtPointer)optTog2);
 */
 
-	Widget optTog3 = XtVaCreateManagedWidget("optTog3",
-		xmToggleButtonWidgetClass, optRC,
-		XmNleftAttachment, XmATTACH_FORM,
-		XmNleftOffset, 10,
-		XmNbottomAttachment, XmATTACH_FORM,
-		XmNbottomOffset, 7,
-		XmNalignment, XmALIGNMENT_BEGINNING,
-		XmNindicatorOn, XmINDICATOR_CHECK_BOX,
-		XmNindicatorSize, 18,
-		XmNtoggleMode, XmTOGGLE_BOOLEAN,
-		XmNhighlightThickness, 0,
-		XmNshadowThickness, 0,
-		XmNset, 0,
-		XmNspacing, 7,
-		XmNmarginWidth, 2,
-		XmNmarginHeight, 2,
-		XmNtraversalOn, 0,
-		XtVaTypedArg, XmNforeground, XmRString, "#000000", 8,
-		XtVaTypedArg, XmNbackground, XmRString, "#a7a7a7", 8,
-		XtVaTypedArg, XmNlabelString, XmRString, "Show plain text password.", 64,
-	NULL);
-	XtAddEventHandler(optTog3, EnterWindowMask, False,
-		mouseOverPushButton, (XtPointer)optTog3);
-	XtAddEventHandler(optTog3, LeaveWindowMask, False,
-		mouseLeftPushButton, (XtPointer)optTog3);
-	XtAddCallback(optTog3, XmNvalueChangedCallback, togglePasswordCB, NULL);
-
 
 
 /* realize the widget tree */
