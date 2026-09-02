@@ -48,7 +48,15 @@
 #include "vt.h"
 #include "callbacks.h"
 #include "shortcuts.h"
+#include "clogin_features.h"
 #include "gui.h"
+
+/* Keep the clogin compatibility rewrites scoped to gui.h only. */
+#undef addCustomShortcuts
+#undef loginButtonCB
+#undef textInputActivatedCB
+#undef XtRealizeWidget
+
 #include "x11mgmt.h"
 #include "session.h"
 
