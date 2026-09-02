@@ -1,24 +1,9 @@
 /* fallback Xresources */
 static String fb_xres[] =
 {
-	/* some optional font settings */
-	"*renderTable: xft",
-	"*xft*fontType: FONT_IS_XFT",
-	"*xft*fontName: Roboto",
-	"*xft*fontSize: 11",
-	"*xft*autohint: 1",
-	"*xft*lcdfilter: lcddefault",
-	"*xft*hintstyle: hintslight",
-	"*xft*hinting: True",
-	"*xft*antialias: 1",
-	"*xft*rgba: rgb",
-	"*xft*dpi: 96",
-	
-	"*scrolledWin0*fontStyle: Italic",
-	"*username*fontStyle: Bold",
-	"*password*fontStyle: Bold",
-	"*hostLabel*fontStyle: Bold Italic",
-	"*hostLabel*fontSize: 26",
+	/* Use the original SGI Screen core X bitmap font throughout. */
+	"*font: -sgi-screen-medium-r-normal--14-140-72-72-m-70-iso8859-1",
+	"*fontList: -sgi-screen-medium-r-normal--14-140-72-72-m-70-iso8859-1",
 
 	"Xcursor.theme: DeskViewCursors",
 	"Xcursor.size: 24",
@@ -36,6 +21,49 @@ static String fb_xres[] =
 };
 
 Widget topLevel, mainForm, username, password, sep, Cancel, Enter, Power, Reboot;
+
+
+/*	Open the dtlogin manual in CDE's native help viewer.
+	
+	Using dthelpview avoids opening an unauthenticated terminal or pager
+	from the greeter while still presenting the real dtlogin man page.
+*/
+static void helpButtonCB(Widget w, XtPointer client_data, XtPointer call_data)
+{
+	pid_t pid;
+	pid_t grandchild;
+
+	pid = fork();
+	if(pid < 0)
+	{
+		fprintf(stderr, "dvlogin: could not fork help viewer: %s\n", strerror(errno));
+		return;
+	}
+
+	if(pid == 0)
+	{
+		grandchild = fork();
+		if(grandchild < 0)
+		{
+			_exit(127);
+		}
+		if(grandchild > 0)
+		{
+			_exit(0);
+		}
+
+		setsid();
+		execlp("dthelpview", "dthelpview", "-manPage", "dtlogin", (char *)NULL);
+		execl("/usr/dt/bin/dthelpview", "dthelpview", "-manPage", "dtlogin", (char *)NULL);
+		fprintf(stderr, "dvlogin: could not start dthelpview: %s\n", strerror(errno));
+		_exit(127);
+	}
+
+	while(waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+	{
+		/* retry */
+	}
+}
 
 
 /*	run_motif_gui - create and run the Motif login GUI.
@@ -130,8 +158,8 @@ void run_motif_gui(int argc, char *argv[])
 
 
 
-	optionsButton = XtVaCreateManagedWidget("optionsButton",
-		xmToggleButtonWidgetClass, mainForm,
+	helpButton = XtVaCreateManagedWidget("helpButton",
+		xmPushButtonWidgetClass, mainForm,
 		XmNrightAttachment, XmATTACH_WIDGET,
 		XmNrightWidget, loginButton,
 		XmNrightOffset, 16,
@@ -139,23 +167,19 @@ void run_motif_gui(int argc, char *argv[])
 		XmNbottomOffset, 30,
 		XmNmarginWidth, 10,
 		XmNmarginHeight, 6,
-		XmNhighlightThickness, 0,
-		XmNindicatorOn, XmINDICATOR_NONE,
-		XmNtraversalOn, 0,
+		XmNhighlightThickness, 1,
+		XmNtraversalOn, 1,
 		XmNshadowThickness, 2,
-		XmNfillOnSelect, 1,
-		XmNlabelType, XmSTRING,
-		XmNset, 0,
 		XtVaTypedArg, XmNbackground, XmRString, "#aaaaaa", 8,
 		XtVaTypedArg, XmNforeground, XmRString, "#000000", 8,
 		XtVaTypedArg, XmNhighlightColor, XmRString, "red", 4,
-		XtVaTypedArg, XmNlabelString, XmRString, "Options", 8,
+		XtVaTypedArg, XmNlabelString, XmRString, "Help", 5,
 	NULL);
-	XtAddEventHandler(optionsButton, EnterWindowMask, False,
-		mouseOverPushButton, (XtPointer)optionsButton);
-	XtAddEventHandler(optionsButton, LeaveWindowMask, False,
-		mouseLeftPushButton, (XtPointer)optionsButton);
-	XtAddCallback(optionsButton, XmNvalueChangedCallback, optButtonCB, NULL);
+	XtAddEventHandler(helpButton, EnterWindowMask, False,
+		mouseOverPushButton, (XtPointer)helpButton);
+	XtAddEventHandler(helpButton, LeaveWindowMask, False,
+		mouseLeftPushButton, (XtPointer)helpButton);
+	XtAddCallback(helpButton, XmNactivateCallback, helpButtonCB, NULL);
 
 
 /*
