@@ -1,5 +1,6 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/extensions/shape.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,28 @@ static void set_desktop_properties(Display *dpy, Window win)
     XStoreName(dpy, win, name);
     XChangeProperty(dpy, win, net_name, utf8, 8, PropModeReplace,
                     (const unsigned char *)name, (int)strlen(name));
+}
+
+static void set_desktop_input_shape(Display *dpy, Window win)
+{
+    /*
+     * The workspace window is visually full-screen, but it must not own the
+     * empty desktop as an input surface.  Keep input only over desktop
+     * objects.  Empty-workspace clicks then reach the root window, preserving
+     * 5Dwm/4Dwm-style root-button handling (notably the Button3 menu).
+     *
+     * These rectangles track the two temporary prototype objects.  When the
+     * object model lands, the input region will be rebuilt from object bounds.
+     */
+    XRectangle objects[] = {
+        { 18, 20, 96, 66 },
+        { 18, 96, 96, 66 }
+    };
+
+    XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0,
+                            objects,
+                            (int)(sizeof(objects) / sizeof(objects[0])),
+                            ShapeSet, Unsorted);
 }
 
 static void draw_icon(Display *dpy, Window win, GC gc, int x, int y,
@@ -60,10 +83,17 @@ int main(void)
     XColor exact, color;
     unsigned long bg;
     unsigned int width, height;
+    int shape_event_base, shape_error_base;
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
         fprintf(stderr, "iid-desktop: cannot open display\n");
+        return 1;
+    }
+
+    if (!XShapeQueryExtension(dpy, &shape_event_base, &shape_error_base)) {
+        fprintf(stderr, "iid-desktop: X Shape extension is required\n");
+        XCloseDisplay(dpy);
         return 1;
     }
 
@@ -83,8 +113,8 @@ int main(void)
     /*
      * 5Dwm is deliberately 4Dwm/MWM-like and does not need to honor EWMH
      * _NET_WM_WINDOW_TYPE_DESKTOP.  The IID workspace must therefore be an
-     * unmanaged root child, just like traditional X desktop/workspace
-     * clients.  override_redirect keeps the WM from reparenting/decorating it.
+     * unmanaged root child.  override_redirect keeps the WM from reparenting
+     * or decorating it.
      */
     attrs.override_redirect = True;
 
@@ -94,9 +124,10 @@ int main(void)
                         &attrs);
 
     set_desktop_properties(dpy, win);
+    set_desktop_input_shape(dpy, win);
     XMapWindow(dpy, win);
 
-    /* Keep the workspace below normal application windows. */
+    /* Keep the visual workspace below normal application windows. */
     XLowerWindow(dpy, win);
 
     gc = XCreateGC(dpy, win, 0, NULL);
