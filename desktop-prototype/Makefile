@@ -1,6 +1,6 @@
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra
-LDLIBS += -lX11
+LDLIBS += -lX11 -lXext
 
 all: iid-desktop
 
