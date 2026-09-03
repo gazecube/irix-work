@@ -26,26 +26,38 @@ static void set_desktop_properties(Display *dpy, Window win)
                     (const unsigned char *)name, (int)strlen(name));
 }
 
-static void set_desktop_input_shape(Display *dpy, Window win)
+static int desktop_object_rects(XRectangle *out, int cap)
 {
-    /*
-     * The workspace window is visually full-screen, but it must not own the
-     * empty desktop as an input surface.  Keep input only over desktop
-     * objects.  Empty-workspace clicks then reach the root window, preserving
-     * 5Dwm/4Dwm-style root-button handling (notably the Button3 menu).
-     *
-     * These rectangles track the two temporary prototype objects.  When the
-     * object model lands, the input region will be rebuilt from object bounds.
-     */
-    XRectangle objects[] = {
+    static const XRectangle objects[] = {
         { 18, 20, 96, 66 },
         { 18, 96, 96, 66 }
     };
+    int n = (int)(sizeof(objects) / sizeof(objects[0]));
 
+    if (n > cap)
+        n = cap;
+    memcpy(out, objects, (size_t)n * sizeof(objects[0]));
+    return n;
+}
+
+static void rebuild_desktop_shape(Display *dpy, Window win)
+{
+    XRectangle objects[16];
+    int n = desktop_object_rects(objects, 16);
+
+    /*
+     * IRIX fm BackLayout::shapeAllViews() makes the background ViewPanel's
+     * ShapeBounding region empty and unions each desktop view back into it.
+     * For these static prototype objects, setting the final rectangle set in
+     * one operation is equivalent: empty workspace is no longer part of the
+     * desktop child window at all.
+     */
+    XShapeCombineRectangles(dpy, win, ShapeBounding, 0, 0,
+                            objects, n, ShapeSet, YXBanded);
+
+    /* Keep input constrained to the same temporary object rectangles. */
     XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0,
-                            objects,
-                            (int)(sizeof(objects) / sizeof(objects[0])),
-                            ShapeSet, Unsorted);
+                            objects, n, ShapeSet, YXBanded);
 }
 
 static void draw_icon(Display *dpy, Window win, GC gc, int x, int y,
@@ -107,15 +119,20 @@ int main(void)
     if (XAllocNamedColor(dpy, cmap, "#4f718a", &color, &exact))
         bg = color.pixel;
 
+    /*
+     * The visible workspace background belongs to the root window. The fm
+     * desktop child is shape-bounded around desktop objects instead of being
+     * an opaque full-screen window. This matches the BackLayout behavior now
+     * recovered from the IRIX binary and naturally preserves 5Dwm root-menu
+     * handling in empty workspace.
+     */
+    XSetWindowBackground(dpy, root, bg);
+    XClearWindow(dpy, root);
+
     attrs.background_pixel = bg;
     attrs.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask;
 
-    /*
-     * 5Dwm is deliberately 4Dwm/MWM-like and does not need to honor EWMH
-     * _NET_WM_WINDOW_TYPE_DESKTOP.  The IID workspace must therefore be an
-     * unmanaged root child.  override_redirect keeps the WM from reparenting
-     * or decorating it.
-     */
+    /* 4Dwm/5Dwm must never reparent or decorate the fm desktop surface. */
     attrs.override_redirect = True;
 
     win = XCreateWindow(dpy, root, 0, 0, width, height, 0,
@@ -124,10 +141,10 @@ int main(void)
                         &attrs);
 
     set_desktop_properties(dpy, win);
-    set_desktop_input_shape(dpy, win);
+    rebuild_desktop_shape(dpy, win);
     XMapWindow(dpy, win);
 
-    /* Keep the visual workspace below normal application windows. */
+    /* Keep desktop objects underneath normal application windows. */
     XLowerWindow(dpy, win);
 
     gc = XCreateGC(dpy, win, 0, NULL);
