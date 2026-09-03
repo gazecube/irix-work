@@ -1,6 +1,7 @@
 add_library(imdUtil SHARED
     c++init.cxx
     MemoryMap.c++
+    RecoveredBatch001.c++
 )
 
 set_target_properties(imdUtil PROPERTIES
