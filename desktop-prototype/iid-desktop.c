@@ -70,6 +70,17 @@ static void set_desktop_properties(Display *dpy, Window win)
                     (const unsigned char *)name, (int)strlen(name));
 }
 
+static unsigned long named_pixel(Display *dpy, int screen,
+                                 const char *name, unsigned long fallback)
+{
+    XColor exact, color;
+    Colormap cmap = DefaultColormap(dpy, screen);
+
+    if (name && *name && XAllocNamedColor(dpy, cmap, name, &color, &exact))
+        return color.pixel;
+    return fallback;
+}
+
 static DesktopObject *append_object(DesktopObjectKind kind,
                                     const char *name, const char *path)
 {
@@ -253,6 +264,53 @@ static void rebuild_desktop_shape(Display *dpy, Window win)
                             rects, n, ShapeSet, Unsorted);
 }
 
+static Window create_background_window(Display *dpy, Window root,
+                                       unsigned int width, unsigned int height,
+                                       unsigned long pixel)
+{
+    XSetWindowAttributes attrs;
+
+    memset(&attrs, 0, sizeof(attrs));
+    attrs.background_pixel = pixel;
+    attrs.override_redirect = True;
+    attrs.event_mask = ExposureMask | StructureNotifyMask;
+
+    return XCreateWindow(dpy, root, 0, 0, width, height, 0,
+                         CopyFromParent, InputOutput, CopyFromParent,
+                         CWBackPixel | CWOverrideRedirect | CWEventMask,
+                         &attrs);
+}
+
+static Window create_background_input_window(Display *dpy, Window root,
+                                             unsigned int width,
+                                             unsigned int height)
+{
+    XSetWindowAttributes attrs;
+    Window win;
+
+    memset(&attrs, 0, sizeof(attrs));
+    attrs.override_redirect = True;
+    attrs.event_mask = 0;
+
+    win = XCreateWindow(dpy, root, 0, 0, width, height, 0,
+                        0, InputOnly, CopyFromParent,
+                        CWOverrideRedirect | CWEventMask, &attrs);
+
+    /*
+     * Real fm has a separate InputOnly window for background interaction.
+     * Use passive grabs for Button1/Button2 so Button3 is not selected by
+     * this window and can continue upward to the root/5Dwm menu machinery.
+     */
+    XGrabButton(dpy, Button1, AnyModifier, win, False,
+                ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                GrabModeAsync, GrabModeAsync, None, None);
+    XGrabButton(dpy, Button2, AnyModifier, win, False,
+                ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                GrabModeAsync, GrabModeAsync, None, None);
+
+    return win;
+}
+
 static void draw_document_glyph(Display *dpy, Window win, GC gc, int x, int y)
 {
     XDrawRectangle(dpy, win, gc, x, y, 42, 34);
@@ -277,13 +335,12 @@ static void draw_icon(Display *dpy, Window win, GC gc,
     int y = obj->y;
     int label_len = (int)strlen(obj->name);
 
-    XSetForeground(dpy, gc, WhitePixel(dpy, screen));
-    XFillRectangle(dpy, win, gc, x, y, ICON_BOX_W, ICON_BOX_H);
-
     if (obj->icon) {
         sgi_icon_draw(dpy, win, gc, obj->icon,
                       x, y, ICON_BOX_W, ICON_BOX_H);
     } else {
+        XSetForeground(dpy, gc, WhitePixel(dpy, screen));
+        XFillRectangle(dpy, win, gc, x, y, ICON_BOX_W, ICON_BOX_H);
         XSetForeground(dpy, gc, BlackPixel(dpy, screen));
         switch (obj->kind) {
         case OBJ_HOME:
@@ -362,6 +419,8 @@ int main(int argc, char **argv)
     Display *dpy;
     int screen;
     Window root;
+    Window background;
+    Window background_input;
     Window win;
     XSetWindowAttributes attrs;
     XEvent ev;
@@ -370,6 +429,8 @@ int main(int argc, char **argv)
     int shape_event_base, shape_error_base;
     char default_desktop[PATH_MAX];
     const char *desktop_dir;
+    const char *background_name;
+    unsigned long background_pixel;
 
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -401,12 +462,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "iid-desktop: SGI icon directory: %s\n",
                 getenv("IID_ICON_DIR"));
 
-    /*
-     * Do not repaint the root window here. 5Dwm/MaXX already owns the root
-     * presentation, which may be a textured/pixmapped SGI-style background.
-     * The shaped fm surface must inherit that existing parent background in
-     * the portions of its bounding shape where we do not explicitly draw.
-     */
+    background_name = getenv("IID_BACKGROUND");
+    if (!background_name || !*background_name)
+        background_name = "#4f718a";
+    background_pixel = named_pixel(dpy, screen, background_name,
+                                   BlackPixel(dpy, screen));
+
+    background = create_background_window(dpy, root, width, height,
+                                          background_pixel);
+    background_input = create_background_input_window(dpy, root, width, height);
+
+    memset(&attrs, 0, sizeof(attrs));
     attrs.background_pixmap = ParentRelative;
     attrs.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask;
     attrs.override_redirect = True;
@@ -418,24 +484,43 @@ int main(int argc, char **argv)
 
     set_desktop_properties(dpy, win);
     rebuild_desktop_shape(dpy, win);
+
+    XMapWindow(dpy, background);
+    XMapWindow(dpy, background_input);
     XMapWindow(dpy, win);
+
+    /* Put all IID desktop layers below normal application windows while
+     * keeping their internal order: icon surface > input layer > background.
+     */
     XLowerWindow(dpy, win);
+    XLowerWindow(dpy, background_input);
+    XLowerWindow(dpy, background);
 
     gc = XCreateGC(dpy, win, 0, NULL);
     XFlush(dpy);
 
+    fprintf(stderr, "iid-desktop: background owner active (%s)\n",
+            background_name);
+    fprintf(stderr, "iid-desktop: background InputOnly layer active\n");
+
     for (;;) {
         XNextEvent(dpy, &ev);
 
-        if (ev.type == Expose && ev.xexpose.count == 0) {
+        if (ev.type == Expose && ev.xexpose.window == win &&
+            ev.xexpose.count == 0) {
             redraw(dpy, win, gc);
-        } else if (ev.type == ButtonPress) {
+        } else if (ev.type == ButtonPress && ev.xbutton.window == win) {
             DesktopObject *obj = object_at(ev.xbutton.x, ev.xbutton.y);
             if (obj) {
                 fprintf(stderr,
                         "iid-desktop: click '%s' path='%s' kind=%d icon='%s'\n",
                         obj->name, obj->path, (int)obj->kind, obj->icon_path);
             }
+        } else if (ev.type == ButtonPress &&
+                   ev.xbutton.window == background_input) {
+            fprintf(stderr,
+                    "iid-desktop: background button %u at %d,%d\n",
+                    ev.xbutton.button, ev.xbutton.x, ev.xbutton.y);
         }
     }
 }
