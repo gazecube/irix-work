@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "sgi_icon.h"
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -20,6 +22,8 @@
 #define MAX_OBJECTS 256
 #define OBJECT_W 96
 #define OBJECT_H 66
+#define ICON_BOX_W 46
+#define ICON_BOX_H 36
 
 typedef enum DesktopObjectKind {
     OBJ_HOME,
@@ -35,10 +39,12 @@ typedef struct DesktopObject {
     DesktopObjectKind kind;
     char name[NAME_MAX + 1];
     char path[PATH_MAX];
+    char icon_path[PATH_MAX];
     int x;
     int y;
     unsigned int width;
     unsigned int height;
+    SgiIconImage *icon;
 } DesktopObject;
 
 static DesktopObject objects[MAX_OBJECTS];
@@ -59,15 +65,13 @@ static void set_desktop_properties(Display *dpy, Window win)
 
     XChangeProperty(dpy, win, wm_type, XA_ATOM, 32, PropModeReplace,
                     (unsigned char *)&desktop_type, 1);
-
     XStoreName(dpy, win, name);
     XChangeProperty(dpy, win, net_name, utf8, 8, PropModeReplace,
                     (const unsigned char *)name, (int)strlen(name));
 }
 
 static DesktopObject *append_object(DesktopObjectKind kind,
-                                    const char *name,
-                                    const char *path)
+                                    const char *name, const char *path)
 {
     DesktopObject *obj;
 
@@ -84,7 +88,6 @@ static DesktopObject *append_object(DesktopObjectKind kind,
         snprintf(obj->name, sizeof(obj->name), "%s", name);
     if (path)
         snprintf(obj->path, sizeof(obj->path), "%s", path);
-
     return obj;
 }
 
@@ -102,13 +105,61 @@ static DesktopObjectKind classify_path(const char *path, const struct stat *st)
     return OBJ_OTHER;
 }
 
+static const char *kind_icon_name(DesktopObjectKind kind)
+{
+    switch (kind) {
+    case OBJ_HOME: return "home.icon";
+    case OBJ_DUMPSTER: return "dumpster.icon";
+    case OBJ_DIRECTORY: return "directory.icon";
+    case OBJ_EXECUTABLE: return "executable.icon";
+    case OBJ_FILE: return "file.icon";
+    case OBJ_SYMLINK: return "symlink.icon";
+    default: return "other.icon";
+    }
+}
+
+static int has_sgi_icon_suffix(const char *path)
+{
+    size_t n = strlen(path);
+    return (n >= 5 && strcmp(path + n - 5, ".icon") == 0) ||
+           (n >= 4 && strcmp(path + n - 4, ".rgb") == 0) ||
+           (n >= 4 && strcmp(path + n - 4, ".sgi") == 0);
+}
+
+static void resolve_object_icon(DesktopObject *obj, const char *icon_dir)
+{
+    if (obj->path[0] && has_sgi_icon_suffix(obj->path)) {
+        strncpy(obj->icon_path, obj->path, sizeof(obj->icon_path) - 1);
+        obj->icon_path[sizeof(obj->icon_path) - 1] = '\0';
+    } else if (icon_dir && *icon_dir) {
+        if (snprintf(obj->icon_path, sizeof(obj->icon_path), "%s/%s",
+                     icon_dir, kind_icon_name(obj->kind)) >=
+            (int)sizeof(obj->icon_path))
+            obj->icon_path[0] = '\0';
+    }
+
+    if (obj->icon_path[0]) {
+        obj->icon = sgi_icon_load(obj->icon_path);
+        if (!obj->icon)
+            obj->icon_path[0] = '\0';
+    }
+}
+
+static void resolve_all_icons(void)
+{
+    const char *icon_dir = getenv("IID_ICON_DIR");
+    int i;
+
+    for (i = 0; i < object_count; ++i)
+        resolve_object_icon(&objects[i], icon_dir);
+}
+
 static void add_fixed_objects(void)
 {
     const char *home = getenv("HOME");
 
     append_object(OBJ_HOME, "Home", home ? home : "");
     append_object(OBJ_DUMPSTER, "Dumpster", "");
-
     objects[0].x = 24;
     objects[0].y = 28;
     objects[1].x = 24;
@@ -127,10 +178,8 @@ static void layout_file_objects(unsigned int screen_width,
             y = 28;
             x -= 110;
         }
-
         if (x < 130)
             x = 130;
-
         objects[i].x = x;
         objects[i].y = y;
         y += 76;
@@ -161,11 +210,9 @@ static int scan_desktop_directory(const char *directory,
             continue;
         if (object_count >= MAX_OBJECTS)
             break;
-
         if (snprintf(path, sizeof(path), "%s/%s", directory, ent->d_name) >=
             (int)sizeof(path))
             continue;
-
         if (lstat(path, &st) != 0)
             continue;
 
@@ -186,14 +233,12 @@ static int desktop_object_rects(XRectangle *out, int cap)
 
     if (n > cap)
         n = cap;
-
     for (i = 0; i < n; ++i) {
         out[i].x = (short)(objects[i].x - 6);
         out[i].y = (short)(objects[i].y - 8);
         out[i].width = (unsigned short)objects[i].width;
         out[i].height = (unsigned short)objects[i].height;
     }
-
     return n;
 }
 
@@ -202,19 +247,13 @@ static void rebuild_desktop_shape(Display *dpy, Window win)
     XRectangle rects[MAX_OBJECTS];
     int n = desktop_object_rects(rects, MAX_OBJECTS);
 
-    /*
-     * The recovered fm BackLayout uses ShapeBounding for the desktop view.
-     * These prototype rectangles are a coarse renderer bound, so use Unsorted
-     * here; the original renderer later supplies properly banded rectangles.
-     */
     XShapeCombineRectangles(dpy, win, ShapeBounding, 0, 0,
                             rects, n, ShapeSet, Unsorted);
     XShapeCombineRectangles(dpy, win, ShapeInput, 0, 0,
                             rects, n, ShapeSet, Unsorted);
 }
 
-static void draw_document_glyph(Display *dpy, Window win, GC gc,
-                                int x, int y)
+static void draw_document_glyph(Display *dpy, Window win, GC gc, int x, int y)
 {
     XDrawRectangle(dpy, win, gc, x, y, 42, 34);
     XDrawLine(dpy, win, gc, x + 8, y + 9, x + 34, y + 9);
@@ -222,8 +261,7 @@ static void draw_document_glyph(Display *dpy, Window win, GC gc,
     XDrawLine(dpy, win, gc, x + 8, y + 21, x + 28, y + 21);
 }
 
-static void draw_folder_glyph(Display *dpy, Window win, GC gc,
-                              int x, int y)
+static void draw_folder_glyph(Display *dpy, Window win, GC gc, int x, int y)
 {
     XDrawRectangle(dpy, win, gc, x, y + 7, 44, 27);
     XDrawLine(dpy, win, gc, x + 4, y + 7, x + 4, y + 2);
@@ -240,36 +278,39 @@ static void draw_icon(Display *dpy, Window win, GC gc,
     int label_len = (int)strlen(obj->name);
 
     XSetForeground(dpy, gc, WhitePixel(dpy, screen));
-    XFillRectangle(dpy, win, gc, x, y, 46, 36);
+    XFillRectangle(dpy, win, gc, x, y, ICON_BOX_W, ICON_BOX_H);
 
-    XSetForeground(dpy, gc, BlackPixel(dpy, screen));
-
-    switch (obj->kind) {
-    case OBJ_HOME:
-    case OBJ_DIRECTORY:
-        draw_folder_glyph(dpy, win, gc, x, y);
-        break;
-    case OBJ_DUMPSTER:
-        XDrawRectangle(dpy, win, gc, x + 5, y + 5, 32, 28);
-        XDrawLine(dpy, win, gc, x + 2, y + 5, x + 40, y + 5);
-        XDrawLine(dpy, win, gc, x + 12, y + 1, x + 30, y + 1);
-        break;
-    case OBJ_EXECUTABLE:
-        draw_document_glyph(dpy, win, gc, x, y);
-        XFillRectangle(dpy, win, gc, x + 15, y + 12, 12, 10);
-        break;
-    case OBJ_SYMLINK:
-        draw_document_glyph(dpy, win, gc, x, y);
-        XDrawLine(dpy, win, gc, x + 5, y + 29, x + 18, y + 23);
-        XDrawLine(dpy, win, gc, x + 5, y + 29, x + 13, y + 32);
-        break;
-    case OBJ_FILE:
-    case OBJ_OTHER:
-    default:
-        draw_document_glyph(dpy, win, gc, x, y);
-        break;
+    if (obj->icon) {
+        sgi_icon_draw(dpy, win, gc, obj->icon,
+                      x, y, ICON_BOX_W, ICON_BOX_H);
+    } else {
+        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+        switch (obj->kind) {
+        case OBJ_HOME:
+        case OBJ_DIRECTORY:
+            draw_folder_glyph(dpy, win, gc, x, y);
+            break;
+        case OBJ_DUMPSTER:
+            XDrawRectangle(dpy, win, gc, x + 5, y + 5, 32, 28);
+            XDrawLine(dpy, win, gc, x + 2, y + 5, x + 40, y + 5);
+            XDrawLine(dpy, win, gc, x + 12, y + 1, x + 30, y + 1);
+            break;
+        case OBJ_EXECUTABLE:
+            draw_document_glyph(dpy, win, gc, x, y);
+            XFillRectangle(dpy, win, gc, x + 15, y + 12, 12, 10);
+            break;
+        case OBJ_SYMLINK:
+            draw_document_glyph(dpy, win, gc, x, y);
+            XDrawLine(dpy, win, gc, x + 5, y + 29, x + 18, y + 23);
+            XDrawLine(dpy, win, gc, x + 5, y + 29, x + 13, y + 32);
+            break;
+        default:
+            draw_document_glyph(dpy, win, gc, x, y);
+            break;
+        }
     }
 
+    XSetForeground(dpy, gc, BlackPixel(dpy, screen));
     if (label_len > 15)
         label_len = 15;
     XDrawString(dpy, win, gc, x, y + 50, obj->name, label_len);
@@ -278,7 +319,6 @@ static void draw_icon(Display *dpy, Window win, GC gc,
 static void redraw(Display *dpy, Window win, GC gc)
 {
     int i;
-
     for (i = 0; i < object_count; ++i)
         draw_icon(dpy, win, gc, &objects[i]);
 }
@@ -286,7 +326,6 @@ static void redraw(Display *dpy, Window win, GC gc)
 static DesktopObject *object_at(int x, int y)
 {
     int i;
-
     for (i = object_count - 1; i >= 0; --i) {
         int left = objects[i].x - 6;
         int top = objects[i].y - 8;
@@ -296,7 +335,6 @@ static DesktopObject *object_at(int x, int y)
         if (x >= left && x < right && y >= top && y < bottom)
             return &objects[i];
     }
-
     return NULL;
 }
 
@@ -309,15 +347,12 @@ static const char *desktop_directory_from_args(int argc, char **argv,
 
     if (argc > 1)
         return argv[1];
-
     env = getenv("IID_DESKTOP_DIR");
     if (env && *env)
         return env;
-
     home = getenv("HOME");
     if (!home)
         return ".";
-
     snprintf(fallback, fallback_size, "%s/Desktop", home);
     return fallback;
 }
@@ -344,7 +379,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "iid-desktop: cannot open display\n");
         return 1;
     }
-
     if (!XShapeQueryExtension(dpy, &shape_event_base, &shape_error_base)) {
         fprintf(stderr, "iid-desktop: X Shape extension is required\n");
         XCloseDisplay(dpy);
@@ -362,9 +396,13 @@ int main(int argc, char **argv)
                                               default_desktop,
                                               sizeof(default_desktop));
     scan_desktop_directory(desktop_dir, width, height);
+    resolve_all_icons();
 
     fprintf(stderr, "iid-desktop: desktop directory: %s\n", desktop_dir);
     fprintf(stderr, "iid-desktop: %d desktop objects\n", object_count);
+    if (getenv("IID_ICON_DIR"))
+        fprintf(stderr, "iid-desktop: SGI icon directory: %s\n",
+                getenv("IID_ICON_DIR"));
 
     cmap = DefaultColormap(dpy, screen);
     bg = BlackPixel(dpy, screen);
@@ -399,11 +437,10 @@ int main(int argc, char **argv)
         } else if (ev.type == ButtonPress) {
             DesktopObject *obj = object_at(ev.xbutton.x, ev.xbutton.y);
             if (obj) {
-                fprintf(stderr, "iid-desktop: click '%s' path='%s' kind=%d\n",
-                        obj->name, obj->path, (int)obj->kind);
+                fprintf(stderr,
+                        "iid-desktop: click '%s' path='%s' kind=%d icon='%s'\n",
+                        obj->name, obj->path, (int)obj->kind, obj->icon_path);
             }
         }
     }
-
-    return 0;
 }
