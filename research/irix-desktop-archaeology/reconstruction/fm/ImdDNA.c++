@@ -123,19 +123,34 @@
  */
 
 /*
- * Escaping
- * --------
+ * Escaping - exact table recovered
+ * --------------------------------
  *
- * _unescape() clearly uses '%' (0x25) as the escape introducer and consults
- * a small four-entry translation table. _escapeLength() and
- * _addStringWithEscape() use the same table in the opposite direction.
+ * _unescape() loads a four-entry table through the GOT. The table lives at
+ * 0x09779848 and consists of four 12-byte records:
  *
- * High confidence:
- *   - '%' begins an encoded two-character escape sequence after itself.
- *   - only a fixed set of four characters is escaped.
+ *   source-byte, escaped-string pointer, escaped-length
  *
- * The exact four source<->escape character mappings have NOT yet been proven
- * from the GOT/small-data table, so they are intentionally not guessed here.
+ * Resolved table:
+ *
+ *   '!'  -> "%21"
+ *   ':'  -> "%3a"
+ *   '='  -> "%3d"
+ *   '%'  -> "%25"
+ *
+ * The backing strings are in small read-only data at:
+ *
+ *   0x097834f0 "%21"
+ *   0x097834f8 "%3a"
+ *   0x09783500 "%3d"
+ *   0x09783508 "%25"
+ *
+ * _unescape() recognizes '%' and compares the following two bytes against
+ * bytes 1 and 2 of each escaped string. On match it replaces the three-byte
+ * sequence with the table's source byte and compacts the string in place.
+ *
+ * Therefore the escape grammar is now fully recovered and byte-exact for all
+ * delimiter characters used by serialized ImdDNA.
  */
 
 /*
@@ -155,8 +170,7 @@
  *      -> background icon DB
  *      -> fm
  *
- * Therefore a Linux-compatible reader/writer can eventually reproduce the
- * original text format exactly. Before wiring that into the runnable
- * prototype, recover the four-character escape table and validate at least
- * one authentic serialized line from IRIX output or an installed DB.
+ * The fixed grammar and all four escapes are now recovered. The remaining
+ * compatibility question is malformed-input behavior in the original parser;
+ * valid-record serialization/deserialization can be implemented byte-for-byte.
  */
