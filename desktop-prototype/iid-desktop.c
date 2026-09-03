@@ -366,9 +366,6 @@ int main(int argc, char **argv)
     XSetWindowAttributes attrs;
     XEvent ev;
     GC gc;
-    Colormap cmap;
-    XColor exact, color;
-    unsigned long bg;
     unsigned int width, height;
     int shape_event_base, shape_error_base;
     char default_desktop[PATH_MAX];
@@ -404,21 +401,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "iid-desktop: SGI icon directory: %s\n",
                 getenv("IID_ICON_DIR"));
 
-    cmap = DefaultColormap(dpy, screen);
-    bg = BlackPixel(dpy, screen);
-    if (XAllocNamedColor(dpy, cmap, "#4f718a", &color, &exact))
-        bg = color.pixel;
-
-    XSetWindowBackground(dpy, root, bg);
-    XClearWindow(dpy, root);
-
-    attrs.background_pixel = bg;
+    /*
+     * Do not repaint the root window here. 5Dwm/MaXX already owns the root
+     * presentation, which may be a textured/pixmapped SGI-style background.
+     * The shaped fm surface must inherit that existing parent background in
+     * the portions of its bounding shape where we do not explicitly draw.
+     */
+    attrs.background_pixmap = ParentRelative;
     attrs.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask;
     attrs.override_redirect = True;
 
     win = XCreateWindow(dpy, root, 0, 0, width, height, 0,
                         CopyFromParent, InputOutput, CopyFromParent,
-                        CWBackPixel | CWEventMask | CWOverrideRedirect,
+                        CWBackPixmap | CWEventMask | CWOverrideRedirect,
                         &attrs);
 
     set_desktop_properties(dpy, win);
