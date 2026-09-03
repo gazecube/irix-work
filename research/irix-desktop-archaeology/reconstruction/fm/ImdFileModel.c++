@@ -22,12 +22,39 @@
  */
 
 /*
+ * _urlPrefix initialization - RESOLVED
+ * ------------------------------------
+ *
+ * _urlPrefix__12ImdFileModel is an 8-byte ImdString object at 0x09783b00
+ * in .bss, so its bytes are zero in the file and are populated at runtime.
+ *
+ * The library static-initialization code at 0x09757238-0x0975724c proves the
+ * initializer:
+ *
+ *   0x09757238  load ImdString(const char *)
+ *   0x0975723c  a1 = gp - 0x7480
+ *   0x09757240  call ImdString(const char *)
+ *   0x09757244  a0 = &_urlPrefix
+ *
+ * gp - 0x7480 = 0x097833a0, whose .srdata bytes are exactly:
+ *
+ *   "file://\0"
+ *
+ * Therefore:
+ *
+ *   ImdFileModel::_urlPrefix == ImdString("file://")
+ *
+ * This is now proven by the constructor call and backing literal, not merely
+ * inferred from a nearby string.
+ */
+
+/*
  * dnaSelectorFromPath() @ 0x09741374
  * ----------------------------------
  *
  * High-confidence behavior from resolved GOT calls:
  *
- *   - start with ImdFileModel::_urlPrefix
+ *   - start with ImdFileModel::_urlPrefix == "file://"
  *   - append a host component
  *       - if the second argument is ImdString::kNull, use
  *         ImdGlobalEnv::getLocalHostName()
@@ -50,7 +77,7 @@
  *                                                const ImdString &host)
  *   {
  *       char tmp[large_stack_buffer];
- *       strcpy(tmp, (const char *)_urlPrefix);
+ *       strcpy(tmp, "file://");
  *
  *       if (host == ImdString::kNull)
  *           strcat(tmp, ImdGlobalEnv::getLocalHostName());
@@ -63,9 +90,76 @@
  *       return ImdString(tmp);
  *   }
  *
- * The binary contains literal "file://" strings, but the exact initializer
- * associated with _urlPrefix has not yet been tied to this object by a
- * relocation/static-constructor proof, so the literal is not hardcoded here.
+ * For a local host named "indy" and path "/usr/people/me", the selector
+ * shape is therefore:
+ *
+ *   file://indy/usr/people/me
+ *
+ * This example follows the proven concatenation grammar; "indy" itself is
+ * illustrative rather than an observed machine name.
+ */
+
+/*
+ * fileNameFromDNA() @ 0x0974146c - RESOLVED
+ * -----------------------------------------
+ *
+ * Resolved GOT calls in exact execution order:
+ *
+ *   ImdString::ImdString()
+ *   ImdDNA::selector()
+ *   ImdString::getLength(false)
+ *   ImdString::getLength(false)          // _urlPrefix
+ *   ImdString::operator const char *()   // selector
+ *   ImdString::operator const char *()   // _urlPrefix
+ *   strncmp(selector, _urlPrefix, prefixLength)
+ *   ImdString::find('/', prefixLength, false)
+ *   ImdString::getLength(false)
+ *   ImdString::getSubString(found, selectorLength - 1)
+ *   ImdString::operator=(substring)
+ *   ImdString::~ImdString()
+ *
+ * The function default-constructs the return string and only replaces it if
+ * every validation step succeeds.
+ *
+ * Exact recovered algorithm:
+ *
+ *   ImdString ImdFileModel::fileNameFromDNA(const ImdDNA &dna)
+ *   {
+ *       ImdString result;
+ *       const ImdString &selector = dna.selector();
+ *       unsigned long prefixLength = _urlPrefix.getLength(false);
+ *       unsigned long selectorLength = selector.getLength(false);
+ *
+ *       if (prefixLength >= selectorLength)
+ *           return result;
+ *
+ *       if (strncmp((const char *)selector,
+ *                   (const char *)_urlPrefix,
+ *                   prefixLength) != 0)
+ *           return result;
+ *
+ *       unsigned long slash = selector.find('/', prefixLength, false);
+ *       if (slash == ImdString::NotFound)
+ *           return result;
+ *
+ *       result = selector.getSubString(slash, selectorLength - 1);
+ *       return result;
+ *   }
+ *
+ * Since _urlPrefix is exactly "file://", this deliberately skips the two
+ * slashes belonging to the URI prefix, searches for the next slash after the
+ * host name, and returns from that slash through the final selector byte.
+ *
+ * Therefore the proven round trip is:
+ *
+ *   dnaSelectorFromPath("/usr/people/me", "indy")
+ *       -> "file://indy/usr/people/me"
+ *
+ *   fileNameFromDNA(DNA(selector="file://indy/usr/people/me"))
+ *       -> "/usr/people/me"
+ *
+ * fileNameFromDNA() does not validate whether the selector host is local. It
+ * only validates the file:// prefix and extracts the pathname component.
  */
 
 /*
@@ -202,6 +296,9 @@
  *
  *   workingPath = ImdFileModel::fileNameFromDNA(tmp)
  *
+ * We can now state exactly what this conversion does: it strips
+ * "file://<host>" and returns the absolute pathname beginning with '/'.
+ *
  * The final fallback is then:
  *
  *   type = ImdFileModel::dnaTypeFromPath(workingPath)
@@ -298,24 +395,31 @@
  * Why this matters for the desktop reconstruction
  * ===============================================
  *
- * We now have the path -> ImdDNA side of the FLtoPopDB pipeline mostly mapped:
+ * We now have a proven path <-> selector conversion pair:
+ *
+ *   path -> "file://" + host + path
+ *   selector -> pathname beginning at first '/' after "file://<host>"
+ *
+ * and the larger path -> ImdDNA side of the FLtoPopDB pipeline is mostly
+ * mapped:
  *
  *   absolute path
- *      -> selector = URL-prefix + host + path
+ *      -> selector = "file://" + localHost + path
  *      -> inspect existing filesystem-backed models
  *      -> optionally normalize selector
+ *      -> selector -> absolute pathname through fileNameFromDNA()
  *      -> classify filesystem object by lstat()
  *      -> ImdDNA(type, selector)
  *      -> parent directory child-info cache update
  *      -> ImdDNA::serialize()
  *
- * This is enough to define the next exact decomp targets without guessing:
+ * Remaining exact decomp targets:
  *
- *   1. resolve ImdFileModel::_urlPrefix initialization
- *   2. resolve the _fsBasedClasses element type and its two virtual slots
- *   3. finish fileNameFromDNA() semantics
- *   4. recover normalizeDNA() behavior relevant to file selectors
+ *   1. resolve the _fsBasedClasses element type and its virtual slots
+ *   2. recover ImdBroker::normalizeDNA() behavior relevant to file selectors
+ *   3. resolve exact kTypeName string values used by file/dir/ref models
  *
- * Once those are proven, a Linux-side dnaFromFullPath compatibility routine
- * can be implemented against the already recovered ImdDNA codec.
+ * With those proven, a Linux-side dnaFromFullPath compatibility routine can
+ * be implemented against the already recovered ImdDNA codec with very little
+ * semantic guesswork remaining.
  */
