@@ -1,5 +1,6 @@
 add_library(imdUtil SHARED
     c++init.cxx
+    decomp/imdMkdirP.c++
 )
 
 set_target_properties(imdUtil PROPERTIES
