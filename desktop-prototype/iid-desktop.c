@@ -13,20 +13,12 @@ static void set_desktop_properties(Display *dpy, Window win)
 {
     Atom wm_type = intern_atom(dpy, "_NET_WM_WINDOW_TYPE");
     Atom desktop_type = intern_atom(dpy, "_NET_WM_WINDOW_TYPE_DESKTOP");
-    Atom wm_state = intern_atom(dpy, "_NET_WM_STATE");
-    Atom states[3];
     Atom utf8 = intern_atom(dpy, "UTF8_STRING");
     Atom net_name = intern_atom(dpy, "_NET_WM_NAME");
     const char *name = "Indigo Magic Desktop";
 
-    states[0] = intern_atom(dpy, "_NET_WM_STATE_BELOW");
-    states[1] = intern_atom(dpy, "_NET_WM_STATE_STICKY");
-    states[2] = intern_atom(dpy, "_NET_WM_STATE_SKIP_TASKBAR");
-
     XChangeProperty(dpy, win, wm_type, XA_ATOM, 32, PropModeReplace,
                     (unsigned char *)&desktop_type, 1);
-    XChangeProperty(dpy, win, wm_state, XA_ATOM, 32, PropModeReplace,
-                    (unsigned char *)states, 3);
 
     XStoreName(dpy, win, name);
     XChangeProperty(dpy, win, net_name, utf8, 8, PropModeReplace,
@@ -87,7 +79,14 @@ int main(void)
 
     attrs.background_pixel = bg;
     attrs.event_mask = ExposureMask | ButtonPressMask | StructureNotifyMask;
-    attrs.override_redirect = False;
+
+    /*
+     * 5Dwm is deliberately 4Dwm/MWM-like and does not need to honor EWMH
+     * _NET_WM_WINDOW_TYPE_DESKTOP.  The IID workspace must therefore be an
+     * unmanaged root child, just like traditional X desktop/workspace
+     * clients.  override_redirect keeps the WM from reparenting/decorating it.
+     */
+    attrs.override_redirect = True;
 
     win = XCreateWindow(dpy, root, 0, 0, width, height, 0,
                         CopyFromParent, InputOutput, CopyFromParent,
@@ -96,6 +95,9 @@ int main(void)
 
     set_desktop_properties(dpy, win);
     XMapWindow(dpy, win);
+
+    /* Keep the workspace below normal application windows. */
+    XLowerWindow(dpy, win);
 
     gc = XCreateGC(dpy, win, 0, NULL);
     XFlush(dpy);
