@@ -59,6 +59,7 @@
 #undef XtRealizeWidget
 
 #include "x11mgmt.h"
+#include "irix_session.h"
 #include "session.h"
 
 
