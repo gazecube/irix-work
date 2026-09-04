@@ -305,43 +305,21 @@ void PandoraComponent::createIconAreaScaffold()
          * Binary-proven readyToDisplay() order: construct PandoraRenderer,
          * adopt renderer, construct PandoraLayout(panelWidget), adopt layout,
          * then apply the 1.5 panel scale.
-         *
-         * The original inheritance ABI for PandoraRenderer/PandoraLayout is
-         * not reconstructed yet. The current ImdViewPanel implementation only
-         * stores these opaque pointers, so the casts are a documented portable
-         * bridge rather than a claim about recovered C++ base layout.
          */
         _renderer = new PandoraRenderer();
-        ImdViewPanelAdoptRenderer(
-            panelWidget,
-            reinterpret_cast<ImdRenderer *>(_renderer));
+        ImdViewPanelAdoptRenderer(panelWidget, _renderer);
 
         const char *configPath = "/var/sysadm/config/clogin.conf";
         const bool haveIrixConfig = access(configPath, R_OK) == 0;
         PwdNameList config(haveIrixConfig ? configPath : NULL);
 
-        /*
-         * readyToDisplay() calls a renderer virtual with true when
-         * getHowDisplay() != 1. ImdIconRenderer::setGallery(bool) is the
-         * strongest symbol/vtable candidate, but the slot name is still an
-         * inference. Keep that uncertainty local to this portable renderer.
-         */
         if (config.displayFaces())
             _renderer->setGallery(true);
 
         _layout = new PandoraLayout(panelWidget);
-        ImdViewPanelAdoptLayout(
-            panelWidget,
-            reinterpret_cast<ImdLayout *>(_layout));
+        ImdViewPanelAdoptLayout(panelWidget, _layout);
 
         ImdViewPanelSetScale(panelWidget, 1.5f, 0, 0);
-
-        /*
-         * The binary next calls a renderer virtual with 2.0f. setScale(float)
-         * is the strongest recovered ImdIconRenderer candidate but remains
-         * annotated as an inferred slot name until the original vtable is
-         * cross-checked.
-         */
         _renderer->setScale(2.0f);
 
         XtManageChild(panelWidget);
@@ -383,17 +361,21 @@ void PandoraComponent::displayIcon()
             continue;
 
         /*
-         * Original displayIcon() constructs
-         * UserView(const ImdString &, long, long) for each accepted model.
-         * The meanings of the two long constructor arguments are not yet
-         * recovered, so the portable probe intentionally does not guess them.
+         * Fresh binary proof from UserView constructor and displayIcon call
+         * site: (login ImdString, uid, home ImdString). std::string is the
+         * portable ImdString stand-in in this probe.
          */
-        UserView *view = new UserView(pwd->pw_name, 0, 0);
+        UserView *view = new UserView(
+            pwd->pw_name,
+            static_cast<long>(pwd->pw_uid),
+            pwd->pw_dir);
+
         view->createPortableWidget(
             _layout->container(),
             &PandoraComponent::userViewActivateCB,
             (XtPointer)this);
         _layout->addView(view);
+        _iconPanel->adoptView(view);
         _userViews.push_back(view);
     }
     endpwent();
@@ -474,13 +456,6 @@ void PandoraComponent::passwordTextModifyVerifyCB(
         return;
     }
 
-    /*
-     * Exact control-flow shape recovered from 0x10010eec:
-     * - reject callback text lengths >= 2
-     * - length 0 is deletion and shrinks the private password buffer
-     * - length 1 stores one real byte when the private length is < 21
-     * - replace the displayed byte with ASCII space
-     */
     if (verify->text->length >= 2)
     {
         verify->doit = False;
