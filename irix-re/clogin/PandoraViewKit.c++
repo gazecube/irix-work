@@ -47,20 +47,28 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "warningLabel",
         xmLabelWidgetClass,
         _baseWidget,
+        XmNtopAttachment, XmATTACH_FORM,
+        XmNleftAttachment, XmATTACH_FORM,
         XmNalignment, XmALIGNMENT_BEGINNING,
+        XmNmappedWhenManaged, False,
         NULL);
 
     _userFullNameLabel = XtVaCreateManagedWidget(
         "userFullNameLabel",
         xmLabelWidgetClass,
         _baseWidget,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_FORM,
         XmNalignment, XmALIGNMENT_BEGINNING,
+        XmNmappedWhenManaged, False,
         NULL);
 
     _userLabel = XtVaCreateManagedWidget(
         "userLabel",
         xmLabelGadgetClass,
         _baseWidget,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_FORM,
         XmNalignment, XmALIGNMENT_END,
         XtVaTypedArg, XmNlabelString, XmRString,
         "Login name:", 12,
@@ -70,6 +78,9 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "userText",
         xmTextWidgetClass,
         _baseWidget,
+        XmNleftAttachment, XmATTACH_WIDGET,
+        XmNleftWidget, _userLabel,
+        XmNbottomAttachment, XmATTACH_FORM,
         XmNeditMode, XmSINGLE_LINE_EDIT,
         XmNblinkRate, 0,
         NULL);
@@ -78,6 +89,9 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "passwordLabel",
         xmLabelGadgetClass,
         _baseWidget,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_WIDGET,
+        XmNbottomWidget, _userLabel,
         XmNalignment, XmALIGNMENT_END,
         XtVaTypedArg, XmNlabelString, XmRString,
         "Password:", 10,
@@ -87,6 +101,10 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "passwordText",
         xmTextWidgetClass,
         _baseWidget,
+        XmNleftAttachment, XmATTACH_WIDGET,
+        XmNleftWidget, _passwordLabel,
+        XmNbottomAttachment, XmATTACH_WIDGET,
+        XmNbottomWidget, _userText,
         XmNeditMode, XmSINGLE_LINE_EDIT,
         XmNblinkRate, 0,
         NULL);
@@ -95,6 +113,11 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "panelWindow",
         xmFormWidgetClass,
         _baseWidget,
+        XmNtopAttachment, XmATTACH_FORM,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_WIDGET,
+        XmNbottomWidget, _passwordLabel,
         XmNshadowThickness, 0,
         NULL);
 
@@ -102,23 +125,37 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         "hostLabel",
         xmLabelWidgetClass,
         _baseWidget,
-        NULL);
-
-    _helpButton = XtVaCreateManagedWidget(
-        "helpButton",
-        xmPushButtonWidgetClass,
-        _baseWidget,
-        XtVaTypedArg, XmNlabelString, XmRString,
-        "Help", 5,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_FORM,
         NULL);
 
     _loginButton = XtVaCreateManagedWidget(
         "loginButton",
         xmPushButtonWidgetClass,
         _baseWidget,
+        XmNrightAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_FORM,
         XtVaTypedArg, XmNlabelString, XmRString,
         "Log In", 7,
         NULL);
+
+    _helpButton = XtVaCreateManagedWidget(
+        "helpButton",
+        xmPushButtonWidgetClass,
+        _baseWidget,
+        XmNrightAttachment, XmATTACH_WIDGET,
+        XmNrightWidget, _loginButton,
+        XmNbottomAttachment, XmATTACH_FORM,
+        XtVaTypedArg, XmNlabelString, XmRString,
+        "Help", 5,
+        NULL);
+
+    /*
+     * The attachment graph above is reconstructed from the original widget
+     * hierarchy and currently preserved portable Pandora behavior. Exact SGI
+     * offsets, widths, fonts and labels remain resource-driven through the
+     * Clogin app-defaults database.
+     */
 }
 
 PandoraComponent::~PandoraComponent()
