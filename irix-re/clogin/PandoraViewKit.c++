@@ -5,6 +5,7 @@
 #include <Xm/Label.h>
 #include <Xm/Text.h>
 #include <Xm/PushB.h>
+#include <Xm/ScrolledW.h>
 
 static String pandoraDefaults[] =
 {
@@ -19,6 +20,7 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
     : VkComponent(name),
       _form(NULL),
       _panelWindow(NULL),
+      _scrolledWindow(NULL),
       _warningLabel(NULL),
       _userFullNameLabel(NULL),
       _userLabel(NULL),
@@ -193,6 +195,33 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
     managed[4] = _userLabel;
     managed[5] = _passwordLabel;
     XtManageChildren(managed, 6);
+
+    createIconAreaScaffold();
+}
+
+void PandoraComponent::createIconAreaScaffold()
+{
+    /*
+     * Binary-proven from PandoraComponent::readyToDisplay() at 0x100115e8.
+     * The original creates this subtree lazily when icon display is enabled:
+     *
+     *   XmCreateScrolledWindow(panelWindow, "scrolledWindow", NULL, 0)
+     *   XtManageChild(scrolledWindow)
+     *   imdFtrChooseVisualArgs(...)
+     *   new ImdIconPanel(..., scrolledWindow, args, count)
+     *   ImdViewPanelAdoptRenderer(...)
+     *   ImdViewPanelAdoptLayout(...)
+     *   ImdViewPanelSetScale(...)
+     *
+     * The probe creates the proven Motif container eagerly so its geometry can
+     * be exercised before the ImdIconPanel compatibility library is linked.
+     */
+    _scrolledWindow = XmCreateScrolledWindow(
+        _panelWindow,
+        (char *)"scrolledWindow",
+        NULL,
+        0);
+    XtManageChild(_scrolledWindow);
 }
 
 PandoraComponent::~PandoraComponent()
