@@ -1,6 +1,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/shape.h>
+#include <X11/Xutil.h>
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -20,10 +21,11 @@
 #endif
 
 #define MAX_OBJECTS 256
-#define OBJECT_W 96
-#define OBJECT_H 66
-#define ICON_BOX_W 46
-#define ICON_BOX_H 36
+#define OBJECT_W 108
+#define OBJECT_H 96
+#define ICON_BOX_W 85
+#define ICON_BOX_H 68
+#define LABEL_Y 84
 
 typedef enum DesktopObjectKind {
     OBJ_HOME,
@@ -44,6 +46,7 @@ typedef struct DesktopObject {
     int y;
     unsigned int width;
     unsigned int height;
+    int selected;
     SgiIconImage *icon;
 } DesktopObject;
 
@@ -116,16 +119,21 @@ static DesktopObjectKind classify_path(const char *path, const struct stat *st)
     return OBJ_OTHER;
 }
 
+/*
+ * These are real names from the recovered IRIX image dump. The dump does
+ * not currently contain the original desktop Dumpster image, so Dumpster
+ * intentionally falls back to the hand-drawn prototype glyph.
+ */
 static const char *kind_icon_name(DesktopObjectKind kind)
 {
     switch (kind) {
-    case OBJ_HOME: return "home.icon";
-    case OBJ_DUMPSTER: return "dumpster.icon";
-    case OBJ_DIRECTORY: return "directory.icon";
-    case OBJ_EXECUTABLE: return "executable.icon";
-    case OBJ_FILE: return "file.icon";
-    case OBJ_SYMLINK: return "symlink.icon";
-    default: return "other.icon";
+    case OBJ_HOME: return "Fm.icon";
+    case OBJ_DUMPSTER: return NULL;
+    case OBJ_DIRECTORY: return "dirview.icon";
+    case OBJ_EXECUTABLE: return "application.icon";
+    case OBJ_FILE: return "default.icon";
+    case OBJ_SYMLINK: return "CustLink.icon";
+    default: return "default.icon";
     }
 }
 
@@ -139,13 +147,14 @@ static int has_sgi_icon_suffix(const char *path)
 
 static void resolve_object_icon(DesktopObject *obj, const char *icon_dir)
 {
+    const char *icon_name = kind_icon_name(obj->kind);
+
     if (obj->path[0] && has_sgi_icon_suffix(obj->path)) {
         strncpy(obj->icon_path, obj->path, sizeof(obj->icon_path) - 1);
         obj->icon_path[sizeof(obj->icon_path) - 1] = '\0';
-    } else if (icon_dir && *icon_dir) {
+    } else if (icon_dir && *icon_dir && icon_name) {
         if (snprintf(obj->icon_path, sizeof(obj->icon_path), "%s/%s",
-                     icon_dir, kind_icon_name(obj->kind)) >=
-            (int)sizeof(obj->icon_path))
+                     icon_dir, icon_name) >= (int)sizeof(obj->icon_path))
             obj->icon_path[0] = '\0';
     }
 
@@ -174,26 +183,26 @@ static void add_fixed_objects(void)
     objects[0].x = 24;
     objects[0].y = 28;
     objects[1].x = 24;
-    objects[1].y = 104;
+    objects[1].y = 134;
 }
 
 static void layout_file_objects(unsigned int screen_width,
                                 unsigned int screen_height)
 {
-    int x = (int)screen_width - 114;
+    int x = (int)screen_width - 126;
     int y = 28;
     int i;
 
     for (i = 2; i < object_count; ++i) {
         if (y + OBJECT_H > (int)screen_height - 8) {
             y = 28;
-            x -= 110;
+            x -= 122;
         }
-        if (x < 130)
-            x = 130;
+        if (x < 142)
+            x = 142;
         objects[i].x = x;
         objects[i].y = y;
-        y += 76;
+        y += 106;
     }
 }
 
@@ -245,7 +254,7 @@ static int desktop_object_rects(XRectangle *out, int cap)
     if (n > cap)
         n = cap;
     for (i = 0; i < n; ++i) {
-        out[i].x = (short)(objects[i].x - 6);
+        out[i].x = (short)(objects[i].x - 8);
         out[i].y = (short)(objects[i].y - 8);
         out[i].width = (unsigned short)objects[i].width;
         out[i].height = (unsigned short)objects[i].height;
@@ -313,18 +322,31 @@ static Window create_background_input_window(Display *dpy, Window root,
 
 static void draw_document_glyph(Display *dpy, Window win, GC gc, int x, int y)
 {
-    XDrawRectangle(dpy, win, gc, x, y, 42, 34);
-    XDrawLine(dpy, win, gc, x + 8, y + 9, x + 34, y + 9);
-    XDrawLine(dpy, win, gc, x + 8, y + 15, x + 34, y + 15);
-    XDrawLine(dpy, win, gc, x + 8, y + 21, x + 28, y + 21);
+    XDrawRectangle(dpy, win, gc, x + 20, y + 12, 42, 34);
+    XDrawLine(dpy, win, gc, x + 28, y + 21, x + 54, y + 21);
+    XDrawLine(dpy, win, gc, x + 28, y + 27, x + 54, y + 27);
+    XDrawLine(dpy, win, gc, x + 28, y + 33, x + 48, y + 33);
 }
 
 static void draw_folder_glyph(Display *dpy, Window win, GC gc, int x, int y)
 {
-    XDrawRectangle(dpy, win, gc, x, y + 7, 44, 27);
-    XDrawLine(dpy, win, gc, x + 4, y + 7, x + 4, y + 2);
-    XDrawLine(dpy, win, gc, x + 4, y + 2, x + 20, y + 2);
-    XDrawLine(dpy, win, gc, x + 20, y + 2, x + 25, y + 7);
+    XDrawRectangle(dpy, win, gc, x + 20, y + 19, 44, 27);
+    XDrawLine(dpy, win, gc, x + 24, y + 19, x + 24, y + 14);
+    XDrawLine(dpy, win, gc, x + 24, y + 14, x + 40, y + 14);
+    XDrawLine(dpy, win, gc, x + 40, y + 14, x + 45, y + 19);
+}
+
+static int text_width(Display *dpy, GC gc, const char *text, int len)
+{
+    XFontStruct *font;
+    int width = len * 7;
+
+    font = XQueryFont(dpy, XGContextFromGC(gc));
+    if (font) {
+        width = XTextWidth(font, text, len);
+        XFreeFontInfo(NULL, font, 1);
+    }
+    return width;
 }
 
 static void draw_icon(Display *dpy, Window win, GC gc,
@@ -334,6 +356,17 @@ static void draw_icon(Display *dpy, Window win, GC gc,
     int x = obj->x;
     int y = obj->y;
     int label_len = (int)strlen(obj->name);
+    int label_width;
+    int label_x;
+
+    if (label_len > 20)
+        label_len = 20;
+
+    if (obj->selected) {
+        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+        XDrawRectangle(dpy, win, gc, x - 2, y - 2,
+                       ICON_BOX_W + 3, ICON_BOX_H + 3);
+    }
 
     if (obj->icon) {
         sgi_icon_draw(dpy, win, gc, obj->icon,
@@ -348,18 +381,18 @@ static void draw_icon(Display *dpy, Window win, GC gc,
             draw_folder_glyph(dpy, win, gc, x, y);
             break;
         case OBJ_DUMPSTER:
-            XDrawRectangle(dpy, win, gc, x + 5, y + 5, 32, 28);
-            XDrawLine(dpy, win, gc, x + 2, y + 5, x + 40, y + 5);
-            XDrawLine(dpy, win, gc, x + 12, y + 1, x + 30, y + 1);
+            XDrawRectangle(dpy, win, gc, x + 25, y + 18, 32, 36);
+            XDrawLine(dpy, win, gc, x + 22, y + 18, x + 60, y + 18);
+            XDrawLine(dpy, win, gc, x + 32, y + 14, x + 50, y + 14);
             break;
         case OBJ_EXECUTABLE:
             draw_document_glyph(dpy, win, gc, x, y);
-            XFillRectangle(dpy, win, gc, x + 15, y + 12, 12, 10);
+            XFillRectangle(dpy, win, gc, x + 35, y + 24, 12, 10);
             break;
         case OBJ_SYMLINK:
             draw_document_glyph(dpy, win, gc, x, y);
-            XDrawLine(dpy, win, gc, x + 5, y + 29, x + 18, y + 23);
-            XDrawLine(dpy, win, gc, x + 5, y + 29, x + 13, y + 32);
+            XDrawLine(dpy, win, gc, x + 25, y + 42, x + 38, y + 36);
+            XDrawLine(dpy, win, gc, x + 25, y + 42, x + 33, y + 45);
             break;
         default:
             draw_document_glyph(dpy, win, gc, x, y);
@@ -367,10 +400,20 @@ static void draw_icon(Display *dpy, Window win, GC gc,
         }
     }
 
-    XSetForeground(dpy, gc, BlackPixel(dpy, screen));
-    if (label_len > 15)
-        label_len = 15;
-    XDrawString(dpy, win, gc, x, y + 50, obj->name, label_len);
+    label_width = text_width(dpy, gc, obj->name, label_len);
+    label_x = x + ((int)ICON_BOX_W - label_width) / 2;
+
+    if (obj->selected) {
+        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+        XFillRectangle(dpy, win, gc, label_x - 3, y + LABEL_Y - 12,
+                       (unsigned int)label_width + 6, 16);
+        XSetForeground(dpy, gc, WhitePixel(dpy, screen));
+    } else {
+        XSetForeground(dpy, gc, BlackPixel(dpy, screen));
+    }
+
+    XDrawString(dpy, win, gc, label_x, y + LABEL_Y,
+                obj->name, label_len);
 }
 
 static void redraw(Display *dpy, Window win, GC gc)
@@ -384,7 +427,7 @@ static DesktopObject *object_at(int x, int y)
 {
     int i;
     for (i = object_count - 1; i >= 0; --i) {
-        int left = objects[i].x - 6;
+        int left = objects[i].x - 8;
         int top = objects[i].y - 8;
         int right = left + (int)objects[i].width;
         int bottom = top + (int)objects[i].height;
@@ -393,6 +436,19 @@ static DesktopObject *object_at(int x, int y)
             return &objects[i];
     }
     return NULL;
+}
+
+static void select_object(Display *dpy, Window win, GC gc,
+                          DesktopObject *selected)
+{
+    int i;
+
+    for (i = 0; i < object_count; ++i)
+        objects[i].selected = (&objects[i] == selected);
+
+    XClearWindow(dpy, win);
+    redraw(dpy, win, gc);
+    XFlush(dpy);
 }
 
 static const char *desktop_directory_from_args(int argc, char **argv,
@@ -512,8 +568,9 @@ int main(int argc, char **argv)
         } else if (ev.type == ButtonPress && ev.xbutton.window == win) {
             DesktopObject *obj = object_at(ev.xbutton.x, ev.xbutton.y);
             if (obj) {
+                select_object(dpy, win, gc, obj);
                 fprintf(stderr,
-                        "iid-desktop: click '%s' path='%s' kind=%d icon='%s'\n",
+                        "iid-desktop: select '%s' path='%s' kind=%d icon='%s'\n",
                         obj->name, obj->path, (int)obj->kind, obj->icon_path);
             }
         } else if (ev.type == ButtonPress &&
