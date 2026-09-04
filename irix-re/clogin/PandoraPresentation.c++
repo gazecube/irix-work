@@ -33,13 +33,67 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
      * The original layout positions views directly in the Imd panel. The
      * portable probe now does the same against the DrawingArea-backed panel;
      * no intermediate Motif RowColumn/BulletinBoard owns the geometry.
+     *
+     * PandoraLayout::resize() at 0x10018408 loads the panel widget from the
+     * ImdLayout base and calls ImdViewPanelUpdateLayout(panel). Our portable
+     * Imd panel does not dispatch that lifecycle yet, so ConfigureNotify is
+     * bridged to resize() until the full ViewPanel layout dispatcher exists.
      */
+    if (_panelWidget)
+    {
+        XtAddEventHandler(
+            _panelWidget,
+            StructureNotifyMask,
+            False,
+            &PandoraLayout::panelStructureEvent,
+            (XtPointer)this);
+    }
+}
+
+PandoraLayout::~PandoraLayout()
+{
+    if (_panelWidget)
+    {
+        XtRemoveEventHandler(
+            _panelWidget,
+            StructureNotifyMask,
+            False,
+            &PandoraLayout::panelStructureEvent,
+            (XtPointer)this);
+    }
+}
+
+void PandoraLayout::panelStructureEvent(
+    Widget,
+    XtPointer clientData,
+    XEvent *event,
+    Boolean *)
+{
+    PandoraLayout *self = static_cast<PandoraLayout *>(clientData);
+    if (!self || !event)
+        return;
+
+    if (event->type == ConfigureNotify)
+        self->resize();
 }
 
 void PandoraLayout::addView(UserView *view)
 {
     if (view)
         _views.push_back(view);
+}
+
+void PandoraLayout::resize()
+{
+    /*
+     * Original 0x10018408 is effectively:
+     *
+     *   ImdViewPanelUpdateLayout(panelWidget);
+     *
+     * update() is the current portable equivalent of the panel/layout
+     * dispatch reached by that call.
+     */
+    update();
 }
 
 void PandoraLayout::update()
