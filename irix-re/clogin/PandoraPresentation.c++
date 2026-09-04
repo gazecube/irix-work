@@ -274,8 +274,6 @@ void UserView::createPortableWidget(
      * Portable rendering backend only. Original UserView instances are drawn
      * through PandoraRenderer / ImdInvertedTeeRenderer in the ImdViewPanel.
      * A flat DrawnButton remains only as the temporary Linux selection surface.
-     * The 128x96 portable cell size remains provisional until
-     * ImdInvertedTeeRenderer::setSize(ImdView &) is reconstructed.
      */
     _widget = XtVaCreateManagedWidget(
         _name.c_str(),
@@ -283,13 +281,55 @@ void UserView::createPortableWidget(
         parent,
         XmNlabelString, label,
         XmNuserData, (XtPointer)this,
-        XmNwidth, 128,
-        XmNheight, 96,
-        XmNrecomputeSize, False,
+        XmNrecomputeSize, True,
+        XmNmarginWidth, 0,
+        XmNmarginHeight, 0,
         XmNshadowThickness, 0,
         XmNhighlightThickness, 0,
         XmNtraversalOn, False,
         XmNpushButtonEnabled, True,
+        NULL);
+
+    /*
+     * Recovered from libimdIconPanel.so:
+     *
+     * ImdInvertedTeeRenderer::setSize(ImdView &) at 0x096842f0 computes
+     * the icon extent as (iconScale / scale) * 100. Its constructor and
+     * setScale() keep iconScale at scale * 0.5 unless explicitly overridden,
+     * so the normal inverted-tee icon extent is exactly 50 pixels.
+     *
+     * The same method computes:
+     *
+     *   width  = max(iconExtent, formattedLabelWidth)
+     *   height = iconExtent + invertedTeeMargin + formattedLabelHeight
+     *
+     * ImdInvertedTeeRenderer::realize() at 0x096844e0 proves the resource
+     * names "invertedTeeMargin" and "minimumIconWidth". The library defaults
+     * are 0 and 50; Clogin app-defaults override invertedTeeMargin to 3.
+     *
+     * The original uses formatLabel(), getPosFont(), and XmbTextExtents().
+     * Until those renderer/font paths are linked into the portable probe,
+     * XmStringExtent() is the explicitly portable stand-in for the measured
+     * formatted-label extent. The sizing formula and constants are original.
+     */
+    XmFontList fontList = NULL;
+    Dimension labelWidth = 0;
+    Dimension labelHeight = 0;
+    XtVaGetValues(_widget, XmNfontList, &fontList, NULL);
+    if (fontList)
+        XmStringExtent(fontList, label, &labelWidth, &labelHeight);
+
+    const Dimension iconExtent = 50;
+    const Dimension invertedTeeMargin = 3;
+    Dimension width = labelWidth > iconExtent ? labelWidth : iconExtent;
+    Dimension height = static_cast<Dimension>(
+        iconExtent + invertedTeeMargin + labelHeight);
+
+    XtVaSetValues(
+        _widget,
+        XmNwidth, width,
+        XmNheight, height,
+        XmNrecomputeSize, False,
         NULL);
 
     XmStringFree(label);
