@@ -36,8 +36,10 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
      *
      * PandoraLayout::resize() at 0x10018408 loads the panel widget from the
      * ImdLayout base and calls ImdViewPanelUpdateLayout(panel). Our portable
-     * Imd panel does not dispatch that lifecycle yet, so ConfigureNotify is
-     * bridged to resize() until the full ViewPanel layout dispatcher exists.
+     * Imd panel does not dispatch the full ViewPanel lifecycle yet, so both
+     * ConfigureNotify and the initial MapNotify are bridged to resize(). The
+     * MapNotify pass is needed because displayIcon() can run before the panel
+     * has its final mapped width.
      */
     if (_panelWidget)
     {
@@ -73,7 +75,13 @@ void PandoraLayout::panelStructureEvent(
     if (!self || !event)
         return;
 
-    if (event->type == ConfigureNotify)
+    /*
+     * ConfigureNotify mirrors the recovered PandoraLayout::resize() path.
+     * MapNotify is a portable bootstrap bridge for the missing ImdViewPanel
+     * show/realize lifecycle: by map time the panel has its final initial
+     * width and the UserViews created by displayIcon() already exist.
+     */
+    if (event->type == ConfigureNotify || event->type == MapNotify)
         self->resize();
 }
 
