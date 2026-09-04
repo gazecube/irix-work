@@ -4,6 +4,9 @@
 #define MAX_PASSWORD_LEN 128
 #define XSERVER_TIMEOUT  10
 #define MAX_DISPLAY_SCAN 32
+#ifndef MAXPATHLEN
+#define MAXPATHLEN 1024
+#endif
 
 #define SHIRT_COLOR_ROOT  "#9b4949"
 #define SHIRT_COLOR_USER  "#499b94"
