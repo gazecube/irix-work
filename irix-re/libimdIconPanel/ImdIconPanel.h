@@ -2,9 +2,31 @@
 #define IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H
 
 #include <X11/Intrinsic.h>
+#include <vector>
 
-class ImdRenderer;
-class ImdLayout;
+/*
+ * Original libimdIconPanel class names recovered from DWARF/symbols.
+ * These are intentionally minimal portable base types. No unproven virtual
+ * API is assigned here; they only let reconstructed subclasses use the
+ * recovered ownership/adoption interfaces without reinterpret_cast bridges.
+ */
+class ImdRenderer
+{
+public:
+    virtual ~ImdRenderer() {}
+};
+
+class ImdLayout
+{
+public:
+    virtual ~ImdLayout() {}
+};
+
+class ImdView
+{
+public:
+    virtual ~ImdView() {}
+};
 
 extern WidgetClass imdViewPanelWidgetClass;
 
@@ -28,8 +50,15 @@ public:
 
     Widget baseWidget() const { return _baseWidget; }
 
+    /* Original public method name recovered from libimdIconPanel DWARF. */
+    void adoptView(ImdView *view);
+
+    /* Portable inspection only; not claimed as an original public method. */
+    const std::vector<ImdView *> &portableViews() const { return _views; }
+
 private:
     Widget _baseWidget;
+    std::vector<ImdView *> _views;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H */
