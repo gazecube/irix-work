@@ -25,10 +25,10 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
     : _panelWidget(panelWidget), _container(NULL)
 {
     /*
-     * Portable backing only. The original PandoraLayout is an Imd layout
-     * object adopted directly by ImdViewPanel; it does not create this Motif
-     * RowColumn. Keeping the container here removes that Linux-only detail
-     * from PandoraComponent::displayIcon().
+     * Portable backing only. The original PandoraLayout directly constructs
+     * ImdLayout(Widget), then installs its own vtable and initializes two
+     * class fields to 10 and 12. The Motif RowColumn remains a Linux-only
+     * placement backend until the original layout algorithm is reconstructed.
      */
     _container = XtVaCreateManagedWidget(
         "userViewContainer",
@@ -53,39 +53,57 @@ void PandoraLayout::update()
 {
     /*
      * Xt's RowColumn performs the portable placement for now. The original
-     * PandoraLayout/ImdLayout geometry algorithm remains an RE target.
+     * PandoraLayout::update(bool) at 0x10018028 remains the geometry target.
      */
     if (_container)
         XtVaSetValues(_container, XmNnumColumns, 4, NULL);
 }
 
-UserView::UserView(const std::string &name, long arg0, long arg1)
+UserView::UserView(
+    const std::string &name,
+    long uid,
+    const std::string &home)
     : _name(name),
-      _home(),
-      _uid(0),
-      _hasAccountMetadata(false),
-      _arg0(arg0),
-      _arg1(arg1),
+      _home(home),
+      _uid(static_cast<uid_t>(uid)),
       _widget(NULL)
 {
     /*
-     * Portable bridge for the current probe. Original PandoraComponent::addUser
-     * already has the accepted xpasswd record and copies pw_name, pw_dir and
-     * pw_uid into the presentation object before displayIcon() constructs the
-     * UserView. Until that intermediate object is reconstructed, recover the
-     * same account metadata by name rather than assigning invented meanings to
-     * UserView's two unresolved long constructor arguments.
+     * Binary-proven constructor shape from 0x100179c4:
+     *
+     *   ImdIconView::ImdIconView()
+     *   install UserView vtable
+     *   store uid
+     *   construct/copy login ImdString
+     *   construct/copy home ImdString
+     *
+     * The portable C++ base constructor runs automatically here; std::string
+     * substitutes for ImdString until libimdUtil's ABI is wired in.
      */
-    struct passwd *pwd = getpwnam(_name.c_str());
-    if (pwd && pwd->pw_dir)
-        setAccountMetadata(pwd->pw_dir, pwd->pw_uid);
 }
 
-void UserView::setAccountMetadata(const std::string &home, uid_t uid)
+UserView::UserView(
+    const std::string &name,
+    long,
+    long)
+    : _name(name),
+      _home(),
+      _uid(0),
+      _widget(NULL)
 {
-    _home = home;
-    _uid = uid;
-    _hasAccountMetadata = true;
+    /*
+     * Transitional compatibility path for the pre-recovery displayIcon()
+     * call site. The fresh clogin disassembly proves the real constructor is
+     * (login, uid, home), so resolve those two values from passwd rather than
+     * retaining the obsolete pair of anonymous long values.
+     */
+    struct passwd *pwd = getpwnam(_name.c_str());
+    if (pwd)
+    {
+        _uid = pwd->pw_uid;
+        if (pwd->pw_dir)
+            _home = pwd->pw_dir;
+    }
 }
 
 void UserView::createPortableWidget(
@@ -101,9 +119,8 @@ void UserView::createPortableWidget(
 
     /*
      * Portable rendering backend only. Original UserView instances are drawn
-     * by PandoraRenderer/ImdIconRenderer into the ImdViewPanel. A flat
-     * DrawnButton avoids presenting the temporary backend as a normal Motif
-     * push-button list while retaining selectable per-view widgets on Linux.
+     * through PandoraRenderer / ImdInvertedTeeRenderer in the ImdViewPanel.
+     * A flat DrawnButton remains only as the temporary Linux selection surface.
      */
     _widget = XtVaCreateManagedWidget(
         _name.c_str(),
