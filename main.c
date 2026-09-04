@@ -49,6 +49,7 @@
 #include "callbacks.h"
 #include "shortcuts.h"
 #include "clogin_reconstructed.h"
+#include "clogin_autologin.h"
 #include "gui.h"
 
 /* Keep the clogin compatibility rewrites scoped to gui.h only. */
@@ -80,7 +81,7 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "dvlogin: invalid VT number '%s'\n", argv[i + 1]);
 				return 1;
 			}
-			i++;  /* skip the number */
+			i++;
 		}
 		else
 		{
@@ -89,7 +90,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	/* auto-detect VT if not specified on command line */
 	if(vt_num < 0)
 	{
 		vt_num = find_current_vt();
@@ -102,19 +102,10 @@ int main(int argc, char *argv[])
 	g_vt_num = vt_num;
 	snprintf(g_vt_str, sizeof(g_vt_str), "vt%d", vt_num);
 
-/*
-	Take ownership of the target VT.  We are root, so we
-	can forcibly switch to it, become session leader, and
-	claim it as our controlling terminal.  This means the
-	Xorg child inherits a real console on the right VT,
-	which avoids "only console users" errors and ensures
-	everything renders on the correct TTY.
-*/
 	{
 		char ttypath[32];
 		int console_fd, vt_fd;
 
-		/* switch the active VT to our target */
 		console_fd = open("/dev/tty0", O_RDWR | O_NOCTTY);
 		if(console_fd >= 0)
 		{
@@ -123,27 +114,16 @@ int main(int argc, char *argv[])
 			close(console_fd);
 		}
 
-		/* become session leader so TIOCSCTTY works */
 		setsid();
-
-		/* open the target VT and claim it */
 		snprintf(ttypath, sizeof(ttypath), "/dev/tty%d", vt_num);
 		vt_fd = open(ttypath, O_RDWR);
 		if(vt_fd >= 0)
 		{
-			ioctl(vt_fd, TIOCSCTTY, 1);  /* 1 = steal from other session */
-
-			/* point stdio at the VT */
+			ioctl(vt_fd, TIOCSCTTY, 1);
 			dup2(vt_fd, STDIN_FILENO);
 			dup2(vt_fd, STDOUT_FILENO);
 			dup2(vt_fd, STDERR_FILENO);
 			if(vt_fd > STDERR_FILENO) { close(vt_fd); }
-
-			/*	Paint the VT so there's no ugly text visible
-				during transitions.  ESC[44m = blue background,
-				ESC[2J = clear screen, ESC[H = cursor home,
-				ESC[?25l = hide cursor.
-			*/
 			{
 				static const char seq[] =
 					"\033[40m\033[30m\033[2J\033[H\033[?25l";
@@ -152,7 +132,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	/* install signal handlers (crash + clean shutdown) */
 	install_signal_handlers();
 
 	fprintf(stdout, "dvlogin: starting session loop on %s\n", g_vt_str);
@@ -160,10 +139,28 @@ int main(int argc, char *argv[])
 
 	while(!g_shutdown)
 	{
+		int display_num;
+		pid_t xpid;
+		int result;
+
 		memset(username, 0, sizeof(username));
 
-		/* find a free X display number */
-		int display_num = find_free_display();
+		/* Original clogin consumes /etc/autologin.on before validating
+		 * /etc/autologin.  A valid entry bypasses the greeter entirely. */
+		if(clogin_check_autologin(username, sizeof(username)))
+		{
+			fprintf(stdout, "dvlogin: IRIX-style autologin for '%s'\n", username);
+			fflush(stdout);
+			run_user_session(username);
+			if(g_shutdown) { break; }
+			paint_vt(g_vt_num);
+			fprintf(stdout, "dvlogin: autologin session ended, returning to login screen\n");
+			fflush(stdout);
+			sleep(1);
+			continue;
+		}
+
+		display_num = find_free_display();
 		if(display_num < 0)
 		{
 			fprintf(stderr, "dvlogin: no free X display found (scanned :%d-:%d), retrying...\n",
@@ -176,8 +173,7 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "dvlogin: using display %s on %s\n", g_display_str, g_vt_str);
 		fflush(stdout);
 
-		/* start X server for the login screen */
-		pid_t xpid = start_xserver(g_display_str, g_vt_str, NULL);
+		xpid = start_xserver(g_display_str, g_vt_str, NULL);
 		if(xpid < 0)
 		{
 			fprintf(stderr, "dvlogin: X server failed to start, retrying...\n");
@@ -186,7 +182,6 @@ int main(int argc, char *argv[])
 		}
 		g_xserver_pid = xpid;
 
-		/* wait until the X server is accepting connections */
 		if(!wait_for_xserver(g_display_str, XSERVER_TIMEOUT))
 		{
 			fprintf(stderr, "dvlogin: X server not responding on %s, retrying...\n",
@@ -197,19 +192,12 @@ int main(int argc, char *argv[])
 			continue;
 		}
 
-		/* optional: set login screen background */
 		setenv("DISPLAY", g_display_str, 1);
 		system("xsetroot -solid skyblue4");
 
-		/* run login GUI, blocks until auth succeeds or GUI exits */
-		int result = run_login_gui(argc, argv, username, sizeof(username));
+		result = run_login_gui(argc, argv, username, sizeof(username));
 
-		/*	Paint the VT blue before tearing down X so the user
-			sees a clean screen instead of TTY text flicker.
-		*/
 		paint_vt(g_vt_num);
-
-		/* tear down the login X server */
 		stop_xserver(xpid);
 		g_xserver_pid = 0;
 
@@ -225,24 +213,16 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "dvlogin: authenticated user '%s', launching session\n", username);
 		fflush(stdout);
 
-		/* run the user's desktop session, blocks until it ends */
 		run_user_session(username);
 
 		if(g_shutdown) { break; }
 
-		/*	Session ended - paint the VT blue for a clean
-			transition back to the login screen.
-		*/
 		paint_vt(g_vt_num);
-
 		fprintf(stdout, "dvlogin: session ended, returning to login screen\n");
 		fflush(stdout);
-
-		/* small delay before restarting login screen */
 		sleep(1);
 	}
 
-	/* clean shutdown */
 	if(g_xserver_pid > 0)
 	{
 		stop_xserver(g_xserver_pid);
@@ -253,6 +233,5 @@ int main(int argc, char *argv[])
 
 	fprintf(stdout, "dvlogin: shutting down cleanly\n");
 	fflush(stdout);
-
 	return 0;
 }
