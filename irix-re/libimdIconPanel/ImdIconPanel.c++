@@ -4,31 +4,62 @@
 #include <cstring>
 #include <map>
 
-#if defined(IMDICONPANEL_HAVE_SGM)
-/*
- * Binary-proven superclass for IRIX 6.5.0 ImdViewPanel.
- *
- * IRIX publishes this declaration through <Sgm/VisualDrawingA.h>. Some MaXX
- * installations provide libSgm without that historical header, so declare the
- * C widget-class symbol directly instead of making the reconstruction depend
- * on an optional SDK header.
- */
-extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
-#endif
-
-/*
- * imdViewPanelClassRec at 0x096caaa0 has a relocation to
- * sgVisualDrawingAreaWidgetClass. Prefer that original superclass whenever
- * libSgm is available. XmDrawingArea remains a portable fallback only.
- */
-#if defined(IMDICONPANEL_HAVE_SGM)
-WidgetClass imdViewPanelWidgetClass = sgVisualDrawingAreaWidgetClass;
-#else
-WidgetClass imdViewPanelWidgetClass = xmDrawingAreaWidgetClass;
+#if defined(IMDICONPANEL_HAVE_DLFCN)
+#include <dlfcn.h>
 #endif
 
 namespace
 {
+WidgetClass resolveViewPanelWidgetClass()
+{
+#if defined(IMDICONPANEL_HAVE_DLFCN)
+    /*
+     * IRIX 6.5.0's ImdViewPanel class record inherits from the exported
+     * sgVisualDrawingAreaWidgetClass data symbol. MaXX installations may ship
+     * libSgm without exporting that historical symbol, so resolve it at
+     * runtime instead of introducing a mandatory link-time reference.
+     *
+     * The library handle is intentionally retained for process lifetime: the
+     * returned WidgetClass points into libSgm's class record storage.
+     */
+    void *symbol = dlsym(RTLD_DEFAULT, "sgVisualDrawingAreaWidgetClass");
+    if (symbol)
+    {
+        WidgetClass *widgetClass = static_cast<WidgetClass *>(symbol);
+        if (widgetClass && *widgetClass)
+            return *widgetClass;
+    }
+
+    static void *sgmHandle = 0;
+    if (!sgmHandle)
+    {
+        static const char *const candidates[] =
+        {
+            "libSgm.so",
+            "libSgm.so.1",
+            "libSgm.so.1.1",
+            0
+        };
+
+        for (int i = 0; candidates[i] && !sgmHandle; ++i)
+            sgmHandle = dlopen(candidates[i], RTLD_LAZY | RTLD_LOCAL);
+    }
+
+    if (sgmHandle)
+    {
+        symbol = dlsym(sgmHandle, "sgVisualDrawingAreaWidgetClass");
+        if (symbol)
+        {
+            WidgetClass *widgetClass = static_cast<WidgetClass *>(symbol);
+            if (widgetClass && *widgetClass)
+                return *widgetClass;
+        }
+    }
+#endif
+
+    return xmDrawingAreaWidgetClass;
+}
+
 struct ViewPanelState
 {
     ImdRenderer *renderer;
@@ -52,10 +83,6 @@ bool isPrivateImdResource(const char *name)
     if (!name)
         return false;
 
-    /*
-     * installColormap and ditherBackground are NOT Imd-only resources. They
-     * belong to SgVisualDrawingArea and must reach Xt when Sgm is in use.
-     */
     return std::strcmp(name, "horzScrollPolicy") == 0 ||
            std::strcmp(name, "vertScrollPolicy") == 0 ||
            std::strcmp(name, "dropEnabled") == 0 ||
@@ -64,20 +91,28 @@ bool isPrivateImdResource(const char *name)
            std::strcmp(name, "renameEnabled") == 0;
 }
 
+bool usingSgVisualDrawingArea()
+{
+    return imdViewPanelWidgetClass != xmDrawingAreaWidgetClass;
+}
+
 bool isUnsupportedFallbackResource(const char *name)
 {
-#if defined(IMDICONPANEL_HAVE_SGM)
-    (void)name;
-    return false;
-#else
-    if (!name)
+    if (!name || usingSgVisualDrawingArea())
         return false;
 
+    /* These are SgVisualDrawingArea resources, not XmDrawingArea resources. */
     return std::strcmp(name, "installColormap") == 0 ||
            std::strcmp(name, "ditherBackground") == 0;
-#endif
 }
 }
+
+/*
+ * imdViewPanelClassRec at 0x096caaa0 has a relocation to
+ * sgVisualDrawingAreaWidgetClass. Use that class when the runtime provides the
+ * historical symbol, otherwise retain XmDrawingArea as the portable fallback.
+ */
+WidgetClass imdViewPanelWidgetClass = resolveViewPanelWidgetClass();
 
 extern "C" Widget ImdCreateViewPanel(
     Widget parent,
@@ -91,10 +126,8 @@ extern "C" Widget ImdCreateViewPanel(
      *
      * Our reconstructed class record does not yet implement ImdViewPanel's
      * private resource table, so those names are filtered. Superclass
-     * resources are preserved. In particular, SgVisualDrawingArea consumes
-     * installColormap and ditherBackground exactly where the original widget
-     * did. The XmDrawingArea fallback filters those two only because Motif
-     * alone does not define them.
+     * resources are preserved when SgVisualDrawingArea was resolved. The
+     * XmDrawingArea fallback filters the two Sgm-only resources.
      */
     Arg *filtered = 0;
     Cardinal filteredCount = 0;
