@@ -9,6 +9,25 @@
  *   no note       - strongly supported original name/semantics
  *   best-guess    - behavior/layout confirmed, original spelling unknown
  *   unresolved    - declaration intentionally incomplete
+ *
+ * IMPORTANT:
+ * This is currently a source-level reconstruction header, not an SGI N32 ABI
+ * compatibility header. The original IRIX object layout is documented below,
+ * but incomplete embedded utility types are temporarily represented by
+ * pointers in the portable declaration. Do not infer IRIX offsets from the
+ * C++ members at the end of this class.
+ *
+ * Recovered IRIX 6.5.0 layout:
+ *   +0x00 ImdCollectionOf<CallbackInfo> * _clientCallbacks
+ *   +0x04 ImdCollectionOf<CallbackInfo> * _clientChildCallbacks
+ *   +0x08 packed flag byte
+ *   +0x0c ImdCollectionOf<ImdAttribute>    _attributes
+ *   +0x10 ImdString                        _selector
+ *   +0x18 ImdDNA *                         _attributeDNA
+ *   +0x1c int                              _refCount
+ *   +0x20 CallbackInfo *                   _batchClient
+ *   +0x24 int                              deactivation delay seconds
+ *   +0x28 SGI C++ vptr for this interface
  */
 
 class ImdDNA;
@@ -29,9 +48,9 @@ public:
 
     struct CallbackInfo
     {
-        Callback callback;          /* +0x00 */
-        void *clientData;           /* +0x04 */
-        unsigned char active;       /* +0x08, best-guess member name */
+        Callback callback;
+        void *clientData;
+        unsigned char active;       /* best-guess member name */
     };
 
     ImdModel(const ImdDNA &dna);
@@ -102,21 +121,19 @@ protected:
     bool setAttr_Privileged(const ImdAttribute &attribute);
 
 protected:
-    ImdCollectionOf<CallbackInfo> *_clientCallbacks;       /* +0x00 */
-    ImdCollectionOf<CallbackInfo> *_clientChildCallbacks;  /* +0x04 */
-
     /*
-     * Packed flags byte at +0x08.
-     * Bit behavior is confirmed. Original member spellings are not.
+     * Portable/reimplementation storage placeholders only.
+     * These intentionally do NOT claim to reproduce the SGI object layout.
      */
+    ImdCollectionOf<CallbackInfo> *_clientCallbacks;
+    ImdCollectionOf<CallbackInfo> *_clientChildCallbacks;
     unsigned char _flags;
-
-    ImdCollectionOf<ImdAttribute> *_attributes; /* +0x0c container identity confirmed */
-    ImdString *_selector;                       /* +0x10 semantic identity confirmed */
-    ImdDNA *_attributeDNA;                      /* +0x18, best-guess name */
-    int _refCount;                              /* +0x1c */
-    CallbackInfo *_batchClient;                 /* +0x20 */
-    int _deactivationDelay;                     /* +0x24, best-guess name */
+    ImdCollectionOf<ImdAttribute> *_attributes;
+    ImdString *_selector;
+    ImdDNA *_attributeDNA;              /* best-guess name */
+    int _refCount;
+    CallbackInfo *_batchClient;
+    int _deactivationDelay;             /* best-guess name */
 
 public:
     enum ReconstructedFlags
