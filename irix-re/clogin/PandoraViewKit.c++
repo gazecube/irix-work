@@ -85,9 +85,11 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _passwordText(NULL),
       _hostLabel(NULL),
       _helpButton(NULL),
-      _loginButton(NULL)
+      _loginButton(NULL),
+      _passwordLength(0)
 {
     Widget managed[6];
+    std::memset(_password, 0, sizeof(_password));
 
     setDefaultResources(parent, pandoraDefaults);
 
@@ -247,15 +249,21 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
     managed[5] = _passwordLabel;
     XtManageChildren(managed, 6);
 
-    /*
-     * Binary-proven constructor callback: userText XmNactivateCallback.
-     * The original callback enters the same login-name transition which can
-     * reveal the password UI without first disclosing whether the name exists.
-     */
     XtAddCallback(
         _userText,
         XmNactivateCallback,
         &PandoraComponent::userTextActivateCB,
+        (XtPointer)this);
+
+    /*
+     * Binary-proven constructor callback. The original callback at
+     * 0x10010eec keeps the real password in component-owned storage and
+     * replaces each inserted display byte with ASCII space (0x20).
+     */
+    XtAddCallback(
+        _passwordText,
+        XmNmodifyVerifyCallback,
+        &PandoraComponent::passwordTextModifyVerifyCB,
         (XtPointer)this);
 
     createIconAreaScaffold();
@@ -301,13 +309,6 @@ void PandoraComponent::displayIcon()
     if (!_iconPanel || !_iconPanel->baseWidget())
         return;
 
-    /*
-     * The original displayIcon() at 0x10011b8c blocks Imd panel changes,
-     * iterates the already-built user model, constructs UserView objects and
-     * inserts them into the panel. The model/view classes are still being
-     * reconstructed, so this probe keeps that function boundary but uses a
-     * Motif RowColumn as the temporary Linux rendering backend.
-     */
     _userIconContainer = XtVaCreateManagedWidget(
         "userViewContainer",
         xmRowColumnWidgetClass,
@@ -342,13 +343,6 @@ void PandoraComponent::displayIcon()
         if (!homeIsDirectory(pwd->pw_dir))
             continue;
 
-        /*
-         * Reconstructed Linux probe fallback only. Stock Debian does not ship
-         * SGI passwd.sgi/clogin metadata for service accounts. If the real
-         * IRIX clogin.conf is absent, suppress nologin/false service accounts
-         * rather than inventing a UID threshold, which the IRIX binary does
-         * not use.
-         */
         if (!haveIrixConfig && !linuxProbeInteractiveShell(pwd->pw_shell))
             continue;
 
@@ -387,12 +381,6 @@ void PandoraComponent::showPasswordPrompt()
     if (!haveName)
         return;
 
-    /*
-     * Binary-proven UI state: passwordLabel starts managed but with
-     * mappedWhenManaged=False, while passwordText starts unmanaged. The
-     * original select/login-name path later reveals the row. Keep that exact
-     * initial-state distinction and perform the delayed transition here.
-     */
     XtSetMappedWhenManaged(_passwordLabel, True);
 
     if (!XtIsManaged(_passwordText))
@@ -425,12 +413,56 @@ void PandoraComponent::userTextActivateCB(
     if (!self)
         return;
 
-    /*
-     * Do not gate this on getpwnam(). The recovered original login flow can
-     * reveal the password field for an unknown typed name so account validity
-     * is not disclosed before a password attempt.
-     */
     self->showPasswordPrompt();
+}
+
+void PandoraComponent::passwordTextModifyVerifyCB(
+    Widget,
+    XtPointer clientData,
+    XtPointer callData)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    XmTextVerifyCallbackStruct *verify =
+        static_cast<XmTextVerifyCallbackStruct *>(callData);
+
+    if (!self || !verify || !verify->text || !verify->text->ptr)
+    {
+        if (verify)
+            verify->doit = False;
+        return;
+    }
+
+    /*
+     * Exact control-flow shape recovered from 0x10010eec:
+     * - reject callback text lengths >= 2
+     * - length 0 is deletion and shrinks the private password buffer
+     * - length 1 stores one real byte when the private length is < 21
+     * - replace the displayed byte with ASCII space
+     */
+    if (verify->text->length >= 2)
+    {
+        verify->doit = False;
+        return;
+    }
+
+    if (verify->text->length == 0)
+    {
+        verify->doit = True;
+        if (self->_passwordLength > 0)
+            --self->_passwordLength;
+        self->_password[self->_passwordLength] = '\0';
+        return;
+    }
+
+    if (self->_passwordLength < 21)
+    {
+        self->_password[self->_passwordLength] = verify->text->ptr[0];
+        ++self->_passwordLength;
+        self->_password[self->_passwordLength] = '\0';
+    }
+
+    verify->text->ptr[0] = ' ';
+    verify->doit = True;
 }
 
 PandoraComponent::~PandoraComponent()
