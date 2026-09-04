@@ -4,15 +4,28 @@
 #include <cstring>
 #include <map>
 
+#if defined(IMDICONPANEL_HAVE_SGM)
 /*
- * Reconstructed Linux backing detail.
+ * Binary-proven superclass for IRIX 6.5.0 ImdViewPanel.
  *
- * The original IRIX library exports a distinct imdViewPanelWidgetClass.
- * Until the private widget class record is recovered, use Motif's DrawingArea
- * class as the backing Xt class while preserving the original public symbol
- * and construction API. Do not treat this alias as binary-proven.
+ * IRIX publishes this declaration through <Sgm/VisualDrawingA.h>. Some MaXX
+ * installations provide libSgm without that historical header, so declare the
+ * C widget-class symbol directly instead of making the reconstruction depend
+ * on an optional SDK header.
  */
+extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
+#endif
+
+/*
+ * imdViewPanelClassRec at 0x096caaa0 has a relocation to
+ * sgVisualDrawingAreaWidgetClass. Prefer that original superclass whenever
+ * libSgm is available. XmDrawingArea remains a portable fallback only.
+ */
+#if defined(IMDICONPANEL_HAVE_SGM)
+WidgetClass imdViewPanelWidgetClass = sgVisualDrawingAreaWidgetClass;
+#else
 WidgetClass imdViewPanelWidgetClass = xmDrawingAreaWidgetClass;
+#endif
 
 namespace
 {
@@ -34,19 +47,35 @@ struct ViewPanelState
 
 std::map<Widget, ViewPanelState> gViewPanelState;
 
-bool isImdOnlyResource(const char *name)
+bool isPrivateImdResource(const char *name)
 {
     if (!name)
         return false;
 
-    return std::strcmp(name, "installColormap") == 0 ||
-           std::strcmp(name, "ditherBackground") == 0 ||
-           std::strcmp(name, "horzScrollPolicy") == 0 ||
+    /*
+     * installColormap and ditherBackground are NOT Imd-only resources. They
+     * belong to SgVisualDrawingArea and must reach Xt when Sgm is in use.
+     */
+    return std::strcmp(name, "horzScrollPolicy") == 0 ||
            std::strcmp(name, "vertScrollPolicy") == 0 ||
            std::strcmp(name, "dropEnabled") == 0 ||
            std::strcmp(name, "dragEnabled") == 0 ||
            std::strcmp(name, "boxSelectEnabled") == 0 ||
            std::strcmp(name, "renameEnabled") == 0;
+}
+
+bool isUnsupportedFallbackResource(const char *name)
+{
+#if defined(IMDICONPANEL_HAVE_SGM)
+    (void)name;
+    return false;
+#else
+    if (!name)
+        return false;
+
+    return std::strcmp(name, "installColormap") == 0 ||
+           std::strcmp(name, "ditherBackground") == 0;
+#endif
 }
 }
 
@@ -60,9 +89,12 @@ extern "C" Widget ImdCreateViewPanel(
      * Original IRIX behavior is XtCreateWidget(name,
      * imdViewPanelWidgetClass, parent, args, count).
      *
-     * The temporary DrawingArea backing class does not know the private Imd
-     * resources, so filter only those recovered Imd-specific names. Other Xt
-     * resources, including any visual/depth/colormap args, are preserved.
+     * Our reconstructed class record does not yet implement ImdViewPanel's
+     * private resource table, so those names are filtered. Superclass
+     * resources are preserved. In particular, SgVisualDrawingArea consumes
+     * installColormap and ditherBackground exactly where the original widget
+     * did. The XmDrawingArea fallback filters those two only because Motif
+     * alone does not define them.
      */
     Arg *filtered = 0;
     Cardinal filteredCount = 0;
@@ -72,8 +104,12 @@ extern "C" Widget ImdCreateViewPanel(
         filtered = new Arg[count];
         for (Cardinal i = 0; i < count; ++i)
         {
-            if (!isImdOnlyResource(args[i].name))
+            const char *resourceName = args[i].name;
+            if (!isPrivateImdResource(resourceName) &&
+                !isUnsupportedFallbackResource(resourceName))
+            {
                 filtered[filteredCount++] = args[i];
+            }
         }
     }
 
