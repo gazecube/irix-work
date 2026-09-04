@@ -39,6 +39,43 @@ count  = current Arg count
 The instance name is binary-proven from the string at virtual address
 `0x10033790`.
 
+## ImdIconPanel backing widget
+
+The original `ImdIconPanel` constructor was disassembled from the symbol-bearing
+IRIX `libimdIconPanel.so` at `0x09682ec8`.
+
+It passes its constructor arguments directly to:
+
+```text
+ImdCreateViewPanel(parent, name, args, count)
+```
+
+and stores the returned Widget in the object at offset `+0x10`.
+
+`ImdCreateViewPanel` is exported at:
+
+```text
+0x096ab184 ImdCreateViewPanel(Widget, const char *, Arg *, unsigned int)
+```
+
+Its complete body is a thin wrapper around:
+
+```text
+XtCreateWidget(name, imdViewPanelWidgetClass, parent, args, count)
+```
+
+Therefore the original icon panel is not backed by a generic Motif DrawingArea
+or Form. Its real backing widget is the custom Xt widget class exported as:
+
+```text
+imdViewPanelWidgetClass
+```
+
+This is binary-proven and defines the next compatibility target. A Linux
+reimplementation may use different private storage, but the reconstructed
+public widget/class contract should preserve `ImdCreateViewPanel` and
+`imdViewPanelWidgetClass` rather than substituting an invented public API.
+
 ## Visual argument setup
 
 Before adding its own icon-panel resources, `readyToDisplay()` calls:
@@ -93,6 +130,8 @@ panelWindow
   -> XmCreateScrolledWindow("scrolledWindow", NULL, 0)
   -> XtManageChild(scrolledWindow)
   -> ImdIconPanel("panel", scrolledWindow, args, count)
+       -> ImdCreateViewPanel(...)
+            -> XtCreateWidget("panel", imdViewPanelWidgetClass, ...)
 ```
 
 The `scrolledWindow` string is at `0x1002f030`.
@@ -197,17 +236,20 @@ The symbol-bearing IRIX library confirms these exported interfaces:
 
 ```text
 ImdIconPanel::ImdIconPanel(const char *, Widget, Arg *, int)
+ImdCreateViewPanel(Widget, const char *, Arg *, unsigned int)
 ImdViewPanelAdoptRenderer(Widget, ImdRenderer *)
 ImdViewPanelAdoptLayout(Widget, ImdLayout *)
 ImdViewPanelSetScale(Widget, float, long, long)
 ImdIconPanel::kSelectionChangedCallback
 ImdIconPanel::kCommandCallback
+imdViewPanelWidgetClass
 ```
 
 Relevant original addresses in `libimdIconPanel.so`:
 
 ```text
 0x09682ec8 ImdIconPanel constructor
+0x096ab184 ImdCreateViewPanel
 0x09680380 ImdViewPanelAdoptRenderer
 0x096802f4 ImdViewPanelAdoptLayout
 0x09687afc ImdViewPanelSetScale
@@ -222,8 +264,9 @@ panelWindow
   -> scrolledWindow
 ```
 
-The next implementation step is to reconstruct the minimal `ImdIconPanel`
-surface required by `clogin` using the original constructor and exported
-interfaces above. Any Linux-only backing widget or storage used internally must
-be marked as reconstructed implementation detail; the public names and behavior
+The next implementation step is to reconstruct the minimal `ImdViewPanel`
+widget class and `ImdIconPanel` wrapper surface required by `clogin`, beginning
+with `imdViewPanelWidgetClass`, `ImdCreateViewPanel`, the constructor, renderer
+and layout adoption, and scale state. Any Linux-only private storage must be
+marked as reconstructed implementation detail; the public names and behavior
 should remain aligned with the recovered IRIX interfaces.
