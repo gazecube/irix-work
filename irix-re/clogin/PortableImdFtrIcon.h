@@ -4,6 +4,7 @@
 #include "FtiVectorIcon.h"
 
 #include <X11/Intrinsic.h>
+#include <algorithm>
 #include <string>
 
 /*
@@ -15,23 +16,56 @@
  *   setIconState(state)
  *   virtual draw(...)
  *
- * This class preserves that object-level call shape while FtiVectorIcon remains
- * the temporary drawing backend. It is not claimed to reproduce the original
- * ImdFtrIcon/ImdFtrIconX ABI or object layout.
+ * This preserves that object-level call shape while FtiVectorIcon remains the
+ * temporary drawing backend. It does not claim the original ImdFtrIcon ABI.
  */
 class PortableImdFtrIcon
 {
 public:
-    PortableImdFtrIcon();
+    PortableImdFtrIcon()
+        : _x(0), _y(0), _xScale(1.0f), _yScale(1.0f), _iconState(0)
+    {
+    }
 
-    bool load(const std::string &path);
-    bool loaded() const;
+    bool load(const std::string &path) { return _backend.load(path); }
+    bool loaded() const { return _backend.loaded(); }
 
-    void setOffset(int x, int y);
-    void setScale(float xScale, float yScale);
-    void setIconState(int state);
+    void setOffset(int x, int y)
+    {
+        _x = x;
+        _y = y;
+    }
 
-    void draw(Widget widget) const;
+    void setScale(float xScale, float yScale)
+    {
+        _xScale = xScale;
+        _yScale = yScale;
+    }
+
+    void setIconState(int state) { _iconState = state; }
+
+    void draw(Widget widget) const
+    {
+        if (!widget || !_backend.loaded())
+            return;
+
+        const float scale = std::min(_xScale, _yScale);
+        if (scale <= 0.0f)
+            return;
+
+        const unsigned int extent =
+            static_cast<unsigned int>(scale * 100.0f + 0.5f);
+        if (extent == 0)
+            return;
+
+        /*
+         * State is retained because setIconState() is binary-proven. Do not
+         * invent selected/disabled rendering until ImdFtrIconX state handling
+         * is decoded.
+         */
+        (void)_iconState;
+        _backend.draw(widget, _x, _y, extent);
+    }
 
 private:
     FtiVectorIcon _backend;
