@@ -13,12 +13,16 @@ public:
     virtual const char *className();
 
     Widget panelWindow() const { return _panelWindow; }
+    Widget scrolledWindow() const { return _scrolledWindow; }
     Widget userText() const { return _userText; }
     Widget passwordText() const { return _passwordText; }
 
 private:
+    void createIconAreaScaffold();
+
     Widget _form;
     Widget _panelWindow;
+    Widget _scrolledWindow;
     Widget _warningLabel;
     Widget _userFullNameLabel;
     Widget _userLabel;
