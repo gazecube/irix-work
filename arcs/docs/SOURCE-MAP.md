@@ -26,7 +26,20 @@ Classifications:
 | `stand/arcs/lib/libsc/gui/tfield.c` | SGI-reusable, pending per-file header review | Preserve text field behavior. |
 | `stand/arcs/include/guicore.h` | SGI-reusable | Preserved unchanged in `arcs/sgisrc/include/guicore.h`; defines the graphics primitive indirection used by the GUI. |
 | `stand/arcs/include/style.h` | SGI-reusable | Preserved unchanged in `arcs/sgisrc/include/style.h`; canonical standalone GUI layout/color indices. |
-| `stand/arcs/include/stand_htport.h` | SGI-reusable, pending complete provenance review | Defines `htp_fncs`, textport state, palette constants, and GUI/textport interfaces. |
+| `stand/arcs/include/stand_htport.h` | SGI-reusable | Defines `htp_fncs`, textport state, palette constants, and GUI/textport interfaces. |
+
+## Built-in standalone fonts
+
+The built-in IRIX standalone font tables are treated as SGI-reusable project assets. Historical source-tree paths containing `att` are not, by themselves, evidence that these generated font tables are AT&T/USL implementation code.
+
+Approved font-table set for direct use:
+
+- `stand/arcs/include/fonts/scrB18.h`
+- `stand/arcs/include/fonts/special.h`
+- `stand/arcs/include/fonts/ncenB18.h`
+- `stand/arcs/include/fonts/helvR10.h`
+
+These are the exact four font slots selected by `style.h` and expected by the standalone GUI/textport path.
 
 ## Backend boundary
 
@@ -38,4 +51,4 @@ The implementation beneath these primitives is reconstructed ARCS-UEFI code usin
 
 ## Current transplant status
 
-The `arcs-uefi` branch now contains the first directly transplanted SGI GUI files under `arcs/sgisrc/` plus a separate reconstructed UEFI backend area under `arcs/uefi/`. The next import is the exact `stand_htport.h` contract and the remaining GUI files needed to compile `initGfxGui()` and `drawBackground()` without rewriting them.
+The `arcs-uefi` branch contains the first directly transplanted SGI GUI files under `arcs/sgisrc/` plus a separate reconstructed UEFI backend area under `arcs/uefi/`. The next porting batch should import the four approved built-in font tables and wire the exact `htp_fncs` contract to a GOP backend so `initGfxGui()`, `drawBackground()`, and `txOutcharmap()` can execute without rewriting them.
