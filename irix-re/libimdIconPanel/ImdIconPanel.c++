@@ -23,9 +23,11 @@ struct ViewPanelState
     float scale;
     long scaleArg0;
     long scaleArg1;
+    unsigned int blockDepth;
 
     ViewPanelState()
-        : renderer(0), layout(0), scale(1.0f), scaleArg0(0), scaleArg1(0)
+        : renderer(0), layout(0), scale(1.0f), scaleArg0(0), scaleArg1(0),
+          blockDepth(0)
     {
     }
 };
@@ -110,6 +112,18 @@ extern "C" void ImdViewPanelSetScale(
     state.scale = scale;
     state.scaleArg0 = arg0;
     state.scaleArg1 = arg1;
+}
+
+extern "C" void ImdViewPanelBeginBlockChanges(Widget widget)
+{
+    ++gViewPanelState[widget].blockDepth;
+}
+
+extern "C" void ImdViewPanelEndBlockChanges(Widget widget)
+{
+    ViewPanelState &state = gViewPanelState[widget];
+    if (state.blockDepth != 0)
+        --state.blockDepth;
 }
 
 ImdIconPanel::ImdIconPanel(
