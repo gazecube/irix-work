@@ -47,12 +47,20 @@ class PandoraLayout : public ImdLayout
 {
 public:
     explicit PandoraLayout(Widget panelWidget);
+    ~PandoraLayout();
 
     Widget container() const { return _container; }
     void addView(UserView *view);
     void update();
+    void resize();
 
 private:
+    static void panelStructureEvent(
+        Widget widget,
+        XtPointer clientData,
+        XEvent *event,
+        Boolean *continueToDispatch);
+
     Widget _panelWidget;
     Widget _container;
     std::vector<UserView *> _views;
