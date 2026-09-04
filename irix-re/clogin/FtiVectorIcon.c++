@@ -145,6 +145,24 @@ bool FtiVectorIcon::load(const std::string &path)
     return !_primitives.empty();
 }
 
+namespace
+{
+Pixel allocRgb(Display *display, Colormap colormap,
+               unsigned short red, unsigned short green, unsigned short blue,
+               Pixel fallback)
+{
+    XColor color;
+    color.red = red;
+    color.green = green;
+    color.blue = blue;
+    color.flags = DoRed | DoGreen | DoBlue;
+    color.pixel = fallback;
+    if (XAllocColor(display, colormap, &color))
+        return color.pixel;
+    return fallback;
+}
+}
+
 void FtiVectorIcon::draw(
     Widget widget,
     int x,
@@ -157,25 +175,71 @@ void FtiVectorIcon::draw(
     Display *display = XtDisplay(widget);
     Window window = XtWindow(widget);
     Screen *screen = XtScreen(widget);
+    Colormap colormap = DefaultColormapOfScreen(screen);
+    XtVaGetValues(widget, XmNcolormap, &colormap, NULL);
 
     Pixel foreground = BlackPixelOfScreen(screen);
-    Pixel background = WhitePixelOfScreen(screen);
-    Pixel shadow = foreground;
-    XtVaGetValues(
-        widget,
-        XmNforeground, &foreground,
-        XmNbackground, &background,
-        XmNbottomShadowColor, &shadow,
-        NULL);
+    XtVaGetValues(widget, XmNforeground, &foreground, NULL);
+
+    /*
+     * Binary-proven special-color definitions from IRIX iconsmith:
+     *
+     *   iconcolor    = -127 = 0x7f
+     *   outlinecolor = 0
+     *   shadowcolor  = -136 = 0x88
+     *
+     * ImdFtrIconXParams::setFillStyle() interprets a negative value as:
+     *
+     *   low nibble  -> foreground palette index
+     *   high nibble -> background palette index
+     *   fill style  -> opaque stipple
+     *
+     * initColormapInfo() has a 16-color fallback palette. The entries used by
+     * Users.Token.fti are:
+     *
+     *   [7]  = 0xffff,0xffff,0xffff
+     *   [8]  = 0x5555,0x5555,0x5555
+     *   [15] = 0xaaaa,0xaaaa,0xaaaa
+     *
+     * The original 8x8 stipple bytes at libimdFtrIcon.so sdata 0x09825cb0
+     * are 55 aa 55 aa 55 aa 55 aa. This portable FTI test backend reproduces
+     * those semantics directly. It is still not a replacement for the real
+     * ImdFtrIconX renderer/cache/mask path.
+     */
+    const Pixel white = allocRgb(
+        display, colormap, 0xffff, 0xffff, 0xffff,
+        WhitePixelOfScreen(screen));
+    const Pixel darkGray = allocRgb(
+        display, colormap, 0x5555, 0x5555, 0x5555,
+        foreground);
+    const Pixel lightGray = allocRgb(
+        display, colormap, 0xaaaa, 0xaaaa, 0xaaaa,
+        white);
+
+    static const char stippleBits[8] = {
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa)
+    };
+    Pixmap stipple = XCreateBitmapFromData(
+        display, window, stippleBits, 8, 8);
 
     XGCValues values;
     values.foreground = foreground;
     GC outlineGC = XCreateGC(display, window, GCForeground, &values);
 
-    values.foreground = WhitePixelOfScreen(screen);
-    GC iconGC = XCreateGC(display, window, GCForeground, &values);
+    values.foreground = lightGray;
+    values.background = white;
+    values.stipple = stipple;
+    values.fill_style = FillOpaqueStippled;
+    GC iconGC = XCreateGC(
+        display,
+        window,
+        GCForeground | GCBackground | GCStipple | GCFillStyle,
+        &values);
 
-    values.foreground = shadow;
+    values.foreground = darkGray;
     GC shadowGC = XCreateGC(display, window, GCForeground, &values);
 
     const double scale = static_cast<double>(extent) / 100.0;
@@ -249,4 +313,6 @@ void FtiVectorIcon::draw(
     XFreeGC(display, shadowGC);
     XFreeGC(display, iconGC);
     XFreeGC(display, outlineGC);
+    if (stipple != None)
+        XFreePixmap(display, stipple);
 }
