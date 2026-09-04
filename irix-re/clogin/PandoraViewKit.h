@@ -3,8 +3,12 @@
 
 #include <Vk/VkComponent.h>
 #include <Vk/VkSimpleWindow.h>
+#include <vector>
 
 class ImdIconPanel;
+class PandoraRenderer;
+class PandoraLayout;
+class UserView;
 
 class PandoraComponent : public VkComponent
 {
@@ -25,7 +29,7 @@ private:
     void displayIcon();
     void showPasswordPrompt();
 
-    static void userIconActivateCB(Widget, XtPointer, XtPointer);
+    static void userViewActivateCB(Widget, XtPointer, XtPointer);
     static void userTextActivateCB(Widget, XtPointer, XtPointer);
     static void passwordTextModifyVerifyCB(Widget, XtPointer, XtPointer);
 
@@ -33,7 +37,9 @@ private:
     Widget _panelWindow;
     Widget _scrolledWindow;
     ImdIconPanel *_iconPanel;
-    Widget _userIconContainer;
+    PandoraRenderer *_renderer;
+    PandoraLayout *_layout;
+    std::vector<UserView *> _userViews;
     Widget _warningLabel;
     Widget _userFullNameLabel;
     Widget _userLabel;
