@@ -99,6 +99,7 @@ public:
         Widget parent,
         XtCallbackProc activateCallback,
         XtPointer clientData);
+    void drawPortableContents();
 
 private:
     std::string _name;
