@@ -113,17 +113,27 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         COPYONLY
     )
 
-    add_executable(pandora_viewkit_probe
-        ../clogin/PandoraViewKit.c++
-        ../clogin/PandoraViewKitProbe.c++
-    )
-    target_include_directories(pandora_viewkit_probe PRIVATE ../clogin)
-    target_compile_definitions(pandora_viewkit_probe PRIVATE
-        "PANDORA_APP_DEFAULTS_PATH=\"${PANDORA_APP_DEFAULTS_DIR}/%N\""
-    )
-    target_link_libraries(pandora_viewkit_probe PRIVATE viewklass)
-    set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
-    set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
+    if(TARGET imdIconPanel)
+        add_executable(pandora_viewkit_probe
+            ../clogin/PandoraViewKit.c++
+            ../clogin/PandoraViewKitProbe.c++
+        )
+        target_include_directories(pandora_viewkit_probe PRIVATE
+            ../clogin
+            ../libimdIconPanel
+        )
+        target_compile_definitions(pandora_viewkit_probe PRIVATE
+            "PANDORA_APP_DEFAULTS_PATH=\"${PANDORA_APP_DEFAULTS_DIR}/%N\""
+        )
+        target_link_libraries(pandora_viewkit_probe PRIVATE
+            viewklass
+            imdIconPanel
+        )
+        set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
+        set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
+    else()
+        message(STATUS "libimdIconPanel unavailable; skipping Pandora probe")
+    endif()
 
     message(STATUS "ViewKlass enabled: ${VIEWKLASS_LIBRARY}")
     message(STATUS "ViewKlass runtime family: ${_viewklass_runtime_dir}")
