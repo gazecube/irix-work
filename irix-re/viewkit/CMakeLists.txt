@@ -62,7 +62,16 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND XT_LIBRARY 
     set_property(TARGET viewkit_probe PROPERTY CXX_STANDARD 11)
     set_property(TARGET viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
 
+    add_executable(pandora_viewkit_probe
+        ../clogin/PandoraViewKit.c++
+        ../clogin/PandoraViewKitProbe.c++
+    )
+    target_include_directories(pandora_viewkit_probe PRIVATE ../clogin)
+    target_link_libraries(pandora_viewkit_probe PRIVATE viewklass)
+    set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
+    set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
+
     message(STATUS "ViewKlass enabled: ${VIEWKLASS_LIBRARY}")
 else()
-    message(STATUS "ViewKlass not found; skipping viewkit_probe")
+    message(STATUS "ViewKlass not found; skipping ViewKit probes")
 endif()
