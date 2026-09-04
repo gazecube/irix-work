@@ -1,4 +1,4 @@
-#define USER_SESSION_CMD "/usr/bin/xmsession"
+#define USER_SESSION_CMD "/opt/MaXX/etc/skel/Xsession.dt"
 
 #define MAX_USERNAME_LEN 32
 #define MAX_PASSWORD_LEN 128
