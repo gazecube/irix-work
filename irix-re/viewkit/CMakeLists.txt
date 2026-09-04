@@ -116,6 +116,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
     if(TARGET imdIconPanel)
         add_executable(pandora_viewkit_probe
             ../clogin/PandoraViewKit.c++
+            ../clogin/PandoraPresentation.c++
             ../clogin/PandoraViewKitProbe.c++
             ../clogin/Base/PwdNameList.c++
         )
