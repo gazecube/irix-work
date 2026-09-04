@@ -7,8 +7,8 @@
  *   - /usr/lib/X11/app-defaults/Clogin
  *   - exported PandoraComponent/PandoraWindow symbols from target clogin
  *
- * This file deliberately uses the original widget instance names so SGI
- * app-defaults resources can map naturally onto the portable Motif tree.
+ * The original SGI instance names are retained so the shipped Cl­ogin
+ * app-defaults resource namespace maps naturally onto this Motif tree.
  */
 #ifndef DVLOGIN_PANDORA_UI_H
 #define DVLOGIN_PANDORA_UI_H
@@ -44,10 +44,7 @@ static Widget pandora_create_label(Widget parent, const char *name,
 
 static void pandora_bind_legacy_handles(void)
 {
-	/*
-	 * Keep the already-working auth/session callbacks untouched while the UI
-	 * hierarchy is replaced underneath them.
-	 */
+	/* Preserve the already-working auth/session implementation. */
 	mainForm = g_pandora_widgets.form;
 	username = g_pandora_widgets.userLabel;
 	textBox1 = g_pandora_widgets.userText;
@@ -64,29 +61,27 @@ static Widget pandora_create_component_ui(Widget parent)
 
 	memset(ui, 0, sizeof(*ui));
 
-	/* Original instance name: form */
 	ui->form = XtVaCreateManagedWidget("form",
 		xmFormWidgetClass, parent,
 		XmNshadowThickness, 0,
 		NULL);
 
-	/* Original instance name: warningLabel */
 	ui->warningLabel = XtVaCreateManagedWidget("warningLabel",
 		xmLabelWidgetClass, ui->form,
 		XmNtopAttachment, XmATTACH_FORM,
 		XmNleftAttachment, XmATTACH_FORM,
 		XmNalignment, XmALIGNMENT_BEGINNING,
+		XmNmappedWhenManaged, False,
 		NULL);
 
-	/* Original instance name: userFullNameLabel */
 	ui->userFullNameLabel = XtVaCreateManagedWidget("userFullNameLabel",
 		xmLabelWidgetClass, ui->form,
 		XmNleftAttachment, XmATTACH_FORM,
 		XmNbottomAttachment, XmATTACH_FORM,
 		XmNalignment, XmALIGNMENT_BEGINNING,
+		XmNmappedWhenManaged, False,
 		NULL);
 
-	/* Original instance name: userLabel */
 	ui->userLabel = pandora_create_label(ui->form, "userLabel", "Login name:");
 	XtVaSetValues(ui->userLabel,
 		XmNleftAttachment, XmATTACH_FORM,
@@ -96,7 +91,6 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNwidth, 120,
 		NULL);
 
-	/* Original instance name: userText */
 	ui->userText = XtVaCreateManagedWidget("userText",
 		xmTextWidgetClass, ui->form,
 		XmNleftAttachment, XmATTACH_WIDGET,
@@ -107,9 +101,9 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNwidth, 225,
 		XmNeditMode, XmSINGLE_LINE_EDIT,
 		XmNblinkRate, 0,
+		XmNhighlightThickness, 1,
 		NULL);
 
-	/* Original instance name: passwordLabel */
 	ui->passwordLabel = pandora_create_label(ui->form,
 		"passwordLabel", "Password:");
 	XtVaSetValues(ui->passwordLabel,
@@ -121,21 +115,20 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNwidth, 120,
 		NULL);
 
-	/* Original instance name: passwordText */
 	ui->passwordText = XtVaCreateManagedWidget("passwordText",
 		xmTextWidgetClass, ui->form,
 		XmNleftAttachment, XmATTACH_WIDGET,
 		XmNleftWidget, ui->passwordLabel,
 		XmNbottomAttachment, XmATTACH_WIDGET,
 		XmNbottomWidget, ui->userText,
-		XmNleftOffset, 0,
+		XmNleftOffset, 6,
 		XmNbottomOffset, 12,
 		XmNwidth, 225,
 		XmNeditMode, XmSINGLE_LINE_EDIT,
 		XmNblinkRate, 0,
+		XmNhighlightThickness, 1,
 		NULL);
 
-	/* Original instance name: panelWindow */
 	ui->panelWindow = XtVaCreateManagedWidget("panelWindow",
 		xmFormWidgetClass, ui->form,
 		XmNtopAttachment, XmATTACH_FORM,
@@ -150,12 +143,14 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNshadowThickness, 0,
 		NULL);
 
-	/*
-	 * Original clogin uses an Imd icon panel here. The portable boundary uses
-	 * XmScrolledWindow until libimdIconPanel is reconstructed.
-	 */
+	/* Original uses the Imd icon panel here. XmScrolledWindow is the
+	 * current portability boundary until libimdIconPanel is reconstructed. */
 	ui->scrolledWindow = XtVaCreateManagedWidget("scrolledWindow",
 		xmScrolledWindowWidgetClass, ui->panelWindow,
+		XmNtopAttachment, XmATTACH_FORM,
+		XmNleftAttachment, XmATTACH_FORM,
+		XmNrightAttachment, XmATTACH_FORM,
+		XmNbottomAttachment, XmATTACH_FORM,
 		XmNscrollingPolicy, XmAUTOMATIC,
 		XmNvisualPolicy, XmAUTOMATIC,
 		XmNscrollBarDisplayPolicy, XmAS_NEEDED,
@@ -163,7 +158,6 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNshadowThickness, 0,
 		NULL);
 
-	/* Original instance name: hostLabel */
 	ui->hostLabel = XtVaCreateManagedWidget("hostLabel",
 		xmLabelWidgetClass, ui->form,
 		XmNleftAttachment, XmATTACH_FORM,
@@ -172,7 +166,6 @@ static Widget pandora_create_component_ui(Widget parent)
 		XmNbottomOffset, 22,
 		NULL);
 
-	/* Original instance name: loginButton */
 	ui->loginButton = XtVaCreateManagedWidget("loginButton",
 		xmPushButtonWidgetClass, ui->form,
 		XmNrightAttachment, XmATTACH_FORM,
@@ -185,7 +178,6 @@ static Widget pandora_create_component_ui(Widget parent)
 		XtVaTypedArg, XmNlabelString, XmRString, "Log In", 7,
 		NULL);
 
-	/* Original instance name: helpButton */
 	ui->helpButton = XtVaCreateManagedWidget("helpButton",
 		xmPushButtonWidgetClass, ui->form,
 		XmNrightAttachment, XmATTACH_WIDGET,
@@ -201,6 +193,112 @@ static Widget pandora_create_component_ui(Widget parent)
 
 	pandora_bind_legacy_handles();
 	return ui->form;
+}
+
+static void pandora_wire_callbacks(void)
+{
+	PandoraWidgets *ui = &g_pandora_widgets;
+
+	XtAddCallback(ui->userText, XmNfocusCallback,
+		textWidgetGainedFocus, ui->userText);
+	XtAddCallback(ui->userText, XmNlosingFocusCallback,
+		textWidgetLostFocus, ui->userText);
+	XtAddCallback(ui->userText, XmNvalueChangedCallback,
+		textInputMotionCB, NULL);
+	XtAddCallback(ui->userText, XmNvalueChangedCallback,
+		clogin_username_changed_cb, NULL);
+	XtAddCallback(ui->userText, XmNvalueChangedCallback,
+		clogin_ui_username_changed_cb, NULL);
+	XtAddCallback(ui->userText, XmNactivateCallback,
+		textInputActivatedCB, NULL);
+
+	XtAddCallback(ui->passwordText, XmNfocusCallback,
+		textWidgetGainedFocus, ui->passwordText);
+	XtAddCallback(ui->passwordText, XmNlosingFocusCallback,
+		textWidgetLostFocus, ui->passwordText);
+	XtAddCallback(ui->passwordText, XmNmodifyVerifyCallback,
+		passwordModifyVerifyCB, NULL);
+	XtAddCallback(ui->passwordText, XmNvalueChangedCallback,
+		textInputMotionCB, NULL);
+	XtAddCallback(ui->passwordText, XmNactivateCallback,
+		textInputActivatedCB, NULL);
+
+	XtAddCallback(ui->loginButton, XmNactivateCallback,
+		loginButtonCB, NULL);
+	XtAddCallback(ui->helpButton, XmNactivateCallback,
+		helpButtonCB, NULL);
+}
+
+static void pandora_set_hostname(void)
+{
+	char hostname[1024];
+
+	if(gethostname(hostname, sizeof(hostname)) != 0)
+		strcpy(hostname, "localhost");
+	hostname[sizeof(hostname) - 1] = '\0';
+
+	XtVaSetValues(g_pandora_widgets.hostLabel,
+		XtVaTypedArg, XmNlabelString, XmRString,
+			hostname, strlen(hostname) + 1,
+		NULL);
+}
+
+static void pandora_center_shell(void)
+{
+	Display *dpy;
+	Screen *screen;
+	Dimension width, height;
+	Position x, y;
+
+	if(topLevel == NULL)
+		return;
+
+	dpy = XtDisplay(topLevel);
+	screen = XtScreen(topLevel);
+	XtVaGetValues(topLevel, XmNwidth, &width, XmNheight, &height, NULL);
+
+	x = (Position)((WidthOfScreen(screen) - width) / 2);
+	y = (Position)((HeightOfScreen(screen) - height) / 2);
+	XtVaSetValues(topLevel, XmNx, x, XmNy, y, NULL);
+	(void)dpy;
+}
+
+/* Live portable entry point for the reconstructed Pandora greeter. */
+static void run_pandora_gui(int argc, char *argv[])
+{
+	Widget icon_view = NULL;
+
+	XtSetLanguageProc(NULL, NULL, NULL);
+
+	/* "Clogin" is the original application resource class. */
+	topLevel = XtVaAppInitialize(&app, "Clogin",
+		NULL, 0, &argc, argv, fb_xres, NULL);
+
+	XtVaSetValues(topLevel,
+		XmNtitle, "Clogin",
+		XmNmwmInputMode, MWM_INPUT_SYSTEM_MODAL,
+		NULL);
+
+	pandora_create_component_ui(topLevel);
+	pandora_wire_callbacks();
+	pandora_set_hostname();
+
+	/* Populate the original displayIcon() portability boundary using the
+	 * reconstructed PwdNameList/user-picture policy. */
+	clogin_add_shortcuts(g_pandora_widgets.scrolledWindow);
+	XtVaGetValues(g_pandora_widgets.scrolledWindow,
+		XmNworkWindow, &icon_view, NULL);
+	g_clogin_icon_view = icon_view;
+
+	clogin_load_policy();
+	clogin_ui_apply_window_policy();
+	clogin_set_password_visible(False, False);
+
+	XtRealizeWidget(topLevel);
+	pandora_center_shell();
+	XmProcessTraversal(g_pandora_widgets.userText, XmTRAVERSE_CURRENT);
+
+	XtAppMainLoop(app);
 }
 
 #endif /* DVLOGIN_PANDORA_UI_H */
