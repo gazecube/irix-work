@@ -17,6 +17,8 @@ extern "C" Widget ImdCreateViewPanel(
 extern "C" void ImdViewPanelAdoptRenderer(Widget, ImdRenderer *);
 extern "C" void ImdViewPanelAdoptLayout(Widget, ImdLayout *);
 extern "C" void ImdViewPanelSetScale(Widget, float, long, long);
+extern "C" void ImdViewPanelBeginBlockChanges(Widget);
+extern "C" void ImdViewPanelEndBlockChanges(Widget);
 
 class ImdIconPanel
 {
