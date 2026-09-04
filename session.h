@@ -34,8 +34,9 @@ static int run_login_gui(int argc, char **argv,
 		setenv("DISPLAY", g_display_str, 1);
 		memset(g_auth_username, 0, sizeof(g_auth_username));
 
-		/* Reconstructed original Pandora/Clogin presentation tree. */
-		run_pandora_gui(argc, argv);
+		/* Keep the known-good Motif greeter live while the reconstructed
+		 * Pandora tree remains available for controlled testing. */
+		run_motif_gui(argc, argv);
 
 		if(strlen(g_auth_username) > 0)
 		{
@@ -99,6 +100,9 @@ static void run_user_session(const char *username)
 		return;
 	}
 
+	/* The root parent needs the cookie too, so its XOpenDisplay
+	 * probe in wait_for_xserver can authenticate against the
+	 * -auth server. Root can read the file regardless of chown. */
 	setenv("XAUTHORITY", authfile, 1);
 
 	pid_t xpid = start_xserver(session_display, g_vt_str, authfile);
@@ -169,13 +173,13 @@ static void run_user_session(const char *username)
 		}
 
 		clearenv();
-		setenv("HOME",       pw->pw_dir,                      1);
-		setenv("USER",       pw->pw_name,                     1);
-		setenv("LOGNAME",    pw->pw_name,                     1);
-		setenv("SHELL",      pw->pw_shell,                    1);
+		setenv("HOME",       pw->pw_dir,                     1);
+		setenv("USER",       pw->pw_name,                    1);
+		setenv("LOGNAME",    pw->pw_name,                    1);
+		setenv("SHELL",      pw->pw_shell,                   1);
 		setenv("PATH",       "/usr/local/bin:/usr/bin:/bin", 1);
-		setenv("DISPLAY",    session_display,                 1);
-		setenv("XAUTHORITY", authfile,                        1);
+		setenv("DISPLAY",    session_display,                1);
+		setenv("XAUTHORITY", authfile,                       1);
 
 		irix_exec_user_session(pw);
 		_exit(1);
