@@ -1,4 +1,5 @@
 #include "PandoraViewKit.h"
+#include "PandoraPresentation.h"
 #include "ImdIconPanel.h"
 #include "Base/PwdNameList.h"
 
@@ -7,7 +8,6 @@
 #include <Xm/Label.h>
 #include <Xm/Text.h>
 #include <Xm/PushB.h>
-#include <Xm/RowColumn.h>
 #include <Xm/ScrolledW.h>
 
 #include <pwd.h>
@@ -76,7 +76,8 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _panelWindow(NULL),
       _scrolledWindow(NULL),
       _iconPanel(NULL),
-      _userIconContainer(NULL),
+      _renderer(NULL),
+      _layout(NULL),
       _warningLabel(NULL),
       _userFullNameLabel(NULL),
       _userLabel(NULL),
@@ -298,28 +299,63 @@ void PandoraComponent::createIconAreaScaffold()
 
     if (_iconPanel && _iconPanel->baseWidget())
     {
-        ImdViewPanelSetScale(_iconPanel->baseWidget(), 1.5f, 0, 0);
-        XtManageChild(_iconPanel->baseWidget());
+        Widget panelWidget = _iconPanel->baseWidget();
+
+        /*
+         * Binary-proven readyToDisplay() order: construct PandoraRenderer,
+         * adopt renderer, construct PandoraLayout(panelWidget), adopt layout,
+         * then apply the 1.5 panel scale.
+         *
+         * The original inheritance ABI for PandoraRenderer/PandoraLayout is
+         * not reconstructed yet. The current ImdViewPanel implementation only
+         * stores these opaque pointers, so the casts are a documented portable
+         * bridge rather than a claim about recovered C++ base layout.
+         */
+        _renderer = new PandoraRenderer();
+        ImdViewPanelAdoptRenderer(
+            panelWidget,
+            reinterpret_cast<ImdRenderer *>(_renderer));
+
+        const char *configPath = "/var/sysadm/config/clogin.conf";
+        const bool haveIrixConfig = access(configPath, R_OK) == 0;
+        PwdNameList config(haveIrixConfig ? configPath : NULL);
+
+        /*
+         * readyToDisplay() calls a renderer virtual with true when
+         * getHowDisplay() != 1. ImdIconRenderer::setGallery(bool) is the
+         * strongest symbol/vtable candidate, but the slot name is still an
+         * inference. Keep that uncertainty local to this portable renderer.
+         */
+        if (config.displayFaces())
+            _renderer->setGallery(true);
+
+        _layout = new PandoraLayout(panelWidget);
+        ImdViewPanelAdoptLayout(
+            panelWidget,
+            reinterpret_cast<ImdLayout *>(_layout));
+
+        ImdViewPanelSetScale(panelWidget, 1.5f, 0, 0);
+
+        /*
+         * The binary next calls a renderer virtual with 2.0f. setScale(float)
+         * is the strongest recovered ImdIconRenderer candidate but remains
+         * annotated as an inferred slot name until the original vtable is
+         * cross-checked.
+         */
+        _renderer->setScale(2.0f);
+
+        XtManageChild(panelWidget);
         displayIcon();
     }
 }
 
 void PandoraComponent::displayIcon()
 {
-    if (!_iconPanel || !_iconPanel->baseWidget())
+    if (!_iconPanel || !_iconPanel->baseWidget() || !_layout)
         return;
 
-    _userIconContainer = XtVaCreateManagedWidget(
-        "userViewContainer",
-        xmRowColumnWidgetClass,
-        _iconPanel->baseWidget(),
-        XmNorientation, XmHORIZONTAL,
-        XmNpacking, XmPACK_COLUMN,
-        XmNnumColumns, 4,
-        XmNspacing, 12,
-        XmNmarginWidth, 16,
-        XmNmarginHeight, 16,
-        NULL);
+    Widget panelWidget = _iconPanel->baseWidget();
+    ImdViewPanelBeginBlockChanges(panelWidget);
 
     const char *configPath = "/var/sysadm/config/clogin.conf";
     const bool haveIrixConfig = access(configPath, R_OK) == 0;
@@ -346,26 +382,24 @@ void PandoraComponent::displayIcon()
         if (!haveIrixConfig && !linuxProbeInteractiveShell(pwd->pw_shell))
             continue;
 
-        XmString label = XmStringCreateLocalized(pwd->pw_name);
-        Widget user = XtVaCreateManagedWidget(
-            pwd->pw_name,
-            xmPushButtonWidgetClass,
-            _userIconContainer,
-            XmNlabelString, label,
-            XmNuserData, (XtPointer)this,
-            XmNwidth, 128,
-            XmNheight, 96,
-            XmNrecomputeSize, False,
-            NULL);
-        XmStringFree(label);
-
-        XtAddCallback(
-            user,
-            XmNactivateCallback,
-            &PandoraComponent::userIconActivateCB,
+        /*
+         * Original displayIcon() constructs
+         * UserView(const ImdString &, long, long) for each accepted model.
+         * The meanings of the two long constructor arguments are not yet
+         * recovered, so the portable probe intentionally does not guess them.
+         */
+        UserView *view = new UserView(pwd->pw_name, 0, 0);
+        view->createPortableWidget(
+            _layout->container(),
+            &PandoraComponent::userViewActivateCB,
             (XtPointer)this);
+        _layout->addView(view);
+        _userViews.push_back(view);
     }
     endpwent();
+
+    _layout->update();
+    ImdViewPanelEndBlockChanges(panelWidget);
 }
 
 void PandoraComponent::showPasswordPrompt()
@@ -391,7 +425,7 @@ void PandoraComponent::showPasswordPrompt()
     XmProcessTraversal(_passwordText, XmTRAVERSE_CURRENT);
 }
 
-void PandoraComponent::userIconActivateCB(
+void PandoraComponent::userViewActivateCB(
     Widget widget,
     XtPointer clientData,
     XtPointer)
@@ -400,7 +434,15 @@ void PandoraComponent::userIconActivateCB(
     if (!self || !self->_userText)
         return;
 
-    XmTextSetString(self->_userText, const_cast<char *>(XtName(widget)));
+    XtPointer userData = NULL;
+    XtVaGetValues(widget, XmNuserData, &userData, NULL);
+    UserView *view = static_cast<UserView *>(userData);
+    if (!view)
+        return;
+
+    XmTextSetString(
+        self->_userText,
+        const_cast<char *>(view->name().c_str()));
     self->showPasswordPrompt();
 }
 
@@ -467,6 +509,16 @@ void PandoraComponent::passwordTextModifyVerifyCB(
 
 PandoraComponent::~PandoraComponent()
 {
+    for (std::size_t i = 0; i < _userViews.size(); ++i)
+        delete _userViews[i];
+    _userViews.clear();
+
+    delete _layout;
+    _layout = NULL;
+
+    delete _renderer;
+    _renderer = NULL;
+
     delete _iconPanel;
     _iconPanel = NULL;
 }
