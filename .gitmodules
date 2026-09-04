@@ -1,0 +1,4 @@
+[submodule "arcs/vendor/sgibootscreen-src"]
+	path = arcs/vendor/sgibootscreen-src
+	url = https://github.com/gazecube/sgibootscreen-src.git
+	branch = master
