@@ -2,15 +2,56 @@
  * clogin_ui.h - portable presentation layer for recovered IRIX clogin states.
  *
  * The original PandoraComponent has separate displayIcon() and showPicture()
- * presentation paths.  This layer preserves that boundary using Motif/Xpm
+ * presentation paths. This layer preserves that boundary using Motif/Xpm
  * while the full SGI Imd/Sg rendering stack is still being reconstructed.
  */
 #ifndef DVLOGIN_CLOGIN_UI_H
 #define DVLOGIN_CLOGIN_UI_H
 
+/*
+ * The small/large distinction is binary-proven through PwdNameList::windowSize.
+ * These pixel dimensions are PORTABLE PLACEHOLDERS, not claimed IRIX values.
+ * Keep them isolated here until the original geometry/resources are recovered.
+ */
+#define CLOGIN_PORTABLE_SMALL_WIDTH   520
+#define CLOGIN_PORTABLE_SMALL_HEIGHT  520
+#define CLOGIN_PORTABLE_LARGE_WIDTH   760
+#define CLOGIN_PORTABLE_LARGE_HEIGHT  620
+
 static Widget g_clogin_icon_view = NULL;
 static Widget g_clogin_picture_view = NULL;
 static Pixmap g_clogin_picture_pixmap = None;
+
+static void clogin_ui_apply_window_policy(void)
+{
+	Dimension width;
+	Dimension height;
+
+	if(topLevel == NULL)
+		return;
+
+	clogin_load_policy();
+
+	if(g_clogin_policy.window_size != 0)
+	{
+		width = CLOGIN_PORTABLE_LARGE_WIDTH;
+		height = CLOGIN_PORTABLE_LARGE_HEIGHT;
+	}
+	else
+	{
+		width = CLOGIN_PORTABLE_SMALL_WIDTH;
+		height = CLOGIN_PORTABLE_SMALL_HEIGHT;
+	}
+
+	XtVaSetValues(topLevel,
+		XmNminWidth, width,
+		XmNmaxWidth, width,
+		XmNwidth, width,
+		XmNminHeight, height,
+		XmNmaxHeight, height,
+		XmNheight, height,
+		NULL);
+}
 
 static void clogin_ui_release_picture(void)
 {
@@ -97,9 +138,9 @@ static int clogin_ui_show_picture(const char *username_value)
 		XmNpacking, XmPACK_TIGHT,
 		XmNentryAlignment, XmALIGNMENT_CENTER,
 		XmNalignment, XmALIGNMENT_CENTER,
-		XmNspacing, 10,
-		XmNmarginWidth, 18,
-		XmNmarginHeight, 18,
+		XmNspacing, 8,
+		XmNmarginWidth, 12,
+		XmNmarginHeight, 12,
 		XmNtraversalOn, 0,
 		XtVaTypedArg, XmNbackground, XmRString, SHORTCUT_BG, 8,
 		NULL);
@@ -108,6 +149,7 @@ static int clogin_ui_show_picture(const char *username_value)
 		xmLabelWidgetClass, g_clogin_picture_view,
 		XmNlabelType, XmPIXMAP,
 		XmNlabelPixmap, g_clogin_picture_pixmap,
+		XmNalignment, XmALIGNMENT_CENTER,
 		XmNmarginWidth, 0,
 		XmNmarginHeight, 0,
 		XmNhighlightThickness, 0,
@@ -119,8 +161,10 @@ static int clogin_ui_show_picture(const char *username_value)
 	name_label = XtVaCreateManagedWidget("selectedUserName",
 		xmLabelWidgetClass, g_clogin_picture_view,
 		XmNalignment, XmALIGNMENT_CENTER,
-		XmNmarginWidth, 4,
-		XmNmarginHeight, 4,
+		XmNmarginWidth, 2,
+		XmNmarginHeight, 2,
+		XmNhighlightThickness, 0,
+		XmNshadowThickness, 0,
 		XtVaTypedArg, XmNbackground, XmRString, SHORTCUT_BG, 8,
 		XtVaTypedArg, XmNforeground, XmRString, SHORTCUT_FG, 8,
 		XtVaTypedArg, XmNlabelString, XmRString,
@@ -156,6 +200,12 @@ static void clogin_ui_username_changed_cb(Widget w, XtPointer client_data,
 
 static void clogin_ui_realize_widget(Widget w)
 {
+	/*
+	 * Apply the recovered small/large policy before realization so the shell
+	 * is born at the intended portable size rather than resizing afterward.
+	 */
+	clogin_ui_apply_window_policy();
+
 	/* Retain the existing reconstructed behavior first. */
 	clogin_realize_widget(w);
 
