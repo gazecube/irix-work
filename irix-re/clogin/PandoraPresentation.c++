@@ -305,11 +305,16 @@ void UserView::createPortableWidget(
     XmString emptyLabel = XmStringCreateLocalized(
         const_cast<char *>(""));
 
+    Pixel panelBackground = 0;
+    XtVaGetValues(parent, XmNbackground, &panelBackground, NULL);
+
     /*
      * Portable event surface only. Original UserView instances are rendered
      * by PandoraRenderer / ImdInvertedTeeRenderer inside ImdViewPanel. The
      * DrawnButton remains temporarily for activation semantics, but Motif no
-     * longer draws the account label or placeholder body contents.
+     * longer draws the account label or placeholder body contents. Match the
+     * carrier widget background to its panel so the temporary widget itself
+     * is not visible as a gray tile.
      */
     _widget = XtVaCreateManagedWidget(
         _name.c_str(),
@@ -317,6 +322,7 @@ void UserView::createPortableWidget(
         parent,
         XmNlabelString, emptyLabel,
         XmNuserData, (XtPointer)this,
+        XmNbackground, panelBackground,
         XmNrecomputeSize, True,
         XmNmarginWidth, 0,
         XmNmarginHeight, 0,
