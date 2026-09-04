@@ -44,15 +44,41 @@ find_library(MOTIF_LIBRARY
     HINTS ${_viewklass_library_hints}
 )
 
+# MaXX ViewKlass/libXm expose these as part of their actual link/runtime
+# dependency closure. Keep them explicit so the probes also link on systems
+# using --as-needed or without transitive development symlinks.
+find_library(SCHEME_LIBRARY
+    NAMES Scheme libScheme
+    HINTS ${_viewklass_library_hints}
+)
+find_library(XP_LIBRARY
+    NAMES Xp libXp
+    HINTS ${_viewklass_library_hints}
+)
+find_library(XPM_LIBRARY NAMES Xpm libXpm)
+find_library(XMU_LIBRARY NAMES Xmu libXmu)
+find_library(XEXT_LIBRARY NAMES Xext libXext)
+find_library(XRENDER_LIBRARY NAMES Xrender libXrender)
+find_library(XFT_LIBRARY NAMES Xft libXft)
 find_library(XT_LIBRARY NAMES Xt libXt)
 find_library(X11_LIBRARY NAMES X11 libX11)
 
-if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND XT_LIBRARY AND X11_LIBRARY)
+if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
+   SCHEME_LIBRARY AND XP_LIBRARY AND XPM_LIBRARY AND XMU_LIBRARY AND
+   XEXT_LIBRARY AND XRENDER_LIBRARY AND XFT_LIBRARY AND XT_LIBRARY AND
+   X11_LIBRARY)
     add_library(viewklass INTERFACE)
     target_include_directories(viewklass INTERFACE "${VIEWKLASS_INCLUDE_DIR}")
     target_link_libraries(viewklass INTERFACE
         "${VIEWKLASS_LIBRARY}"
         "${MOTIF_LIBRARY}"
+        "${SCHEME_LIBRARY}"
+        "${XP_LIBRARY}"
+        "${XPM_LIBRARY}"
+        "${XMU_LIBRARY}"
+        "${XEXT_LIBRARY}"
+        "${XRENDER_LIBRARY}"
+        "${XFT_LIBRARY}"
         "${XT_LIBRARY}"
         "${X11_LIBRARY}"
     )
@@ -73,5 +99,5 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND XT_LIBRARY 
 
     message(STATUS "ViewKlass enabled: ${VIEWKLASS_LIBRARY}")
 else()
-    message(STATUS "ViewKlass not found; skipping ViewKit probes")
+    message(STATUS "ViewKlass dependency closure incomplete; skipping ViewKit probes")
 endif()
