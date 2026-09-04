@@ -88,11 +88,22 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
     set_property(TARGET viewkit_probe PROPERTY CXX_STANDARD 11)
     set_property(TARGET viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
 
+    set(PANDORA_APP_DEFAULTS_DIR "${CMAKE_CURRENT_BINARY_DIR}/app-defaults")
+    file(MAKE_DIRECTORY "${PANDORA_APP_DEFAULTS_DIR}")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/app-defaults/Clogin"
+        "${PANDORA_APP_DEFAULTS_DIR}/Clogin"
+        COPYONLY
+    )
+
     add_executable(pandora_viewkit_probe
         ../clogin/PandoraViewKit.c++
         ../clogin/PandoraViewKitProbe.c++
     )
     target_include_directories(pandora_viewkit_probe PRIVATE ../clogin)
+    target_compile_definitions(pandora_viewkit_probe PRIVATE
+        "PANDORA_APP_DEFAULTS_PATH=\"${PANDORA_APP_DEFAULTS_DIR}/%N\""
+    )
     target_link_libraries(pandora_viewkit_probe PRIVATE viewklass)
     set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
     set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
