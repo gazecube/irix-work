@@ -28,6 +28,33 @@ The following recovered IRIX desktop libraries link directly against libvk.so.1:
 
 This makes libimdXutil.so and libimdIconPanel.so especially useful cross-reference targets because both retain rich C++ symbol/debug information and sit directly underneath Clogin.
 
+### libimdXutil.so as the primary ViewKit specimen
+
+Recovered batch metadata gives libimdXutil.so:
+
+- ELF32 MSB MIPS N32 MIPS-III
+- debug_info present, not stripped
+- 565 dynamic exports/imports on the export side and 314 imports
+- 689 DWARF pubnames
+- direct dependencies on libvk.so.1, libXm.so.1, libXt.so, libX11.so.1, and the Imd utility libraries
+- recoverable class VkImdApp with 11 published/debug names
+
+This is currently the strongest IRIX-side specimen for recovering the VkApp application-lifecycle contract. Unlike Clogin, it exposes a ViewKit-derived application class while retaining extensive debug metadata.
+
+### libimdIconPanel.so as the ViewKit/Motif boundary specimen
+
+libimdIconPanel.so directly depends on:
+
+- libvk.so.1
+- libSgm.so.1
+- libXm.so.1
+- libXt.so
+- libX11.so.1
+- libimdFtrIcon.so
+- libimdXutil.so
+
+That dependency shape is important for Clogin archaeology. It gives us a concrete place to distinguish behavior supplied by ViewKit from behavior supplied by the custom Imd widget/Sgm/Motif stack. In particular, the user-panel background/resource path should be traced here rather than attributed to ViewKit by assumption.
+
 ## High-value recovered ViewKit-facing classes
 
 From the recovered IRIX desktop binaries:
@@ -56,6 +83,7 @@ The MaXX installation includes a broad Vk header set, including:
 - VkModel.h
 - VkPeriodic.h
 - VkPipe.h
+- VkWindow.h
 
 The headers are useful for naming and public API hypotheses, but each method or ownership rule must be checked against the IRIX binaries before being considered reconstructed original behavior.
 
@@ -111,6 +139,16 @@ Cross-check VkCallbackObject / VkCallbackList against IRIX consumers to recover:
 - dispatch ordering
 - whether callbacks are copied or referenced during notification
 
+## Current reconstruction rule
+
+Do not add ViewKit-like convenience behavior to the portable Clogin code solely because the MaXX headers expose a similarly named API. Before moving behavior into a reconstructed ViewKit layer, require one of:
+
+1. a matching IRIX libvk import/call site,
+2. a derived-class call pattern in an IRIX consumer,
+3. binary/debug evidence for the member or lifecycle rule.
+
+This is especially important for ownership and destruction semantics, where a modern ViewKlass implementation may differ subtly from IRIX 6.5.0.
+
 ## Why this matters to Clogin
 
 A better ViewKit reconstruction will let us distinguish three layers cleanly:
@@ -124,3 +162,5 @@ That separation is important for avoiding portable convenience code in places wh
 ## Next binary work
 
 The first disassembly pass should focus on ViewKit imports visible from Clogin, libimdXutil.so, and libimdApp.so, then map those imports back to the public Vk declarations. Priority symbols/classes are VkComponent, VkSimpleWindow, VkApp, VkCallbackObject, and VkDialogManager.
+
+For the panel-color issue, trace libimdIconPanel.so resource initialization separately. The theme-switch test showed that the current panel shade does not follow the selected MaXX desktop theme, so the custom Imd/Sgm resource path is now a higher-confidence suspect than global ViewKit theming.
