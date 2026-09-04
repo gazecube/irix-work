@@ -97,7 +97,6 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
     /*
      * Binary-proven from PandoraComponentUI::PandoraComponentUI at
      * 0x10012bbc: the VkComponent base widget is an XmFrame, not the form.
-     * The child form is created managed inside that frame.
      */
     _baseWidget = XtVaCreateWidget(
         name,
@@ -257,9 +256,8 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         (XtPointer)this);
 
     /*
-     * Binary-proven constructor callback. The original callback at
-     * 0x10010eec keeps the real password in component-owned storage and
-     * replaces each inserted display byte with ASCII space (0x20).
+     * Binary-proven callback at 0x10010eec. The real password is stored in
+     * component-owned memory while inserted display bytes become ASCII space.
      */
     XtAddCallback(
         _passwordText,
@@ -317,6 +315,9 @@ void PandoraComponent::createIconAreaScaffold()
             _renderer->setGallery(true);
 
         _layout = new PandoraLayout(panelWidget);
+        _layout->setActivateCallback(
+            &PandoraComponent::userViewActivateCB,
+            (XtPointer)this);
         ImdViewPanelAdoptLayout(panelWidget, _layout);
 
         ImdViewPanelSetScale(panelWidget, 1.5f, 0, 0);
@@ -350,7 +351,8 @@ void PandoraComponent::displayIcon()
             continue;
 
         const PwdNameListEntry *entry = config.findEntry(pwd->pw_name);
-        if (entry && (entry->flags & (PwdNameListEntry::kNoShow | PwdNameListEntry::kNoIcon)))
+        if (entry && (entry->flags &
+            (PwdNameListEntry::kNoShow | PwdNameListEntry::kNoIcon)))
             continue;
         if (homeIsIgnored(pwd->pw_dir))
             continue;
@@ -361,19 +363,20 @@ void PandoraComponent::displayIcon()
             continue;
 
         /*
-         * Fresh binary proof from UserView constructor and displayIcon call
-         * site: (login ImdString, uid, home ImdString). std::string is the
-         * portable ImdString stand-in in this probe.
+         * Binary-proven UserView constructor payload from displayIcon():
+         * (login ImdString, uid, home ImdString).
          */
         UserView *view = new UserView(
             pwd->pw_name,
             static_cast<long>(pwd->pw_uid),
             pwd->pw_dir);
 
-        view->createPortableWidget(
-            _layout->container(),
-            &PandoraComponent::userViewActivateCB,
-            (XtPointer)this);
+        /*
+         * Original displayIcon() adopts Imd views into the panel; it does not
+         * create one Xt widget per account. The portable probe now follows the
+         * same ownership shape. PandoraLayout stores reconstructed geometry
+         * until the full ImdView fields/layout ABI are wired.
+         */
         _layout->addView(view);
         _iconPanel->adoptView(view);
         _userViews.push_back(view);
@@ -408,20 +411,22 @@ void PandoraComponent::showPasswordPrompt()
 }
 
 void PandoraComponent::userViewActivateCB(
-    Widget widget,
+    Widget,
     XtPointer clientData,
-    XtPointer)
+    XtPointer callData)
 {
     PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
-    if (!self || !self->_userText)
+    UserView *view = static_cast<UserView *>(callData);
+    if (!self || !self->_userText || !view)
         return;
 
-    XtPointer userData = NULL;
-    XtVaGetValues(widget, XmNuserData, &userData, NULL);
-    UserView *view = static_cast<UserView *>(userData);
-    if (!view)
-        return;
-
+    /*
+     * The original Clogin selectCB obtains the selected ImdView from
+     * getSelectedViewList(), extracts the login string, fills the XmText, and
+     * reveals the password prompt. The portable panel callback receives the
+     * already hit-tested UserView directly until the selected-view list ABI is
+     * reconstructed.
+     */
     XmTextSetString(
         self->_userText,
         const_cast<char *>(view->name().c_str()));
