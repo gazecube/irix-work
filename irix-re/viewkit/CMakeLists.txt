@@ -113,6 +113,50 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         COPYONLY
     )
 
+    # Deterministic primary-evidence test vector for the generic user artwork.
+    # The archive member and SHA-256 are fixed so the renderer probe cannot
+    # silently drift to a different asset. The photograph of a stock login
+    # screen is only corroborating evidence; geometry and behavior continue to
+    # come from the binaries and installed resources.
+    set(PANDORA_ICON_EVIDENCE_ARCHIVE "${CMAKE_SOURCE_DIR}/evidence/icons.tar")
+    set(PANDORA_USER_TOKEN_MEMBER
+        "icons/usr/lib/filetype/vadmin/iconlib/Users.Token.fti")
+    set(PANDORA_USER_TOKEN_SHA256
+        "78a530b3fc190e94b6996f460f47fee02f0935a7833d729fac6e80a241ca5c64")
+    set(PANDORA_TEST_ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-assets")
+    set(PANDORA_USER_TOKEN_FTI "${PANDORA_TEST_ASSET_DIR}/Users.Token.fti")
+
+    if(EXISTS "${PANDORA_ICON_EVIDENCE_ARCHIVE}")
+        find_program(PANDORA_TAR_EXECUTABLE tar)
+        if(NOT PANDORA_TAR_EXECUTABLE)
+            message(FATAL_ERROR
+                "icons.tar is present but tar is unavailable; cannot stage Users.Token.fti")
+        endif()
+
+        file(MAKE_DIRECTORY "${PANDORA_TEST_ASSET_DIR}")
+        execute_process(
+            COMMAND "${PANDORA_TAR_EXECUTABLE}" -xOf
+                    "${PANDORA_ICON_EVIDENCE_ARCHIVE}"
+                    "${PANDORA_USER_TOKEN_MEMBER}"
+            OUTPUT_FILE "${PANDORA_USER_TOKEN_FTI}"
+            RESULT_VARIABLE _pandora_user_token_extract_result
+        )
+        if(NOT _pandora_user_token_extract_result EQUAL 0)
+            message(FATAL_ERROR
+                "failed to extract ${PANDORA_USER_TOKEN_MEMBER} from icons.tar")
+        endif()
+
+        file(SHA256 "${PANDORA_USER_TOKEN_FTI}" _pandora_user_token_actual_sha256)
+        if(NOT _pandora_user_token_actual_sha256 STREQUAL PANDORA_USER_TOKEN_SHA256)
+            message(FATAL_ERROR
+                "Users.Token.fti SHA-256 mismatch: expected ${PANDORA_USER_TOKEN_SHA256}, got ${_pandora_user_token_actual_sha256}")
+        endif()
+    else()
+        message(STATUS
+            "IRIX icon evidence archive unavailable; Users.Token.fti test vector disabled")
+        set(PANDORA_USER_TOKEN_FTI "")
+    endif()
+
     if(TARGET imdIconPanel)
         add_executable(pandora_viewkit_probe
             ../clogin/PandoraViewKit.c++
@@ -126,6 +170,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         )
         target_compile_definitions(pandora_viewkit_probe PRIVATE
             "PANDORA_APP_DEFAULTS_PATH=\"${PANDORA_APP_DEFAULTS_DIR}/%N\""
+            "PANDORA_USER_TOKEN_FTI_PATH=\"${PANDORA_USER_TOKEN_FTI}\""
         )
         target_link_libraries(pandora_viewkit_probe PRIVATE
             viewklass
