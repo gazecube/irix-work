@@ -92,7 +92,14 @@ public:
 
     void preparePortableGeometry(XmFontList fontList);
     void setPortablePosition(Position x, Position y);
-    bool contains(Position x, Position y) const;
+
+    /*
+     * Portable counterpart of ImdIconRenderer::intersects(). The original
+     * checks icon and label regions separately instead of accepting the whole
+     * ImdView bounding rectangle.
+     */
+    bool intersectsPortable(Position x, Position y, XmFontList fontList) const;
+
     void drawPortableContents(Widget panelWidget, XmFontList fontList) const;
 
 private:
