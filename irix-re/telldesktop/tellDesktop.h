@@ -4,17 +4,13 @@
 #include <X11/Xlib.h>
 
 /*
- * Reconstructed original call boundary.
+ * Binary-proven original libimdXutil boundary:
  *
- * The IRIX telldesktop wrapper proves three arguments are passed:
+ *     int tellDesktop(Display *display, Window root, char *command)
  *
- *     Display *display
- *     Window root
- *     char *command
- *
- * The original caller ignores the return register, so the precise original
- * return type is not yet claimed here.  int is retained as a portable ABI
- * placeholder until matching DWARF or the implementation proves otherwise.
+ * The implementation returns 0 when no desktop window is registered and 1
+ * after sending the command property successfully.  The standalone original
+ * telldesktop wrapper ignores this return value and exits 0 after the call.
  */
 int tellDesktop(Display *display, Window root, char *command);
 
