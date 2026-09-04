@@ -4,6 +4,7 @@
 #include "ImdIconPanel.h"
 
 #include <X11/Intrinsic.h>
+#include <sys/types.h>
 #include <string>
 #include <vector>
 
@@ -55,13 +56,23 @@ public:
      * Original constructor is UserView(const ImdString &, long, long).
      * std::string is a portable stand-in until reconstructed libimdUtil's
      * ImdString ABI is linkable from the probe.
+     *
+     * The binary-proven addUser() path also carries the account home path and
+     * uid into the presentation object. Their exact relationship to the two
+     * long constructor arguments is not proven, so they are retained as
+     * explicit metadata rather than being forced into arg0/arg1.
      */
     UserView(const std::string &name, long arg0, long arg1);
 
     const std::string &name() const { return _name; }
+    const std::string &home() const { return _home; }
+    uid_t uid() const { return _uid; }
+    bool hasAccountMetadata() const { return _hasAccountMetadata; }
     long arg0() const { return _arg0; }
     long arg1() const { return _arg1; }
     Widget widget() const { return _widget; }
+
+    void setAccountMetadata(const std::string &home, uid_t uid);
 
     void createPortableWidget(
         Widget parent,
@@ -70,6 +81,9 @@ public:
 
 private:
     std::string _name;
+    std::string _home;
+    uid_t _uid;
+    bool _hasAccountMetadata;
     long _arg0;
     long _arg1;
     Widget _widget;
