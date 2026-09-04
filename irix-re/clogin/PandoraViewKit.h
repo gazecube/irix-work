@@ -17,6 +17,7 @@ public:
     Widget passwordText() const { return _passwordText; }
 
 private:
+    Widget _form;
     Widget _panelWindow;
     Widget _warningLabel;
     Widget _userFullNameLabel;
