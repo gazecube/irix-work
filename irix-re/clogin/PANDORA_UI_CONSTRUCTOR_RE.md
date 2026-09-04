@@ -258,6 +258,66 @@ loginButton XmNactivateCallback -> loginCBCallback
 The standalone ViewKit probe currently reconstructs the widget hierarchy and
 geometry but does not yet reproduce these behavioral callbacks.
 
+## Runtime icon-panel construction
+
+The upper icon area is not completed in the UI constructor. It is created later
+inside:
+
+```text
+0x100115e8 PandoraComponent::readyToDisplay(int, int, char)
+```
+
+When the icon-display path is enabled, the binary performs this sequence:
+
+```text
+0x100116c0 XmCreateScrolledWindow
+    parent = panelWindow (+0x34)
+    name   = "scrolledWindow"
+    args   = NULL
+    count  = 0
+
+0x100116d4 XtManageChild(scrolledWindow)
+
+0x100116f4 imdFtrChooseVisualArgs(...)
+
+0x100117e4 ImdIconPanel::ImdIconPanel(
+    <name>,
+    scrolledWindow,
+    args,
+    count)
+
+0x1001188c ImdViewPanelAdoptRenderer(...)
+
+0x1001193c ImdViewPanelAdoptLayout(...)
+
+0x10011968 ImdViewPanelSetScale(...)
+
+0x100119a0 VkCallbackObject::addCallback(...)
+0x100119bc VkCallbackObject::addCallback(...)
+```
+
+The two ViewKit callbacks use the `ImdIconPanel` callback objects exported as:
+
+```text
+ImdIconPanel::kSelectionChangedCallback
+ImdIconPanel::kCommandCallback
+```
+
+The surrounding code constructs a `PandoraRenderer` and `PandoraLayout` and
+adopts them into the icon-panel widget before setting the scale. The exact
+constructor argument list assembled for `ImdIconPanel` is still being decoded;
+do not invent those Arg names or values.
+
+The standalone probe currently implements only the binary-proven Motif portion:
+
+```text
+panelWindow
+  -> XmCreateScrolledWindow("scrolledWindow", NULL, 0)
+```
+
+and manages the scrolled window. The Imd subtree remains intentionally absent
+until the `ImdIconPanel` interface is reconstructed and linkable.
+
 ## App-defaults-owned values
 
 The preserved SGI app-defaults file supplies offsets, widths, fonts, labels,
@@ -300,6 +360,17 @@ passwordLabel = "Password:"
 loginButton   = "Log In"
 helpButton    = "Help"
 ```
+
+The preserved original keeps SGI scheme-driven font resources such as:
+
+```text
+SGI_DYNAMIC ExtraLargeBoldLabelFont
+```
+
+The Linux probe-safe app-defaults copy deliberately omits those particular
+fontList lines because stock Linux Motif cannot expand the SGI scheme token and
+otherwise reports a FontStruct conversion warning. This does not alter the raw
+IRIX evidence file.
 
 ## Source cross-check
 
