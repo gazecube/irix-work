@@ -1,7 +1,7 @@
 #include "PandoraPresentation.h"
 
+#include <Xm/BulletinB.h>
 #include <Xm/DrawnB.h>
-#include <Xm/RowColumn.h>
 #include <Xm/Xm.h>
 
 #include <pwd.h>
@@ -26,20 +26,23 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
 {
     /*
      * Portable backing only. The original PandoraLayout directly constructs
-     * ImdLayout(Widget), then installs its own vtable and initializes two
-     * class fields to 10 and 12. The Motif RowColumn remains a Linux-only
-     * placement backend until the original layout algorithm is reconstructed.
+     * ImdLayout(Widget), installs its own vtable, then initializes:
+     *
+     *   +0x0c = 10   outer inset
+     *   +0x10 = 12   inter-cell spacing
+     *
+     * PandoraLayout::update(bool) at 0x10018028 explicitly positions each
+     * view. XmBulletinBoard is therefore a closer portability boundary than
+     * XmRowColumn because it lets the recovered algorithm own child x/y.
      */
     _container = XtVaCreateManagedWidget(
         "userViewContainer",
-        xmRowColumnWidgetClass,
+        xmBulletinBoardWidgetClass,
         _panelWidget,
-        XmNorientation, XmHORIZONTAL,
-        XmNpacking, XmPACK_COLUMN,
-        XmNnumColumns, 4,
-        XmNspacing, 3,
-        XmNmarginWidth, 3,
-        XmNmarginHeight, 3,
+        XmNmarginWidth, 0,
+        XmNmarginHeight, 0,
+        XmNshadowThickness, 0,
+        XmNresizePolicy, XmRESIZE_NONE,
         NULL);
 }
 
@@ -51,12 +54,109 @@ void PandoraLayout::addView(UserView *view)
 
 void PandoraLayout::update()
 {
+    if (!_container || !_panelWidget || _views.empty())
+        return;
+
+    const Dimension outerInset = 10;
+    const Dimension spacing = 12;
+
+    Dimension panelWidth = 0;
+    XtVaGetValues(_panelWidget, XmNwidth, &panelWidth, NULL);
+    if (panelWidth == 0)
+        XtVaGetValues(_container, XmNwidth, &panelWidth, NULL);
+    if (panelWidth == 0)
+        panelWidth = 1;
+
+    Dimension maxWidth = 0;
+    Dimension maxHeight = 0;
+    for (std::size_t i = 0; i < _views.size(); ++i)
+    {
+        Widget widget = _views[i] ? _views[i]->widget() : NULL;
+        if (!widget)
+            continue;
+
+        Dimension width = 0;
+        Dimension height = 0;
+        XtVaGetValues(widget, XmNwidth, &width, XmNheight, &height, NULL);
+        if (width > maxWidth)
+            maxWidth = width;
+        if (height > maxHeight)
+            maxHeight = height;
+    }
+
+    if (maxWidth == 0 || maxHeight == 0)
+        return;
+
     /*
-     * Xt's RowColumn performs the portable placement for now. The original
-     * PandoraLayout::update(bool) at 0x10018028 remains the geometry target.
+     * Binary-proven column calculation from PandoraLayout::update(bool):
+     *
+     *   cols = (availableWidth - 2*outerInset + spacing)
+     *          / (maxViewWidth + spacing)
+     *   if (cols == 0) cols = 1
      */
-    if (_container)
-        XtVaSetValues(_container, XmNnumColumns, 4, NULL);
+    long numerator = static_cast<long>(panelWidth)
+                   - 2L * static_cast<long>(outerInset)
+                   + static_cast<long>(spacing);
+    long denominator = static_cast<long>(maxWidth)
+                     + static_cast<long>(spacing);
+    long columns = denominator > 0 ? numerator / denominator : 1;
+    if (columns < 1)
+        columns = 1;
+
+    long column = 0;
+    Position cellX = static_cast<Position>(outerInset);
+    Position cellY = static_cast<Position>(outerInset);
+
+    for (std::size_t i = 0; i < _views.size(); ++i)
+    {
+        Widget widget = _views[i] ? _views[i]->widget() : NULL;
+        if (!widget)
+            continue;
+
+        Dimension width = 0;
+        XtVaGetValues(widget, XmNwidth, &width, NULL);
+
+        /* Original centers narrower views inside the maximum-width cell. */
+        Position x = static_cast<Position>(
+            cellX + static_cast<Position>((maxWidth - width) / 2));
+
+        XtVaSetValues(
+            widget,
+            XmNx, x,
+            XmNy, cellY,
+            NULL);
+
+        ++column;
+        if (column == columns)
+        {
+            column = 0;
+            cellX = static_cast<Position>(outerInset);
+            cellY = static_cast<Position>(
+                cellY + static_cast<Position>(maxHeight + spacing));
+        }
+        else
+        {
+            cellX = static_cast<Position>(
+                cellX + static_cast<Position>(maxWidth + spacing));
+        }
+    }
+
+    /*
+     * The original computes panel height from the final occupied row while
+     * keeping the same outer inset at the bottom.
+     */
+    Dimension contentHeight;
+    if (column == 0)
+        contentHeight = static_cast<Dimension>(cellY - spacing + outerInset);
+    else
+        contentHeight = static_cast<Dimension>(
+            cellY + static_cast<Position>(maxHeight + outerInset));
+
+    XtVaSetValues(
+        _container,
+        XmNwidth, panelWidth,
+        XmNheight, contentHeight,
+        NULL);
 }
 
 UserView::UserView(
@@ -121,6 +221,8 @@ void UserView::createPortableWidget(
      * Portable rendering backend only. Original UserView instances are drawn
      * through PandoraRenderer / ImdInvertedTeeRenderer in the ImdViewPanel.
      * A flat DrawnButton remains only as the temporary Linux selection surface.
+     * The 128x96 portable cell size remains provisional until
+     * ImdInvertedTeeRenderer::setSize(ImdView &) is reconstructed.
      */
     _widget = XtVaCreateManagedWidget(
         _name.c_str(),
