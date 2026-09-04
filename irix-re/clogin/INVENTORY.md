@@ -1,6 +1,6 @@
 # clogin evidence inventory
 
-This file records only evidence currently located in the IRIX 6.5.7m source mirror and the existing Linux prototype. Anything not directly supported is labeled as a prototype hypothesis or unresolved.
+This file records only evidence currently located in the IRIX 6.5.7m source mirror, archived IRIX files, and the existing Linux prototype. Anything not directly supported is labeled as a prototype hypothesis or unresolved.
 
 ## Confirmed IRIX integration
 
@@ -26,6 +26,50 @@ Configuration files named by the man page:
 
 - `/etc/config/visuallogin`
 - `/etc/config/noiconlogin`
+
+### Actual `clogin.conf` vocabulary
+
+An archived IRIX `clogin.conf` is available in the project evidence set. Its own comments state that it is modified by `configClogin`, read by `clogin`, and that the fixed keywords are defined by `sysadm/SaCloginConf.h`.
+
+Observed active directives:
+
+```text
+home directory must be local
+use small window
+display faces
+```
+
+Observed hidden-user syntax:
+
+```text
+<username>:noshow
+```
+
+with the sample file hiding:
+
+```text
+lp:noshow
+nuucp:noshow
+```
+
+The file explicitly says the hidden-user list must be at the end of the file.
+
+This materially upgrades several previously vague ideas into confirmed behavior:
+
+- `clogin` has its own configuration file in addition to `visuallogin`/`noiconlogin`.
+- locality of home directories is configurable.
+- a small-window mode is configurable.
+- face display is configurable.
+- per-user hiding is implemented by explicit `username:noshow` records.
+
+Still unresolved from this file alone:
+
+- the pathname from which `clogin` reads `clogin.conf`,
+- the opposite keyword forms for each directive,
+- exact parsing/error behavior,
+- whether `display faces` and `noiconlogin` are combined, overridden, or synchronized by `configClogin`.
+
+High-value source target: `sysadm/SaCloginConf.h`.
 
 ### Autologin contract
 
@@ -54,13 +98,14 @@ Direct searches for source code named `clogin`, `dtlogin`, or `configClogin` hav
 
 This means the next searches should use:
 
-- package/IDB entries
-- installed resource paths
-- X resource names
-- strings from the target `clogin` binary
-- library dependencies and symbol names
-- related session utilities
-- historical CDE/xdm source names where SGI may have retained upstream filenames
+- `SaCloginConf.h` and neighboring `sysadm` sources,
+- package/IDB entries,
+- installed resource paths,
+- X resource names,
+- strings from the target `clogin` binary,
+- library dependencies and symbol names,
+- related session utilities,
+- historical CDE/xdm source names where SGI may have retained upstream filenames.
 
 ## Existing Linux prototype inventory
 
@@ -92,9 +137,9 @@ This is portable implementation behavior, not yet evidence of SGI's exact proces
 - click/double-click behavior,
 - delayed password-field display.
 
-These are now classified as **prototype hypotheses to verify**, unless separately supported by target-binary evidence or an authoritative IRIX source/document.
+After recovering `clogin.conf`, home-directory locality and face display are no longer pure guesses, but the prototype's exact filtering algorithm remains unproven. In particular, a generic Linux minimum-UID cutoff is not supported by the recovered config file; original SGI behavior may instead depend on explicit hiding, account properties, locality, and other rules.
 
-In particular, the comments currently label the following face lookup order as historical:
+The comments currently label the following face lookup order as historical:
 
 - `$HOME/.icons/login.icon`
 - `/usr/local/lib/faces/$USER`
@@ -104,18 +149,20 @@ Do not treat that ordering as confirmed until we locate the original `clogin(1)`
 
 ## High-value targets to recover next
 
-1. Original `clogin` binary from the target IRIX installation.
-2. Original `clogin(1)` and `configClogin(1M)` man pages if present in installation media or archive material.
-3. Package/IDB entries containing the actual installed executable and resource paths.
-4. X resource databases or app-defaults used by `clogin`.
-5. User-face/icon search strings from the binary.
-6. Authentication/session-start symbols and imported libraries.
-7. Exact relationship to `xdm`: shared daemon code, exec handoff, or separate replacement process.
-8. Autologin handling in the target binary, especially unlink/removal of `/etc/autologin.on`.
+1. `sysadm/SaCloginConf.h` or any binary/archive containing it.
+2. Original `clogin` binary from the target IRIX installation.
+3. Original `clogin(1)` and `configClogin(1M)` man pages if present in installation media or archive material.
+4. Package/IDB entries containing the actual installed executable, `clogin.conf`, and resource paths.
+5. X resource databases or app-defaults used by `clogin`.
+6. User-face/icon search strings from the binary.
+7. Authentication/session-start symbols and imported libraries.
+8. Exact relationship to `xdm`: shared daemon code, exec handoff, or separate replacement process.
+9. Autologin handling in the target binary, especially unlink/removal of `/etc/autologin.on`.
 
 ## Confidence rule
 
 - target 6.5.0 binary/resource evidence: primary truth
 - matching 6.5.7m source/documentation: very strong support
+- archived IRIX config/resource files: direct behavioral evidence
 - current Linux `dvlogin` code: implementation reference only
 - unsupported comments/assumptions: hypothesis until proven
