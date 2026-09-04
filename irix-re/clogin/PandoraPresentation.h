@@ -4,29 +4,13 @@
 #include "ImdIconPanel.h"
 
 #include <X11/Intrinsic.h>
+#include <Xm/Xm.h>
 #include <sys/types.h>
 #include <string>
 #include <vector>
 
 class UserView;
 
-/*
- * Original direct base-constructor chains recovered from the fresh IRIX
- * /usr/Cadmin/bin/clogin binary:
- *
- *   PandoraRenderer::PandoraRenderer()
- *     -> ImdInvertedTeeRenderer::ImdInvertedTeeRenderer()
- *
- *   PandoraLayout::PandoraLayout(Widget)
- *     -> ImdLayout::ImdLayout(Widget)
- *
- *   UserView::UserView(...)
- *     -> ImdIconView::ImdIconView()
- *
- * The portable base types do not yet reproduce the complete original vtables;
- * they preserve the recovered class direction while the renderer ABI is
- * reconstructed incrementally.
- */
 class PandoraRenderer : public ImdInvertedTeeRenderer
 {
 public:
@@ -53,6 +37,7 @@ public:
     void addView(UserView *view);
     void update();
     void resize();
+    void setActivateCallback(XtCallbackProc callback, XtPointer clientData);
 
 private:
     static void panelStructureEvent(
@@ -60,9 +45,25 @@ private:
         XtPointer clientData,
         XEvent *event,
         Boolean *continueToDispatch);
+    static void panelButtonEvent(
+        Widget widget,
+        XtPointer clientData,
+        XEvent *event,
+        Boolean *continueToDispatch);
+    static void panelExposeCallback(
+        Widget widget,
+        XtPointer clientData,
+        XtPointer callData);
+
+    void draw();
+    UserView *viewAt(Position x, Position y) const;
+    XmFontList fontList() const;
 
     Widget _panelWidget;
     Widget _container;
+    Widget _fontProbe;
+    XtCallbackProc _activateCallback;
+    XtPointer _activateClientData;
     std::vector<UserView *> _views;
 };
 
@@ -76,36 +77,32 @@ public:
      *
      * The old SGI mangling is:
      *   __ct__8UserViewGRC9ImdStringlT1
-     *
-     * displayIcon() passes the model's login ImdString, uid field, and home
-     * ImdString directly. std::string remains the portable stand-in until the
-     * reconstructed ImdString ABI is linked into this probe.
      */
     UserView(const std::string &name, long uid, const std::string &home);
-
-    /*
-     * Transitional source-compatibility constructor for the current probe.
-     * It resolves the binary-proven uid/home payload from passwd by name so
-     * older call sites keep working until displayIcon() is updated directly.
-     */
     UserView(const std::string &name, long legacyArg0, long legacyArg1);
 
     const std::string &name() const { return _name; }
     const std::string &home() const { return _home; }
     uid_t uid() const { return _uid; }
-    Widget widget() const { return _widget; }
 
-    void createPortableWidget(
-        Widget parent,
-        XtCallbackProc activateCallback,
-        XtPointer clientData);
-    void drawPortableContents();
+    Position x() const { return _x; }
+    Position y() const { return _y; }
+    Dimension width() const { return _width; }
+    Dimension height() const { return _height; }
+
+    void preparePortableGeometry(XmFontList fontList);
+    void setPortablePosition(Position x, Position y);
+    bool contains(Position x, Position y) const;
+    void drawPortableContents(Widget panelWidget, XmFontList fontList) const;
 
 private:
     std::string _name;
     std::string _home;
     uid_t _uid;
-    Widget _widget;
+    Position _x;
+    Position _y;
+    Dimension _width;
+    Dimension _height;
 };
 
 #endif /* IRIX_RE_CLOGIN_PANDORA_PRESENTATION_H */
