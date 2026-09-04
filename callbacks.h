@@ -23,27 +23,15 @@ void toggleHostnameCB(Widget w, XtPointer client_data, XtPointer call_data)
 	}
 	
 	XmUpdateDisplay(hostLabel);
-	
-	
 }
 
 
-/*	Shadow password buffer
-
-	The real password is always stored here. The XmText widget
-	always displays asterisks; there is intentionally no UI path
-	that can reveal the password in clear text.
-*/
+/* Shadow password buffer */
 static char g_shadow_password[MAX_PASSWORD_LEN + 1];
 static int g_shadow_len = 0;
-static Boolean g_pw_internal = False;    /* suppresses modifyVerify during programmatic updates */
+static Boolean g_pw_internal = False;
 
 
-/*	clear_password_field
-	
-	zeroes the shadow buffer and clears the textBox2 
-	widget without triggering the modifyVerify callback.
-*/
 static void clear_password_field(void)
 {
 	g_pw_internal = True;
@@ -54,18 +42,11 @@ static void clear_password_field(void)
 }
 
 
-/*	passwordModifyVerifyCB
-	
-	Fires BEFORE a change is applied to the widget. Keeps the
-	shadow buffer in sync with every insert/delete, and always
-	replaces displayed characters with '*'.
-*/
 void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data)
 {
 	XmTextVerifyCallbackStruct *cbs = (XmTextVerifyCallbackStruct *)call_data;
 	int start, end, del_len, new_len, result_len, i;
 
-	/* skip processing during our own programmatic updates */
 	if(g_pw_internal) { return; }
 
 	start   = cbs->startPos;
@@ -73,7 +54,6 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 	del_len = end - start;
 	new_len = (cbs->text != NULL) ? cbs->text->length : 0;
 
-	/* enforce length limit */
 	result_len = g_shadow_len - del_len + new_len;
 	if(result_len > MAX_PASSWORD_LEN)
 	{
@@ -81,7 +61,6 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 		return;
 	}
 
-	/* remove deleted range from shadow buffer */
 	if(del_len > 0)
 	{
 		memmove(&g_shadow_password[start],
@@ -90,7 +69,6 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 		g_shadow_len -= del_len;
 	}
 
-	/* insert new characters into shadow buffer */
 	if(new_len > 0 && cbs->text->ptr != NULL)
 	{
 		memmove(&g_shadow_password[start + new_len],
@@ -100,7 +78,6 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 		g_shadow_len += new_len;
 		g_shadow_password[g_shadow_len] = '\0';
 
-		/* password text is never displayed in clear text */
 		for(i = 0; i < new_len; i++)
 		{
 			cbs->text->ptr[i] = '*';
@@ -109,14 +86,8 @@ void passwordModifyVerifyCB(Widget w, XtPointer client_data, XtPointer call_data
 }
 
 
-
 void quitNow()
 {
-/*
-	In the forked GUI child, just exit.
-	g_auth_username will be empty so the parent
-	knows no auth occurred.
-*/
 	_exit(0);
 }
 
@@ -132,7 +103,6 @@ void verifySuperUser()
 }
 
 
-
 void optButtonCB()
 {
 	if(XmToggleButtonGetState(optionsButton) == 1)
@@ -146,54 +116,29 @@ void optButtonCB()
 }
 
 
-
-
 void mouseOverLoginPanel(Widget widget, XtPointer client_data, XEvent *event, Boolean *none)
 {
-/* get XtDisplay associated with the calling widget */
 	Display *display = XtDisplay(widget);
-
-/* set up custom cursor */
 	Cursor handCursor = XCreateFontCursor(display, XC_left_ptr);
-
-/* change cursor */
 	XDefineCursor(display, XtWindow(widget), handCursor);
-
-/* clean up */
 	XFreeCursor(display, handCursor);
 }
 
 
-
-
 void mouseOverPushButton(Widget widget, XtPointer client_data, XEvent *event, Boolean *none)
 {
-/* get XtDisplay associated with the calling widget */
 	Display *display = XtDisplay(widget);
-
-/* set up custom cursor */
 	Cursor handCursor = XCreateFontCursor(display, XC_hand1);
-
-/* change cursor */
 	XDefineCursor(display, XtWindow(widget), handCursor);
-
-/* clean up */
 	XFreeCursor(display, handCursor);
 }
 
 
 void mouseLeftPushButton(Widget widget, XtPointer client_data, XEvent *event, Boolean *none)
 {
-/* get XtDisplay associated with the calling widget */
 	Display *display = XtDisplay(widget);
-
-/* revert to default cursor */
 	XUndefineCursor(display, XtWindow(widget));
 }
-
-
-
-
 
 
 void lockWidgets()
@@ -209,41 +154,35 @@ void unlockWidgets()
 }
 
 
-
-
-
-
-/* Helper function to validate username characters */
 static Boolean is_valid_username_char(char c)
 {
 	return (isalnum(c) || c == '_' || c == '-');
 }
 
-/* Check for valid chars and limit while typing */
+
 void textInputMotionCB(Widget widgetName, XtPointer client_data, XtPointer call_data)
 {
-	char *widgetNameStr = XtName(widgetName);
 	char *text;
 	int max_len;
 	Boolean (*validator)(char) = NULL;
 
-	/* Determine which widget and its constraints */
-	if(strcmp(widgetNameStr, "textBox1") == 0)
+	/* Use widget identity, not instance names. This permits both the old
+	 * prototype names and the original Pandora userText/passwordText names. */
+	if(widgetName == textBox1)
 	{
 		max_len = MAX_USERNAME_LEN;
 		validator = is_valid_username_char;
 	}
-	else if(strcmp(widgetNameStr, "textBox2") == 0)
+	else if(widgetName == textBox2)
 	{
 		max_len = MAX_PASSWORD_LEN;
-		validator = NULL; /* Allow any chars in password */
+		validator = NULL;
 	}
 	else
 	{
 		return;
 	}
 
-	/* Get current text */
 	text = XmTextGetString(widgetName);
 
 	if(text != NULL)
@@ -251,14 +190,12 @@ void textInputMotionCB(Widget widgetName, XtPointer client_data, XtPointer call_
 		int len = strlen(text);
 		Boolean modified = False;
 
-		/* Check length limit */
 		if(len > max_len)
 		{
 			text[max_len] = '\0';
 			modified = True;
 		}
 
-		/* Validate characters (username only) */
 		if(validator != NULL)
 		{
 			int i, j = 0;
@@ -276,7 +213,6 @@ void textInputMotionCB(Widget widgetName, XtPointer client_data, XtPointer call_
 			text[j] = '\0';
 		}
 
-		/* Update widget if we modified the text */
 		if(modified)
 		{
 			XmTextSetString(widgetName, text);
@@ -289,16 +225,13 @@ void textInputMotionCB(Widget widgetName, XtPointer client_data, XtPointer call_
 }
 
 
-
-
-/* Structure to pass credentials to PAM conversation function */
 struct pam_response_data
 {
 	char *username;
 	char *password;
 };
 
-/* PAM conversation function - handles password prompts */
+
 static int pam_conversation(int num_msg, const struct pam_message **msg,
 	struct pam_response **resp, void *appdata_ptr)
 {
@@ -321,14 +254,14 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
 
 		switch(msg[i]->msg_style)
 		{
-			case PAM_PROMPT_ECHO_OFF:  /* Password prompt */
+			case PAM_PROMPT_ECHO_OFF:
 				if(creds->password)
 				{
 					reply[i].resp = strdup(creds->password);
 				}
 				break;
 
-			case PAM_PROMPT_ECHO_ON:   /* Username prompt */
+			case PAM_PROMPT_ECHO_ON:
 				if(creds->username)
 				{
 					reply[i].resp = strdup(creds->username);
@@ -337,7 +270,6 @@ static int pam_conversation(int num_msg, const struct pam_message **msg,
 
 			case PAM_ERROR_MSG:
 			case PAM_TEXT_INFO:
-				/* Just acknowledge info/error messages */
 				break;
 
 			default:
@@ -361,7 +293,7 @@ fail:
 	return PAM_CONV_ERR;
 }
 
-/* Returns 1 on success, 0 on failure */
+
 int authenticateLogin(char *username, char *password)
 {
 	pam_handle_t *pamh = NULL;
@@ -372,15 +304,12 @@ int authenticateLogin(char *username, char *password)
 	fprintf(stdout, "Attempting auth for user: %s\n", username);
 	fflush(stdout);
 
-	/* Set up credentials */
 	creds.username = username;
 	creds.password = password;
 
-	/* Set up PAM conversation */
 	conv.conv = pam_conversation;
 	conv.appdata_ptr = &creds;
 
-	/* Initialize PAM */
 	retval = pam_start("login", username, &conv, &pamh);
 	if(retval != PAM_SUCCESS)
 	{
@@ -388,19 +317,15 @@ int authenticateLogin(char *username, char *password)
 		return 0;
 	}
 
-	/* Authenticate the user */
 	retval = pam_authenticate(pamh, 0);
 	if(retval != PAM_SUCCESS)
 	{
 		fprintf(stderr, "Authentication failed: %s\n", pam_strerror(pamh, retval));
 		pam_end(pamh, retval);
-
-		/* Add delay to prevent brute force */
 		sleep(2);
 		return 0;
 	}
 
-	/* Check account validity (expired password, etc.) */
 	retval = pam_acct_mgmt(pamh, 0);
 	if(retval != PAM_SUCCESS)
 	{
@@ -409,26 +334,15 @@ int authenticateLogin(char *username, char *password)
 		return 0;
 	}
 
-	/* Success! */
 	fprintf(stdout, "Authentication successful for user: %s\n", username);
 	fflush(stdout);
 
-	/* Clean up */
 	pam_end(pamh, PAM_SUCCESS);
-
-	/* Clear password from memory */
 	memset(password, 0, strlen(password));
-
 	return 1;
 }
 
 
-/*	auth_success_exit - common handler for successful authentication.
-	
-	Stores the username in g_auth_username and signals
-	XtAppMainLoop to return so the GUI child can exit
-	cleanly and pass the username back via pipe.
-*/
 static void auth_success_exit(const char *username)
 {
 	strncpy(g_auth_username, username, MAX_USERNAME_LEN);
@@ -437,31 +351,29 @@ static void auth_success_exit(const char *username)
 }
 
 
-/* Runs when enter key is pressed */
 void textInputActivatedCB(Widget widgetName, XtPointer client_data, XtPointer call_data)
 {
-	char *widgetNameStr = XtName(widgetName);
-
-	if(strcmp(widgetNameStr, "textBox1") == 0)
+	if(widgetName == textBox1)
 	{
-		/* username field - just focus the password field */
-		XmProcessTraversal(textBox1, XmTRAVERSE_NEXT_TAB_GROUP);
+		XmProcessTraversal(textBox2, XmTRAVERSE_CURRENT);
 	}
-	else if(strcmp(widgetNameStr, "textBox2") == 0)
+	else if(widgetName == textBox2)
 	{
+		char *username;
+		char *password;
+
 		lockWidgets();
 
-		/* get username from widget, password from shadow buffer */
-		char *username = XmTextGetString(
-			XtNameToWidget(XtParent(widgetName), "textBox1"));
-		char *password = strdup(g_shadow_password);
+		/* Read the bound username widget directly. Pandora intentionally uses
+		 * the original instance name userText, so name-based lookup is wrong. */
+		username = XmTextGetString(textBox1);
+		password = strdup(g_shadow_password);
 
 		if(username != NULL && strlen(username) > 0 &&
 			password != NULL && strlen(password) > 0)
 		{
 			if(authenticateLogin(username, password))
 			{
-				/* success clear sensitive data and hand off */
 				clear_password_field();
 				auth_success_exit(username);
 
@@ -471,7 +383,6 @@ void textInputActivatedCB(Widget widgetName, XtPointer client_data, XtPointer ca
 			}
 			else
 			{
-				/* Failed - clear password field */
 				clear_password_field();
 			}
 		}
@@ -492,6 +403,7 @@ void textInputActivatedCB(Widget widgetName, XtPointer client_data, XtPointer ca
 	}
 }
 
+
 void loginButtonCB(Widget widgetName, XtPointer client_data, XtPointer call_data)
 {
 	char *username = XmTextGetString(textBox1);
@@ -507,7 +419,6 @@ void loginButtonCB(Widget widgetName, XtPointer client_data, XtPointer call_data
 	{
 		if(authenticateLogin(username, password))
 		{
-			/* success - clear sensitive data and hand off */
 			clear_password_field();
 			auth_success_exit(username);
 
@@ -517,7 +428,6 @@ void loginButtonCB(Widget widgetName, XtPointer client_data, XtPointer call_data
 		}
 		else
 		{
-			/* Failed - clear password field */
 			clear_password_field();
 		}
 	}
@@ -531,41 +441,27 @@ void loginButtonCB(Widget widgetName, XtPointer client_data, XtPointer call_data
 }
 
 
-
-
 void textWidgetGainedFocus(Widget widgetName, XtPointer client_data, XtPointer call_data)
 {
-	/* enable visible cursor for insert position */
 	XtVaSetValues(widgetName, XmNcursorPositionVisible, 1, NULL);
 }
 
 void textWidgetLostFocus(Widget widgetName, XtPointer client_data, XtPointer call_data)
 {
-	/* disables insert cursor */
 	XtVaSetValues(widgetName, XmNcursorPositionVisible, 0, NULL);
 }
 
 void mouseOverTextInput(Widget widget, XtPointer client_data, XEvent *event, Boolean *none)
 {
-/* get XtDisplay associated with the calling widget */
 	Display *display = XtDisplay(widget);
-
-/* set up custom cursor */
 	Cursor handCursor = XCreateFontCursor(display, XC_xterm);
-
-/* change cursor */
 	XDefineCursor(display, XtWindow(widget), handCursor);
-
-/* clean up */
 	XFreeCursor(display, handCursor);
 }
 
 
 void mouseLeftTextInput(Widget widget, XtPointer client_data, XEvent *event, Boolean *none)
 {
-/* get XtDisplay associated with the calling widget */
 	Display *display = XtDisplay(widget);
-
-/* revert to default cursor */
 	XUndefineCursor(display, XtWindow(widget));
 }
