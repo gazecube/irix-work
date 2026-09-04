@@ -14,14 +14,14 @@
 int enableRootShortcut = 1;
 
 /*
+ * Shared widget handles used by the reconstructed presentation layer.
  * Keep the password label and password input as distinct widget handles.
  * The original prototype temporarily aliased `password` to `textBox2`, which
  * caused the label pointer to be overwritten when gui.h constructed the input
- * widget.  The reconstructed UI now needs both independently so the prompt can
- * follow the original presentation state cleanly.
+ * widget.
  */
-Widget textBox1, textBox2, password, helpButton, powerButton, optionsButton,
-	scrolledWin0, scrolledWin, hostLabel;
+Widget topLevel, textBox1, textBox2, password, helpButton, powerButton,
+	optionsButton, scrolledWin0, scrolledWin, hostLabel;
 XtAppContext app;
 
 /*	Set by auth callbacks on success.
