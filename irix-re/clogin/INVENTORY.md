@@ -132,19 +132,227 @@ This gives us a concrete compatibility requirement for the Linux implementation:
 
 6.5.7m references show `endsession -f` used by IRIX session/test tooling. This confirms `endsession` is part of the surrounding IID session lifecycle, but it does not yet prove exactly how `clogin` launches or monitors the normal IID session.
 
+## Original `sysadmdesktop` payload recovered
+
+The extracted `sysadmdesktop` tree contains the original runtime pieces directly:
+
+```text
+/usr/Cadmin/bin/clogin
+/usr/Cadmin/images/cloginlogo.rgb
+/usr/lib/X11/app-defaults/Clogin
+/usr/lib/X11/app-defaults/SaConfigCloginGuide
+/usr/lib/X11/app-defaults/SaConfigCloginTask
+/usr/sysadm/taskdf/SaConfigCloginTask.tdf
+/usr/sysadm/taskdso/SaConfigCloginTask.so
+/usr/sysadm/privbin/updateclogin
+/usr/share/catman/u_man/cat1/clogin.z
+/usr/share/catman/a_man/cat1/sysadm/updateclogin.z
+/var/sysadm/config/clogin.conf
+```
+
+### Original `clogin` executable
+
+`/usr/Cadmin/bin/clogin` is:
+
+- ELF32
+- big-endian MIPS
+- N32 ABI
+- MIPS-III
+- dynamically linked
+- stripped, but with useful dynamic symbols
+
+Important linked libraries include:
+
+```text
+libimdIconPanel.so
+libimdModel.so
+libimdXutil.so
+libimdUtil.so
+libimdFtrIcon.so
+libimdFtrDB.so
+libil.so
+libvk.so.1
+libSgm.so.1
+libXm.so.1
+libXt.so
+libX11.so.1
+```
+
+This proves `clogin` is not merely an xdm greeter skin. It directly uses the same IMD icon/model stack that the Interactive Desktop uses.
+
+Recovered dynamic symbols include:
+
+```text
+findUserPicture__16PandoraComponentGP7xpasswd
+getIgnoreList__11PwdNameListGv
+getShowAnywayList__11PwdNameListGv
+getNoshowList__11PwdNameListGv
+loginCB__16PandoraComponentGP10_WidgetRecPv
+passwordTextActivateCB__16PandoraComponentGP10_WidgetRecPv
+userTextActivateCB__16PandoraComponentGP10_WidgetRecPv
+createContents__8UserViewGb
+update__13PandoraLayoutGb
+draw__15PandoraRendererGR7ImdViewlT2
+```
+
+Class names present in the executable include:
+
+```text
+PandoraComponent
+PandoraComponentUI
+PandoraWindow
+pandora
+PandoraLayout
+PandoraRenderer
+UserView
+PwdNameList
+imageIcon
+```
+
+This is especially important because the IRIX documentation described `pandora` as the older 4Sight visual login program. The IID `clogin` binary still retains `pandora` class/function names internally, strongly suggesting evolutionary reuse rather than a wholly separate implementation.
+
+### Confirmed runtime strings from `clogin`
+
+The binary directly contains:
+
+```text
+/var/sysadm/config/clogin.conf
+/etc/autologin.on
+/etc/autologin
+/etc/config/
+/usr/Cadmin/images/cloginlogo.rgb
+/.icons/login.icon
+/usr/local/lib/faces/
+/usr/lib/faces/
+/usr/local/lib/faces/machineUserIcon
+/usr/local/lib/faces/userIcon
+display faces
+home directory must be local
+home directory can be anywhere
+use small window
+machineicon
+noshow
+noicon
+```
+
+This confirms the previously hypothesized face-search order and gives the exact runtime configuration pathname.
+
+The exact `clogin.conf` keyword pair for account source locality is now confirmed:
+
+```text
+home directory must be local
+home directory can be anywhere
+```
+
+The face lookup roots are confirmed:
+
+```text
+$HOME/.icons/login.icon
+/usr/local/lib/faces/
+/usr/lib/faces/
+```
+
+and the binary also references generic face images:
+
+```text
+/usr/local/lib/faces/machineUserIcon
+/usr/local/lib/faces/userIcon
+```
+
+### `Clogin` X resources
+
+The original app-defaults file confirms:
+
+- `Clogin` uses SGI schemes/palettes.
+- drag-and-drop is disabled in the login UI.
+- the login icon panel disables normal traversal and DnD.
+- a `useNoHang` resource defaults to `True` specifically to avoid hanging on down NFS mounts while resolving faces/accounts.
+- `noiconlogin` mode displays `/usr/Cadmin/images/cloginlogo.rgb`.
+- double-clicking a user icon is documented as an alternative to typing the login name and clicking Log In.
+- the password field appears only when needed.
+- invalid username and wrong-password messages deliberately use identical wording for security.
+
+Important resource/widget names include:
+
+```text
+panelWindow
+warningLabel
+userFullNameLabel
+userLabel
+userText
+passwordLabel
+passwordText
+hostLabel
+helpButton
+loginButton
+```
+
+### `configClogin` sysadm task
+
+The configuration UI exposes the original intended semantics very clearly:
+
+- show only local password-file accounts, or include network/NIS accounts,
+- explicit SHOW and HIDE user lists,
+- show face images or generic user icons,
+- use large or small login window.
+
+`SaConfigCloginTask.tdf` identifies the privileged helper as:
+
+```text
+PrivilegeList: updateclogin
+```
+
+The task DSO contains original class/function names including:
+
+```text
+SaCloginConf
+SaConfigCloginData
+SaConfigCloginTask
+SaConfigCloginGuide
+SaConfigCloginShowLocalFilter
+SaConfigCloginShowNisFilter
+SaConfigCloginHideLocalFilter
+SaConfigCloginHideNisFilter
+getCloginConf__18SaConfigCloginDataGv
+displayLocalOnly__18SaConfigCloginDataGv
+getLocalOnlyFlag__12SaCloginConfGv
+getShowFaceFlag__12SaCloginConfGv
+getSmWinSizeFlag__12SaCloginConfGv
+```
+
+This recovers the actual `SaCloginConf` class that the archived config file comments pointed to, even though `SaCloginConf.h` itself is not currently present.
+
+### `updateclogin` helper
+
+The privileged helper contains:
+
+```text
+/var/sysadm/config/clogin.conf
+/var/sysadm/config/clogin.conf.tmp
+display faces
+home directory must be local
+home directory can be anywhere
+use small window
+%s:noshow
+noshow
+```
+
+This strongly indicates an atomic rewrite pattern using `clogin.conf.tmp` followed by rename, and confirms that `updateclogin` serializes the same keyword vocabulary consumed by `clogin`.
+
 ## Source-mirror status
 
 Direct searches for source code named `clogin`, `dtlogin`, `configClogin`, or `SaCloginConf` have not yet exposed the implementation/header in the 6.5.7m mirror. Current literal `clogin` hits are documentation/integration references rather than the main implementation.
 
 This means the next searches should use:
 
-- package/IDB entries for `passwd.sgi`, `clogin.conf`, `configClogin`, and login resources,
+- strings and dynamic symbols from the recovered `clogin` executable,
+- `SaConfigCloginTask.so` symbols and embedded source-unit names,
+- package/IDB entries for neighboring sysadm files,
 - installed resource paths,
 - X resource names,
-- strings from the target `clogin` binary,
 - library dependencies and symbol names,
 - related session utilities,
-- historical CDE/xdm source names where SGI may have retained upstream filenames.
+- historical CDE/xdm and Pandora source names where SGI may have retained upstream filenames.
 
 ## Existing Linux prototype inventory
 
@@ -176,27 +384,27 @@ This is portable implementation behavior, not yet evidence of SGI's exact proces
 - click/double-click behavior,
 - delayed password-field display.
 
-After recovering `clogin.conf` and `passwd.sgi`, home-directory locality, face display, and explicit account visibility metadata are no longer pure guesses, but the prototype's exact filtering algorithm remains unproven. In particular, a generic Linux minimum-UID cutoff is not supported by the recovered IRIX evidence and should not be treated as reconstructed SGI behavior.
+After recovering the original binary and resources, several of these are now confirmed in broad semantics, but the prototype's exact filtering algorithm still diverges. In particular, a generic Linux minimum-UID cutoff is not supported by the recovered IRIX evidence and should not be treated as reconstructed SGI behavior.
 
-The comments currently label the following face lookup order as historical:
+The following face lookup order is now confirmed by the original `clogin` binary:
 
-- `$HOME/.icons/login.icon`
-- `/usr/local/lib/faces/$USER`
-- `/usr/lib/faces/$USER`
+```text
+$HOME/.icons/login.icon
+/usr/local/lib/faces/$USER
+/usr/lib/faces/$USER
+```
 
-Do not treat that ordering as confirmed until we locate the original `clogin(1)` documentation, binary strings, resources, or source evidence that proves it.
+The exact precedence and fallback rules still need function-level recovery from `findUserPicture()`.
 
 ## High-value targets to recover next
 
-1. Package/IDB entries for `passwd.sgi`, `clogin.conf`, `configClogin`, and the actual `clogin` executable/resources.
-2. `sysadm/SaCloginConf.h` or any archive/binary containing its strings/symbols.
-3. Original `clogin` binary from the target IRIX installation.
-4. Original `clogin(1)` and `configClogin(1M)` man pages if present in installation media or archive material.
-5. X resource databases or app-defaults used by `clogin`.
-6. User-face/icon search strings from the binary.
-7. Authentication/session-start symbols and imported libraries.
-8. Exact relationship to `xdm`: shared daemon code, exec handoff, or separate replacement process.
-9. Autologin handling in the target binary, especially unlink/removal of `/etc/autologin.on`.
+1. Reverse `findUserPicture__16PandoraComponentGP7xpasswd` to recover exact face/icon precedence and `machineicon`/`noicon` semantics.
+2. Reverse `PwdNameList` methods to recover account enumeration, `noshow`, `ignore`, and `show anyway` precedence.
+3. Reverse `checkAutoLogin__7pandoraGv` to recover one-shot autologin behavior exactly.
+4. Recover `SaCloginConf` layout and methods from `SaConfigCloginTask.so`.
+5. Recover `clogin` process/session startup and exact relationship to xdm/session scripts.
+6. Decode or recover the `clogin.z` and `updateclogin.z` catman pages if useful.
+7. Map the current Linux `dvlogin` compatibility layer onto the recovered behavior and remove unsupported UID-threshold assumptions.
 
 ## Confidence rule
 
