@@ -64,6 +64,11 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
      * now follows that architecture: UserView is geometry/state only and the
      * panel is the sole visible drawing surface. One unmanaged XmLabel is kept
      * only as a portable Motif font-list source until getPosFont() is wired.
+     *
+     * libimdIconPanel.so also preserves the panel translation table. Button 1
+     * down invokes Select(), CheckForDoubleClick(), Expand(), MouseClick(), and
+     * BoxSelectArm(); Shift+Button1 uses ExtendSelect(). Clogin disables box
+     * selection and rename, so this probe bridges ordinary Button1 press only.
      */
     if (_panelWidget)
     {
@@ -82,7 +87,7 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
             (XtPointer)this);
         XtAddEventHandler(
             _panelWidget,
-            ButtonReleaseMask,
+            ButtonPressMask,
             False,
             &PandoraLayout::panelButtonEvent,
             (XtPointer)this);
@@ -106,7 +111,7 @@ PandoraLayout::~PandoraLayout()
             (XtPointer)this);
         XtRemoveEventHandler(
             _panelWidget,
-            ButtonReleaseMask,
+            ButtonPressMask,
             False,
             &PandoraLayout::panelButtonEvent,
             (XtPointer)this);
@@ -155,9 +160,21 @@ void PandoraLayout::panelButtonEvent(
     Boolean *)
 {
     PandoraLayout *self = static_cast<PandoraLayout *>(clientData);
-    if (!self || !event || event->type != ButtonRelease)
+    if (!self || !event || event->type != ButtonPress)
+        return;
+    if (event->xbutton.button != Button1)
         return;
 
+    /*
+     * Binary shape:
+     *   panel Button1Down -> Select()
+     *   Select() -> ImdViewPanelFindIntersectingView(panel, x, y)
+     *   FindIntersectingView -> renderer->intersects(view, x, y)
+     *
+     * The portable bridge keeps the same division: viewAt() delegates to the
+     * UserView's renderer-shaped icon/label intersection test and passes the
+     * selected view upward. The real Imd selected-view list is still pending.
+     */
     UserView *view = self->viewAt(
         static_cast<Position>(event->xbutton.x),
         static_cast<Position>(event->xbutton.y));
@@ -300,10 +317,11 @@ void PandoraLayout::draw()
 
 UserView *PandoraLayout::viewAt(Position x, Position y) const
 {
+    XmFontList fonts = fontList();
     for (std::size_t i = 0; i < _views.size(); ++i)
     {
         UserView *view = _views[i];
-        if (view && view->contains(x, y))
+        if (view && view->intersectsPortable(x, y, fonts))
             return view;
     }
     return NULL;
@@ -369,15 +387,47 @@ void UserView::setPortablePosition(Position x, Position y)
     _y = y;
 }
 
-bool UserView::contains(Position x, Position y) const
+bool UserView::intersectsPortable(
+    Position x,
+    Position y,
+    XmFontList fontList) const
 {
+    /*
+     * ImdIconRenderer::intersects() at 0x096af238 calls intersectsIcon() and
+     * intersectsLabel() separately. Mirror that structure instead of testing
+     * the complete ImdView bounding rectangle.
+     */
     const long px = static_cast<long>(x);
     const long py = static_cast<long>(y);
-    const long left = static_cast<long>(_x);
-    const long top = static_cast<long>(_y);
-    return px >= left && py >= top &&
-           px < left + static_cast<long>(_width) &&
-           py < top + static_cast<long>(_height);
+    const long iconExtent = 50;
+    const long iconLeft = static_cast<long>(_x)
+        + (static_cast<long>(_width) > iconExtent
+            ? (static_cast<long>(_width) - iconExtent) / 2
+            : 0);
+    const long iconTop = static_cast<long>(_y);
+
+    if (px >= iconLeft && px < iconLeft + iconExtent &&
+        py >= iconTop && py < iconTop + iconExtent)
+        return true;
+
+    XmString label = XmStringCreateLocalized(
+        const_cast<char *>(_name.c_str()));
+    Dimension labelWidth = 0;
+    Dimension labelHeight = 0;
+    if (fontList)
+        XmStringExtent(fontList, label, &labelWidth, &labelHeight);
+    XmStringFree(label);
+
+    const long labelLeft = static_cast<long>(_x)
+        + (static_cast<long>(_width) > static_cast<long>(labelWidth)
+            ? (static_cast<long>(_width) - static_cast<long>(labelWidth)) / 2
+            : 0);
+    const long labelTop = static_cast<long>(_y) + iconExtent + 3;
+
+    return px >= labelLeft &&
+           px < labelLeft + static_cast<long>(labelWidth) &&
+           py >= labelTop &&
+           py < labelTop + static_cast<long>(labelHeight);
 }
 
 void UserView::drawPortableContents(
@@ -391,7 +441,17 @@ void UserView::drawPortableContents(
     const Dimension invertedTeeMargin = 3;
 
     /*
-     * getIconX() at 0x096b5b70 centers the 50-pixel icon extent in the view.
+     * ImdInvertedTeeRenderer::getIconX() at 0x096b5b70 centers the normal
+     * 50-pixel icon extent inside the view.
+     *
+     * Rendering architecture cross-check:
+     * ImdIconRenderer::drawIcons() at 0x09679b54 operates on icon objects held
+     * by ImdIconView. It configures ImdFtrIcon scale/offset/state and invokes
+     * the icon object's virtual draw path. libimdFtrIcon.so provides
+     * ImdFtrIconX::drawIcon(), getPixmap(), getMask(), cache and colormap
+     * machinery, plus FtrImageIconLib. Therefore FtiVectorIcon below is only
+     * a portable visual test backend for the preserved Users.Token.fti asset,
+     * not a reconstruction of the original runtime renderer.
      */
     const int localIconX = _width > iconExtent
         ? static_cast<int>((_width - iconExtent) / 2)
