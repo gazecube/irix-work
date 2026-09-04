@@ -8,4 +8,5 @@ set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
 add_subdirectory(libimdUtil)
 add_subdirectory(libimdModel)
+add_subdirectory(libimdIconPanel)
 add_subdirectory(viewkit)
