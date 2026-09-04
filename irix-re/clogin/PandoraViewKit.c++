@@ -1,12 +1,19 @@
 #include "PandoraViewKit.h"
 #include "ImdIconPanel.h"
+#include "Base/PwdNameList.h"
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
 #include <Xm/Label.h>
 #include <Xm/Text.h>
 #include <Xm/PushB.h>
+#include <Xm/RowColumn.h>
 #include <Xm/ScrolledW.h>
+
+#include <pwd.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cstring>
 
 static String pandoraDefaults[] =
 {
@@ -17,12 +24,59 @@ static String pandoraDefaults[] =
     NULL
 };
 
+namespace
+{
+bool pathPrefixMatch(const std::string &prefix, const char *path)
+{
+    if (!path || prefix.empty())
+        return false;
+
+    const std::size_t length = prefix.size();
+    if (std::strncmp(path, prefix.c_str(), length) != 0)
+        return false;
+
+    return path[length] == '\0' || path[length] == '/';
+}
+
+bool homeIsIgnored(const char *home)
+{
+    const std::vector<std::string> &ignored = PwdNameList::getIgnoreList();
+    for (std::size_t i = 0; i < ignored.size(); ++i)
+    {
+        if (pathPrefixMatch(ignored[i], home))
+            return true;
+    }
+    return false;
+}
+
+bool homeIsDirectory(const char *home)
+{
+    if (!home || !*home)
+        return false;
+
+    struct stat st;
+    return stat(home, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+bool linuxProbeInteractiveShell(const char *shell)
+{
+    if (!shell || !*shell)
+        return false;
+
+    const char *base = std::strrchr(shell, '/');
+    base = base ? base + 1 : shell;
+    return std::strcmp(base, "nologin") != 0 &&
+           std::strcmp(base, "false") != 0;
+}
+}
+
 PandoraComponent::PandoraComponent(const char *name, Widget parent)
     : VkComponent(name),
       _form(NULL),
       _panelWindow(NULL),
       _scrolledWindow(NULL),
       _iconPanel(NULL),
+      _userIconContainer(NULL),
       _warningLabel(NULL),
       _userFullNameLabel(NULL),
       _userLabel(NULL),
@@ -185,11 +239,6 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         XmNrightAttachment, XmATTACH_NONE,
         NULL);
 
-    /*
-     * Binary-proven XtManageChildren call at the end of the constructor.
-     * warningLabel, passwordText, userFullNameLabel and hostLabel remain
-     * unmanaged initially.
-     */
     managed[0] = _loginButton;
     managed[1] = _helpButton;
     managed[2] = _panelWindow;
@@ -213,11 +262,6 @@ void PandoraComponent::createIconAreaScaffold()
         0);
     XtManageChild(_scrolledWindow);
 
-    /*
-     * Binary-proven Clogin resources appended after imdFtrChooseVisualArgs().
-     * The standalone probe does not yet reconstruct visual selection, so both
-     * booleans derived from its return value are false here.
-     */
     XtSetArg(args[count], (char *)"installColormap", False); ++count;
     XtSetArg(args[count], (char *)"ditherBackground", False); ++count;
     XtSetArg(args[count], (char *)"horzScrollPolicy", 0); ++count;
@@ -237,7 +281,98 @@ void PandoraComponent::createIconAreaScaffold()
     {
         ImdViewPanelSetScale(_iconPanel->baseWidget(), 1.5f, 0, 0);
         XtManageChild(_iconPanel->baseWidget());
+        displayIcon();
     }
+}
+
+void PandoraComponent::displayIcon()
+{
+    if (!_iconPanel || !_iconPanel->baseWidget())
+        return;
+
+    /*
+     * The original displayIcon() at 0x10011b8c blocks Imd panel changes,
+     * iterates the already-built user model, constructs UserView objects and
+     * inserts them into the panel. The model/view classes are still being
+     * reconstructed, so this probe keeps that function boundary but uses a
+     * Motif RowColumn as the temporary Linux rendering backend.
+     */
+    _userIconContainer = XtVaCreateManagedWidget(
+        "userViewContainer",
+        xmRowColumnWidgetClass,
+        _iconPanel->baseWidget(),
+        XmNorientation, XmHORIZONTAL,
+        XmNpacking, XmPACK_COLUMN,
+        XmNnumColumns, 4,
+        XmNspacing, 12,
+        XmNmarginWidth, 16,
+        XmNmarginHeight, 16,
+        NULL);
+
+    const char *configPath = "/var/sysadm/config/clogin.conf";
+    const bool haveIrixConfig = access(configPath, R_OK) == 0;
+    PwdNameList config(haveIrixConfig ? configPath : NULL);
+
+    setpwent();
+    for (struct passwd *pwd = getpwent(); pwd; pwd = getpwent())
+    {
+        if (!pwd->pw_name || !*pwd->pw_name)
+            continue;
+        if (!pwd->pw_dir || !*pwd->pw_dir)
+            continue;
+        if (pwd->pw_passwd && std::strcmp(pwd->pw_passwd, "*") == 0)
+            continue;
+
+        const PwdNameListEntry *entry = config.findEntry(pwd->pw_name);
+        if (entry && (entry->flags & (PwdNameListEntry::kNoShow | PwdNameListEntry::kNoIcon)))
+            continue;
+        if (homeIsIgnored(pwd->pw_dir))
+            continue;
+        if (!homeIsDirectory(pwd->pw_dir))
+            continue;
+
+        /*
+         * Reconstructed Linux probe fallback only. Stock Debian does not ship
+         * SGI passwd.sgi/clogin metadata for service accounts. If the real
+         * IRIX clogin.conf is absent, suppress nologin/false service accounts
+         * rather than inventing a UID threshold, which the IRIX binary does
+         * not use.
+         */
+        if (!haveIrixConfig && !linuxProbeInteractiveShell(pwd->pw_shell))
+            continue;
+
+        XmString label = XmStringCreateLocalized(pwd->pw_name);
+        Widget user = XtVaCreateManagedWidget(
+            pwd->pw_name,
+            xmPushButtonWidgetClass,
+            _userIconContainer,
+            XmNlabelString, label,
+            XmNuserData, (XtPointer)this,
+            XmNwidth, 128,
+            XmNheight, 96,
+            XmNrecomputeSize, False,
+            NULL);
+        XmStringFree(label);
+
+        XtAddCallback(
+            user,
+            XmNactivateCallback,
+            &PandoraComponent::userIconActivateCB,
+            (XtPointer)this);
+    }
+    endpwent();
+}
+
+void PandoraComponent::userIconActivateCB(
+    Widget widget,
+    XtPointer clientData,
+    XtPointer)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    if (!self || !self->_userText)
+        return;
+
+    XmTextSetString(self->_userText, const_cast<char *>(XtName(widget)));
 }
 
 PandoraComponent::~PandoraComponent()
