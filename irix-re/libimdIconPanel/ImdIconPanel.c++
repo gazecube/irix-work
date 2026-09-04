@@ -140,8 +140,23 @@ ImdIconPanel::ImdIconPanel(
         static_cast<Cardinal>(count));
 }
 
+void ImdIconPanel::adoptView(ImdView *view)
+{
+    if (!view)
+        return;
+
+    /*
+     * Original method name/ownership direction are recovered from DWARF and
+     * clogin displayIcon() call flow. Destruction ownership is deliberately
+     * still left with the probe until the original destructor path is traced.
+     */
+    _views.push_back(view);
+}
+
 ImdIconPanel::~ImdIconPanel()
 {
+    _views.clear();
+
     if (_baseWidget)
     {
         gViewPanelState.erase(_baseWidget);
