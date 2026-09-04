@@ -21,11 +21,14 @@ public:
 
 private:
     void createIconAreaScaffold();
+    void displayIcon();
+    static void userIconActivateCB(Widget, XtPointer, XtPointer);
 
     Widget _form;
     Widget _panelWindow;
     Widget _scrolledWindow;
     ImdIconPanel *_iconPanel;
+    Widget _userIconContainer;
     Widget _warningLabel;
     Widget _userFullNameLabel;
     Widget _userLabel;
