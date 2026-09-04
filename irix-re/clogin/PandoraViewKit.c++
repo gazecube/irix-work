@@ -247,6 +247,17 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
     managed[5] = _passwordLabel;
     XtManageChildren(managed, 6);
 
+    /*
+     * Binary-proven constructor callback: userText XmNactivateCallback.
+     * The original callback enters the same login-name transition which can
+     * reveal the password UI without first disclosing whether the name exists.
+     */
+    XtAddCallback(
+        _userText,
+        XmNactivateCallback,
+        &PandoraComponent::userTextActivateCB,
+        (XtPointer)this);
+
     createIconAreaScaffold();
 }
 
@@ -363,6 +374,35 @@ void PandoraComponent::displayIcon()
     endpwent();
 }
 
+void PandoraComponent::showPasswordPrompt()
+{
+    if (!_userText || !_passwordLabel || !_passwordText)
+        return;
+
+    char *name = XmTextGetString(_userText);
+    const bool haveName = name && *name;
+    if (name)
+        XtFree(name);
+
+    if (!haveName)
+        return;
+
+    /*
+     * Binary-proven UI state: passwordLabel starts managed but with
+     * mappedWhenManaged=False, while passwordText starts unmanaged. The
+     * original select/login-name path later reveals the row. Keep that exact
+     * initial-state distinction and perform the delayed transition here.
+     */
+    XtSetMappedWhenManaged(_passwordLabel, True);
+
+    if (!XtIsManaged(_passwordText))
+        XtManageChild(_passwordText);
+    else
+        XtSetMappedWhenManaged(_passwordText, True);
+
+    XmProcessTraversal(_passwordText, XmTRAVERSE_CURRENT);
+}
+
 void PandoraComponent::userIconActivateCB(
     Widget widget,
     XtPointer clientData,
@@ -373,6 +413,24 @@ void PandoraComponent::userIconActivateCB(
         return;
 
     XmTextSetString(self->_userText, const_cast<char *>(XtName(widget)));
+    self->showPasswordPrompt();
+}
+
+void PandoraComponent::userTextActivateCB(
+    Widget,
+    XtPointer clientData,
+    XtPointer)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    if (!self)
+        return;
+
+    /*
+     * Do not gate this on getpwnam(). The recovered original login flow can
+     * reveal the password field for an unknown typed name so account validity
+     * is not disclosed before a password attempt.
+     */
+    self->showPasswordPrompt();
 }
 
 PandoraComponent::~PandoraComponent()
