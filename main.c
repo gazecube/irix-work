@@ -59,6 +59,7 @@
 #undef textInputActivatedCB
 #undef XtRealizeWidget
 
+#include "pandora_ui.h"
 #include "x11mgmt.h"
 #include "irix_session.h"
 #include "session.h"
@@ -148,7 +149,7 @@ int main(int argc, char *argv[])
 		memset(username, 0, sizeof(username));
 
 		/* Original clogin consumes /etc/autologin.on before validating
-		 * /etc/autologin.  A valid entry bypasses the greeter entirely. */
+		 * /etc/autologin. A valid entry bypasses the greeter entirely. */
 		if(clogin_check_autologin(username, sizeof(username)))
 		{
 			fprintf(stdout, "dvlogin: IRIX-style autologin for '%s'\n", username);
