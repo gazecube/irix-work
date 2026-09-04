@@ -48,7 +48,7 @@
 #include "vt.h"
 #include "callbacks.h"
 #include "shortcuts.h"
-#include "clogin_features.h"
+#include "clogin_reconstructed.h"
 #include "gui.h"
 
 /* Keep the clogin compatibility rewrites scoped to gui.h only. */
