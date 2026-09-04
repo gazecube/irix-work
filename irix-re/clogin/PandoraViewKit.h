@@ -4,6 +4,8 @@
 #include <Vk/VkComponent.h>
 #include <Vk/VkSimpleWindow.h>
 
+class ImdIconPanel;
+
 class PandoraComponent : public VkComponent
 {
 public:
@@ -23,6 +25,7 @@ private:
     Widget _form;
     Widget _panelWindow;
     Widget _scrolledWindow;
+    ImdIconPanel *_iconPanel;
     Widget _warningLabel;
     Widget _userFullNameLabel;
     Widget _userLabel;
