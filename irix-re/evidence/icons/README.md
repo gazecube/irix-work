@@ -5,7 +5,7 @@ This directory records provenance for the icon/resource corpus used by the IRIX 
 Canonical archive path:
 
 ```
-irix-re/evidence/icons/icons.tar
+irix-re/evidence/icons.tar
 ```
 
 Archive fingerprint:
