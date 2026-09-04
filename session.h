@@ -1,10 +1,10 @@
 
-/*	Login GUI (runs in forked process)
-	
-	Returns 1 and fills username_out on successful auth.
-	Returns 0 if the GUI exited without authenticating
-	or if a shutdown was requested.
-*/
+/* Login GUI (runs in forked process)
+ *
+ * Returns 1 and fills username_out on successful auth.
+ * Returns 0 if the GUI exited without authenticating
+ * or if a shutdown was requested.
+ */
 
 static int run_login_gui(int argc, char **argv,
 	char *username_out, size_t username_len)
@@ -29,18 +29,14 @@ static int run_login_gui(int argc, char **argv,
 
 	if(pid == 0)
 	{
-		/* run the Motif login GUI */
 		close(pipefd[0]);
 
 		setenv("DISPLAY", g_display_str, 1);
-
-		/* clear auth state */
 		memset(g_auth_username, 0, sizeof(g_auth_username));
 
-		/* blocks in XtAppMainLoop until XtAppSetExitFlag */
-		run_motif_gui(argc, argv);
+		/* Reconstructed original Pandora/Clogin presentation tree. */
+		run_pandora_gui(argc, argv);
 
-		/* write authenticated username back to parent */
 		if(strlen(g_auth_username) > 0)
 		{
 			write(pipefd[1], g_auth_username, strlen(g_auth_username));
@@ -50,15 +46,11 @@ static int run_login_gui(int argc, char **argv,
 		_exit(0);
 	}
 
-	/* wait for username */
 	close(pipefd[1]);
 
 	ssize_t n = read(pipefd[0], username_out, username_len - 1);
 	close(pipefd[0]);
 
-	/*
-	 * waitpid may return -1/EINTR if we caught SIGTERM while waiting. 
-	 */
 	if(waitpid(pid, NULL, 0) < 0 && errno == EINTR)
 	{
 		kill(pid, SIGTERM);
@@ -86,7 +78,6 @@ static void run_user_session(const char *username)
 		return;
 	}
 
-	/* pick a fresh display for the session server */
 	int display_num = find_free_display();
 	if(display_num < 0)
 	{
@@ -108,18 +99,8 @@ static void run_user_session(const char *username)
 		return;
 	}
 
-	/*	The root parent needs the cookie too, so its XOpenDisplay
-		probe in wait_for_xserver can authenticate against the
-		-auth server.  Root can read the file regardless of the
-		chown above.
-	*/
 	setenv("XAUTHORITY", authfile, 1);
 
-	/*	Start the session X server ourselves, as root, on the
-		login VT.  Root opens the DRM/input devices and the VT,
-		so the rootless-Xorg ACL and Xorg.wrap console gates
-		that killed the startx path never come into play.
-	*/
 	pid_t xpid = start_xserver(session_display, g_vt_str, authfile);
 	if(xpid < 0)
 	{
@@ -141,7 +122,6 @@ static void run_user_session(const char *username)
 		return;
 	}
 
-	/* fork the unprivileged session client */
 	pid_t pid = fork();
 
 	if(pid < 0)
@@ -156,7 +136,6 @@ static void run_user_session(const char *username)
 
 	if(pid == 0)
 	{
-		/* drop privileges: groups, then gid, then uid (uid last) */
 		if(initgroups(username, pw->pw_gid) < 0)
 		{
 			perror("dvlogin: initgroups");
@@ -173,7 +152,6 @@ static void run_user_session(const char *username)
 			_exit(1);
 		}
 
-		/* paranoia: confirm we cannot climb back to root */
 		if(setuid(0) != -1)
 		{
 			fprintf(stderr, "dvlogin: privilege drop incomplete\n");
@@ -190,27 +168,19 @@ static void run_user_session(const char *username)
 			}
 		}
 
-		/* clean environment for the session */
 		clearenv();
-		setenv("HOME",       pw->pw_dir,                     1);
-		setenv("USER",       pw->pw_name,                    1);
-		setenv("LOGNAME",    pw->pw_name,                    1);
-		setenv("SHELL",      pw->pw_shell,                   1);
+		setenv("HOME",       pw->pw_dir,                      1);
+		setenv("USER",       pw->pw_name,                     1);
+		setenv("LOGNAME",    pw->pw_name,                     1);
+		setenv("SHELL",      pw->pw_shell,                    1);
 		setenv("PATH",       "/usr/local/bin:/usr/bin:/bin", 1);
-		setenv("DISPLAY",    session_display,                1);
-		setenv("XAUTHORITY", authfile,                       1);
+		setenv("DISPLAY",    session_display,                 1);
+		setenv("XAUTHORITY", authfile,                        1);
 
-		/*
-		 * Hand off through the reconstructed IRIX Xsession selector.
-		 * It gives ~/.xsession the same top-level precedence observed
-		 * in IRIX, then falls back to the configured system desktop
-		 * backend (currently MaXX Xsession.dt).
-		 */
 		irix_exec_user_session(pw);
 		_exit(1);
 	}
 
-	/* parent: wait for the session client to exit */
 	int status;
 	while(waitpid(pid, &status, 0) < 0)
 	{
@@ -237,7 +207,6 @@ static void run_user_session(const char *username)
 	}
 	fflush(stdout);
 
-	/* tear down the session X server and its cookie */
 	stop_xserver(xpid);
 	g_xserver_pid = 0;
 	unsetenv("XAUTHORITY");
