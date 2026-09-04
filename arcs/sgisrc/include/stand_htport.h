@@ -62,7 +62,7 @@
 #define	PNL_MAXCOLS	80
 
 #define chartoindex(c)		((c) - (((c)&0x80) ? 2*' '+2 : ' '))
-struct fontinfo {
+struct fontinfo {			/* should match GL Fontchar */
 	short offset;
 	char xsize;
 	char ysize;
@@ -74,16 +74,20 @@ struct fontinfo {
 struct htp_font {
 	unsigned short *data;
 	struct fontinfo *info;
-	short height;
-	short descender;
+	short height;			/* maximum total height */
+	short descender;		/* maximum descender */
 };
 
+/*
+ * textport modes
+ */
 #define HCTPCODE(c)		('G'<<8|(c))
-#define TP_MODE			HCTPCODE(2)
-#define PNL_MODE		HCTPCODE(3)
+#define TP_MODE			HCTPCODE(2) /* basic textport "TP" */
+#define PNL_MODE		HCTPCODE(3) /* boot panel "PNL" */
 #define AUTO_INIT		HCTPCODE(4)
-#define GUI_MODE		HCTPCODE(5)
+#define GUI_MODE		HCTPCODE(5) /* gfx gui mode */
 
+/* flags */
 #define CURSOFF		0x01
 #define TP_NOBG		0x02
 #define TP_AUTOWRAP	0x04
@@ -92,14 +96,19 @@ struct htp_font {
 
 #define SCRB18_HT	17
 #define SCRB18_DC	4
+
 #define	FONTWIDTH	9
 #define	XSIZE(cols)	((cols) * FONTWIDTH)
 
+/*
+ * graphical characters recognized in the BOOT PANEL mode
+ */
 #define		L_BRAK		((char) 1)
 #define		U_BAR		((char) 2)
 #define		O_BAR		((char) 5)
 #define		R_BRAK		((char) 6)
 
+/* astates */
 #define NORM		0
 #define ESC		1
 #define CSI		2
@@ -109,14 +118,18 @@ struct htp_font {
 #define	BORDER_COLOR		WHITE
 #define INR_BORDER		14
 
+/* states */
+#define	     DIRTYLINE(tx, r) (tx)->row[r]->dirty = 1
+#define	     DIRTYCURSOR(tx, r) (tx)->row[r]->dirty = 2
+
 #define	CLEAN		0
 #define	DIRTY		1
 #define VOFF		2
 #define GUI		3
 
-#define	     DIRTYLINE(tx, r) (tx)->row[r]->dirty = 1
-#define	     DIRTYCURSOR(tx, r) (tx)->row[r]->dirty = 2
-
+/*
+ * special graphics attributes and characters
+ */
 #define		AT_UL		(1<<8)
 #define		AT_RV		(2<<8)
 #define		AT_BX		(4<<8)
@@ -142,14 +155,20 @@ struct htp_fncs {
         void    (*pnt2i)(void*, int, int);
         void    (*cmov2i)(void*, int, int);
         void    (*drawbitmap)(void*, struct htp_bitmap*);
+	/* block move -- leave as 0 if gfx does not support this */
 	void	(*blockm)(void*, int, int, int, int, int, int);
 	void	(*init)(void*, int*, int*);
-	void	(*movec)(void*, int, int);
+	void	(*movec)(void*, int, int);		/* move cursor */
 };
 
+/*
+ *  htport data structures
+ */
 struct htp_row {
-	char	maxcol;
-	char	dirty;
+	char	maxcol;			/* last used column */
+	char	dirty;			/* 1 if row needs painting,
+					 * 2 if cursor needs to be erased
+					 */
 	unsigned short data[TP_MAXCOLS];
 #ifdef _TP_COLOR
 	unsigned char color[TP_MAXCOLS];
@@ -159,27 +178,29 @@ struct htp_row {
 struct htp_textport {
 	char	state;
 	char	astate;
-	short	llx, lly;
-	short	numrows;
-	short	numcols;
-	short	crow, ccol;
+	short	llx, lly;	/* coordinates of lower window corner */
+	short	numrows;	/* number of rows displayed */
+	short	numcols;	/* number of columns displayed */
+	short	crow, ccol;	/* cursor row & column */
 	short	aparams[MAXAPARAMS];
 	short	aparamc;
 	short	aflags;
 	unsigned short	attribs;
 	struct htp_row *row[TP_MAXROWS];
-	struct htp_row rowd[TP_MAXROWS];
+	struct htp_row rowd[TP_MAXROWS]; /* textport presumed bigger than panel */
 };
 
 struct htp_state {
+	/* public (used by gui) */
 	struct htp_fncs *fncs;
 	void *hw;
-	struct htp_font *fonts;
+	struct htp_font *fonts;		/* pointer to font data */
 	int x,y,buttons;
 	void (*mshandler)(int, int, int);
-	int clogow, clogoh;
-	unsigned char *clogodata;
+	int clogow, clogoh;		/* product logo w/h */
+	unsigned char *clogodata;	/* product logo data */
 
+	/* private to textport */
 	int xscreensize, yscreensize;
 	int fontheight, fontdescender;
 	int boot_panel_mode;
@@ -188,8 +209,9 @@ struct htp_state {
 	int cfgnd;
 	int cbgnd;
 	int page_r, page_g, page_b;
-	struct htp_textport textport;
+	struct htp_textport textport;	/* must be last for _TP_COLOR */
 };
 
-#endif
-#endif
+#endif /* C || C++ */
+
+#endif /* !__SYS_STAND_HTPORT_H__ */
