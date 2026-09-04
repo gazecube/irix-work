@@ -22,7 +22,10 @@ public:
 private:
     void createIconAreaScaffold();
     void displayIcon();
+    void showPasswordPrompt();
+
     static void userIconActivateCB(Widget, XtPointer, XtPointer);
+    static void userTextActivateCB(Widget, XtPointer, XtPointer);
 
     Widget _form;
     Widget _panelWindow;
