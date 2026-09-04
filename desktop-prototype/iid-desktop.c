@@ -359,8 +359,8 @@ static void draw_icon(Display *dpy, Window win, GC gc,
     int label_width;
     int label_x;
 
-    if (label_len > 20)
-        label_len = 20;
+    if (label_len > 15)
+        label_len = 15;
 
     if (obj->selected) {
         XSetForeground(dpy, gc, BlackPixel(dpy, screen));
