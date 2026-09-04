@@ -4,10 +4,18 @@
 #include <X11/Xlib.h>
 
 /*
- * Reconstructed public boundary for the original libimdXutil tellDesktop()
- * transport.  The exact original return convention is still under RE; the
- * portable implementation uses 0 for success and nonzero for failure.
+ * Reconstructed original call boundary.
+ *
+ * The IRIX telldesktop wrapper proves three arguments are passed:
+ *
+ *     Display *display
+ *     Window root
+ *     char *command
+ *
+ * The original caller ignores the return register, so the precise original
+ * return type is not yet claimed here.  int is retained as a portable ABI
+ * placeholder until matching DWARF or the implementation proves otherwise.
  */
-int tellDesktop(Display *display, const char *command);
+int tellDesktop(Display *display, Window root, char *command);
 
 #endif
