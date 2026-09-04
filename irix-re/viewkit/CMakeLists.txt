@@ -39,29 +39,46 @@ find_library(VIEWKLASS_LIBRARY
     HINTS ${_viewklass_library_hints}
 )
 
-find_library(MOTIF_LIBRARY
-    NAMES Xm libXm
-    HINTS ${_viewklass_library_hints}
-)
+# Keep libraries which belong to the ViewKlass/Motif runtime in one family.
+# In particular, do not accidentally link libVk from MaXX with the host
+# libXm/libXp/libXt when MaXX provides its own copies with the same SONAMEs.
+# This also works naturally after ViewKlass moves to /usr/local: the directory
+# containing libVk becomes the preferred co-located runtime directory.
+if(VIEWKLASS_LIBRARY)
+    get_filename_component(_viewklass_runtime_dir "${VIEWKLASS_LIBRARY}" DIRECTORY)
+endif()
 
-# MaXX ViewKlass/libXm expose these as part of their actual link/runtime
-# dependency closure. Keep them explicit so the probes also link on systems
-# using --as-needed or without transitive development symlinks.
-find_library(SCHEME_LIBRARY
-    NAMES Scheme libScheme
-    HINTS ${_viewklass_library_hints}
-)
-find_library(XP_LIBRARY
-    NAMES Xp libXp
-    HINTS ${_viewklass_library_hints}
-)
-find_library(XPM_LIBRARY NAMES Xpm libXpm)
-find_library(XMU_LIBRARY NAMES Xmu libXmu)
-find_library(XEXT_LIBRARY NAMES Xext libXext)
-find_library(XRENDER_LIBRARY NAMES Xrender libXrender)
-find_library(XFT_LIBRARY NAMES Xft libXft)
-find_library(XT_LIBRARY NAMES Xt libXt)
-find_library(X11_LIBRARY NAMES X11 libX11)
+function(find_viewklass_runtime_library out_var)
+    set(_names ${ARGN})
+
+    if(_viewklass_runtime_dir)
+        find_library(${out_var}
+            NAMES ${_names}
+            PATHS "${_viewklass_runtime_dir}"
+            NO_DEFAULT_PATH
+        )
+    endif()
+
+    if(NOT ${out_var})
+        find_library(${out_var}
+            NAMES ${_names}
+            HINTS ${_viewklass_library_hints}
+        )
+    endif()
+
+    set(${out_var} "${${out_var}}" PARENT_SCOPE)
+endfunction()
+
+find_viewklass_runtime_library(MOTIF_LIBRARY Xm libXm)
+find_viewklass_runtime_library(SCHEME_LIBRARY Scheme libScheme)
+find_viewklass_runtime_library(XP_LIBRARY Xp libXp)
+find_viewklass_runtime_library(XPM_LIBRARY Xpm libXpm)
+find_viewklass_runtime_library(XMU_LIBRARY Xmu libXmu)
+find_viewklass_runtime_library(XEXT_LIBRARY Xext libXext)
+find_viewklass_runtime_library(XRENDER_LIBRARY Xrender libXrender)
+find_viewklass_runtime_library(XFT_LIBRARY Xft libXft)
+find_viewklass_runtime_library(XT_LIBRARY Xt libXt)
+find_viewklass_runtime_library(X11_LIBRARY X11 libX11)
 
 if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
    SCHEME_LIBRARY AND XP_LIBRARY AND XPM_LIBRARY AND XMU_LIBRARY AND
@@ -109,6 +126,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
     set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
 
     message(STATUS "ViewKlass enabled: ${VIEWKLASS_LIBRARY}")
+    message(STATUS "ViewKlass runtime family: ${_viewklass_runtime_dir}")
 else()
     message(STATUS "ViewKlass dependency closure incomplete; skipping ViewKit probes")
 endif()
