@@ -18,6 +18,7 @@ public:
     Widget scrolledWindow() const { return _scrolledWindow; }
     Widget userText() const { return _userText; }
     Widget passwordText() const { return _passwordText; }
+    const char *password() const { return _password; }
 
 private:
     void createIconAreaScaffold();
@@ -26,6 +27,7 @@ private:
 
     static void userIconActivateCB(Widget, XtPointer, XtPointer);
     static void userTextActivateCB(Widget, XtPointer, XtPointer);
+    static void passwordTextModifyVerifyCB(Widget, XtPointer, XtPointer);
 
     Widget _form;
     Widget _panelWindow;
@@ -41,6 +43,15 @@ private:
     Widget _hostLabel;
     Widget _helpButton;
     Widget _loginButton;
+
+    /*
+     * Reconstructed storage for binary-proven PandoraComponent fields.
+     * Original clogin stores password length at +0x5c and password bytes
+     * starting at +0x6c. The recovered modify-verify callback caps stored
+     * input at 21 bytes and keeps it separate from the displayed XmText data.
+     */
+    int _passwordLength;
+    char _password[22];
 };
 
 class PandoraWindow : public VkSimpleWindow
