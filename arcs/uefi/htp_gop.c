@@ -1,4 +1,5 @@
 #include "htp_gop.h"
+#include <Library/BaseMemoryLib.h>
 
 static VOID
 GopBlankScreen(VOID *Hw, INT32 Mode)
@@ -9,7 +10,7 @@ GopBlankScreen(VOID *Hw, INT32 Mode)
     if (!B || !B->Gop)
         return;
 
-    /* UEFI GOP has no portable DPMS equivalent.  Preserve the PROM
+    /* UEFI GOP has no portable DPMS equivalent. Preserve the PROM
      * blanking contract as closely as possible by blacking the display
      * when asked to blank; unblanking is satisfied by the next redraw. */
     if (Mode)
@@ -139,8 +140,8 @@ GopDrawBitmap(VOID *Hw, struct htp_bitmap *Bitmap)
     if (!B || !B->Gop || !Bitmap || !Bitmap->buf || Bitmap->xsize <= 0 || Bitmap->ysize <= 0)
         return;
 
-    /* Match the standalone textport raster semantics used by the original
-     * SGI backends: xleft = cpos_x - xorig and framebuffer Y starts at
+    /* Match the original standalone textport raster semantics:
+     * xleft = cpos_x - xorig and raster Y begins at
      * (height - 1 - cpos_y + yorig). */
     XLeft = B->CposX - Bitmap->xorig;
     GopY0 = (INTN)B->Height - 1 - B->CposY + Bitmap->yorig;
@@ -197,8 +198,8 @@ static VOID
 GopMoveCursor(VOID *Hw, INT32 X, INT32 Y)
 {
     /* The historical htp_fncs cursor hook controls the hardware pointer.
-     * UEFI GOP has no cursor primitive; UEFI input integration will supply
-     * a software cursor later. */
+     * UEFI GOP has no cursor primitive; the input port will supply a
+     * software cursor later. */
     (VOID)Hw;
     (VOID)X;
     (VOID)Y;
