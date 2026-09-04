@@ -575,6 +575,8 @@ int main(int argc, char **argv)
             }
         } else if (ev.type == ButtonPress &&
                    ev.xbutton.window == background_input) {
+            if (ev.xbutton.button == Button1)
+                select_object(dpy, win, gc, NULL);
             fprintf(stderr,
                     "iid-desktop: background button %u at %d,%d\n",
                     ev.xbutton.button, ev.xbutton.x, ev.xbutton.y);
