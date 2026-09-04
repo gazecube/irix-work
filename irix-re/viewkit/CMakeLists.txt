@@ -117,6 +117,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         add_executable(pandora_viewkit_probe
             ../clogin/PandoraViewKit.c++
             ../clogin/PandoraViewKitProbe.c++
+            ../clogin/Base/PwdNameList.c++
         )
         target_include_directories(pandora_viewkit_probe PRIVATE
             ../clogin
