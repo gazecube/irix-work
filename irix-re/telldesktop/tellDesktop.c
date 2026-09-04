@@ -15,29 +15,33 @@ int tellDesktop(Display *display, Window root, char *command)
     size_t length;
 
     if(display == NULL || root == None || command == NULL)
-        return 1;
-
-    desktop = getDesktopWindow(display, root);
-    if(desktop == None)
-        return 1;
-
-    property = XInternAtom(display, SGI_DESKTOP_COMMAND_ATOM, False);
-    if(property == None)
-        return 1;
-
-    length = strlen(command);
+        return 0;
 
     /*
-     * Receiver-proven protocol:
+     * Binary-proven original path:
      *
-     *   desktop window
-     *     _SGI_DESKS_DESKTOP_COMMAND : XA_STRING / format 8
+     *     desktop = getDesktopWindow(display, root)
      *
-     * Replacing this property produces the PropertyNotify consumed by fm.
-     * The exact historical sender element count is still pending the original
-     * library binary; strlen(command) is interoperable with the proven fm
-     * XGetWindowProperty(XA_STRING) receiver.
+     * and return 0 immediately when no desktop window is registered.
      */
+    desktop = getDesktopWindow(display, root);
+    if(desktop == None)
+        return 0;
+
+    property = XInternAtom(display, SGI_DESKTOP_COMMAND_ATOM, False);
+
+    /*
+     * Binary-proven original sender format:
+     *
+     *   property = _SGI_DESKS_DESKTOP_COMMAND
+     *   type     = XA_STRING
+     *   format   = 8
+     *   mode     = PropModeReplace
+     *   data     = command
+     *   count    = strlen(command), exactly (no trailing NUL)
+     */
+    length = strlen(command);
+
     XChangeProperty(display,
                     desktop,
                     property,
@@ -48,5 +52,5 @@ int tellDesktop(Display *display, Window root, char *command)
                     (int)length);
 
     XFlush(display);
-    return 0;
+    return 1;
 }
