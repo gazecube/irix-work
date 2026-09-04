@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
 {
     Display *display;
-    int rc;
+    Window root;
 
     if(argc != 2)
     {
@@ -27,8 +27,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    rc = tellDesktop(display, argv[1]);
-    XCloseDisplay(display);
+    root = RootWindow(display, DefaultScreen(display));
 
-    return rc;
+    /* The original wrapper ignores tellDesktop's return value. */
+    (void)tellDesktop(display, root, argv[1]);
+
+    XCloseDisplay(display);
+    return 0;
 }
