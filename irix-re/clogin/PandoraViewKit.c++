@@ -1,4 +1,5 @@
 #include "PandoraViewKit.h"
+#include "ImdIconPanel.h"
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
@@ -21,6 +22,7 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _form(NULL),
       _panelWindow(NULL),
       _scrolledWindow(NULL),
+      _iconPanel(NULL),
       _warningLabel(NULL),
       _userFullNameLabel(NULL),
       _userLabel(NULL),
@@ -201,31 +203,47 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
 
 void PandoraComponent::createIconAreaScaffold()
 {
-    /*
-     * Binary-proven from PandoraComponent::readyToDisplay() at 0x100115e8.
-     * The original creates this subtree lazily when icon display is enabled:
-     *
-     *   XmCreateScrolledWindow(panelWindow, "scrolledWindow", NULL, 0)
-     *   XtManageChild(scrolledWindow)
-     *   imdFtrChooseVisualArgs(...)
-     *   new ImdIconPanel(..., scrolledWindow, args, count)
-     *   ImdViewPanelAdoptRenderer(...)
-     *   ImdViewPanelAdoptLayout(...)
-     *   ImdViewPanelSetScale(...)
-     *
-     * The probe creates the proven Motif container eagerly so its geometry can
-     * be exercised before the ImdIconPanel compatibility library is linked.
-     */
+    Arg args[8];
+    int count = 0;
+
     _scrolledWindow = XmCreateScrolledWindow(
         _panelWindow,
         (char *)"scrolledWindow",
         NULL,
         0);
     XtManageChild(_scrolledWindow);
+
+    /*
+     * Binary-proven Clogin resources appended after imdFtrChooseVisualArgs().
+     * The standalone probe does not yet reconstruct visual selection, so both
+     * booleans derived from its return value are false here.
+     */
+    XtSetArg(args[count], (char *)"installColormap", False); ++count;
+    XtSetArg(args[count], (char *)"ditherBackground", False); ++count;
+    XtSetArg(args[count], (char *)"horzScrollPolicy", 0); ++count;
+    XtSetArg(args[count], (char *)"vertScrollPolicy", 1); ++count;
+    XtSetArg(args[count], (char *)"dropEnabled", 0); ++count;
+    XtSetArg(args[count], (char *)"dragEnabled", 0); ++count;
+    XtSetArg(args[count], (char *)"boxSelectEnabled", 0); ++count;
+    XtSetArg(args[count], (char *)"renameEnabled", 0); ++count;
+
+    _iconPanel = new ImdIconPanel(
+        "panel",
+        _scrolledWindow,
+        args,
+        count);
+
+    if (_iconPanel && _iconPanel->baseWidget())
+    {
+        ImdViewPanelSetScale(_iconPanel->baseWidget(), 1.5f, 0, 0);
+        XtManageChild(_iconPanel->baseWidget());
+    }
 }
 
 PandoraComponent::~PandoraComponent()
 {
+    delete _iconPanel;
+    _iconPanel = NULL;
 }
 
 const char *PandoraComponent::className()
