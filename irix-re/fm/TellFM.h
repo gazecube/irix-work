@@ -4,24 +4,31 @@
 #include <X11/Xlib.h>
 
 /*
- * Portable transport core for the newer SGI fm service protocol recovered
- * from the original IRIX fm binary.
+ * Portable reconstruction of the newer SGI fm service path.
  *
- * The original exported function is mangled as:
- *
- *   TellFM__GP9_XDisplayP10_WidgetReciPPc
- *
- * corresponding to:
+ * Original exported boundary:
  *
  *   TellFM(Display *, WidgetRec *, int, char **)
  *
- * The original Widget parameter participates in UI/error handling and fmserv
- * fallback.  The transport itself only needs Display + argv, so it is kept
- * behind this smaller reusable boundary.
- *
- * Returns 1 after receiving the original PropertyDelete completion ack,
- * 0 on transport/setup failure.
+ * The original function combines argument preparation, fmserv fallback/UI,
+ * and the X11 request transport.  These are split here so the exact wire
+ * protocol can stay reusable and testable.
  */
+
+typedef struct SgiTellFMArgs
+{
+    int argc;
+    char **argv;
+    char *ownedPath;
+} SgiTellFMArgs;
+
+int sgiTellFMPrepareArgs(int argc, char **argv, SgiTellFMArgs *prepared);
+void sgiTellFMFreeArgs(SgiTellFMArgs *prepared);
+
+/* Exact X11 request transport once an fm service owner already exists. */
 int sgiTellFMTransport(Display *display, int argc, char **argv);
+
+/* Prepare arguments, send them, then release temporary preparation storage. */
+int sgiTellFM(Display *display, int argc, char **argv);
 
 #endif /* IRIX_RE_FM_TELLFM_H */
