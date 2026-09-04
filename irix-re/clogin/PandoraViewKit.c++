@@ -1,8 +1,8 @@
 #include "PandoraViewKit.h"
 
 #include <Xm/Form.h>
+#include <Xm/Frame.h>
 #include <Xm/Label.h>
-#include <Xm/LabelG.h>
 #include <Xm/Text.h>
 #include <Xm/PushB.h>
 
@@ -17,6 +17,7 @@ static String pandoraDefaults[] =
 
 PandoraComponent::PandoraComponent(const char *name, Widget parent)
     : VkComponent(name),
+      _form(NULL),
       _panelWindow(NULL),
       _warningLabel(NULL),
       _userFullNameLabel(NULL),
@@ -28,134 +29,170 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _helpButton(NULL),
       _loginButton(NULL)
 {
+    Widget managed[6];
+
     setDefaultResources(parent, pandoraDefaults);
 
     /*
-     * VkComponent contract: the derived class owns one single-rooted widget
-     * subtree and leaves the base widget unmanaged for the container/window
-     * to manage through addView()/show().
+     * Binary-proven from PandoraComponentUI::PandoraComponentUI at
+     * 0x10012bbc: the VkComponent base widget is an XmFrame, not the form.
+     * The child form is created managed inside that frame.
      */
     _baseWidget = XtVaCreateWidget(
-        "form",
-        xmFormWidgetClass,
+        name,
+        xmFrameWidgetClass,
         parent,
-        XmNshadowThickness, 0,
+        XmNshadowType, 8,
+        XtNwidth, 846,
+        XtNheight, 744,
         NULL);
     installDestroyHandler();
 
-    _warningLabel = XtVaCreateManagedWidget(
-        "warningLabel",
-        xmLabelWidgetClass,
-        _baseWidget,
-        XmNtopAttachment, XmATTACH_FORM,
-        XmNleftAttachment, XmATTACH_FORM,
-        XmNalignment, XmALIGNMENT_BEGINNING,
-        XmNmappedWhenManaged, False,
-        NULL);
-
-    _userFullNameLabel = XtVaCreateManagedWidget(
-        "userFullNameLabel",
-        xmLabelWidgetClass,
-        _baseWidget,
-        XmNleftAttachment, XmATTACH_FORM,
-        XmNbottomAttachment, XmATTACH_FORM,
-        XmNalignment, XmALIGNMENT_BEGINNING,
-        XmNmappedWhenManaged, False,
-        NULL);
-
-    _userLabel = XtVaCreateManagedWidget(
-        "userLabel",
-        xmLabelGadgetClass,
-        _baseWidget,
-        XmNleftAttachment, XmATTACH_FORM,
-        XmNbottomAttachment, XmATTACH_FORM,
-        XmNalignment, XmALIGNMENT_END,
-        XtVaTypedArg, XmNlabelString, XmRString,
-        "Login name:", 12,
-        NULL);
-
-    _userText = XtVaCreateManagedWidget(
-        "userText",
-        xmTextWidgetClass,
-        _baseWidget,
-        XmNleftAttachment, XmATTACH_WIDGET,
-        XmNleftWidget, _userLabel,
-        XmNbottomAttachment, XmATTACH_FORM,
-        XmNeditMode, XmSINGLE_LINE_EDIT,
-        XmNblinkRate, 0,
-        NULL);
-
-    _passwordLabel = XtVaCreateManagedWidget(
-        "passwordLabel",
-        xmLabelGadgetClass,
-        _baseWidget,
-        XmNleftAttachment, XmATTACH_FORM,
-        XmNbottomAttachment, XmATTACH_WIDGET,
-        XmNbottomWidget, _userLabel,
-        XmNalignment, XmALIGNMENT_END,
-        XtVaTypedArg, XmNlabelString, XmRString,
-        "Password:", 10,
-        NULL);
-
-    _passwordText = XtVaCreateManagedWidget(
-        "passwordText",
-        xmTextWidgetClass,
-        _baseWidget,
-        XmNleftAttachment, XmATTACH_WIDGET,
-        XmNleftWidget, _passwordLabel,
-        XmNbottomAttachment, XmATTACH_WIDGET,
-        XmNbottomWidget, _userText,
-        XmNeditMode, XmSINGLE_LINE_EDIT,
-        XmNblinkRate, 0,
-        NULL);
-
-    _panelWindow = XtVaCreateManagedWidget(
-        "panelWindow",
+    _form = XtVaCreateManagedWidget(
+        "form",
         xmFormWidgetClass,
         _baseWidget,
-        XmNtopAttachment, XmATTACH_FORM,
+        XtNwidth, 844,
+        XtNheight, 742,
+        NULL);
+
+    _passwordLabel = XtVaCreateWidget(
+        "passwordLabel",
+        xmLabelWidgetClass,
+        _form,
+        XtNmappedWhenManaged, False,
+        XmNalignment, XmALIGNMENT_END,
+        XmNrecomputeSize, True,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_FORM,
         XmNleftAttachment, XmATTACH_FORM,
-        XmNrightAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_NONE,
+        NULL);
+
+    _userLabel = XtVaCreateWidget(
+        "userLabel",
+        xmLabelWidgetClass,
+        _form,
+        XmNalignment, XmALIGNMENT_END,
+        XmNrecomputeSize, True,
+        XmNtopAttachment, XmATTACH_NONE,
         XmNbottomAttachment, XmATTACH_WIDGET,
         XmNbottomWidget, _passwordLabel,
-        XmNshadowThickness, 0,
-        NULL);
-
-    _hostLabel = XtVaCreateManagedWidget(
-        "hostLabel",
-        xmLabelWidgetClass,
-        _baseWidget,
         XmNleftAttachment, XmATTACH_FORM,
-        XmNbottomAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_NONE,
         NULL);
 
-    _loginButton = XtVaCreateManagedWidget(
-        "loginButton",
-        xmPushButtonWidgetClass,
-        _baseWidget,
+    _userText = XtVaCreateWidget(
+        "userText",
+        xmTextWidgetClass,
+        _form,
+        XmNeditMode, XmSINGLE_LINE_EDIT,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_OPPOSITE_WIDGET,
+        XmNbottomWidget, _userLabel,
+        XmNleftAttachment, XmATTACH_WIDGET,
+        XmNleftWidget, _userLabel,
+        XmNrightAttachment, XmATTACH_NONE,
+        NULL);
+
+    _warningLabel = XtVaCreateWidget(
+        "warningLabel",
+        xmLabelWidgetClass,
+        _form,
+        XmNalignment, XmALIGNMENT_BEGINNING,
+        XmNtopAttachment, XmATTACH_OPPOSITE_WIDGET,
+        XmNtopWidget, _passwordLabel,
+        XmNbottomAttachment, XmATTACH_NONE,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_NONE,
+        NULL);
+
+    _passwordText = XtVaCreateWidget(
+        "passwordText",
+        xmTextWidgetClass,
+        _form,
+        XmNuserData, (XtPointer)this,
+        XmNeditMode, XmSINGLE_LINE_EDIT,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_OPPOSITE_WIDGET,
+        XmNbottomWidget, _passwordLabel,
+        XmNleftAttachment, XmATTACH_OPPOSITE_WIDGET,
+        XmNleftWidget, _userText,
+        XmNrightAttachment, XmATTACH_NONE,
+        NULL);
+
+    _userFullNameLabel = XtVaCreateWidget(
+        "userFullNameLabel",
+        xmLabelWidgetClass,
+        _form,
+        XmNalignment, XmALIGNMENT_BEGINNING,
+        XmNrecomputeSize, True,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_OPPOSITE_WIDGET,
+        XmNbottomWidget, _userLabel,
+        XmNleftAttachment, XmATTACH_WIDGET,
+        XmNleftWidget, _userText,
+        XmNrightAttachment, XmATTACH_NONE,
+        NULL);
+
+    _panelWindow = XtVaCreateWidget(
+        "panelWindow",
+        xmFrameWidgetClass,
+        _form,
+        XmNtopAttachment, XmATTACH_FORM,
+        XmNbottomAttachment, XmATTACH_WIDGET,
+        XmNbottomWidget, _userLabel,
+        XmNleftAttachment, XmATTACH_FORM,
         XmNrightAttachment, XmATTACH_FORM,
-        XmNbottomAttachment, XmATTACH_FORM,
-        XtVaTypedArg, XmNlabelString, XmRString,
-        "Log In", 7,
         NULL);
 
-    _helpButton = XtVaCreateManagedWidget(
+    _helpButton = XtVaCreateWidget(
         "helpButton",
         xmPushButtonWidgetClass,
-        _baseWidget,
-        XmNrightAttachment, XmATTACH_WIDGET,
-        XmNrightWidget, _loginButton,
+        _form,
+        XmNrecomputeSize, False,
+        XmNtopAttachment, XmATTACH_NONE,
         XmNbottomAttachment, XmATTACH_FORM,
-        XtVaTypedArg, XmNlabelString, XmRString,
-        "Help", 5,
+        XmNleftAttachment, XmATTACH_NONE,
+        XmNrightAttachment, XmATTACH_FORM,
+        NULL);
+
+    _loginButton = XtVaCreateWidget(
+        "loginButton",
+        xmPushButtonWidgetClass,
+        _form,
+        XmNrecomputeSize, False,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_FORM,
+        XmNleftAttachment, XmATTACH_NONE,
+        XmNrightAttachment, XmATTACH_WIDGET,
+        XmNrightWidget, _helpButton,
+        NULL);
+
+    _hostLabel = XtVaCreateWidget(
+        "hostLabel",
+        xmLabelWidgetClass,
+        _form,
+        XmNalignment, XmALIGNMENT_BEGINNING,
+        XmNrecomputeSize, True,
+        XmNtopAttachment, XmATTACH_NONE,
+        XmNbottomAttachment, XmATTACH_FORM,
+        XmNleftAttachment, XmATTACH_FORM,
+        XmNrightAttachment, XmATTACH_NONE,
         NULL);
 
     /*
-     * The attachment graph above is reconstructed from the original widget
-     * hierarchy and currently preserved portable Pandora behavior. Exact SGI
-     * offsets, widths, fonts and labels remain resource-driven through the
-     * Clogin app-defaults database.
+     * Binary-proven XtManageChildren call at the end of the constructor.
+     * warningLabel, passwordText, userFullNameLabel and hostLabel remain
+     * unmanaged initially.
      */
+    managed[0] = _loginButton;
+    managed[1] = _helpButton;
+    managed[2] = _panelWindow;
+    managed[3] = _userText;
+    managed[4] = _userLabel;
+    managed[5] = _passwordLabel;
+    XtManageChildren(managed, 6);
 }
 
 PandoraComponent::~PandoraComponent()
