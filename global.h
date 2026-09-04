@@ -16,6 +16,9 @@
 int enableRootShortcut = 1;
 
 Widget textBox1, textBox2, helpButton, powerButton, optionsButton, scrolledWin0, scrolledWin, hostLabel;
+/* Temporary compatibility alias for the reconstructed clogin bridge.
+ * The current Motif prototype's password input widget is textBox2. */
+#define password textBox2
 XtAppContext app;
 
 /*	Set by auth callbacks on success.
