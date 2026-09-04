@@ -200,14 +200,13 @@ static void run_user_session(const char *username)
 		setenv("DISPLAY",    session_display,                1);
 		setenv("XAUTHORITY", authfile,                       1);
 
-		/*	Connect to the server we already started.  The cookie
-			lets this uid in; no startx, no xinit, no wrapper.
-			USER_SESSION_CMD must be a plain session client that
-			blocks until logout and does NOT start its own X.
-		*/
-		execlp(USER_SESSION_CMD, USER_SESSION_CMD, (char *)NULL);
-
-		perror("dvlogin: execlp (session)");
+		/*
+		 * Hand off through the reconstructed IRIX Xsession selector.
+		 * It gives ~/.xsession the same top-level precedence observed
+		 * in IRIX, then falls back to the configured system desktop
+		 * backend (currently MaXX Xsession.dt).
+		 */
+		irix_exec_user_session(pw);
 		_exit(1);
 	}
 
