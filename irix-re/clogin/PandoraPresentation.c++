@@ -4,6 +4,8 @@
 #include <Xm/RowColumn.h>
 #include <Xm/Xm.h>
 
+#include <pwd.h>
+
 PandoraRenderer::PandoraRenderer()
     : _gallery(false), _scale(1.0f)
 {
@@ -66,6 +68,17 @@ UserView::UserView(const std::string &name, long arg0, long arg1)
       _arg1(arg1),
       _widget(NULL)
 {
+    /*
+     * Portable bridge for the current probe. Original PandoraComponent::addUser
+     * already has the accepted xpasswd record and copies pw_name, pw_dir and
+     * pw_uid into the presentation object before displayIcon() constructs the
+     * UserView. Until that intermediate object is reconstructed, recover the
+     * same account metadata by name rather than assigning invented meanings to
+     * UserView's two unresolved long constructor arguments.
+     */
+    struct passwd *pwd = getpwnam(_name.c_str());
+    if (pwd && pwd->pw_dir)
+        setAccountMetadata(pwd->pw_dir, pwd->pw_uid);
 }
 
 void UserView::setAccountMetadata(const std::string &home, uid_t uid)
