@@ -1,9 +1,42 @@
 #include "PandoraPresentation.h"
+#include "FtiVectorIcon.h"
 
 #include <Xm/DrawnB.h>
 #include <Xm/Xm.h>
 
+#include <X11/Xlib.h>
+
 #include <pwd.h>
+
+#ifndef PANDORA_USER_TOKEN_FTI_PATH
+#define PANDORA_USER_TOKEN_FTI_PATH ""
+#endif
+
+namespace
+{
+FtiVectorIcon &portableUserTokenIcon()
+{
+    static FtiVectorIcon icon;
+    static bool attempted = false;
+
+    if (!attempted)
+    {
+        attempted = true;
+        const char *path = PANDORA_USER_TOKEN_FTI_PATH;
+        if (path && path[0])
+            icon.load(path);
+    }
+
+    return icon;
+}
+
+void userViewExposeCallback(Widget, XtPointer clientData, XtPointer)
+{
+    UserView *view = static_cast<UserView *>(clientData);
+    if (view)
+        view->drawPortableContents();
+}
+}
 
 PandoraRenderer::PandoraRenderer()
     : _gallery(false), _scale(1.0f)
@@ -269,17 +302,20 @@ void UserView::createPortableWidget(
 
     XmString label = XmStringCreateLocalized(
         const_cast<char *>(_name.c_str()));
+    XmString emptyLabel = XmStringCreateLocalized(
+        const_cast<char *>(""));
 
     /*
-     * Portable rendering backend only. Original UserView instances are drawn
-     * through PandoraRenderer / ImdInvertedTeeRenderer in the ImdViewPanel.
-     * A flat DrawnButton remains only as the temporary Linux selection surface.
+     * Portable event surface only. Original UserView instances are rendered
+     * by PandoraRenderer / ImdInvertedTeeRenderer inside ImdViewPanel. The
+     * DrawnButton remains temporarily for activation semantics, but Motif no
+     * longer draws the account label or placeholder body contents.
      */
     _widget = XtVaCreateManagedWidget(
         _name.c_str(),
         xmDrawnButtonWidgetClass,
         parent,
-        XmNlabelString, label,
+        XmNlabelString, emptyLabel,
         XmNuserData, (XtPointer)this,
         XmNrecomputeSize, True,
         XmNmarginWidth, 0,
@@ -289,6 +325,8 @@ void UserView::createPortableWidget(
         XmNtraversalOn, False,
         XmNpushButtonEnabled, True,
         NULL);
+
+    XmStringFree(emptyLabel);
 
     /*
      * Recovered from libimdIconPanel.so:
@@ -334,10 +372,89 @@ void UserView::createPortableWidget(
 
     XmStringFree(label);
 
+    XtAddCallback(
+        _widget,
+        XmNexposeCallback,
+        userViewExposeCallback,
+        (XtPointer)this);
+
     if (activateCallback)
         XtAddCallback(
             _widget,
             XmNactivateCallback,
             activateCallback,
             clientData);
+}
+
+void UserView::drawPortableContents()
+{
+    if (!_widget || !XtIsRealized(_widget))
+        return;
+
+    Dimension width = 0;
+    XtVaGetValues(_widget, XmNwidth, &width, NULL);
+
+    const Dimension iconExtent = 50;
+    const Dimension invertedTeeMargin = 3;
+
+    /*
+     * ImdInvertedTeeRenderer::getIconX() at 0x096b5b70 computes the icon X
+     * coordinate by centering iconScale*100 inside the scaled view width.
+     * Under Clogin's normal scale/iconScale relationship this is a 50-pixel
+     * box centered in the UserView.
+     */
+    const int iconX = width > iconExtent
+        ? static_cast<int>((width - iconExtent) / 2)
+        : 0;
+    const int iconY = 0;
+
+    FtiVectorIcon &icon = portableUserTokenIcon();
+    if (icon.loaded())
+        icon.draw(_widget, iconX, iconY, iconExtent);
+
+    XmString label = XmStringCreateLocalized(
+        const_cast<char *>(_name.c_str()));
+    XmFontList fontList = NULL;
+    Dimension labelWidth = 0;
+    Dimension labelHeight = 0;
+    Pixel foreground = 0;
+    XtVaGetValues(
+        _widget,
+        XmNfontList, &fontList,
+        XmNforeground, &foreground,
+        NULL);
+
+    if (fontList)
+        XmStringExtent(fontList, label, &labelWidth, &labelHeight);
+
+    Display *display = XtDisplay(_widget);
+    Window window = XtWindow(_widget);
+    XGCValues values;
+    values.foreground = foreground;
+    GC gc = XCreateGC(display, window, GCForeground, &values);
+
+    const Position labelX = width > labelWidth
+        ? static_cast<Position>((width - labelWidth) / 2)
+        : 0;
+    const Position labelY = static_cast<Position>(
+        iconExtent + invertedTeeMargin);
+
+    if (fontList)
+    {
+        XmStringDraw(
+            display,
+            window,
+            fontList,
+            label,
+            gc,
+            labelX,
+            labelY,
+            width,
+            XmALIGNMENT_BEGINNING,
+            XmSTRING_DIRECTION_L_TO_R,
+            NULL);
+    }
+
+    XFreeGC(display, gc);
+    XmStringFree(label);
 }
