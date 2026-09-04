@@ -16,6 +16,18 @@ public:
     virtual ~ImdRenderer() {}
 };
 
+class ImdIconRenderer : public ImdRenderer
+{
+public:
+    virtual ~ImdIconRenderer() {}
+};
+
+class ImdInvertedTeeRenderer : public ImdIconRenderer
+{
+public:
+    virtual ~ImdInvertedTeeRenderer() {}
+};
+
 class ImdLayout
 {
 public:
@@ -26,6 +38,12 @@ class ImdView
 {
 public:
     virtual ~ImdView() {}
+};
+
+class ImdIconView : public ImdView
+{
+public:
+    virtual ~ImdIconView() {}
 };
 
 extern WidgetClass imdViewPanelWidgetClass;
