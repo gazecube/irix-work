@@ -194,7 +194,6 @@ static void run_user_session(const char *username)
 		clearenv();
 		setenv("HOME",       pw->pw_dir,                     1);
 		setenv("USER",       pw->pw_name,                    1);
-		setenv("USERNAME",   pw->pw_name,                    1);
 		setenv("LOGNAME",    pw->pw_name,                    1);
 		setenv("SHELL",      pw->pw_shell,                   1);
 		setenv("PATH",       "/usr/local/bin:/usr/bin:/bin", 1);
