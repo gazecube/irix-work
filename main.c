@@ -49,6 +49,7 @@
 #include "callbacks.h"
 #include "shortcuts.h"
 #include "clogin_reconstructed.h"
+#include "clogin_ui.h"
 #include "clogin_autologin.h"
 #include "gui.h"
 
