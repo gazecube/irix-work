@@ -58,8 +58,21 @@ void PandoraLayout::update()
 }
 
 UserView::UserView(const std::string &name, long arg0, long arg1)
-    : _name(name), _arg0(arg0), _arg1(arg1), _widget(NULL)
+    : _name(name),
+      _home(),
+      _uid(0),
+      _hasAccountMetadata(false),
+      _arg0(arg0),
+      _arg1(arg1),
+      _widget(NULL)
 {
+}
+
+void UserView::setAccountMetadata(const std::string &home, uid_t uid)
+{
+    _home = home;
+    _uid = uid;
+    _hasAccountMetadata = true;
 }
 
 void UserView::createPortableWidget(
