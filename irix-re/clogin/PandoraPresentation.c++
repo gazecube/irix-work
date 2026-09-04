@@ -1,7 +1,8 @@
 #include "PandoraPresentation.h"
 #include "FtiVectorIcon.h"
 
-#include <Xm/DrawnB.h>
+#include <Xm/DrawingA.h>
+#include <Xm/Label.h>
 #include <Xm/Xm.h>
 
 #include <X11/Xlib.h>
@@ -29,13 +30,6 @@ FtiVectorIcon &portableUserTokenIcon()
 
     return icon;
 }
-
-void userViewExposeCallback(Widget, XtPointer clientData, XtPointer)
-{
-    UserView *view = static_cast<UserView *>(clientData);
-    if (view)
-        view->drawPortableContents();
-}
 }
 
 PandoraRenderer::PandoraRenderer()
@@ -54,33 +48,48 @@ void PandoraRenderer::setScale(float scale)
 }
 
 PandoraLayout::PandoraLayout(Widget panelWidget)
-    : _panelWidget(panelWidget), _container(panelWidget)
+    : _panelWidget(panelWidget),
+      _container(panelWidget),
+      _fontProbe(NULL),
+      _activateCallback(NULL),
+      _activateClientData(NULL)
 {
     /*
-     * Binary-proven PandoraLayout directly constructs ImdLayout(Widget),
-     * installs its own vtable, then initializes:
+     * Binary-proven PandoraLayout constants:
      *
      *   +0x0c = 10   outer inset
      *   +0x10 = 12   inter-cell spacing
      *
-     * The original layout positions views directly in the Imd panel. The
-     * portable probe now does the same against the DrawingArea-backed panel;
-     * no intermediate Motif RowColumn/BulletinBoard owns the geometry.
-     *
-     * PandoraLayout::resize() at 0x10018408 loads the panel widget from the
-     * ImdLayout base and calls ImdViewPanelUpdateLayout(panel). Our portable
-     * Imd panel does not dispatch the full ViewPanel lifecycle yet, so both
-     * ConfigureNotify and the initial MapNotify are bridged to resize(). The
-     * MapNotify pass is needed because displayIcon() can run before the panel
-     * has its final mapped width.
+     * The original ImdViewPanel owns drawing and selection. The portable probe
+     * now follows that architecture: UserView is geometry/state only and the
+     * panel is the sole visible drawing surface. One unmanaged XmLabel is kept
+     * only as a portable Motif font-list source until getPosFont() is wired.
      */
     if (_panelWidget)
     {
+        _fontProbe = XtVaCreateWidget(
+            "userViewFontProbe",
+            xmLabelWidgetClass,
+            _panelWidget,
+            XmNrecomputeSize, True,
+            NULL);
+
         XtAddEventHandler(
             _panelWidget,
             StructureNotifyMask,
             False,
             &PandoraLayout::panelStructureEvent,
+            (XtPointer)this);
+        XtAddEventHandler(
+            _panelWidget,
+            ButtonReleaseMask,
+            False,
+            &PandoraLayout::panelButtonEvent,
+            (XtPointer)this);
+        XtAddCallback(
+            _panelWidget,
+            XmNexposeCallback,
+            &PandoraLayout::panelExposeCallback,
             (XtPointer)this);
     }
 }
@@ -95,7 +104,34 @@ PandoraLayout::~PandoraLayout()
             False,
             &PandoraLayout::panelStructureEvent,
             (XtPointer)this);
+        XtRemoveEventHandler(
+            _panelWidget,
+            ButtonReleaseMask,
+            False,
+            &PandoraLayout::panelButtonEvent,
+            (XtPointer)this);
+        XtRemoveCallback(
+            _panelWidget,
+            XmNexposeCallback,
+            &PandoraLayout::panelExposeCallback,
+            (XtPointer)this);
     }
+}
+
+void PandoraLayout::setActivateCallback(
+    XtCallbackProc callback,
+    XtPointer clientData)
+{
+    _activateCallback = callback;
+    _activateClientData = clientData;
+}
+
+XmFontList PandoraLayout::fontList() const
+{
+    XmFontList result = NULL;
+    if (_fontProbe)
+        XtVaGetValues(_fontProbe, XmNfontList, &result, NULL);
+    return result;
 }
 
 void PandoraLayout::panelStructureEvent(
@@ -108,31 +144,56 @@ void PandoraLayout::panelStructureEvent(
     if (!self || !event)
         return;
 
-    /*
-     * ConfigureNotify mirrors the recovered PandoraLayout::resize() path.
-     * MapNotify is a portable bootstrap bridge for the missing ImdViewPanel
-     * show/realize lifecycle: by map time the panel has its final initial
-     * width and the UserViews created by displayIcon() already exist.
-     */
     if (event->type == ConfigureNotify || event->type == MapNotify)
         self->resize();
 }
 
+void PandoraLayout::panelButtonEvent(
+    Widget widget,
+    XtPointer clientData,
+    XEvent *event,
+    Boolean *)
+{
+    PandoraLayout *self = static_cast<PandoraLayout *>(clientData);
+    if (!self || !event || event->type != ButtonRelease)
+        return;
+
+    UserView *view = self->viewAt(
+        static_cast<Position>(event->xbutton.x),
+        static_cast<Position>(event->xbutton.y));
+    if (view && self->_activateCallback)
+    {
+        self->_activateCallback(
+            widget,
+            self->_activateClientData,
+            (XtPointer)view);
+    }
+}
+
+void PandoraLayout::panelExposeCallback(
+    Widget,
+    XtPointer clientData,
+    XtPointer)
+{
+    PandoraLayout *self = static_cast<PandoraLayout *>(clientData);
+    if (self)
+        self->draw();
+}
+
 void PandoraLayout::addView(UserView *view)
 {
-    if (view)
-        _views.push_back(view);
+    if (!view)
+        return;
+
+    view->preparePortableGeometry(fontList());
+    _views.push_back(view);
 }
 
 void PandoraLayout::resize()
 {
     /*
-     * Original 0x10018408 is effectively:
-     *
-     *   ImdViewPanelUpdateLayout(panelWidget);
-     *
-     * update() is the current portable equivalent of the panel/layout
-     * dispatch reached by that call.
+     * PandoraLayout::resize() at 0x10018408 calls
+     * ImdViewPanelUpdateLayout(panel). update() is the portable equivalent.
      */
     update();
 }
@@ -159,29 +220,19 @@ void PandoraLayout::update()
     Dimension maxHeight = 0;
     for (std::size_t i = 0; i < _views.size(); ++i)
     {
-        Widget widget = _views[i] ? _views[i]->widget() : NULL;
-        if (!widget)
+        UserView *view = _views[i];
+        if (!view)
             continue;
-
-        Dimension width = 0;
-        Dimension height = 0;
-        XtVaGetValues(widget, XmNwidth, &width, XmNheight, &height, NULL);
-        if (width > maxWidth)
-            maxWidth = width;
-        if (height > maxHeight)
-            maxHeight = height;
+        if (view->width() > maxWidth)
+            maxWidth = view->width();
+        if (view->height() > maxHeight)
+            maxHeight = view->height();
     }
 
     if (maxWidth == 0 || maxHeight == 0)
         return;
 
-    /*
-     * Binary-proven column calculation from PandoraLayout::update(bool):
-     *
-     *   cols = (availableWidth - 2*outerInset + spacing)
-     *          / (maxViewWidth + spacing)
-     *   if (cols == 0) cols = 1
-     */
+    /* Binary-proven PandoraLayout::update(bool) column calculation. */
     long numerator = static_cast<long>(panelWidth)
                    - 2L * static_cast<long>(outerInset)
                    + static_cast<long>(spacing);
@@ -197,22 +248,13 @@ void PandoraLayout::update()
 
     for (std::size_t i = 0; i < _views.size(); ++i)
     {
-        Widget widget = _views[i] ? _views[i]->widget() : NULL;
-        if (!widget)
+        UserView *view = _views[i];
+        if (!view)
             continue;
 
-        Dimension width = 0;
-        XtVaGetValues(widget, XmNwidth, &width, NULL);
-
-        /* Original centers narrower views inside the maximum-width cell. */
-        Position x = static_cast<Position>(
-            cellX + static_cast<Position>((maxWidth - width) / 2));
-
-        XtVaSetValues(
-            widget,
-            XmNx, x,
-            XmNy, cellY,
-            NULL);
+        const Position x = static_cast<Position>(
+            cellX + static_cast<Position>((maxWidth - view->width()) / 2));
+        view->setPortablePosition(x, cellY);
 
         ++column;
         if (column == columns)
@@ -229,11 +271,6 @@ void PandoraLayout::update()
         }
     }
 
-    /*
-     * Preserve the visible panel height, but grow the work area if the
-     * recovered grid requires more vertical space. This is a portable
-     * ScrolledWindow integration detail, not an original Pandora method.
-     */
     Dimension contentHeight;
     if (column == 0)
         contentHeight = static_cast<Dimension>(cellY - spacing + outerInset);
@@ -243,6 +280,33 @@ void PandoraLayout::update()
 
     if (contentHeight > panelHeight)
         XtVaSetValues(_panelWidget, XmNheight, contentHeight, NULL);
+
+    if (XtIsRealized(_panelWidget))
+        XClearArea(XtDisplay(_panelWidget), XtWindow(_panelWidget), 0, 0, 0, 0, True);
+}
+
+void PandoraLayout::draw()
+{
+    if (!_panelWidget || !XtIsRealized(_panelWidget))
+        return;
+
+    XmFontList fonts = fontList();
+    for (std::size_t i = 0; i < _views.size(); ++i)
+    {
+        if (_views[i])
+            _views[i]->drawPortableContents(_panelWidget, fonts);
+    }
+}
+
+UserView *PandoraLayout::viewAt(Position x, Position y) const
+{
+    for (std::size_t i = 0; i < _views.size(); ++i)
+    {
+        UserView *view = _views[i];
+        if (view && view->contains(x, y))
+            return view;
+    }
+    return NULL;
 }
 
 UserView::UserView(
@@ -252,20 +316,11 @@ UserView::UserView(
     : _name(name),
       _home(home),
       _uid(static_cast<uid_t>(uid)),
-      _widget(NULL)
+      _x(0),
+      _y(0),
+      _width(50),
+      _height(53)
 {
-    /*
-     * Binary-proven constructor shape from 0x100179c4:
-     *
-     *   ImdIconView::ImdIconView()
-     *   install UserView vtable
-     *   store uid
-     *   construct/copy login ImdString
-     *   construct/copy home ImdString
-     *
-     * The portable C++ base constructor runs automatically here; std::string
-     * substitutes for ImdString until libimdUtil's ABI is wired in.
-     */
 }
 
 UserView::UserView(
@@ -275,14 +330,11 @@ UserView::UserView(
     : _name(name),
       _home(),
       _uid(0),
-      _widget(NULL)
+      _x(0),
+      _y(0),
+      _width(50),
+      _height(53)
 {
-    /*
-     * Transitional compatibility path for the pre-recovery displayIcon()
-     * call site. The fresh clogin disassembly proves the real constructor is
-     * (login, uid, home), so resolve those two values from passwd rather than
-     * retaining the obsolete pair of anonymous long values.
-     */
     struct passwd *pwd = getpwnam(_name.c_str());
     if (pwd)
     {
@@ -292,158 +344,89 @@ UserView::UserView(
     }
 }
 
-void UserView::createPortableWidget(
-    Widget parent,
-    XtCallbackProc activateCallback,
-    XtPointer clientData)
+void UserView::preparePortableGeometry(XmFontList fontList)
 {
-    if (!parent || _widget)
-        return;
-
     XmString label = XmStringCreateLocalized(
         const_cast<char *>(_name.c_str()));
-    XmString emptyLabel = XmStringCreateLocalized(
-        const_cast<char *>(""));
-
-    Pixel panelBackground = 0;
-    XtVaGetValues(parent, XmNbackground, &panelBackground, NULL);
-
-    /*
-     * Portable event surface only. Original UserView instances are rendered
-     * by PandoraRenderer / ImdInvertedTeeRenderer inside ImdViewPanel. The
-     * DrawnButton remains temporarily for activation semantics, but Motif no
-     * longer draws the account label or placeholder body contents. Match the
-     * carrier widget background to its panel so the temporary widget itself
-     * is not visible as a gray tile.
-     */
-    _widget = XtVaCreateManagedWidget(
-        _name.c_str(),
-        xmDrawnButtonWidgetClass,
-        parent,
-        XmNlabelString, emptyLabel,
-        XmNuserData, (XtPointer)this,
-        XmNbackground, panelBackground,
-        XmNrecomputeSize, True,
-        XmNmarginWidth, 0,
-        XmNmarginHeight, 0,
-        XmNshadowThickness, 0,
-        XmNhighlightThickness, 0,
-        XmNtraversalOn, False,
-        XmNpushButtonEnabled, True,
-        NULL);
-
-    XmStringFree(emptyLabel);
-
-    /*
-     * Recovered from libimdIconPanel.so:
-     *
-     * ImdInvertedTeeRenderer::setSize(ImdView &) at 0x096842f0 computes
-     * the icon extent as (iconScale / scale) * 100. Its constructor and
-     * setScale() keep iconScale at scale * 0.5 unless explicitly overridden,
-     * so the normal inverted-tee icon extent is exactly 50 pixels.
-     *
-     * The same method computes:
-     *
-     *   width  = max(iconExtent, formattedLabelWidth)
-     *   height = iconExtent + invertedTeeMargin + formattedLabelHeight
-     *
-     * ImdInvertedTeeRenderer::realize() at 0x096844e0 proves the resource
-     * names "invertedTeeMargin" and "minimumIconWidth". The library defaults
-     * are 0 and 50; Clogin app-defaults override invertedTeeMargin to 3.
-     *
-     * The original uses formatLabel(), getPosFont(), and XmbTextExtents().
-     * Until those renderer/font paths are linked into the portable probe,
-     * XmStringExtent() is the explicitly portable stand-in for the measured
-     * formatted-label extent. The sizing formula and constants are original.
-     */
-    XmFontList fontList = NULL;
     Dimension labelWidth = 0;
     Dimension labelHeight = 0;
-    XtVaGetValues(_widget, XmNfontList, &fontList, NULL);
     if (fontList)
         XmStringExtent(fontList, label, &labelWidth, &labelHeight);
+    XmStringFree(label);
 
     const Dimension iconExtent = 50;
     const Dimension invertedTeeMargin = 3;
-    Dimension width = labelWidth > iconExtent ? labelWidth : iconExtent;
-    Dimension height = static_cast<Dimension>(
+
+    /* Binary-proven setSize() formula; XmStringExtent is portable stand-in. */
+    _width = labelWidth > iconExtent ? labelWidth : iconExtent;
+    _height = static_cast<Dimension>(
         iconExtent + invertedTeeMargin + labelHeight);
-
-    XtVaSetValues(
-        _widget,
-        XmNwidth, width,
-        XmNheight, height,
-        XmNrecomputeSize, False,
-        NULL);
-
-    XmStringFree(label);
-
-    XtAddCallback(
-        _widget,
-        XmNexposeCallback,
-        userViewExposeCallback,
-        (XtPointer)this);
-
-    if (activateCallback)
-        XtAddCallback(
-            _widget,
-            XmNactivateCallback,
-            activateCallback,
-            clientData);
 }
 
-void UserView::drawPortableContents()
+void UserView::setPortablePosition(Position x, Position y)
 {
-    if (!_widget || !XtIsRealized(_widget))
-        return;
+    _x = x;
+    _y = y;
+}
 
-    Dimension width = 0;
-    XtVaGetValues(_widget, XmNwidth, &width, NULL);
+bool UserView::contains(Position x, Position y) const
+{
+    const long px = static_cast<long>(x);
+    const long py = static_cast<long>(y);
+    const long left = static_cast<long>(_x);
+    const long top = static_cast<long>(_y);
+    return px >= left && py >= top &&
+           px < left + static_cast<long>(_width) &&
+           py < top + static_cast<long>(_height);
+}
+
+void UserView::drawPortableContents(
+    Widget panelWidget,
+    XmFontList fontList) const
+{
+    if (!panelWidget || !XtIsRealized(panelWidget))
+        return;
 
     const Dimension iconExtent = 50;
     const Dimension invertedTeeMargin = 3;
 
     /*
-     * ImdInvertedTeeRenderer::getIconX() at 0x096b5b70 computes the icon X
-     * coordinate by centering iconScale*100 inside the scaled view width.
-     * Under Clogin's normal scale/iconScale relationship this is a 50-pixel
-     * box centered in the UserView.
+     * getIconX() at 0x096b5b70 centers the 50-pixel icon extent in the view.
      */
-    const int iconX = width > iconExtent
-        ? static_cast<int>((width - iconExtent) / 2)
+    const int localIconX = _width > iconExtent
+        ? static_cast<int>((_width - iconExtent) / 2)
         : 0;
-    const int iconY = 0;
 
     FtiVectorIcon &icon = portableUserTokenIcon();
     if (icon.loaded())
-        icon.draw(_widget, iconX, iconY, iconExtent);
+    {
+        icon.draw(
+            panelWidget,
+            static_cast<int>(_x) + localIconX,
+            static_cast<int>(_y),
+            iconExtent);
+    }
 
     XmString label = XmStringCreateLocalized(
         const_cast<char *>(_name.c_str()));
-    XmFontList fontList = NULL;
     Dimension labelWidth = 0;
     Dimension labelHeight = 0;
-    Pixel foreground = 0;
-    XtVaGetValues(
-        _widget,
-        XmNfontList, &fontList,
-        XmNforeground, &foreground,
-        NULL);
-
     if (fontList)
         XmStringExtent(fontList, label, &labelWidth, &labelHeight);
 
-    Display *display = XtDisplay(_widget);
-    Window window = XtWindow(_widget);
+    Pixel foreground = 0;
+    XtVaGetValues(panelWidget, XmNforeground, &foreground, NULL);
+
+    Display *display = XtDisplay(panelWidget);
+    Window window = XtWindow(panelWidget);
     XGCValues values;
     values.foreground = foreground;
     GC gc = XCreateGC(display, window, GCForeground, &values);
 
-    const Position labelX = width > labelWidth
-        ? static_cast<Position>((width - labelWidth) / 2)
-        : 0;
+    const Position labelX = static_cast<Position>(
+        _x + (_width > labelWidth ? (_width - labelWidth) / 2 : 0));
     const Position labelY = static_cast<Position>(
-        iconExtent + invertedTeeMargin);
+        _y + iconExtent + invertedTeeMargin);
 
     if (fontList)
     {
@@ -455,7 +438,7 @@ void UserView::drawPortableContents()
             gc,
             labelX,
             labelY,
-            width,
+            _width,
             XmALIGNMENT_BEGINNING,
             XmSTRING_DIRECTION_L_TO_R,
             NULL);
