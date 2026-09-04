@@ -1,6 +1,5 @@
 #include "PandoraPresentation.h"
 
-#include <Xm/BulletinB.h>
 #include <Xm/DrawnB.h>
 #include <Xm/Xm.h>
 
@@ -22,28 +21,19 @@ void PandoraRenderer::setScale(float scale)
 }
 
 PandoraLayout::PandoraLayout(Widget panelWidget)
-    : _panelWidget(panelWidget), _container(NULL)
+    : _panelWidget(panelWidget), _container(panelWidget)
 {
     /*
-     * Portable backing only. The original PandoraLayout directly constructs
-     * ImdLayout(Widget), installs its own vtable, then initializes:
+     * Binary-proven PandoraLayout directly constructs ImdLayout(Widget),
+     * installs its own vtable, then initializes:
      *
      *   +0x0c = 10   outer inset
      *   +0x10 = 12   inter-cell spacing
      *
-     * PandoraLayout::update(bool) at 0x10018028 explicitly positions each
-     * view. XmBulletinBoard is therefore a closer portability boundary than
-     * XmRowColumn because it lets the recovered algorithm own child x/y.
+     * The original layout positions views directly in the Imd panel. The
+     * portable probe now does the same against the DrawingArea-backed panel;
+     * no intermediate Motif RowColumn/BulletinBoard owns the geometry.
      */
-    _container = XtVaCreateManagedWidget(
-        "userViewContainer",
-        xmBulletinBoardWidgetClass,
-        _panelWidget,
-        XmNmarginWidth, 0,
-        XmNmarginHeight, 0,
-        XmNshadowThickness, 0,
-        XmNresizePolicy, XmRESIZE_NONE,
-        NULL);
 }
 
 void PandoraLayout::addView(UserView *view)
@@ -54,16 +44,19 @@ void PandoraLayout::addView(UserView *view)
 
 void PandoraLayout::update()
 {
-    if (!_container || !_panelWidget || _views.empty())
+    if (!_panelWidget || _views.empty())
         return;
 
     const Dimension outerInset = 10;
     const Dimension spacing = 12;
 
     Dimension panelWidth = 0;
-    XtVaGetValues(_panelWidget, XmNwidth, &panelWidth, NULL);
-    if (panelWidth == 0)
-        XtVaGetValues(_container, XmNwidth, &panelWidth, NULL);
+    Dimension panelHeight = 0;
+    XtVaGetValues(
+        _panelWidget,
+        XmNwidth, &panelWidth,
+        XmNheight, &panelHeight,
+        NULL);
     if (panelWidth == 0)
         panelWidth = 1;
 
@@ -142,8 +135,9 @@ void PandoraLayout::update()
     }
 
     /*
-     * The original computes panel height from the final occupied row while
-     * keeping the same outer inset at the bottom.
+     * Preserve the visible panel height, but grow the work area if the
+     * recovered grid requires more vertical space. This is a portable
+     * ScrolledWindow integration detail, not an original Pandora method.
      */
     Dimension contentHeight;
     if (column == 0)
@@ -152,11 +146,8 @@ void PandoraLayout::update()
         contentHeight = static_cast<Dimension>(
             cellY + static_cast<Position>(maxHeight + outerInset));
 
-    XtVaSetValues(
-        _container,
-        XmNwidth, panelWidth,
-        XmNheight, contentHeight,
-        NULL);
+    if (contentHeight > panelHeight)
+        XtVaSetValues(_panelWidget, XmNheight, contentHeight, NULL);
 }
 
 UserView::UserView(
