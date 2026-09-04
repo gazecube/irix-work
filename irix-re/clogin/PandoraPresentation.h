@@ -1,6 +1,8 @@
 #ifndef IRIX_RE_CLOGIN_PANDORA_PRESENTATION_H
 #define IRIX_RE_CLOGIN_PANDORA_PRESENTATION_H
 
+#include "ImdIconPanel.h"
+
 #include <X11/Intrinsic.h>
 #include <string>
 #include <vector>
@@ -10,11 +12,12 @@ class UserView;
 /*
  * Original clogin class names recovered from symbols.
  *
- * Their complete inheritance/vtable ABI is not reconstructed yet. These
- * portable classes preserve the original object boundaries while keeping the
- * Linux Motif backing implementation private and explicitly provisional.
+ * PandoraRenderer/PandoraLayout inheritance details are not fully recovered,
+ * but the binary passes them to ImdViewPanelAdoptRenderer/Layout respectively.
+ * The minimal Imd base classes therefore preserve that proven type direction
+ * without assigning unproven virtual slots.
  */
-class PandoraRenderer
+class PandoraRenderer : public ImdRenderer
 {
 public:
     PandoraRenderer();
@@ -30,7 +33,7 @@ private:
     float _scale;
 };
 
-class PandoraLayout
+class PandoraLayout : public ImdLayout
 {
 public:
     explicit PandoraLayout(Widget panelWidget);
@@ -45,7 +48,7 @@ private:
     std::vector<UserView *> _views;
 };
 
-class UserView
+class UserView : public ImdView
 {
 public:
     /*
