@@ -3,6 +3,12 @@
 ! The original file begins with an IRIX-specific absolute #include of
 ! /usr/lib/X11/app-defaults/SetPassComp; that include is intentionally omitted
 ! here so Linux Xt can consume this file directly through XFILESEARCHPATH.
+!
+! The preserved IRIX file also uses SGI scheme tokens such as
+! "SGI_DYNAMIC ExtraLargeBoldLabelFont" for several fontList resources.
+! Linux Motif does not understand those SGI scheme expansions and attempts to
+! parse them as literal font names, so the probe-safe file intentionally omits
+! those dynamic fontList entries and lets the runtime default apply.
 
 Clogin*useSchemes: all
 Clogin*schemeFileList: SgiSpec, ImdSpec
@@ -34,9 +40,6 @@ Clogin*intl.msg_agedPwd: Your password has expired(aged). You need a new passwor
 Clogin*intl.logoPath: /usr/Cadmin/images/cloginlogo.rgb
 
 Clogin*userFullNameLabel.fontList: -adobe-helvetica-medium-o-normal--*-240-75-75-p-*-iso8859-1
-Clogin*warningLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
-Clogin*userLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
-Clogin*passwordLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
 Clogin*hostLabel.fontList: -adobe-helvetica-bold-o-normal--*-240-100-100-p-*-iso8859-1
 Clogin*userText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
 Clogin*passwordText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
