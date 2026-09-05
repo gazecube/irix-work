@@ -14,8 +14,12 @@
   original_fonts.c
   bootstrap_compat.c
   drawbackground_bringup.c
+  widget_bringup.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
+  ../sgisrc/libsc/gui/button.c
+  ../sgisrc/libsc/gui/canvas.c
+  ../sgisrc/libsc/gui/pcbm.c
   ../sgisrc/libsc/gui/text.c
   ../sgisrc/libsc/gui/tport.c
   ../vendor/sgibootscreen-src/src/ip19.c
