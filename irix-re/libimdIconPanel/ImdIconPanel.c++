@@ -1,6 +1,7 @@
 #include "ImdIconPanel.h"
 
 #include <Xm/DrawingA.h>
+#include <cstdio>
 #include <cstring>
 #include <map>
 
@@ -96,6 +97,21 @@ bool usingSgVisualDrawingArea()
     return imdViewPanelWidgetClass != xmDrawingAreaWidgetClass;
 }
 
+void reportViewPanelSuperclassOnce()
+{
+    static bool reported = false;
+    if (reported)
+        return;
+
+    reported = true;
+    std::fprintf(
+        stderr,
+        "ImdViewPanel superclass: %s\n",
+        usingSgVisualDrawingArea()
+            ? "SgVisualDrawingArea"
+            : "XmDrawingArea fallback");
+}
+
 bool isUnsupportedFallbackResource(const char *name)
 {
     if (!name || usingSgVisualDrawingArea())
@@ -129,6 +145,8 @@ extern "C" Widget ImdCreateViewPanel(
      * resources are preserved when SgVisualDrawingArea was resolved. The
      * XmDrawingArea fallback filters the two Sgm-only resources.
      */
+    reportViewPanelSuperclassOnce();
+
     Arg *filtered = 0;
     Cardinal filteredCount = 0;
 
