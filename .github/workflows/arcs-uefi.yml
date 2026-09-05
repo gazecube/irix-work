@@ -1,13 +1,6 @@
 name: ARCS UEFI bring-up
 
 on:
-  push:
-    branches:
-      - arcs-uefi
-    paths:
-      - '.github/workflows/arcs-uefi.yml'
-      - 'arcs/**'
-      - '.gitmodules'
   workflow_dispatch:
 
 jobs:
