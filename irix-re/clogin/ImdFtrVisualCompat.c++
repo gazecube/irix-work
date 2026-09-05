@@ -23,6 +23,7 @@ Boolean imdFtrChooseVisualArgs(Widget widget,
                                int *auxVisualValue)
 {
     Widget shell;
+    Screen *screen;
     Visual *visual = NULL;
     Colormap colormap = None;
     int depth = 0;
@@ -34,10 +35,10 @@ Boolean imdFtrChooseVisualArgs(Widget widget,
         return False;
 
     /*
-     * Binary-proven wrapper behavior: the original uses
-     * _XtCheckSubclassFlag(..., 0x20) and XtParent() to reach the containing
-     * shell before fetching these three resources. XtIsShell expresses the
-     * same host-side relationship without relying on private Xt flag values.
+     * Binary-proven wrapper behavior from IRIX libimdFtrIcon.so:
+     * _XtCheckSubclassFlag(..., 0x20) and XtParent() are used to reach the
+     * containing shell before reading visual/colormap/depth. XtIsShell is the
+     * portable expression of the same relationship.
      */
     shell = findVisualShell(widget);
     if (!shell)
@@ -49,21 +50,31 @@ Boolean imdFtrChooseVisualArgs(Widget widget,
                   XtNdepth, &depth,
                   NULL);
 
+    /*
+     * The original explicitly tolerates a NULL XtNvisual. In that case it
+     * calls XtScreen(shell) and substitutes Screen.root_visual before entering
+     * the internal SGI visual chooser. Do not reject NULL here.
+     */
+    screen = XtScreen(shell);
+    if (!visual && screen)
+        visual = DefaultVisualOfScreen(screen);
+
     if (!visual || colormap == None || depth <= 0)
         return False;
 
     /*
-     * IRIX FastStrDefs.h proves the three resource IDs used by the original:
+     * IRIX FastStrDefs.h / machine-code resource IDs:
      *   -39 = XtNvisual
      *   -33 = XtNcolormap
      *   -34 = XtNdepth
-     * and the MIPS wrapper appends them in exactly this order.
+     * The original appends the three Arg entries in exactly this order.
      *
-     * internalChooseVisual() may replace this tuple according to visualType.
-     * The mode-2 visual-selection policy is still under reconstruction. On a
-     * host without the SGI icon-visual registry, preserving the shell's valid
-     * tuple is the compatibility behavior; keep this policy isolated here so
-     * it can be replaced directly when that table is fully recovered.
+     * Clogin passes visualType == 2 on both recovered call sites. The SGI
+     * mode-2 chooser consults a cached per-screen visual table populated from
+     * a root-window property before it may replace this tuple. That policy is
+     * still being recovered. Until it is complete, preserving a valid shell
+     * tuple is the compatibility fallback; keep the gap explicit here rather
+     * than inventing a different visual-selection rule.
      */
     (void)visualType;
 
