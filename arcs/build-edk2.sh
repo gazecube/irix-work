@@ -28,4 +28,4 @@ build \
 
 echo
 echo "EFI image:"
-echo "$WORKSPACE/Build/ArcsPkg/$TARGET\_${TOOLCHAIN}/X64/ArcsGfxBringup.efi"
+echo "$WORKSPACE/Build/ArcsPkg/${TARGET}_${TOOLCHAIN}/X64/ArcsGfxBringup.efi"
