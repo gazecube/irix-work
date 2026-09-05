@@ -1,5 +1,4 @@
 #include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
 
 #include <gfxgui.h>
 #include <guicore.h>
@@ -8,22 +7,8 @@
 #include "original_fonts.h"
 #include "gfxgui_bringup.h"
 
-struct gfxgui gfxgui;
-
 static ARCS_GFXGUI_BRINGUP Bringup;
 static struct htp_font Fonts[NUMFONTS];
-
-int
-gfxWidth(void)
-{
-    return gfxgui.htp ? gfxgui.htp->xscreensize : 0;
-}
-
-int
-gfxHeight(void)
-{
-    return gfxgui.htp ? gfxgui.htp->yscreensize : 0;
-}
 
 EFI_STATUS
 ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
@@ -36,15 +21,11 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
     if (EFI_ERROR(Status))
         return Status;
 
-    ZeroMem(&gfxgui, sizeof(gfxgui));
-    gfxgui.htp = &Bringup.Htp;
-    gfxgui.fncs = Bringup.Htp.fncs;
-    gfxgui.hw = Bringup.Htp.hw;
-    gfxgui.next = gfxgui.prev = (struct gui_obj *)&gfxgui;
-
-    /* First visual checkpoint: execute the original SGI renderer unchanged.
-     * This temporary direct initialization is removed when core.c and the
-     * original initGfxGui() dependency set are fully linked. */
+    /* Hand control to the original SGI GUI core now that the UEFI-backed
+     * htp_state is complete.  From here on, object ownership, dimensions,
+     * redraw order and GUI state come from core.c rather than a bring-up
+     * facsimile. */
+    initGfxGui(&Bringup.Htp);
     drawBackground();
 
     return EFI_SUCCESS;
