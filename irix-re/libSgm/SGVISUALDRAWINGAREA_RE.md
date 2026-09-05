@@ -2,7 +2,7 @@
 
 Target: IRIX 6.5.0 `libSgm.so.1`, n32 MIPS, debug info present.
 
-This file records only binary-backed findings. Descriptive names are used only where the Xt/Motif ABI makes a class-record slot unambiguous.
+This file records binary-backed findings. Descriptive names are used only where the Xt/Motif ABI or matching SGI documentation makes the meaning unambiguous.
 
 ## Exported symbols
 
@@ -22,7 +22,18 @@ This file records only binary-backed findings. Descriptive names are used only w
 
 Therefore the original superclass is exactly `XmDrawingArea`.
 
-The original n32 class record is 208 bytes. The beginning of the record maps cleanly onto the Xt `CoreClassPart` ABI:
+The original n32 class record is 208 bytes. The Xt/Motif class-part layout is:
+
+```
++0x000 CoreClassPart
++0x074 CompositeClassPart
++0x088 ConstraintClassPart
++0x0a4 XmManagerClassPart
++0x0c0 XmDrawingAreaClassPart
++0x0c4 SgVisualDrawingAreaClassPart, 12 bytes, all zero
+```
+
+The recovered CoreClassPart is:
 
 ```
 +0x00  superclass            xmDrawingAreaClassRec
@@ -39,7 +50,7 @@ The original n32 class record is 208 bytes. The beginning of the record maps cle
 +0x2c  resources             0x0b2542b8
 +0x30  num_resources         3
 +0x34  xrm_class             0
-+0x38  compress flags        0x01000100 as packed Xt fields
++0x38  packed flags          01 00 01 00
 +0x3c  destroy               0x0b1c7ff8
 +0x40  resize                _XtInherit
 +0x44  expose                _XtInherit
@@ -56,122 +67,158 @@ The original n32 class record is 208 bytes. The beginning of the record maps cle
 +0x70  extension             0x0b254310
 ```
 
-The remaining class parts inherit from `XmDrawingArea` except where later binary work proves otherwise.
+The Composite class methods are inherited. The Constraint class part is zero. The Manager class part has inherited translations and an inherited extension pointer; its other class-specific entries are zero. The DrawingArea class-part extension is zero. The final 12-byte Sg class part is also entirely zero, so no Sg-specific virtual class methods exist here.
 
-The object at `0x0b254310` is consistent with a Motif base-class extension record. Its first fields are:
+## Motif base-class extension
 
-```
-+0x00  0
-+0x04  0
-+0x08  2
-+0x0c  0x78
-```
+The object at `0x0b254310` is an `XmBaseClassExtRec` version 2 and is exactly `0x78` bytes on n32.
 
-The extension is exactly 0x78 bytes long. Most fields are zero; a single inherited/runtime hook pointer is present near the tail. The exact Motif private type still needs to be matched against the corresponding IRIX Motif ABI before naming individual extension slots.
-
-## Resource table
-
-The class has exactly three resources. The resource table begins at `0x0b2542b8`.
-
-Binary-backed instance offsets:
+Recovered contents:
 
 ```
-+0x104  Visual *
-+0x108  Boolean installColormap
-+0x109  Boolean ditherBackground
+next_extension          NULL
+record_type             NULLQUARK
+version                 2
+record_size             0x78
+initializePrehook       NULL
+setValuesPrehook        NULL
+initializePosthook      NULL
+setValuesPosthook       NULL
+secondaryObjectClass    NULL
+secondaryObjectCreate   NULL
+getSecResData           NULL
+flags[32]               all zero
+getValuesPrehook        NULL
+getValuesPosthook       NULL
+classPartInitPrehook    NULL
+classPartInitPosthook   NULL
+ext_resources           NULL
+compiled_ext_resources  NULL
+num_ext_resources       0
+use_sub_resources       False
+widgetNavigable         _XtInherit
+focusChange             NULL
+wrapperData             NULL
 ```
 
-Literal resource strings present in the binary:
+The `_XtInherit` relocation is at extension offset `+0x6c`, which is the `widgetNavigable` slot in the Motif v2 ABI.
+
+## Public resource table
+
+The class has exactly three public resources. The table begins at `0x0b2542b8`.
 
 ```
-installColormap
-InstallColormap
-ditherBackground
-DitherBackground
-SgVisualDrawingArea
++0x104  XmNvisual             XmCVisual             Visual *   CopyFromParent
++0x108  SgNinstallColormap    SgCInstallColormap    Boolean    False
++0x109  SgNditherBackground   SgCDitherBackground   Boolean    False
 ```
 
-The first resource uses shared Xt/Motif quark strings; its runtime use at `+0x104` proves it is a `Visual *` resource.
+The latter two names/classes occur literally in the binary. The first resource uses the SGI/Xt fast-quark representation; runtime use plus SGI's public `SgVisualDrawingArea(3X)` documentation identifies it as `XmNvisual`.
 
 ## Private instance state
 
-The widget is not just an `XmDrawingArea` plus the three resources. The original `widget_size` is `0x124`, and methods directly access private state after the public resources:
+`XmDrawingAreaRec` ends at n32 offset `+0x104`. The Sg instance part continues through `+0x123`:
 
 ```
-+0x104  Visual * resource
-+0x108  installColormap resource
-+0x109  ditherBackground resource
-+0x10c  ancestor/shell-like Widget pointer used by WM colormap management
-+0x110  Boolean-like private policy/state loaded with XtGetValues during realize
-+0x114  Window * saved installed-colormap list
-+0x118  int saved installed-colormap count
-+0x11c  Boolean-like installed/state flag
-+0x120  String-like dither color subresource
++0x104  Visual * visual
++0x108  Boolean installColormap
++0x109  Boolean ditherBackground
++0x10c  Widget colormapShell
++0x110  Boolean shellOverrideRedirect
++0x114  Colormap *savedInstalledColormaps
++0x118  int savedInstalledColormapCount
++0x11c  Boolean colormapInstalled
++0x120  String requestedBackgroundName
 ```
 
-The descriptions for `+0x10c`, `+0x110`, and `+0x11c` are intentionally conservative until their resource names/private helper semantics are fully recovered.
+`+0x110` is identified from both code and documentation: `Realize` calls `XtGetValues()` on the containing shell for `XtNoverrideRedirect`, and install/uninstall use this byte to decide whether server-installed colormaps must be saved/restored directly.
+
+The one-entry private XtResource table used by `Initialize` is at `0x0b254460` and has:
+
+```
+size          4
+instance off  0x120
+default type  XtRImmediate
+default       NULL
+```
+
+Its fast-quark name corresponds to the Core background resource and its converted type is `String`; the result is passed directly to `XAllocNamedColor()`. This preserves the original requested background color text alongside Core's converted Pixel value.
 
 ## Initialize
 
-Class `initialize` is at `0x0b22a5b0`.
+Class `Initialize` is at `0x0b22a5b0`.
 
-Resolved behavior from disassembly and GOT entries:
+Exact recovered flow:
 
-- clears byte `+0x11c` immediately.
-- reads `ditherBackground` at `+0x109`.
-- reads the `Visual *` at `+0x104`.
-- may clear `ditherBackground` when the selected Visual does not meet the expected visual-class/depth conditions.
-- calls `XtGetSubresources()` with one private subresource whose instance offset is `+0x120`.
-- the `+0x120` value is passed to `XAllocNamedColor()` as a color-name string.
-- geometry/color comparisons are then made against the widget's current colormap/background state.
-- if a replacement dither background is required, calls `XAllocColor()` and then `XmGetPixmapByDepth()`.
-- the literal pixmap name passed to `XmGetPixmapByDepth()` is exactly `"50_foreground"`.
-- the returned pixmap is stored in the widget's core background-pixmap field.
-- when pixmap creation succeeds, `ditherBackground` is set back to 1.
-
-Resolved external calls used by this path include:
+1. Clear `colormapInstalled` at `+0x11c`.
+2. If `ditherBackground` is false, return.
+3. Clear `ditherBackground` before attempting construction.
+4. Require a non-CopyFromParent Visual whose class is `TrueColor` or `StaticColor`.
+5. Require Core `background_pixmap == XmUNSPECIFIED_PIXMAP`.
+6. Use `XtGetSubresources()` to retrieve the requested background color as a string into `+0x120`.
+7. Call `XAllocNamedColor()` in the widget colormap, producing allocated and exact colors.
+8. If the allocated pixel already equals Core `background_pixel` and all allocated RGB components equal the exact RGB components, return without dithering.
+9. For each RGB component compute:
 
 ```
-XtGetSubresources
-XAllocNamedColor
-XAllocColor
-XmGetPixmapByDepth
+complement = clamp((2 * exact) - allocated, 0, 65535)
 ```
 
-This proves `ditherBackground` is an actual SGI/Motif dither construction path rather than a passive flag.
+10. Set `DoRed | DoGreen | DoBlue` and call `XAllocColor()` for the complement.
+11. If the complement pixel equals the originally allocated pixel, return.
+12. Call:
+
+```
+XmGetPixmapByDepth(screen,
+                   "50_foreground",
+                   complement.pixel,
+                   allocated.pixel,
+                   depth)
+```
+
+13. Store the returned pixmap in Core `background_pixmap`.
+14. Set `ditherBackground` back to true on success.
+
+The local helper implementing the component formula is named `complementingColorComponent` in the debug strings.
 
 ## Realize
 
-Class `realize` is at `0x0b1c3264`.
+Class `Realize` is at `0x0b1c3264`.
 
-Resolved behavior:
+Exact recovered behavior:
 
-- forces nonzero width and height before creating the window.
-- sets window-attribute bits before creation.
-- calls `XtCreateWindow()` directly, passing the configured `Visual *` at `+0x104`.
-- walks ancestors to find/store a shell-like parent at `+0x10c`.
-- calls `XtGetValues()` for one Boolean-like resource and stores it at `+0x110`.
-- if `installColormap` at `+0x108` is true, calls `SgVisualDrawingAreaInstallColormap(this)`.
+- force width to 1 if zero.
+- force height to 1 if zero.
+- set `attributes->bit_gravity = NorthWestGravity`.
+- set `attributes->do_not_propagate_mask` to:
+
+```
+KeyPressMask |
+KeyReleaseMask |
+ButtonPressMask |
+ButtonReleaseMask |
+PointerMotionMask
+```
+
+- OR `CWBitGravity | CWDontPropagate` into the create-window value mask.
+- call `XtCreateWindow()` directly with the configured `Visual *`.
+- walk ancestors until the containing shell is found and store it at `+0x10c`.
+- call `XtGetValues(shell, XtNoverrideRedirect, ...)` and store the result at `+0x110`.
+- if `installColormap` is true, call `SgVisualDrawingAreaInstallColormap(this)`.
 
 This is materially different from calling the `XmDrawingArea` superclass realize method.
 
 ## Destroy
 
-Class `destroy` is at `0x0b1c7ff8`.
+Class `Destroy` is at `0x0b1c7ff8`.
 
-Resolved behavior is very small and specific:
+It only tests `colormapInstalled` at `+0x11c`. If true, it calls `SgVisualDrawingAreaUninstallColormap(this)`. Otherwise it returns.
 
-- tests byte `+0x11c`.
-- when set, calls `SgVisualDrawingAreaUninstallColormap(this)`.
-- otherwise returns immediately.
+## SgVisualDrawingAreaInstallColormap
 
-No separate ownership cleanup is performed by the class destroy entry point beyond the uninstall path.
+Address: `0x0b1c7d20`, size 728 bytes.
 
-## Colormap installation
-
-`SgVisualDrawingAreaInstallColormap` at `0x0b1c7d20` is a substantial 728-byte routine.
-
-Resolved Xlib/Xt call targets:
+Resolved external calls:
 
 ```
 XGetWMColormapWindows
@@ -183,48 +230,54 @@ XListInstalledColormaps
 XInstallColormap
 ```
 
-Binary-proven behavior:
+Recovered behavior:
 
-- requires private `+0x10c` to be non-NULL.
-- uses the realized widget window and the stored ancestor/shell window.
-- calls `XGetWMColormapWindows()` on the ancestor/shell window.
-- searches the returned list for the widget's own window and avoids duplicate insertion.
-- when insertion is required, allocates a new `(count + 1)` window array with `XtMalloc()`.
-- inserts the widget window at element 0 and copies the old list after it.
-- calls `XSetWMColormapWindows()` with the updated list.
-- frees temporary Xlib memory with `XFree()` and Xt memory with `XtFree()` as appropriate.
-- if private byte `+0x110` is set, calls `XListInstalledColormaps()` for the widget window and stores its returned array at `+0x114` and count at `+0x118`.
-- then calls `XInstallColormap()` on the widget's colormap.
-- sets byte `+0x11c` to 1 before returning.
+- require stored shell `+0x10c`.
+- obtain display, widget window, and shell window.
+- call `XGetWMColormapWindows()` on the shell.
+- if the property exists, allocate a new `(count + 1)` array with `XtMalloc()`, prepend the widget window, append the old list, and call `XSetWMColormapWindows()` with `count + 1`.
+- free the temporary Xt array with `XtFree()` and the Xlib-owned old array with `XFree()`.
+- if no WM list exists, create a two-element local list containing the widget window followed by the shell window and install that property.
+- if `shellOverrideRedirect` is true, call `XListInstalledColormaps()` for the widget window, store the returned array/count at `+0x114/+0x118`, then call `XInstallColormap()` for the widget colormap.
+- set `colormapInstalled` true.
 
-Thus the original routine manages both ICCCM `WM_COLORMAP_WINDOWS` membership and, conditionally, the server's currently installed colormap set.
+The routine does not contain the duplicate-window suppression that an earlier reconstruction assumed; the binary simply prepends the widget window when the property already exists.
 
-## Colormap uninstallation
+## SgVisualDrawingAreaUninstallColormap
 
-`SgVisualDrawingAreaUninstallColormap` at `0x0b1c3368` is the inverse path.
+Address: `0x0b1c3368`, size 572 bytes.
 
-Resolved behavior:
+Recovered behavior:
 
-- requires `+0x10c` to be non-NULL.
-- calls `XGetWMColormapWindows()` for the stored ancestor/shell window.
-- searches for this widget's window.
-- when found, compacts the list in place to remove it.
-- calls `XSetWMColormapWindows()` with `count - 1`.
-- frees the Xlib-owned WM list with `XFree()`.
-- if private `+0x110` is set, iterates the saved colormap array at `+0x114` for `+0x118` entries and calls `XInstallColormap()` for each saved colormap.
-- frees `+0x114` with `XFree()` after restoring the saved installed-colormap set.
-- clears byte `+0x11c` before returning.
+- require stored shell `+0x10c`.
+- call `XGetWMColormapWindows()` on the shell.
+- search for the widget window.
+- when found, compact the array in place and call `XSetWMColormapWindows()` with `count - 1`.
+- free the Xlib-owned WM list with `XFree()`.
+- if `shellOverrideRedirect` is true, reinstall every colormap saved at `+0x114` for `+0x118` entries using `XInstallColormap()`.
+- free the saved array with `XFree()`.
+- clear `colormapInstalled`.
 
-This confirms `+0x114/+0x118` are saved server-installed colormaps used only to restore pre-install state.
+This is the IRIX 6.5.0 behavior. Older SGI documentation describes direct uninstall in more general terms, but the target binary preserves/restores the server's previously installed colormap set instead.
 
 ## Constructor
 
-`SgCreateVisualDrawingArea` at `0x0b22a7b8` is a thin wrapper around the Xt widget creation API using `sgVisualDrawingAreaWidgetClass`.
+`SgCreateVisualDrawingArea` at `0x0b22a7b8` is a thin `XtCreateWidget()` wrapper using `sgVisualDrawingAreaWidgetClass`. There is no additional constructor policy.
 
-No extra constructor policy should be invented in the public creation function.
+## Reconstruction status
 
-## Current reconstruction warning
+The original crashy implementation built a subclass by copying the host's live `XmDrawingAreaClassRec` with `memcpy()` and mutating the copy. That approach has been removed.
 
-The initial portable implementation that copied the host `XmDrawingAreaClassRec` and appended only the three resources is not binary-faithful and is expected to be unsafe. The original class has additional private instance state, its own direct `XtCreateWindow` realize path, a Motif class extension, a dither-background subresource path, and substantial colormap-window/server-colormap management.
+The current reconstruction uses:
 
-Do not treat the current portable class as complete until the private `+0x110` resource is named, the class extension is matched against the IRIX Motif ABI, and the host-side class record is rebuilt from the actual recovered contract rather than a mutated superclass copy.
+- a statically defined subclass class record;
+- the recovered zero 12-byte Sg class part;
+- a native `XmBaseClassExtRec` version 2 matching the original extension semantics;
+- the recovered three public resources;
+- the complete private instance state used by the original routines;
+- the direct `XtCreateWindow()` realize path and exact extra X attributes;
+- `XtNoverrideRedirect` shell handling;
+- the recovered WM colormap-window and server-colormap save/restore behavior;
+- the recovered TrueColor/StaticColor `50_foreground` dither path.
+
+This is the first Sgm widget intended to be behaviorally usable rather than merely symbol-compatible. The remaining validation step is execution against the MaXX/OpenMotif runtime through the Pandora probe.
