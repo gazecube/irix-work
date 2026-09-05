@@ -150,7 +150,7 @@ void reportSgVisualState(Widget widget)
             stderr,
             "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n",
             static_cast<unsigned long>(XVisualIDFromVisual(visual)),
-            visual->class,
+            visual->c_class,
             depth,
             static_cast<unsigned long>(colormap));
     }
