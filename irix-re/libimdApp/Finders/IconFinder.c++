@@ -1,6 +1,7 @@
 #include "IconFinder.h"
 
 #include "ImdIconPanel.h"
+#include "ArgList.h"
 #include <Sgm/Finder.h>
 
 #include <Xm/Frame.h>
@@ -20,17 +21,19 @@ ImdIconFinder::ImdIconFinder(
     /*
      * Binary-confirmed at ImdIconFinder::ImdIconFinder, 0x0963ec5c:
      * XtCreateWidget(name, sgFinderWidgetClass, parent, args, count) supplies
-     * the VkComponent base widget. The original args come from ImdArgList;
-     * until that type is reconstructed this stage passes an empty list. We
-     * retain the exact creation route instead of hiding it behind
-     * SgCreateFinder.
+     * the VkComponent base widget. The original arguments are carried through
+     * ImdArgList. ArgList.c++ and the ImdArgList method names are recovered
+     * from the original libimdIconPanel.so DWARF; the exact constructor-time
+     * resource population is still under reconstruction, so this list is
+     * intentionally empty rather than inventing resources.
      */
+    ImdArgList args;
     _baseWidget = XtCreateWidget(
         const_cast<char *>(name ? name : "iconFinder"),
         sgFinderWidgetClass,
         parent,
-        0,
-        0);
+        args.getArgList(),
+        args.getNumArgs());
 
     if (!_baseWidget)
         return;
