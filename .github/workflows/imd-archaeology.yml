@@ -53,9 +53,6 @@ jobs:
           echo '--- libimdIconPanel ---'
           mips-linux-gnu-readelf -Ws "$IMDICONPANEL" | c++filt | grep -E 'ImdArgList|ImdModelBasedIconPanel|ImdSingleViewLayout|AdoptRenderer|AdoptLayout' || true
 
-          echo '--- raw ImdArgList symbols ---'
-          mips-linux-gnu-nm -n "$IMDICONPANEL" | grep 'ImdArgList' || true
-
       - name: Map dynamic GOT calls
         run: |
           # N32 calls imported functions through the GOT. readelf's MIPS
@@ -72,8 +69,6 @@ jobs:
 
       - name: Disassemble ImdIconFinder constructor
         run: |
-          # dump the complete binary-confirmed constructor. the next pass
-          # correlates each jal/jalr target with strings and DWARF names.
           mips-linux-gnu-objdump -drC \
             --start-address=0x0963ec5c \
             --stop-address=0x0963f350 \
@@ -123,39 +118,62 @@ jobs:
 
       - name: Disassemble original ImdArgList
         run: |
-          # ArgList is the strongest lead for the negative small resource-name
-          # values passed by the original IconFinder constructor. dump the
-          # original implementation before translating any of those values.
-          mips-linux-gnu-objdump -drC "$IMDICONPANEL" > /tmp/iconpanel-dis.txt
-
+          # these addresses come directly from the original dynamic symbol
+          # table. use them rather than relying on modern demangler spelling.
           echo '--- ImdArgList constructor ---'
-          grep -F -A80 '<ImdArgList::ImdArgList()>' /tmp/iconpanel-dis.txt | head -100 || true
-
-          echo '--- ImdArgList clear ---'
-          grep -F -A120 '<ImdArgList::clear()>' /tmp/iconpanel-dis.txt | head -140 || true
-
-          echo '--- ImdArgList getArgList ---'
-          grep -F -A80 '<ImdArgList::getArgList()>' /tmp/iconpanel-dis.txt | head -100 || true
-
-          echo '--- ImdArgList getNumArgs ---'
-          grep -F -A80 '<ImdArgList::getNumArgs()>' /tmp/iconpanel-dis.txt | head -100 || true
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c180 \
+            --stop-address=0x0967c23c \
+            "$IMDICONPANEL"
 
           echo '--- ImdArgList setArg ---'
-          grep -F -A180 '<ImdArgList::setArg(char*, long)>' /tmp/iconpanel-dis.txt | head -210 || true
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c23c \
+            --stop-address=0x0967c2b4 \
+            "$IMDICONPANEL"
 
-          echo '--- ImdArgList setValues ---'
-          grep -F -A140 '<ImdArgList::setValues(_WidgetRec*)>' /tmp/iconpanel-dis.txt | head -170 || true
+          echo '--- ImdArgList getArgList ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c2b4 \
+            --stop-address=0x0967c40c \
+            "$IMDICONPANEL"
+
+          echo '--- ImdArgList getNumArgs ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c40c \
+            --stop-address=0x0967c450 \
+            "$IMDICONPANEL"
 
           echo '--- ImdArgList getValues ---'
-          grep -F -A180 '<ImdArgList::getValues' /tmp/iconpanel-dis.txt | head -210 || true
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c450 \
+            --stop-address=0x0967c4b4 \
+            "$IMDICONPANEL"
+
+          echo '--- ImdArgListImpl clear ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c4b4 \
+            --stop-address=0x0967c5bc \
+            "$IMDICONPANEL"
+
+          echo '--- ImdArgList clear ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c5bc \
+            --stop-address=0x0967c5f0 \
+            "$IMDICONPANEL"
+
+          echo '--- ImdArgList setValues ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967d06c \
+            --stop-address=0x0967d0d0 \
+            "$IMDICONPANEL"
 
       - name: Disassemble ModelBasedIconPanel constructor
         run: |
-          echo '--- constructor symbols ---'
-          mips-linux-gnu-nm -nC "$IMDICONPANEL" | grep 'ImdModelBasedIconPanel::ImdModelBasedIconPanel' || true
-
-          echo '--- constructor code ---'
-          grep -F -A260 '<ImdModelBasedIconPanel::ImdModelBasedIconPanel' /tmp/iconpanel-dis.txt | head -300 || true
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09684610 \
+            --stop-address=0x09685f6c \
+            "$IMDICONPANEL"
 
       - name: Dump constructor strings and relocations
         run: |
