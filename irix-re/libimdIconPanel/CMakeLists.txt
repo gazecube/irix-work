@@ -32,6 +32,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
    IMDICONPANEL_MOTIF_LIBRARY AND
    IMDICONPANEL_XT_LIBRARY)
     add_library(imdIconPanel SHARED
+        ArgList.c++
         ImdIconPanel.c++
     )
 
