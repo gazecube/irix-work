@@ -86,6 +86,13 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     set_property(TARGET Sgm PROPERTY C_STANDARD 99)
     set_property(TARGET Sgm PROPERTY C_STANDARD_REQUIRED ON)
 
+    add_executable(sgm_visual_drawing_area_smoke
+        SgVisualDrawingAreaSmoke.c
+    )
+    target_link_libraries(sgm_visual_drawing_area_smoke PRIVATE Sgm)
+    set_property(TARGET sgm_visual_drawing_area_smoke PROPERTY C_STANDARD 99)
+    set_property(TARGET sgm_visual_drawing_area_smoke PROPERTY C_STANDARD_REQUIRED ON)
+
     message(STATUS "Building reconstructed IRIX libSgm.so.1 compatibility library")
 else()
     message(STATUS "Motif/Xt/X11 not found; skipping reconstructed libSgm")
