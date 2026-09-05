@@ -47,7 +47,11 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
             "${IMDICONPANEL_XT_LIBRARY}"
     )
 
-    if(CMAKE_DL_LIBS)
+    if(TARGET Sgm)
+        target_compile_definitions(imdIconPanel PRIVATE IMDICONPANEL_HAVE_RECONSTRUCTED_SGM=1)
+        target_link_libraries(imdIconPanel PUBLIC Sgm)
+        message(STATUS "using reconstructed libSgm for ImdViewPanel superclass")
+    elseif(CMAKE_DL_LIBS)
         target_compile_definitions(imdIconPanel PRIVATE IMDICONPANEL_HAVE_DLFCN=1)
         target_link_libraries(imdIconPanel PUBLIC "${CMAKE_DL_LIBS}")
         message(STATUS "dynamic loader available; ImdViewPanel will probe for SgVisualDrawingArea at runtime")
