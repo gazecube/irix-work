@@ -162,6 +162,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
             ../clogin/PandoraViewKit.c++
             ../clogin/PandoraPresentation.c++
             ../clogin/FtiVectorIcon.c++
+            ../clogin/ImdFtrVisualCompat.c++
             ../clogin/PandoraViewKitProbe.c++
             ../clogin/Base/PwdNameList.c++
         )
