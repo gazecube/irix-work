@@ -3,6 +3,7 @@
 #include <Protocol/GraphicsOutput.h>
 
 #include "drawbackground_bringup.h"
+#include "input_bringup.h"
 
 EFI_STATUS
 EFIAPI
@@ -13,8 +14,6 @@ UefiMain(
 {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop;
-    UINTN Index;
-    EFI_INPUT_KEY Key;
 
     (VOID)ImageHandle;
 
@@ -27,14 +26,7 @@ UefiMain(
     if (EFI_ERROR(Status))
         return Status;
 
-    /* First visual checkpoint: keep the rendered PROM screen visible until
-     * the tester explicitly presses a key.  Returning immediately hands
-     * control back to OVMF and hides the frame before it can be inspected. */
-    if (SystemTable && SystemTable->ConIn && SystemTable->ConIn->WaitForKey) {
-        Status = gBS->WaitForEvent(1, &SystemTable->ConIn->WaitForKey, &Index);
-        if (!EFI_ERROR(Status))
-            (VOID)SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &Key);
-    }
-
-    return EFI_SUCCESS;
+    /* Feed firmware keyboard and pointer state into the original SGI GUI
+     * event machinery.  Escape returns to the containing UEFI firmware. */
+    return ArcsRunInputBringup(SystemTable);
 }
