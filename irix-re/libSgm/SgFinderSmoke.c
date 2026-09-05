@@ -135,6 +135,26 @@ int main(int argc, char **argv)
     require(activateCount == activateBeforeHistory + 1,
             "history selection did not emit Finder activate callback");
 
+    fprintf(stderr, "SgFinder smoke: duplicate history promotion\n");
+    SgFinderAddHistoryItem(finder, "/history/c");
+    historyItem = XtNameToWidget(history, "historyItem0");
+    require(historyItem != NULL,
+            "promoted duplicate history item missing");
+    activateBeforeHistory = activateCount;
+    XtCallCallbacks(historyItem, XmNactivateCallback, NULL);
+    value = SgFinderGetTextString(finder);
+    require(value != NULL,
+            "promoted duplicate left text NULL");
+    require(strcmp(value, "/history/c") == 0,
+            "duplicate history item was not promoted to the front");
+    XtFree(value);
+    require(activateCount == activateBeforeHistory + 1,
+            "promoted duplicate did not emit Finder activate callback");
+    require(XtNameToWidget(history, "historyItem5") != NULL,
+            "duplicate promotion changed six-entry history size");
+    require(XtNameToWidget(history, "historyItem6") == NULL,
+            "duplicate promotion grew history beyond six entries");
+
     SgFinderClearHistory(finder);
     require(XtNameToWidget(history, "historyItem0") == NULL,
             "clear history left menu items behind");

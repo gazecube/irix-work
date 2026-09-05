@@ -585,10 +585,12 @@ void SgFinderAddHistoryItem(Widget finder, char *text)
         return;
 
     /*
-     * Reconstructed host policy: keep the most recently added item first,
-     * promote duplicates, and retain at most six entries. The six-entry cap
-     * is documented SGI behavior; ordering/duplicate policy still needs the
-     * original Finder/DynaMenu binary path for exact confirmation.
+     * Binary-confirmed IRIX policy: convert the candidate to XmString, remove
+     * an equal existing item, evict count - 1 when maxHistoryCount is full,
+     * then insert the candidate at index zero and rebuild the menu.
+     *
+     * This host representation stores UTF-8 strings instead of XmStrings, but
+     * preserves the original newest-first and duplicate-promotion semantics.
      */
     found = rec->finder.history_count;
     for (i = 0; i < rec->finder.history_count; ++i)
