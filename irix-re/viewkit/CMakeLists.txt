@@ -177,6 +177,26 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
             viewklass
             imdIconPanel
         )
+
+        # The MaXX runtime also ships a minimal libSgm.so.1. Because both that
+        # library and the reconstruction intentionally use the historical
+        # SONAME, ordinary loader search order can select MaXX's stub even
+        # though this executable linked against our reconstructed Sgm target.
+        #
+        # Put the build-tree libSgm directory first and, on ELF/GNU linkers,
+        # emit DT_RPATH rather than DT_RUNPATH so an inherited MaXX
+        # LD_LIBRARY_PATH cannot silently replace the library under test.
+        if(TARGET Sgm)
+            set_property(TARGET pandora_viewkit_probe PROPERTY
+                BUILD_RPATH "$ORIGIN/../libSgm")
+            set_property(TARGET pandora_viewkit_probe PROPERTY
+                BUILD_RPATH_USE_ORIGIN TRUE)
+            if(UNIX AND NOT APPLE)
+                target_link_options(pandora_viewkit_probe PRIVATE
+                    "-Wl,--disable-new-dtags")
+            endif()
+        endif()
+
         set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
         set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
     else()
