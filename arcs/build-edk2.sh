@@ -15,6 +15,7 @@ if [ ! -f "$HERE/vendor/sgibootscreen-src/src/ip19.c" ]; then
 fi
 
 "$HERE/prepare-original-fonts.sh"
+sh "$HERE/prepare-original-pcbm.sh"
 
 rm -rf "$WORKSPACE/ArcsPkg"
 cp -a "$HERE" "$WORKSPACE/ArcsPkg"
