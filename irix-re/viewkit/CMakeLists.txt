@@ -157,7 +157,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         set(PANDORA_USER_TOKEN_FTI "")
     endif()
 
-    if(TARGET imdIconPanel)
+    if(TARGET imdIconPanel AND TARGET imdApp)
         add_executable(pandora_viewkit_probe
             ../clogin/PandoraViewKit.c++
             ../clogin/PandoraPresentation.c++
@@ -169,6 +169,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         target_include_directories(pandora_viewkit_probe PRIVATE
             ../clogin
             ../libimdIconPanel
+            ../libimdApp
         )
         target_compile_definitions(pandora_viewkit_probe PRIVATE
             "PANDORA_APP_DEFAULTS_PATH=\"${PANDORA_APP_DEFAULTS_DIR}/%N\""
@@ -177,6 +178,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         target_link_libraries(pandora_viewkit_probe PRIVATE
             viewklass
             imdIconPanel
+            imdApp
         )
 
         # The MaXX runtime also ships a minimal libSgm.so.1. Because both that
@@ -201,7 +203,7 @@ if(VIEWKLASS_INCLUDE_DIR AND VIEWKLASS_LIBRARY AND MOTIF_LIBRARY AND
         set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD 11)
         set_property(TARGET pandora_viewkit_probe PROPERTY CXX_STANDARD_REQUIRED ON)
     else()
-        message(STATUS "libimdIconPanel unavailable; skipping Pandora probe")
+        message(STATUS "libimdIconPanel/libimdApp unavailable; skipping Pandora probe")
     endif()
 
     message(STATUS "ViewKlass enabled: ${VIEWKLASS_LIBRARY}")
