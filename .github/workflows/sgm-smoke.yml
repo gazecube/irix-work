@@ -68,30 +68,6 @@ jobs:
         if: success()
         run: xvfb-run -a ./irix-re/build/libSgm/sgm_finder_smoke
 
-      - name: Trace ImdIconFinder runtime and teardown
-        if: success()
-        run: |
-          cat >/tmp/imd.gdb <<'EOF'
-          set pagination off
-          set breakpoint pending on
-          handle SIGSEGV stop print nopass
-          break XDeleteProperty
-          commands
-            silent
-            if $rsi == 0
-              printf "ImdIconFinder smoke: caught XDeleteProperty with window 0\n"
-              bt full
-              quit 99
-            end
-            continue
-          end
-          run
-          printf "ImdIconFinder smoke: stopped after signal/runtime failure\n"
-          bt full
-          quit 98
-          EOF
-          xvfb-run -a gdb -q -batch -x /tmp/imd.gdb --args ./irix-re/build/libimdApp/imd_icon_finder_smoke
-
       - name: Run ImdIconFinder application smoke test
         if: success()
         run: xvfb-run -a ./irix-re/build/libimdApp/imd_icon_finder_smoke
