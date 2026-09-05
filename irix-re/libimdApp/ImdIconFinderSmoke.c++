@@ -2,6 +2,7 @@
 
 #include <Sgm/Finder.h>
 #include <Xm/Xm.h>
+#include <Xm/Display.h>
 #include <X11/Shell.h>
 
 #include <cstdio>
@@ -28,6 +29,15 @@ int main(int argc, char **argv)
         argv,
         0,
         NULL);
+
+    /*
+     * Original ImdIconFinder is a ViewKit component and normally enters here
+     * after Motif/ViewKit has initialized the per-display XmDisplay object.
+     * The bare smoke harness must establish the same prerequisite before the
+     * first SgFinder resource conversion.
+     */
+    Widget xmDisplay = XmGetXmDisplay(XtDisplay(shell));
+    require(xmDisplay != 0, "XmGetXmDisplay failed during application setup");
 
     ImdIconFinder finder("iconFinder", shell);
     Widget widget = finder.getWidget();
