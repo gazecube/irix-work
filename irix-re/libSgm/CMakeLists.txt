@@ -44,6 +44,7 @@ find_library(SGM_X11_LIBRARY
 if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LIBRARY)
     set(CMAKE_REQUIRED_INCLUDES "${SGM_MOTIF_INCLUDE_DIR}")
     check_include_file("Xm/DrawingAP.h" SGM_HAVE_DRAWINGAP_H)
+    check_include_file("Xm/BaseClassP.h" SGM_HAVE_BASECLASSP_H)
     unset(CMAKE_REQUIRED_INCLUDES)
 
     add_library(Sgm SHARED
@@ -59,11 +60,14 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
             "${SGM_MOTIF_INCLUDE_DIR}"
     )
 
-    if(SGM_HAVE_DRAWINGAP_H)
-        target_compile_definitions(Sgm PRIVATE SGM_HAVE_DRAWINGAP_H=1)
-        message(STATUS "private Motif DrawingArea headers found; building native SgVisualDrawingArea subclass")
+    if(SGM_HAVE_DRAWINGAP_H AND SGM_HAVE_BASECLASSP_H)
+        target_compile_definitions(Sgm PRIVATE
+            SGM_HAVE_DRAWINGAP_H=1
+            SGM_HAVE_BASECLASSP_H=1
+        )
+        message(STATUS "private Motif DrawingArea/BaseClass headers found; building native SgVisualDrawingArea subclass")
     else()
-        message(STATUS "private Motif DrawingArea headers missing; SgVisualDrawingArea will use compatibility fallback")
+        message(STATUS "private Motif DrawingArea/BaseClass headers incomplete; SgVisualDrawingArea will use compatibility fallback")
     endif()
 
     target_link_libraries(Sgm
