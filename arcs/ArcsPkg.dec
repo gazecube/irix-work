@@ -7,3 +7,4 @@
 [Includes]
   sgisrc/include
   uefi/include
+  vendor/sgibootscreen-src/include
