@@ -13,7 +13,7 @@ unsigned char glxDrawClassRec[120];
 unsigned char glxMDrawClassRec[152];
 unsigned char sgDropPocketClassRec[156];
 unsigned char sgDynaMenuClassRec[204];
-unsigned char sgFinderClassRec[204];
+/* sgFinderClassRec is now a real native class record. */
 unsigned char sgZbTextClassRec[204];
 unsigned char sgZoomBarClassRec[156];
 unsigned char sgColumnClassRec[224];
