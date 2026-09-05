@@ -1,12 +1,19 @@
 #include <Uefi.h>
 #include <Library/BaseMemoryLib.h>
 
-#include <style.h>
 #include <stand_htport.h>
 
 #include "../vendor/sgibootscreen-src/include/types.h"
 #include "../vendor/sgibootscreen-src/include/fonts.h"
 #include "font_bridge.h"
+
+enum {
+    ArcsFontScrB18 = 0,
+    ArcsFontSpecial = 1,
+    ArcsFontNcenB18 = 2,
+    ArcsFontHelvR10 = 3,
+    ArcsFontCount = 4
+};
 
 static struct fontinfo ScrInfo[256];
 static struct fontinfo NcenInfo[256];
@@ -42,15 +49,16 @@ ConvertFont(
 }
 
 void
-ArcsInitBringupFonts(struct htp_font Fonts[NUMFONTS])
+ArcsInitBringupFonts(struct htp_font Fonts[4])
 {
-    ZeroMem(Fonts, sizeof(struct htp_font) * NUMFONTS);
+    ZeroMem(Fonts, sizeof(struct htp_font) * ArcsFontCount);
 
-    ConvertFont(&ScrB18, &Fonts[ScrB18], ScrInfo);
-    ConvertFont(&ncenB18, &Fonts[ncenB18], NcenInfo);
-    ConvertFont(&helvR10, &Fonts[helvR10], HelvInfo);
+    ConvertFont(&ScrB18, &Fonts[ArcsFontScrB18], ScrInfo);
+    ConvertFont(&ncenB18, &Fonts[ArcsFontNcenB18], NcenInfo);
+    ConvertFont(&helvR10, &Fonts[ArcsFontHelvR10], HelvInfo);
 
     /* The first drawBackground() milestone does not emit the standalone
      * control glyphs that use the Special slot.  Keep that slot empty until
      * the original special.h table is imported verbatim. */
+    (VOID)ArcsFontSpecial;
 }
