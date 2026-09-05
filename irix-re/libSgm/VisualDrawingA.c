@@ -56,8 +56,8 @@ typedef struct
 static XtResource visualDrawingAreaResources[] =
 {
     {
-        XtNvisual,
-        XtCVisual,
+        "visual",
+        "Visual",
         XtRVisual,
         sizeof(Visual *),
         XtOffsetOf(SgVisualDrawingAreaRecCompat,
