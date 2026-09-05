@@ -368,16 +368,6 @@ void SgVisualDrawingAreaInstallColormap(Widget w)
                               &old_windows,
                               &count))
     {
-        for (i = 0; i < count; ++i)
-        {
-            if (old_windows[i] == widget_window)
-            {
-                XFree(old_windows);
-                sg->colormap_installed = True;
-                return;
-            }
-        }
-
         new_windows = (Window *)XtMalloc((Cardinal)(count + 1) *
                                          sizeof(Window));
         if (new_windows)
