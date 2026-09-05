@@ -44,7 +44,7 @@ jobs:
       - name: Build ARCS graphical bring-up EFI
         env:
           WORKSPACE: ${{ github.workspace }}/edk2
-          TOOLCHAIN: GCC5
+          TOOLCHAIN: GCC
           TARGET: DEBUG
         run: |
           chmod +x arcs/build-edk2.sh arcs/prepare-original-fonts.sh
@@ -53,7 +53,7 @@ jobs:
       - name: Collect EFI image
         run: |
           mkdir -p out
-          cp edk2/Build/ArcsPkg/DEBUG_GCC5/X64/ArcsGfxBringup.efi out/ARCS.efi
+          cp edk2/Build/ArcsPkg/DEBUG_GCC/X64/ArcsGfxBringup.efi out/ARCS.efi
 
       - name: Upload EFI artifact
         uses: actions/upload-artifact@v4
