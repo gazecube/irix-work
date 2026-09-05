@@ -58,7 +58,7 @@ The original n32 class record is 208 bytes. The beginning of the record maps cle
 
 The remaining class parts inherit from `XmDrawingArea` except where later binary work proves otherwise.
 
-The object at `0x0b254310` is consistent with an Xt/Motif class extension record. It begins:
+The object at `0x0b254310` is consistent with a Motif base-class extension record. Its first fields are:
 
 ```
 +0x00  0
@@ -67,7 +67,7 @@ The object at `0x0b254310` is consistent with an Xt/Motif class extension record
 +0x0c  0x78
 ```
 
-The exact extension type and all hooks still need to be decoded before claiming binary compatibility.
+The extension is exactly 0x78 bytes long. Most fields are zero; a single inherited/runtime hook pointer is present near the tail. The exact Motif private type still needs to be matched against the corresponding IRIX Motif ABI before naming individual extension slots.
 
 ## Resource table
 
@@ -101,80 +101,121 @@ The widget is not just an `XmDrawingArea` plus the three resources. The original
 +0x104  Visual * resource
 +0x108  installColormap resource
 +0x109  ditherBackground resource
-+0x10c  Widget-like pointer used by colormap install/uninstall paths
-+0x110  Boolean-like state
-+0x114  pointer to Window array / colormap-window bookkeeping
-+0x118  integer count
++0x10c  ancestor/shell-like Widget pointer used by WM colormap management
++0x110  Boolean-like private policy/state loaded with XtGetValues during realize
++0x114  Window * saved installed-colormap list
++0x118  int saved installed-colormap count
 +0x11c  Boolean-like installed/state flag
-+0x120  pointer used by initialize/dither path
++0x120  String-like dither color subresource
 ```
 
-The semantic names for `+0x10c` through `+0x120` are not fully proven yet. Do not rename them as final fields until call targets and data flow are resolved.
+The descriptions for `+0x10c`, `+0x110`, and `+0x11c` are intentionally conservative until their resource names/private helper semantics are fully recovered.
 
 ## Initialize
 
 Class `initialize` is at `0x0b22a5b0`.
 
-Proven behavior from disassembly:
+Resolved behavior from disassembly and GOT entries:
 
 - clears byte `+0x11c` immediately.
 - reads `ditherBackground` at `+0x109`.
 - reads the `Visual *` at `+0x104`.
-- may clear `ditherBackground` when the visual does not meet the expected visual-class conditions.
-- inspects the widget colormap/background-related core fields.
-- uses private pointer `+0x120` during the dither/background setup path.
-- may set `ditherBackground` back to 1 after successfully constructing replacement background state.
+- may clear `ditherBackground` when the selected Visual does not meet the expected visual-class/depth conditions.
+- calls `XtGetSubresources()` with one private subresource whose instance offset is `+0x120`.
+- the `+0x120` value is passed to `XAllocNamedColor()` as a color-name string.
+- geometry/color comparisons are then made against the widget's current colormap/background state.
+- if a replacement dither background is required, calls `XAllocColor()` and then `XmGetPixmapByDepth()`.
+- the literal pixmap name passed to `XmGetPixmapByDepth()` is exactly `"50_foreground"`.
+- the returned pixmap is stored in the widget's core background-pixmap field.
+- when pixmap creation succeeds, `ditherBackground` is set back to 1.
 
-The exact called Xlib/Xt routines must be resolved from the GOT before reproducing this path.
+Resolved external calls used by this path include:
+
+```
+XtGetSubresources
+XAllocNamedColor
+XAllocColor
+XmGetPixmapByDepth
+```
+
+This proves `ditherBackground` is an actual SGI/Motif dither construction path rather than a passive flag.
 
 ## Realize
 
 Class `realize` is at `0x0b1c3264`.
 
-Proven behavior:
+Resolved behavior:
 
 - forces nonzero width and height before creating the window.
-- calls an Xt window-creation routine using the configured `Visual *` at `+0x104`.
-- walks ancestors to find a shell-like parent and stores it at private `+0x10c`.
-- initializes additional colormap bookkeeping beginning at `+0x110`.
+- sets window-attribute bits before creation.
+- calls `XtCreateWindow()` directly, passing the configured `Visual *` at `+0x104`.
+- walks ancestors to find/store a shell-like parent at `+0x10c`.
+- calls `XtGetValues()` for one Boolean-like resource and stores it at `+0x110`.
 - if `installColormap` at `+0x108` is true, calls `SgVisualDrawingAreaInstallColormap(this)`.
 
-This is materially different from simply calling the `XmDrawingArea` superclass realize method.
+This is materially different from calling the `XmDrawingArea` superclass realize method.
 
 ## Destroy
 
 Class `destroy` is at `0x0b1c7ff8`.
 
-Proven behavior:
+Resolved behavior is very small and specific:
 
 - tests byte `+0x11c`.
-- when set, calls an internal cleanup routine.
-- returns without invoking an explicitly stored subclass destroy hook.
+- when set, calls `SgVisualDrawingAreaUninstallColormap(this)`.
+- otherwise returns immediately.
 
-The cleanup routine and exact ownership of `+0x114/+0x118/+0x120` remain to be resolved.
+No separate ownership cleanup is performed by the class destroy entry point beyond the uninstall path.
 
 ## Colormap installation
 
-`SgVisualDrawingAreaInstallColormap` at `0x0b1c7d20` is a substantial 728-byte routine, not a simple `XInstallColormap` wrapper.
+`SgVisualDrawingAreaInstallColormap` at `0x0b1c7d20` is a substantial 728-byte routine.
 
-Proven behavior includes:
+Resolved Xlib/Xt call targets:
+
+```
+XGetWMColormapWindows
+XSetWMColormapWindows
+XtMalloc
+XtFree
+XFree
+XListInstalledColormaps
+XInstallColormap
+```
+
+Binary-proven behavior:
 
 - requires private `+0x10c` to be non-NULL.
-- obtains and edits a WM colormap-window list associated with the shell/window hierarchy.
-- avoids duplicate widget windows.
-- allocates a new list when insertion is required.
-- stores bookkeeping at `+0x114` and `+0x118`.
-- sets byte `+0x11c` on successful installation/update.
+- uses the realized widget window and the stored ancestor/shell window.
+- calls `XGetWMColormapWindows()` on the ancestor/shell window.
+- searches the returned list for the widget's own window and avoids duplicate insertion.
+- when insertion is required, allocates a new `(count + 1)` window array with `XtMalloc()`.
+- inserts the widget window at element 0 and copies the old list after it.
+- calls `XSetWMColormapWindows()` with the updated list.
+- frees temporary Xlib memory with `XFree()` and Xt memory with `XtFree()` as appropriate.
+- if private byte `+0x110` is set, calls `XListInstalledColormaps()` for the widget window and stores its returned array at `+0x114` and count at `+0x118`.
+- then calls `XInstallColormap()` on the widget's colormap.
+- sets byte `+0x11c` to 1 before returning.
 
-`SgVisualDrawingAreaUninstallColormap` at `0x0b1c3368` performs the inverse operation:
+Thus the original routine manages both ICCCM `WM_COLORMAP_WINDOWS` membership and, conditionally, the server's currently installed colormap set.
 
-- obtains the current WM colormap-window list.
-- removes this widget's window if present.
-- updates the shell's list.
-- frees temporary/list storage.
-- clears `+0x11c`.
+## Colormap uninstallation
 
-The exact Xlib calls will be named after GOT resolution.
+`SgVisualDrawingAreaUninstallColormap` at `0x0b1c3368` is the inverse path.
+
+Resolved behavior:
+
+- requires `+0x10c` to be non-NULL.
+- calls `XGetWMColormapWindows()` for the stored ancestor/shell window.
+- searches for this widget's window.
+- when found, compacts the list in place to remove it.
+- calls `XSetWMColormapWindows()` with `count - 1`.
+- frees the Xlib-owned WM list with `XFree()`.
+- if private `+0x110` is set, iterates the saved colormap array at `+0x114` for `+0x118` entries and calls `XInstallColormap()` for each saved colormap.
+- frees `+0x114` with `XFree()` after restoring the saved installed-colormap set.
+- clears byte `+0x11c` before returning.
+
+This confirms `+0x114/+0x118` are saved server-installed colormaps used only to restore pre-install state.
 
 ## Constructor
 
@@ -184,6 +225,6 @@ No extra constructor policy should be invented in the public creation function.
 
 ## Current reconstruction warning
 
-The initial portable implementation that copied the host `XmDrawingAreaClassRec` and appended only the three resources is not binary-faithful and is expected to be unsafe. The original class has additional private instance state, its own realize path, a nontrivial class extension, and substantial colormap-window management.
+The initial portable implementation that copied the host `XmDrawingAreaClassRec` and appended only the three resources is not binary-faithful and is expected to be unsafe. The original class has additional private instance state, its own direct `XtCreateWindow` realize path, a Motif class extension, a dither-background subresource path, and substantial colormap-window/server-colormap management.
 
-Do not treat the current portable class as complete until the remaining call targets, extension record, and private state semantics are recovered.
+Do not treat the current portable class as complete until the private `+0x110` resource is named, the class extension is matched against the IRIX Motif ABI, and the host-side class record is rebuilt from the actual recovered contract rather than a mutated superclass copy.
