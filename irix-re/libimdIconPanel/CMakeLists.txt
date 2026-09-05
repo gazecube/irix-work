@@ -31,7 +31,7 @@ find_library(IMDICONPANEL_XT_LIBRARY
 if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
    IMDICONPANEL_MOTIF_LIBRARY AND
    IMDICONPANEL_XT_LIBRARY)
-    add_library(imdIconPanel STATIC
+    add_library(imdIconPanel SHARED
         ImdIconPanel.c++
     )
 
@@ -59,6 +59,11 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
         message(STATUS "dynamic loader unavailable; reconstructed ImdViewPanel will use XmDrawingArea")
     endif()
 
+    set_target_properties(imdIconPanel PROPERTIES
+        OUTPUT_NAME imdIconPanel
+        VERSION 1.0.0
+        SOVERSION 1
+    )
     set_property(TARGET imdIconPanel PROPERTY CXX_STANDARD 11)
     set_property(TARGET imdIconPanel PROPERTY CXX_STANDARD_REQUIRED ON)
 else()

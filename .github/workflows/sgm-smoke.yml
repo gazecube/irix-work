@@ -6,6 +6,8 @@ on:
       - irix-re
     paths:
       - 'irix-re/libSgm/**'
+      - 'irix-re/libimdApp/**'
+      - 'irix-re/libimdIconPanel/**'
       - 'irix-re/clogin/ImdFtrVisualCompat.*'
       - 'irix-re/CMakeLists.txt'
       - '.github/workflows/sgm-smoke.yml'
@@ -32,7 +34,12 @@ jobs:
         run: cmake -S irix-re -B irix-re/build -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build smoke tests
-        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke sgm_finder_smoke -j2
+        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke sgm_finder_smoke imd_icon_finder_smoke -j2
+
+      - name: Verify application linkage
+        run: |
+          readelf -d irix-re/build/libimdApp/libimdApp.so.1 | grep 'Shared library: \[libSgm.so.1\]'
+          readelf -d irix-re/build/libimdApp/libimdApp.so.1 | grep 'Shared library: \[libimdIconPanel.so.1\]'
 
       - name: Trace invalid XDeleteProperty
         run: |
@@ -60,3 +67,7 @@ jobs:
       - name: Run Finder smoke test
         if: success()
         run: xvfb-run -a ./irix-re/build/libSgm/sgm_finder_smoke
+
+      - name: Run ImdIconFinder application smoke test
+        if: success()
+        run: xvfb-run -a ./irix-re/build/libimdApp/imd_icon_finder_smoke
