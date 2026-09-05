@@ -97,7 +97,7 @@ static Boolean runIconFinderSmoke(Widget parent)
 
     fprintf(stderr,
             "ImdIconFinder probe: class=%s separator='%c' drop=%s history=%s\n",
-            XtClass(widget)->core_class.class_name,
+            XtIsSubclass(widget, sgFinderWidgetClass) ? "SgFinder" : "unknown",
             separator ? separator : '?',
             useDropPocket ? "True" : "False",
             useHistoryMenu ? "True" : "False");
