@@ -5,6 +5,8 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 : "${WORKSPACE:?set WORKSPACE to your EDK II workspace}"
 TOOLCHAIN=${TOOLCHAIN:-GCC5}
 TARGET=${TARGET:-DEBUG}
+PYTHON_COMMAND=${PYTHON_COMMAND:-python3}
+export PYTHON_COMMAND
 
 if [ ! -f "$HERE/vendor/sgibootscreen-src/src/ip19.c" ]; then
     echo "error: initialize submodules first:" >&2
