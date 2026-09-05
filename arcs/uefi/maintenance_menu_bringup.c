@@ -25,6 +25,35 @@ static struct pcbm *MenuIcons[] = {
     &console
 };
 
+static struct Button *MenuButtons[5];
+
+static void
+MaintenanceMenuCallBack(struct Button *Button, __scunsigned_t Value)
+{
+    (void)Button;
+    ArcsMaintenanceMenuSelect((UINTN)Value);
+}
+
+void
+ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
+{
+    UINTN I;
+
+    if (OneBasedIndex < 1 || OneBasedIndex > 5)
+        return;
+
+    /* Temporary bring-up feedback until these callbacks enter the actual
+     * ARCS service routines.  Keep the selected icon visibly depressed so
+     * both keyboard and pointer delivery can be verified on real hardware. */
+    for (I = 0; I < 5; ++I) {
+        if (!MenuButtons[I])
+            continue;
+
+        stickButton(MenuButtons[I], I == (OneBasedIndex - 1));
+        drawObject(guiobj(MenuButtons[I]));
+    }
+}
+
 void
 ArcsDrawMaintenanceMenuBringup(void)
 {
@@ -48,7 +77,13 @@ ArcsDrawMaintenanceMenuBringup(void)
         int Bx = MSGX;
 
         Button = createButton(Bx, Base, MENUBUTTW, MENUBUTTH);
+        MenuButtons[I] = Button;
         addButtonImage(Button, MenuIcons[I]);
+        addButtonCallBack(
+            Button,
+            MaintenanceMenuCallBack,
+            (__scunsigned_t)(I + 1)
+            );
 
         moveTextPoint(Bx + MENUBUTTW + 10, Base + 15);
         (void)createText((char *)MenuItems[I], ncenB18);
