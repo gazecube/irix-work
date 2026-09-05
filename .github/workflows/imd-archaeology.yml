@@ -253,6 +253,9 @@ jobs:
           section 'MIPS architecture / GOT references'
           mips-linux-gnu-readelf -A "$IMDICONPANEL" | c++filt >> "$report"
 
+          section 'IconFinder neighboring strings'
+          strings -a -t x "$IMDAPP" | grep -B3 -A5 'iconFinderFrame' >> "$report" || true
+
           section 'resource-like strings'
           strings -a -t x "$IMDICONPANEL" | grep -E 'XmN|SgN|Scroll|drop|drag|select|rename|visual|background|ArgList' >> "$report" || true
 
