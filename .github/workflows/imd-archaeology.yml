@@ -28,10 +28,15 @@ jobs:
 
       - name: Symbol neighborhood
         run: |
+          # pull the nearby public/debug symbols before looking at the code.
+          # this keeps the disassembly anchored to names recovered from the
+          # original object rather than names invented during reconstruction.
           mips-linux-gnu-readelf -Ws /tmp/imd-evidence/usr/lib32/internal/libimdApp.so | c++filt | grep -E 'ImdIconFinder|ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget' || true
 
       - name: Disassemble ImdIconFinder constructor
         run: |
+          # dump the complete binary-confirmed constructor. the next pass
+          # correlates each jal/jalr target with strings and DWARF names.
           mips-linux-gnu-objdump -drC \
             --start-address=0x0963ec5c \
             --stop-address=0x0963f350 \
