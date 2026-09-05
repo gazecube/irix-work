@@ -24,9 +24,6 @@ public:
     Widget passwordText() const { return _passwordText; }
     const char *password() const { return _password; }
 
-    /* Portable probe inspection only; not claimed as original public API. */
-    Widget iconPanelWidget() const;
-
 private:
     void createIconAreaScaffold();
     void displayIcon();
