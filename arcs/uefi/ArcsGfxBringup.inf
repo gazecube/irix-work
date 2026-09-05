@@ -14,7 +14,7 @@
   original_fonts.c
   bootstrap_compat.c
   drawbackground_bringup.c
-  widget_bringup.c
+  maintenance_menu_bringup.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
