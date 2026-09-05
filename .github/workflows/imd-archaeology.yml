@@ -19,28 +19,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils-mips-linux-gnu
 
-      - name: Extract original libimdApp
+      - name: Extract original IMD libraries
         run: |
           mkdir -p /tmp/imd-evidence
 
           # find the archive spelling actually present in the preserved
           # evidence. do not repack or normalize the original tar file.
-          entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdApp.so$' | head -1)"
-          test -n "$entry"
-          echo "archive entry: $entry"
-          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-evidence "$entry"
+          app_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdApp.so$' | head -1)"
+          panel_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdIconPanel.so$' | head -1)"
+          test -n "$app_entry"
+          test -n "$panel_entry"
 
-          app="/tmp/imd-evidence/$entry"
-          file "$app"
-          sha256sum "$app"
+          echo "libimdApp archive entry: $app_entry"
+          echo "libimdIconPanel archive entry: $panel_entry"
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-evidence \
+            "$app_entry" "$panel_entry"
+
+          app="/tmp/imd-evidence/$app_entry"
+          panel="/tmp/imd-evidence/$panel_entry"
+          file "$app" "$panel"
+          sha256sum "$app" "$panel"
           echo "IMDAPP=$app" >> "$GITHUB_ENV"
+          echo "IMDICONPANEL=$panel" >> "$GITHUB_ENV"
 
       - name: Symbol neighborhood
         run: |
           # pull the nearby public/debug symbols before looking at the code.
           # this keeps the disassembly anchored to names recovered from the
           # original object rather than names invented during reconstruction.
+          echo '--- libimdApp ---'
           mips-linux-gnu-readelf -Ws "$IMDAPP" | c++filt | grep -E 'ImdIconFinder|ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget' || true
+
+          echo '--- libimdIconPanel ---'
+          mips-linux-gnu-readelf -Ws "$IMDICONPANEL" | c++filt | grep -E 'ImdArgList|ImdModelBasedIconPanel|ImdSingleViewLayout|AdoptRenderer|AdoptLayout' || true
+
+          echo '--- raw ImdArgList symbols ---'
+          mips-linux-gnu-nm -n "$IMDICONPANEL" | grep 'ImdArgList' || true
 
       - name: Map dynamic GOT calls
         run: |
@@ -65,9 +79,91 @@ jobs:
             --stop-address=0x0963f350 \
             "$IMDAPP"
 
+      - name: Disassemble ImdIconFinder accessors
+        run: |
+          echo '--- destructor ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0963cac4 \
+            --stop-address=0x0963cc10 \
+            "$IMDAPP"
+
+          echo '--- getIconView ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0963cc10 \
+            --stop-address=0x0963cc9c \
+            "$IMDAPP"
+
+          echo '--- getWidget ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0963f350 \
+            --stop-address=0x0963f358 \
+            "$IMDAPP"
+
+          echo '--- getCompletionField ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09644b44 \
+            --stop-address=0x09644b4c \
+            "$IMDAPP"
+
+          echo '--- getPocket ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09644b88 \
+            --stop-address=0x09644b90 \
+            "$IMDAPP"
+
+          echo '--- set/getTimoutBeforeTyping ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09644788 \
+            --stop-address=0x09644790 \
+            "$IMDAPP"
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09644d7c \
+            --stop-address=0x09644d84 \
+            "$IMDAPP"
+
+      - name: Disassemble original ImdArgList
+        run: |
+          # ArgList is the strongest lead for the negative small resource-name
+          # values passed by the original IconFinder constructor. dump the
+          # original implementation before translating any of those values.
+          mips-linux-gnu-objdump -drC "$IMDICONPANEL" > /tmp/iconpanel-dis.txt
+
+          echo '--- ImdArgList constructor ---'
+          grep -F -A80 '<ImdArgList::ImdArgList()>' /tmp/iconpanel-dis.txt | head -100 || true
+
+          echo '--- ImdArgList clear ---'
+          grep -F -A120 '<ImdArgList::clear()>' /tmp/iconpanel-dis.txt | head -140 || true
+
+          echo '--- ImdArgList getArgList ---'
+          grep -F -A80 '<ImdArgList::getArgList()>' /tmp/iconpanel-dis.txt | head -100 || true
+
+          echo '--- ImdArgList getNumArgs ---'
+          grep -F -A80 '<ImdArgList::getNumArgs()>' /tmp/iconpanel-dis.txt | head -100 || true
+
+          echo '--- ImdArgList setArg ---'
+          grep -F -A180 '<ImdArgList::setArg(char*, long)>' /tmp/iconpanel-dis.txt | head -210 || true
+
+          echo '--- ImdArgList setValues ---'
+          grep -F -A140 '<ImdArgList::setValues(_WidgetRec*)>' /tmp/iconpanel-dis.txt | head -170 || true
+
+          echo '--- ImdArgList getValues ---'
+          grep -F -A180 '<ImdArgList::getValues' /tmp/iconpanel-dis.txt | head -210 || true
+
+      - name: Disassemble ModelBasedIconPanel constructor
+        run: |
+          echo '--- constructor symbols ---'
+          mips-linux-gnu-nm -nC "$IMDICONPANEL" | grep 'ImdModelBasedIconPanel::ImdModelBasedIconPanel' || true
+
+          echo '--- constructor code ---'
+          grep -F -A260 '<ImdModelBasedIconPanel::ImdModelBasedIconPanel' /tmp/iconpanel-dis.txt | head -300 || true
+
       - name: Dump constructor strings and relocations
         run: |
-          echo '--- relevant strings ---'
+          echo '--- libimdApp relevant strings ---'
           strings -a -t x "$IMDAPP" | grep -E 'iconFinder|finderSelection|findButton|IconBook|SearchBook|InfoScape|XmN|SgN' || true
+
+          echo '--- libimdIconPanel resource strings ---'
+          strings -a -t x "$IMDICONPANEL" | grep -E 'XmN|SgN|Scroll|drop|drag|select|rename|visual|background|ArgList' || true
+
           echo '--- relocations near constructor dependencies ---'
           mips-linux-gnu-readelf -rW "$IMDAPP" | c++filt | grep -E 'ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget|XtManageChild|Xm' || true
