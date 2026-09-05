@@ -20,7 +20,12 @@ rm -rf "$WORKSPACE/ArcsPkg"
 cp -a "$HERE" "$WORKSPACE/ArcsPkg"
 
 cd "$WORKSPACE"
+# edksetup.sh probes several optional environment variables and is not
+# nounset-safe. Temporarily disable -u while sourcing the upstream script,
+# then restore our stricter shell mode for the actual build.
+set +u
 . ./edksetup.sh
+set -u
 
 build \
     -a X64 \
