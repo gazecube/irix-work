@@ -6,6 +6,7 @@ on:
       - irix-re
     paths:
       - 'irix-re/libSgm/**'
+      - 'irix-re/clogin/ImdFtrVisualCompat.*'
       - 'irix-re/CMakeLists.txt'
       - '.github/workflows/sgm-smoke.yml'
   workflow_dispatch:
@@ -20,6 +21,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake gdb libmotif-dev libx11-dev libxt-dev xvfb
+
+      - name: Compile Imd visual chooser
+        run: |
+          c++ -std=c++11 -Iirix-re/clogin -c \
+            irix-re/clogin/ImdFtrVisualCompat.c++ \
+            -o /tmp/ImdFtrVisualCompat.o
 
       - name: Configure
         run: cmake -S irix-re -B irix-re/build -DCMAKE_BUILD_TYPE=Debug
