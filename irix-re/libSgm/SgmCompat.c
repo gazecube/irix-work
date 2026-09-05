@@ -13,12 +13,16 @@
 #include <Xm/LabelG.h>
 #include <Xm/List.h>
 #include <Xm/PanedW.h>
+#include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
 #include <Xm/Scale.h>
 #include <Xm/ScrollBar.h>
 #include <Xm/ScrolledW.h>
+#include <Xm/Text.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
+#include <stdlib.h>
+#include <string.h>
 
 WidgetClass glxDrawWidgetClass = (WidgetClass)0;
 WidgetClass glwMDrawingAreaWidgetClass = (WidgetClass)0;
@@ -95,7 +99,6 @@ Widget name(Widget parent, char *widgetName, ArgList args, Cardinal count) \
 SGM_CREATOR(SgCreateColorChooser, sgColorChooserWidgetClass)
 SGM_CREATOR(SgCreateDropPocket, sgDropPocketWidgetClass)
 SGM_CREATOR(SgCreateDynaMenu, sgDynaMenuWidgetClass)
-SGM_CREATOR(SgCreateFinder, sgFinderWidgetClass)
 SGM_CREATOR(SgCreateZbText, sgZbTextWidgetClass)
 SGM_CREATOR(SgCreateZoomBar, sgZoomBarWidgetClass)
 SGM_CREATOR(SgCreateColumn, sgColumnWidgetClass)
@@ -114,6 +117,97 @@ SGM_CREATOR(SgCreateOsc, sgOscWidgetClass)
 SGM_CREATOR(SgCreateHorzPanedWindow, sgHorzPanedWindowWidgetClass)
 SGM_CREATOR(SgCreateVisualDrawingArea, sgVisualDrawingAreaWidgetClass)
 SGM_CREATOR(GlxCreateMDraw, glxMDrawWidgetClass)
+
+typedef struct FinderCompatState
+{
+    Widget finder;
+    Widget child[4];
+    struct FinderCompatState *next;
+} FinderCompatState;
+
+static FinderCompatState *finderStates;
+
+static FinderCompatState *finderState(Widget finder, Boolean create)
+{
+    FinderCompatState *state;
+
+    for (state = finderStates; state; state = state->next)
+        if (state->finder == finder)
+            return state;
+
+    if (!create || !finder)
+        return 0;
+
+    state = (FinderCompatState *)calloc(1, sizeof(FinderCompatState));
+    if (!state)
+        return 0;
+
+    state->finder = finder;
+    state->child[0] = XmCreateText(finder, "text", 0, 0);
+    state->child[1] = XmCreatePushButton(finder, "history", 0, 0);
+    state->child[2] = XmCreatePushButton(finder, "button", 0, 0);
+    state->child[3] = XmCreatePushButton(finder, "menu", 0, 0);
+
+    XtManageChild(state->child[0]);
+
+    state->next = finderStates;
+    finderStates = state;
+    return state;
+}
+
+Widget SgCreateFinder(Widget parent, char *name, ArgList args, Cardinal count)
+{
+    Widget finder = sgmCreate(parent, name, args, count,
+                              sgFinderWidgetClass, False);
+    (void)finderState(finder, True);
+    return finder;
+}
+
+char *SgFinderGetTextString(Widget finder)
+{
+    FinderCompatState *state = finderState(finder, True);
+    char *text;
+    size_t length;
+
+    if (!state || !state->child[0])
+        return 0;
+
+    text = XmTextGetString(state->child[0]);
+    if (!text)
+        return 0;
+
+    length = strlen(text);
+    if (length && text[length - 1] == '\n')
+        text[length - 1] = '\0';
+
+    return text;
+}
+
+void SgFinderSetTextString(Widget finder, char *text)
+{
+    FinderCompatState *state = finderState(finder, True);
+    XmTextPosition end;
+
+    if (!state || !state->child[0])
+        return;
+
+    if (!text)
+        text = "";
+
+    XmTextSetString(state->child[0], text);
+    end = (XmTextPosition)strlen(text);
+    XmTextSetInsertionPosition(state->child[0], end);
+}
+
+Widget SgFinderGetChild(Widget finder, int which)
+{
+    FinderCompatState *state = finderState(finder, True);
+
+    if (!state || which < 0 || which > 3)
+        return (Widget)0;
+
+    return state->child[which];
+}
 
 Widget SgCreateManagedGraph(Widget parent, char *name, ArgList args,
                             Cardinal count)
@@ -198,34 +292,37 @@ void SgVisualDrawingAreaUninstallColormap(Widget w)
         XUninstallColormap(XtDisplay(w), cmap);
 }
 
-int SgThumbWheelGetValue(Widget w)
+/* Original n32 ABI: getters write through the second argument. */
+void SgThumbWheelGetValue(Widget w, int *value)
 {
-    int value = 0;
+    if (!value)
+        return;
+
+    *value = 0;
     if (w)
-        XmScaleGetValue(w, &value);
-    return value;
+        XmScaleGetValue(w, value);
 }
 
-void SgThumbWheelSetValue(Widget w, int value, Boolean notify)
+void SgThumbWheelSetValue(Widget w, int value)
 {
     if (w)
         XmScaleSetValue(w, value);
-    (void)notify;
 }
 
-int SgDialGetValue(Widget w)
+void SgDialGetValue(Widget w, int *value)
 {
-    int value = 0;
+    if (!value)
+        return;
+
+    *value = 0;
     if (w)
-        XmScaleGetValue(w, &value);
-    return value;
+        XmScaleGetValue(w, value);
 }
 
-void SgDialSetValue(Widget w, int value, Boolean notify)
+void SgDialSetValue(Widget w, int value)
 {
     if (w)
         XmScaleSetValue(w, value);
-    (void)notify;
 }
 
 void SgScrollBarGetValues(Widget w, int *value, int *slider,
