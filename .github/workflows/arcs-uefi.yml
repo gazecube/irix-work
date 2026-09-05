@@ -2,6 +2,11 @@ name: ARCS UEFI bring-up
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - arcs-uefi
+    paths:
+      - '.github/arcs-uefi.trigger'
 
 jobs:
   build:
