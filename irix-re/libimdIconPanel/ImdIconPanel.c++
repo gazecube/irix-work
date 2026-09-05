@@ -5,6 +5,10 @@
 #include <cstring>
 #include <map>
 
+#if defined(IMDICONPANEL_HAVE_RECONSTRUCTED_SGM)
+extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
+#endif
+
 #if defined(IMDICONPANEL_HAVE_DLFCN)
 #include <dlfcn.h>
 #endif
@@ -13,15 +17,21 @@ namespace
 {
 WidgetClass resolveViewPanelWidgetClass()
 {
+#if defined(IMDICONPANEL_HAVE_RECONSTRUCTED_SGM)
+    /*
+     * Our reconstructed libSgm exports the historical IRIX symbol directly.
+     * Keeping a real reference here also prevents --as-needed from dropping
+     * libSgm from the final executable before runtime symbol probing occurs.
+     */
+    if (sgVisualDrawingAreaWidgetClass)
+        return sgVisualDrawingAreaWidgetClass;
+#endif
+
 #if defined(IMDICONPANEL_HAVE_DLFCN)
     /*
      * IRIX 6.5.0's ImdViewPanel class record inherits from the exported
-     * sgVisualDrawingAreaWidgetClass data symbol. MaXX installations may ship
-     * libSgm without exporting that historical symbol, so resolve it at
-     * runtime instead of introducing a mandatory link-time reference.
-     *
-     * The library handle is intentionally retained for process lifetime: the
-     * returned WidgetClass points into libSgm's class record storage.
+     * sgVisualDrawingAreaWidgetClass data symbol. External compatibility
+     * libraries may omit it, so this remains as the fallback probe path.
      */
     void *symbol = dlsym(RTLD_DEFAULT, "sgVisualDrawingAreaWidgetClass");
     if (symbol)
