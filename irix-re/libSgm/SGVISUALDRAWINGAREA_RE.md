@@ -67,7 +67,7 @@ The recovered CoreClassPart is:
 +0x70  extension             0x0b254310
 ```
 
-The Composite class methods are inherited. The Constraint class part is zero. The Manager class part has inherited translations and an inherited extension pointer; its other class-specific entries are zero. The DrawingArea class-part extension is zero. The final 12-byte Sg class part is also entirely zero, so no Sg-specific virtual class methods exist here.
+The Composite class methods are inherited. The Constraint class part is zero. In the Manager class part, `parent_process` is `_XtInherit` and `extension` is `NULL`; the earlier reconstruction had these two host fields reversed, which caused an OpenMotif class-initialization crash. The DrawingArea class-part extension is zero. The final 12-byte Sg class part is also entirely zero, so no Sg-specific virtual class methods exist here.
 
 ## Motif base-class extension
 
@@ -108,12 +108,12 @@ The `_XtInherit` relocation is at extension offset `+0x6c`, which is the `widget
 The class has exactly three public resources. The table begins at `0x0b2542b8`.
 
 ```
-+0x104  XmNvisual             XmCVisual             Visual *   CopyFromParent
++0x104  XmNvisual             XmCVisual             Visual *   NULL
 +0x108  SgNinstallColormap    SgCInstallColormap    Boolean    False
 +0x109  SgNditherBackground   SgCDitherBackground   Boolean    False
 ```
 
-The latter two names/classes occur literally in the binary. The first resource uses the SGI/Xt fast-quark representation; runtime use plus SGI's public `SgVisualDrawingArea(3X)` documentation identifies it as `XmNvisual`.
+The latter two names/classes occur literally in the binary. The first resource uses the SGI/Xt fast-quark representation; runtime use plus SGI's public `SgVisualDrawingArea(3X)` documentation identifies it as `XmNvisual`. Its default type is `XtRImmediate` and its default address/value is exactly `NULL`; it is not `CopyFromParent` in the resource table.
 
 ## Private instance state
 
@@ -153,7 +153,7 @@ Exact recovered flow:
 1. Clear `colormapInstalled` at `+0x11c`.
 2. If `ditherBackground` is false, return.
 3. Clear `ditherBackground` before attempting construction.
-4. Require a non-CopyFromParent Visual whose class is `TrueColor` or `StaticColor`.
+4. Require `visual != NULL` and require its class to be `TrueColor` or `StaticColor`.
 5. Require Core `background_pixmap == XmUNSPECIFIED_PIXMAP`.
 6. Use `XtGetSubresources()` to retrieve the requested background color as a string into `+0x120`.
 7. Call `XAllocNamedColor()` in the widget colormap, producing allocated and exact colors.
@@ -181,6 +181,8 @@ XmGetPixmapByDepth(screen,
 
 The local helper implementing the component formula is named `complementingColorComponent` in the debug strings.
 
+A NULL visual is therefore an ordinary valid state when dithering is disabled. `Initialize` does not substitute the default screen visual.
+
 ## Realize
 
 Class `Realize` is at `0x0b1c3264`.
@@ -201,7 +203,7 @@ PointerMotionMask
 ```
 
 - OR `CWBitGravity | CWDontPropagate` into the create-window value mask.
-- call `XtCreateWindow()` directly with the configured `Visual *`.
+- call `XtCreateWindow()` directly with the configured `Visual *`; a NULL value is passed through as X `CopyFromParent`.
 - walk ancestors until the containing shell is found and store it at `+0x10c`.
 - call `XtGetValues(shell, XtNoverrideRedirect, ...)` and store the result at `+0x110`.
 - if `installColormap` is true, call `SgVisualDrawingAreaInstallColormap(this)`.
@@ -232,16 +234,15 @@ XInstallColormap
 
 Recovered behavior:
 
-- require stored shell `+0x10c`.
+- require stored shell `+0x10c` and realized widget/shell windows.
 - obtain display, widget window, and shell window.
 - call `XGetWMColormapWindows()` on the shell.
 - if the property exists, allocate a new `(count + 1)` array with `XtMalloc()`, prepend the widget window, append the old list, and call `XSetWMColormapWindows()` with `count + 1`.
+- there is no duplicate-window suppression in the target binary.
 - free the temporary Xt array with `XtFree()` and the Xlib-owned old array with `XFree()`.
 - if no WM list exists, create a two-element local list containing the widget window followed by the shell window and install that property.
 - if `shellOverrideRedirect` is true, call `XListInstalledColormaps()` for the widget window, store the returned array/count at `+0x114/+0x118`, then call `XInstallColormap()` for the widget colormap.
 - set `colormapInstalled` true.
-
-The routine does not contain the duplicate-window suppression that an earlier reconstruction assumed; the binary simply prepends the widget window when the property already exists.
 
 ## SgVisualDrawingAreaUninstallColormap
 
@@ -249,7 +250,7 @@ Address: `0x0b1c3368`, size 572 bytes.
 
 Recovered behavior:
 
-- require stored shell `+0x10c`.
+- require stored shell `+0x10c` and realized widget/shell windows.
 - call `XGetWMColormapWindows()` on the shell.
 - search for the widget window.
 - when found, compact the array in place and call `XSetWMColormapWindows()` with `count - 1`.
@@ -264,6 +265,17 @@ This is the IRIX 6.5.0 behavior. Older SGI documentation describes direct uninst
 
 `SgCreateVisualDrawingArea` at `0x0b22a7b8` is a thin `XtCreateWidget()` wrapper using `sgVisualDrawingAreaWidgetClass`. There is no additional constructor policy.
 
+## Imd/Pandora visual selection handoff
+
+The original Clogin binary imports `imdFtrChooseVisualArgs` before constructing `ImdIconPanel`. The provider has now been located in the original n32 `libimdFtrIcon.so`:
+
+```
+0x0980cc8c  528   imdFtrChooseVisualArgs
+0x09812c74  1760  imdFtrInitializeIconVisuals
+```
+
+`imdFtrChooseVisualArgs` uses `XtGetValues()` to read three visual-related resources from the parent, calls the internal visual chooser, and on success appends three replacement resources to the caller's ArgList. Fast-quark value `-39` is proven to be `visual` because the same value is used by the `SgVisualDrawingArea` public resource table. The other two visual-tuple fast quarks are still being named from binary evidence and are intentionally not guessed here.
+
 ## Reconstruction status
 
 The original crashy implementation built a subclass by copying the host's live `XmDrawingAreaClassRec` with `memcpy()` and mutating the copy. That approach has been removed.
@@ -273,11 +285,11 @@ The current reconstruction uses:
 - a statically defined subclass class record;
 - the recovered zero 12-byte Sg class part;
 - a native `XmBaseClassExtRec` version 2 matching the original extension semantics;
-- the recovered three public resources;
+- the recovered three public resources and exact defaults;
 - the complete private instance state used by the original routines;
 - the direct `XtCreateWindow()` realize path and exact extra X attributes;
 - `XtNoverrideRedirect` shell handling;
 - the recovered WM colormap-window and server-colormap save/restore behavior;
 - the recovered TrueColor/StaticColor `50_foreground` dither path.
 
-This is the first Sgm widget intended to be behaviorally usable rather than merely symbol-compatible. The remaining validation step is execution against the MaXX/OpenMotif runtime through the Pandora probe.
+Validation now includes a permanent OpenMotif/Xvfb smoke test covering class initialization, default-visual creation/realization/destruction, and an explicit-visual `ditherBackground` path. The real Pandora probe has also successfully run with `ImdViewPanel superclass: SgVisualDrawingArea` and remained interactive.
