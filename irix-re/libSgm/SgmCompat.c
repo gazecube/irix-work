@@ -46,7 +46,7 @@ WidgetClass sgRubberBoardWidgetClass = (WidgetClass)0;
 WidgetClass sgScrollBarWidgetClass = (WidgetClass)0;
 WidgetClass sgSpringBoxWidgetClass = (WidgetClass)0;
 WidgetClass sgThumbWheelWidgetClass = (WidgetClass)0;
-WidgetClass sgVisualDrawingAreaWidgetClass = (WidgetClass)0;
+extern WidgetClass sgVisualDrawingAreaWidgetClass;
 WidgetClass sgOscWidgetClass = (WidgetClass)0;
 
 #if defined(__GNUC__)
@@ -76,7 +76,6 @@ static void SgmCompatInitClasses(void)
     sgScrollBarWidgetClass = xmScrollBarWidgetClass;
     sgSpringBoxWidgetClass = xmBulletinBoardWidgetClass;
     sgThumbWheelWidgetClass = xmScaleWidgetClass;
-    sgVisualDrawingAreaWidgetClass = xmDrawingAreaWidgetClass;
     sgOscWidgetClass = xmDrawingAreaWidgetClass;
 }
 
@@ -115,7 +114,6 @@ SGM_CREATOR(SgCreateSpringBox, sgSpringBoxWidgetClass)
 SGM_CREATOR(SgCreateThumbWheel, sgThumbWheelWidgetClass)
 SGM_CREATOR(SgCreateOsc, sgOscWidgetClass)
 SGM_CREATOR(SgCreateHorzPanedWindow, sgHorzPanedWindowWidgetClass)
-SGM_CREATOR(SgCreateVisualDrawingArea, sgVisualDrawingAreaWidgetClass)
 SGM_CREATOR(GlxCreateMDraw, glxMDrawWidgetClass)
 
 typedef struct FinderCompatState
@@ -270,26 +268,6 @@ Widget SgCreateMediaViewer(Widget parent, char *name, ArgList args,
                            Cardinal count)
 {
     return XmCreateForm(parent, name, args, count);
-}
-
-void SgVisualDrawingAreaInstallColormap(Widget w)
-{
-    Colormap cmap = None;
-    if (!w)
-        return;
-    XtVaGetValues(w, XtNcolormap, &cmap, NULL);
-    if (cmap != None && XtIsRealized(w))
-        XInstallColormap(XtDisplay(w), cmap);
-}
-
-void SgVisualDrawingAreaUninstallColormap(Widget w)
-{
-    Colormap cmap = None;
-    if (!w)
-        return;
-    XtVaGetValues(w, XtNcolormap, &cmap, NULL);
-    if (cmap != None && XtIsRealized(w))
-        XUninstallColormap(XtDisplay(w), cmap);
 }
 
 /* Original n32 ABI: getters write through the second argument. */
