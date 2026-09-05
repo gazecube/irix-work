@@ -7,10 +7,19 @@
 
 int main(int argc, char **argv)
 {
+    static String fallback_resources[] =
+    {
+        "*explicit.background: gray70",
+        NULL
+    };
+
     XtAppContext app;
     Widget shell;
     Widget stock;
     Widget drawing;
+    Widget explicit_drawing;
+    Arg args[2];
+    Cardinal n;
 
     shell = XtVaAppInitialize(
         &app,
@@ -19,7 +28,7 @@ int main(int argc, char **argv)
         0,
         &argc,
         argv,
-        NULL,
+        fallback_resources,
         NULL);
 
     if (!shell)
@@ -44,24 +53,44 @@ int main(int argc, char **argv)
     XtDestroyWidget(stock);
     fprintf(stderr, "Sg smoke: stock XmDrawingArea destroyed\n");
 
-    fprintf(stderr, "Sg smoke: creating SgVisualDrawingArea\n");
+    fprintf(stderr, "Sg smoke: creating default SgVisualDrawingArea\n");
     drawing = SgCreateVisualDrawingArea(shell, "drawing", NULL, 0);
     if (!drawing)
     {
-        fprintf(stderr, "Sg smoke: failed to create drawing area\n");
+        fprintf(stderr, "Sg smoke: failed to create default drawing area\n");
         XtDestroyWidget(shell);
         return 4;
     }
 
-    fprintf(stderr, "Sg smoke: managing widget\n");
+    fprintf(stderr, "Sg smoke: managing default widget\n");
     XtManageChild(drawing);
 
     fprintf(stderr, "Sg smoke: realizing shell\n");
     XtRealizeWidget(shell);
+    fprintf(stderr, "Sg smoke: default widget realized successfully\n");
 
-    fprintf(stderr, "Sg smoke: realized successfully\n");
+    XtDestroyWidget(drawing);
+    fprintf(stderr, "Sg smoke: default widget destroyed\n");
+
+    n = 0;
+    XtSetArg(args[n], "visual", DefaultVisualOfScreen(XtScreen(shell))); ++n;
+    XtSetArg(args[n], "ditherBackground", True); ++n;
+
+    fprintf(stderr, "Sg smoke: creating explicit-visual dither widget\n");
+    explicit_drawing = SgCreateVisualDrawingArea(shell, "explicit", args, n);
+    if (!explicit_drawing)
+    {
+        fprintf(stderr, "Sg smoke: failed to create explicit-visual widget\n");
+        XtDestroyWidget(shell);
+        return 5;
+    }
+
+    fprintf(stderr, "Sg smoke: managing explicit-visual dither widget\n");
+    XtManageChild(explicit_drawing);
+    fprintf(stderr, "Sg smoke: explicit-visual dither widget realized successfully\n");
+
     XtDestroyWidget(shell);
-    fprintf(stderr, "Sg smoke: destroyed successfully\n");
+    fprintf(stderr, "Sg smoke: shell destroyed successfully\n");
 
     return 0;
 }
