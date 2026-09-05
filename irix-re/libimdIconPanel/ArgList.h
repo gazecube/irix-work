@@ -3,7 +3,7 @@
 
 #include <X11/Intrinsic.h>
 
-#include <vector>
+class ImdArgListImpl;
 
 /* ImdArgList - convenience wrapper for Xt argument lists.
  *
@@ -21,11 +21,12 @@ public:
     ArgList getArgList();
     Cardinal getNumArgs() const;
 
+    void getValues(Widget widget);
     void setArg(const char *name, XtArgVal value);
     void setValues(Widget widget);
 
 private:
-    std::vector<Arg> _args;
+    ImdArgListImpl *_impl;
 };
 
 #endif
