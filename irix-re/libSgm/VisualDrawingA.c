@@ -1,27 +1,35 @@
 /*
  * SgVisualDrawingArea reconstruction.
  *
- * Binary evidence from IRIX 6.5.0 libSgm.so.1:
- *   sgVisualDrawingAreaClassRec: 0x0b254388, n32 size 208
+ * Primary evidence: IRIX 6.5.0 libSgm.so.1, n32 MIPS, unstripped.
+ *
+ * Binary-backed facts used here:
+ *   sgVisualDrawingAreaClassRec: 0x0b254388, n32 size 0xd0
  *   widget_size:                0x124
  *   superclass:                 xmDrawingAreaClassRec
  *   resources:                  3
  *   resource instance offsets:  0x104, 0x108, 0x109
+ *   base class extension:       XmBaseClassExtRec v2, size 0x78
  *
- * The host structure below preserves recovered semantics rather than n32 byte
- * offsets. Host pointer/alignment rules are intentionally allowed to differ.
+ * The host structures preserve recovered semantics. Host pointer sizes and
+ * alignment are intentionally allowed to differ from the original n32 ABI.
  */
 #include <Xm/Xm.h>
 #include <Xm/DrawingA.h>
 #include <X11/Intrinsic.h>
+#include <X11/IntrinsicP.h>
 #include <X11/Shell.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
 #include <stddef.h>
-#include <string.h>
 
-#if defined(SGM_HAVE_DRAWINGAP_H)
+#if defined(SGM_HAVE_DRAWINGAP_H) && defined(SGM_HAVE_BASECLASSP_H)
 #include <Xm/DrawingAP.h>
+#include <Xm/BaseClassP.h>
+
+#ifndef XmInheritWidgetNavigable
+#define XmInheritWidgetNavigable ((XmWidgetNavigableProc)_XtInherit)
+#endif
 
 typedef struct
 {
@@ -32,7 +40,7 @@ typedef struct
 
     /* Original private state: n32 +0x10c .. +0x120. */
     Widget colormap_shell;
-    Boolean save_installed_colormaps;
+    Boolean shell_override_redirect;
     Colormap *saved_colormaps;
     int saved_colormap_count;
     Boolean colormap_installed;
@@ -46,16 +54,29 @@ typedef struct
 } SgVisualDrawingAreaRecCompat;
 
 /*
- * IRIX has a 56-byte Sg class part after the inherited XmDrawingArea class
- * parts. Its hooks are not yet recovered, and all observed inherited behavior
- * needed by this widget lives in the standard Motif class parts. Reserve the
- * host equivalent without inventing semantics for those slots.
+ * The original n32 XmDrawingArea class prefix ends at +0xc4. The remaining
+ * 12 bytes of sgVisualDrawingAreaClassRec are all zero. Keep three reserved
+ * class-part pointers rather than inventing methods that do not exist.
  */
 typedef struct
 {
+    XtPointer reserved0;
+    XtPointer reserved1;
+    XtPointer reserved2;
+} SgVisualDrawingAreaClassPartCompat;
+
+typedef struct
+{
     XmDrawingAreaClassRec drawing_area_class;
-    XtPointer sg_class_part[14];
+    SgVisualDrawingAreaClassPartCompat sg_visual_drawing_area_class;
 } SgVisualDrawingAreaClassRecCompat;
+
+static void visualDrawingAreaInitialize(Widget, Widget, ArgList, Cardinal *);
+static void visualDrawingAreaRealize(Widget, XtValueMask *, XSetWindowAttributes *);
+static void visualDrawingAreaDestroy(Widget);
+
+void SgVisualDrawingAreaInstallColormap(Widget);
+void SgVisualDrawingAreaUninstallColormap(Widget);
 
 static XtResource visualDrawingAreaResources[] =
 {
@@ -63,7 +84,7 @@ static XtResource visualDrawingAreaResources[] =
         "visual", "Visual", XtRVisual, sizeof(Visual *),
         XtOffsetOf(SgVisualDrawingAreaRecCompat,
                    sg_visual_drawing_area.visual),
-        XtRImmediate, (XtPointer)0
+        XtRImmediate, (XtPointer)CopyFromParent
     },
     {
         "installColormap", "InstallColormap", XtRBoolean, sizeof(Boolean),
@@ -79,91 +100,306 @@ static XtResource visualDrawingAreaResources[] =
     }
 };
 
-SgVisualDrawingAreaClassRecCompat sgVisualDrawingAreaClassRec;
+/*
+ * VisualDrawingA.o contains a second one-entry XtResource record at
+ * 0x0b254460. Its n32 offset is +0x120, size is sizeof(String), default is
+ * immediate NULL, and Initialize passes the resulting string to
+ * XAllocNamedColor(). The fast-quark resource name is the Core background
+ * resource; fetching it as String preserves the original requested color
+ * text before normal Pixel conversion.
+ */
+static XtResource ditherColorResource[] =
+{
+    {
+        XtNbackground, XtCBackground, XtRString, sizeof(String),
+        XtOffsetOf(SgVisualDrawingAreaRecCompat,
+                   sg_visual_drawing_area.dither_color_name),
+        XtRImmediate, (XtPointer)NULL
+    }
+};
+
+/*
+ * Exact Motif v2 base-class extension recovered from 0x0b254310.
+ * All hooks are NULL; the only inherited hook is widgetNavigable.
+ */
+static XmBaseClassExtRec baseClassExtRec =
+{
+    NULL,                         /* next_extension */
+    NULLQUARK,                    /* record_type */
+    XmBaseClassExtVersion,        /* version */
+    sizeof(XmBaseClassExtRec),    /* record_size */
+    NULL,                         /* initializePrehook */
+    NULL,                         /* setValuesPrehook */
+    NULL,                         /* initializePosthook */
+    NULL,                         /* setValuesPosthook */
+    NULL,                         /* secondaryObjectClass */
+    NULL,                         /* secondaryObjectCreate */
+    NULL,                         /* getSecResData */
+    { 0 },                        /* flags */
+    NULL,                         /* getValuesPrehook */
+    NULL,                         /* getValuesPosthook */
+    NULL,                         /* classPartInitPrehook */
+    NULL,                         /* classPartInitPosthook */
+    NULL,                         /* ext_resources */
+    NULL,                         /* compiled_ext_resources */
+    0,                            /* num_ext_resources */
+    False,                        /* use_sub_resources */
+    XmInheritWidgetNavigable,     /* widgetNavigable */
+    NULL,                         /* focusChange */
+    NULL                          /* wrapperData */
+};
+
+/*
+ * Static class record, matching the original inheritance contract. This is
+ * intentionally not constructed by memcpy() from xmDrawingAreaClassRec.
+ * Xt/Motif class records contain mutable private state; copying a live
+ * superclass record and then pretending the copy is a subclass is unsafe.
+ */
+SgVisualDrawingAreaClassRecCompat sgVisualDrawingAreaClassRec =
+{
+    {
+        {
+            (WidgetClass)&xmDrawingAreaClassRec, /* superclass */
+            "SgVisualDrawingArea",               /* class_name */
+            sizeof(SgVisualDrawingAreaRecCompat), /* widget_size */
+            NULL,                                 /* class_initialize */
+            NULL,                                 /* class_part_initialize */
+            False,                                /* class_inited */
+            visualDrawingAreaInitialize,          /* initialize */
+            NULL,                                 /* initialize_hook */
+            visualDrawingAreaRealize,             /* realize */
+            NULL,                                 /* actions */
+            0,                                    /* num_actions */
+            visualDrawingAreaResources,           /* resources */
+            XtNumber(visualDrawingAreaResources), /* num_resources */
+            NULLQUARK,                             /* xrm_class */
+            True,                                 /* compress_motion */
+            False,                                /* compress_exposure */
+            True,                                 /* compress_enterleave */
+            False,                                /* visible_interest */
+            visualDrawingAreaDestroy,             /* destroy */
+            XtInheritResize,                       /* resize */
+            XtInheritExpose,                       /* expose */
+            NULL,                                 /* set_values */
+            NULL,                                 /* set_values_hook */
+            XtInheritSetValuesAlmost,              /* set_values_almost */
+            NULL,                                 /* get_values_hook */
+            NULL,                                 /* accept_focus */
+            XtVersion,                            /* version */
+            NULL,                                 /* callback_private */
+            XtInheritTranslations,                /* tm_table */
+            XtInheritQueryGeometry,               /* query_geometry */
+            NULL,                                 /* display_accelerator */
+            (XtPointer)&baseClassExtRec            /* extension */
+        },
+        {
+            XtInheritGeometryManager,
+            XtInheritChangeManaged,
+            XtInheritInsertChild,
+            XtInheritDeleteChild,
+            NULL
+        },
+        {
+            NULL,
+            0,
+            0,
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        },
+        {
+            XtInheritTranslations,
+            NULL,
+            0,
+            NULL,
+            0,
+            NULL,
+            (XtPointer)_XtInherit
+        },
+        {
+            NULL
+        }
+    },
+    {
+        NULL,
+        NULL,
+        NULL
+    }
+};
+
 WidgetClass sgVisualDrawingAreaWidgetClass =
     (WidgetClass)&sgVisualDrawingAreaClassRec;
 
-static Boolean visualDrawingAreaClassPrepared;
-
 static Widget findShell(Widget w)
 {
-    Widget shell = w;
+    Widget shell = XtParent(w);
+
     while (shell && !XtIsShell(shell))
         shell = XtParent(shell);
+
     return shell;
+}
+
+static unsigned short complementingColorComponent(unsigned short exact,
+                                                   unsigned short allocated)
+{
+    long value = ((long)exact * 2L) - (long)allocated;
+
+    if (value < 0)
+        value = 0;
+    else if (value > 65535L)
+        value = 65535L;
+
+    return (unsigned short)value;
+}
+
+static void createDitherBackground(SgVisualDrawingAreaRecCompat *rec,
+                                   ArgList args,
+                                   Cardinal num_args)
+{
+    SgVisualDrawingAreaPartCompat *sg = &rec->sg_visual_drawing_area;
+    XColor allocated;
+    XColor exact;
+    XColor complement;
+    Pixmap pixmap;
+    Display *display;
+
+    if (!sg->dither_background)
+        return;
+
+    /* Original Initialize clears the flag first and only restores it on success. */
+    sg->dither_background = False;
+
+    if (!sg->visual)
+        return;
+
+    if (sg->visual->class != TrueColor && sg->visual->class != StaticColor)
+        return;
+
+    if (rec->drawing_area.core.background_pixmap != XmUNSPECIFIED_PIXMAP)
+        return;
+
+    sg->dither_color_name = NULL;
+    XtGetSubresources((Widget)rec,
+                      (XtPointer)rec,
+                      NULL,
+                      NULL,
+                      ditherColorResource,
+                      XtNumber(ditherColorResource),
+                      NULL,
+                      0);
+
+    if (!sg->dither_color_name)
+        return;
+
+    display = XtDisplay((Widget)rec);
+
+    if (!XAllocNamedColor(display,
+                          rec->drawing_area.core.colormap,
+                          sg->dither_color_name,
+                          &allocated,
+                          &exact))
+        return;
+
+    if (allocated.pixel == rec->drawing_area.core.background_pixel &&
+        allocated.red == exact.red &&
+        allocated.green == exact.green &&
+        allocated.blue == exact.blue)
+        return;
+
+    complement.red = complementingColorComponent(exact.red, allocated.red);
+    complement.green = complementingColorComponent(exact.green, allocated.green);
+    complement.blue = complementingColorComponent(exact.blue, allocated.blue);
+    complement.flags = DoRed | DoGreen | DoBlue;
+
+    if (!XAllocColor(display,
+                     rec->drawing_area.core.colormap,
+                     &complement))
+        return;
+
+    if (complement.pixel == allocated.pixel)
+        return;
+
+    pixmap = XmGetPixmapByDepth(rec->drawing_area.core.screen,
+                                "50_foreground",
+                                complement.pixel,
+                                allocated.pixel,
+                                rec->drawing_area.core.depth);
+
+    if (pixmap == XmUNSPECIFIED_PIXMAP || pixmap == None)
+        return;
+
+    rec->drawing_area.core.background_pixmap = pixmap;
+    sg->dither_background = True;
+
+    (void)args;
+    (void)num_args;
 }
 
 void SgVisualDrawingAreaInstallColormap(Widget w)
 {
     SgVisualDrawingAreaRecCompat *rec;
     SgVisualDrawingAreaPartCompat *sg;
-    Widget shell;
     Display *display;
-    Window *windows = NULL;
-    Window *updated = NULL;
+    Window *old_windows = NULL;
+    Window *new_windows = NULL;
+    Window initial_windows[2];
     Window widget_window;
     Window shell_window;
     int count = 0;
     int i;
 
-    if (!w || !XtIsRealized(w))
+    if (!w)
         return;
 
     rec = (SgVisualDrawingAreaRecCompat *)w;
     sg = &rec->sg_visual_drawing_area;
-    shell = sg->colormap_shell ? sg->colormap_shell : findShell(w);
-    if (!shell || !XtIsRealized(shell))
+
+    if (!sg->colormap_shell || !XtIsRealized(w) ||
+        !XtIsRealized(sg->colormap_shell))
         return;
 
     display = XtDisplay(w);
     widget_window = XtWindow(w);
-    shell_window = XtWindow(shell);
+    shell_window = XtWindow(sg->colormap_shell);
 
-    if (XGetWMColormapWindows(display, shell_window, &windows, &count))
+    if (XGetWMColormapWindows(display,
+                              shell_window,
+                              &old_windows,
+                              &count))
     {
-        for (i = 0; i < count; ++i)
+        new_windows = (Window *)XtMalloc((Cardinal)(count + 1) *
+                                         sizeof(Window));
+        if (new_windows)
         {
-            if (windows[i] == widget_window)
-            {
-                XFree(windows);
-                sg->colormap_installed = True;
-                return;
-            }
+            new_windows[0] = widget_window;
+            for (i = 0; i < count; ++i)
+                new_windows[i + 1] = old_windows[i];
+
+            XSetWMColormapWindows(display,
+                                  shell_window,
+                                  new_windows,
+                                  count + 1);
+            XtFree((char *)new_windows);
         }
+
+        if (old_windows)
+            XFree(old_windows);
     }
     else
     {
-        windows = NULL;
-        count = 0;
+        /* Original fallback installs both the drawing-area and shell windows. */
+        initial_windows[0] = widget_window;
+        initial_windows[1] = shell_window;
+        XSetWMColormapWindows(display, shell_window, initial_windows, 2);
     }
 
-    updated = (Window *)XtMalloc((Cardinal)(count + 1) * sizeof(Window));
-    if (!updated)
-    {
-        if (windows)
-            XFree(windows);
-        return;
-    }
-
-    updated[0] = widget_window;
-    for (i = 0; i < count; ++i)
-        updated[i + 1] = windows[i];
-
-    XSetWMColormapWindows(display, shell_window, updated, count + 1);
-    XtFree((char *)updated);
-    if (windows)
-        XFree(windows);
-
-    /*
-     * Original +0x110 controls preservation/restoration of the server's
-     * currently installed colormap set. Its resource name is not yet proven,
-     * so the reconstruction keeps the state false unless later binary-backed
-     * work identifies and populates it.
-     */
-    if (sg->save_installed_colormaps)
+    if (sg->shell_override_redirect)
     {
         sg->saved_colormaps =
-            XListInstalledColormaps(display, widget_window,
+            XListInstalledColormaps(display,
+                                    widget_window,
                                     &sg->saved_colormap_count);
         XInstallColormap(display, rec->drawing_area.core.colormap);
     }
@@ -175,7 +411,6 @@ void SgVisualDrawingAreaUninstallColormap(Widget w)
 {
     SgVisualDrawingAreaRecCompat *rec;
     SgVisualDrawingAreaPartCompat *sg;
-    Widget shell;
     Display *display;
     Window *windows = NULL;
     Window widget_window;
@@ -189,41 +424,53 @@ void SgVisualDrawingAreaUninstallColormap(Widget w)
 
     rec = (SgVisualDrawingAreaRecCompat *)w;
     sg = &rec->sg_visual_drawing_area;
-    shell = sg->colormap_shell ? sg->colormap_shell : findShell(w);
 
-    if (XtIsRealized(w) && shell && XtIsRealized(shell))
+    if (!sg->colormap_shell || !XtIsRealized(w) ||
+        !XtIsRealized(sg->colormap_shell))
     {
-        display = XtDisplay(w);
-        widget_window = XtWindow(w);
-        shell_window = XtWindow(shell);
+        sg->colormap_installed = False;
+        return;
+    }
 
-        if (XGetWMColormapWindows(display, shell_window, &windows, &count))
+    display = XtDisplay(w);
+    widget_window = XtWindow(w);
+    shell_window = XtWindow(sg->colormap_shell);
+
+    if (XGetWMColormapWindows(display,
+                              shell_window,
+                              &windows,
+                              &count))
+    {
+        for (i = 0; i < count; ++i)
         {
-            for (i = 0; i < count; ++i)
+            if (windows[i] == widget_window)
             {
-                if (windows[i] == widget_window)
-                {
-                    found = i;
-                    break;
-                }
+                found = i;
+                break;
             }
-
-            if (found >= 0)
-            {
-                for (i = found; i + 1 < count; ++i)
-                    windows[i] = windows[i + 1];
-                XSetWMColormapWindows(display, shell_window,
-                                      windows, count - 1);
-            }
-            XFree(windows);
         }
 
-        if (sg->save_installed_colormaps && sg->saved_colormaps)
+        if (found >= 0)
         {
-            for (i = 0; i < sg->saved_colormap_count; ++i)
-                XInstallColormap(display, sg->saved_colormaps[i]);
+            for (i = found + 1; i < count; ++i)
+                windows[i - 1] = windows[i];
+
+            XSetWMColormapWindows(display,
+                                  shell_window,
+                                  windows,
+                                  count - 1);
+        }
+
+        XFree(windows);
+    }
+
+    if (sg->shell_override_redirect)
+    {
+        for (i = 0; i < sg->saved_colormap_count; ++i)
+            XInstallColormap(display, sg->saved_colormaps[i]);
+
+        if (sg->saved_colormaps)
             XFree(sg->saved_colormaps);
-        }
     }
 
     sg->saved_colormaps = NULL;
@@ -241,25 +488,17 @@ static void visualDrawingAreaInitialize(Widget request,
     SgVisualDrawingAreaPartCompat *sg = &rec->sg_visual_drawing_area;
 
     (void)request;
-    (void)args;
-    (void)num_args;
 
     sg->colormap_shell = NULL;
-    sg->save_installed_colormaps = False;
+    sg->shell_override_redirect = False;
     sg->saved_colormaps = NULL;
     sg->saved_colormap_count = 0;
     sg->colormap_installed = False;
     sg->dither_color_name = NULL;
 
-    if (!sg->visual)
-        sg->visual = DefaultVisualOfScreen(XtScreen(new_widget));
-
-    /*
-     * The original dither path uses XtGetSubresources, XAllocNamedColor,
-     * XAllocColor and XmGetPixmapByDepth("50_foreground"). The private
-     * subresource name feeding +0x120 is not yet recovered, so deliberately
-     * do not invent it. False is the original resource default and is safe.
-     */
+    createDitherBackground(rec,
+                           args,
+                           num_args ? *num_args : 0);
 }
 
 static void visualDrawingAreaRealize(Widget w,
@@ -269,18 +508,37 @@ static void visualDrawingAreaRealize(Widget w,
     SgVisualDrawingAreaRecCompat *rec =
         (SgVisualDrawingAreaRecCompat *)w;
     SgVisualDrawingAreaPartCompat *sg = &rec->sg_visual_drawing_area;
+    Arg arg;
 
     if (rec->drawing_area.core.width == 0)
         rec->drawing_area.core.width = 1;
     if (rec->drawing_area.core.height == 0)
         rec->drawing_area.core.height = 1;
 
-    /* Original code calls XtCreateWindow directly with the configured Visual. */
-    XtCreateWindow(w, (unsigned int)InputOutput,
-                   sg->visual ? sg->visual : CopyFromParent,
-                   *value_mask, attributes);
+    attributes->bit_gravity = NorthWestGravity;
+    attributes->do_not_propagate_mask =
+        KeyPressMask |
+        KeyReleaseMask |
+        ButtonPressMask |
+        ButtonReleaseMask |
+        PointerMotionMask;
+
+    *value_mask |= CWBitGravity | CWDontPropagate;
+
+    XtCreateWindow(w,
+                   (unsigned int)InputOutput,
+                   sg->visual,
+                   *value_mask,
+                   attributes);
 
     sg->colormap_shell = findShell(w);
+    sg->shell_override_redirect = False;
+
+    if (sg->colormap_shell)
+    {
+        XtSetArg(arg, XtNoverrideRedirect, &sg->shell_override_redirect);
+        XtGetValues(sg->colormap_shell, &arg, 1);
+    }
 
     if (sg->install_colormap)
         SgVisualDrawingAreaInstallColormap(w);
@@ -295,75 +553,21 @@ static void visualDrawingAreaDestroy(Widget w)
         SgVisualDrawingAreaUninstallColormap(w);
 }
 
-static void prepareVisualDrawingAreaClass(void)
-{
-    XmDrawingAreaClassRec *klass;
-
-    if (visualDrawingAreaClassPrepared)
-        return;
-
-    memset(&sgVisualDrawingAreaClassRec, 0,
-           sizeof(sgVisualDrawingAreaClassRec));
-
-    klass = &sgVisualDrawingAreaClassRec.drawing_area_class;
-    memcpy(klass, &xmDrawingAreaClassRec, sizeof(XmDrawingAreaClassRec));
-
-    klass->core_class.superclass = (WidgetClass)&xmDrawingAreaClassRec;
-    klass->core_class.class_name = "SgVisualDrawingArea";
-    klass->core_class.widget_size = sizeof(SgVisualDrawingAreaRecCompat);
-    klass->core_class.class_initialize = NULL;
-    klass->core_class.class_part_initialize = NULL;
-    klass->core_class.class_inited = False;
-    klass->core_class.initialize = visualDrawingAreaInitialize;
-    klass->core_class.initialize_hook = NULL;
-    klass->core_class.realize = visualDrawingAreaRealize;
-    klass->core_class.actions = NULL;
-    klass->core_class.num_actions = 0;
-    klass->core_class.resources = visualDrawingAreaResources;
-    klass->core_class.num_resources = XtNumber(visualDrawingAreaResources);
-    klass->core_class.xrm_class = NULLQUARK;
-    klass->core_class.destroy = visualDrawingAreaDestroy;
-
-    /* Binary: set_values is NULL. Do not add policy the original did not have. */
-    klass->core_class.set_values = NULL;
-    klass->core_class.set_values_hook = NULL;
-    klass->core_class.get_values_hook = NULL;
-    klass->core_class.accept_focus = NULL;
-    klass->core_class.display_accelerator = NULL;
-
-    /*
-     * CRITICAL: never share XmDrawingArea's private Motif class-extension
-     * object by copying its pointer into this subclass. The IRIX class owns a
-     * distinct 0x78-byte extension at 0x0b254310. Until that host ABI record is
-     * reconstructed, NULL is safer and semantically honest than aliasing the
-     * superclass's mutable private extension state.
-     */
-    klass->core_class.extension = NULL;
-
-    visualDrawingAreaClassPrepared = True;
-}
-
-#if defined(__GNUC__)
-__attribute__((constructor))
-#endif
-static void initializeVisualDrawingAreaLibraryClass(void)
-{
-    prepareVisualDrawingAreaClass();
-}
-
 Widget SgCreateVisualDrawingArea(Widget parent,
                                  char *name,
                                  ArgList args,
                                  Cardinal count)
 {
-    prepareVisualDrawingAreaClass();
-    return XtCreateWidget(name, sgVisualDrawingAreaWidgetClass,
-                          parent, args, count);
+    return XtCreateWidget(name,
+                          sgVisualDrawingAreaWidgetClass,
+                          parent,
+                          args,
+                          count);
 }
 
 #else
 
-/* Build fallback for Motif installations without private DrawingArea headers. */
+/* Build fallback for Motif installations without the required private ABI. */
 unsigned char sgVisualDrawingAreaClassRec[208];
 WidgetClass sgVisualDrawingAreaWidgetClass = (WidgetClass)0;
 
@@ -380,8 +584,11 @@ Widget SgCreateVisualDrawingArea(Widget parent,
                                  ArgList args,
                                  Cardinal count)
 {
-    return XtCreateWidget(name, sgVisualDrawingAreaWidgetClass,
-                          parent, args, count);
+    return XtCreateWidget(name,
+                          sgVisualDrawingAreaWidgetClass,
+                          parent,
+                          args,
+                          count);
 }
 
 void SgVisualDrawingAreaInstallColormap(Widget w) { (void)w; }
