@@ -5,7 +5,7 @@
 #include <guicore.h>
 #include <style.h>
 
-#include "font_bridge.h"
+#include "original_fonts.h"
 #include "gfxgui_bringup.h"
 
 struct gfxgui gfxgui;
@@ -30,7 +30,7 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
 {
     EFI_STATUS Status;
 
-    ArcsInitBringupFonts(Fonts);
+    ArcsInitOriginalFonts(Fonts);
 
     Status = ArcsGfxGuiBringupInit(&Bringup, Gop, Fonts);
     if (EFI_ERROR(Status))
