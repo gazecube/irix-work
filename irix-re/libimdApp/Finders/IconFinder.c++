@@ -18,14 +18,11 @@ ImdIconFinder::ImdIconFinder(
       _changingContent(false),
       _constructorValue(constructorValue)
 {
-    /*
-     * Binary-confirmed at ImdIconFinder::ImdIconFinder, 0x0963ec5c:
-     * XtCreateWidget(name, sgFinderWidgetClass, parent, args, count) supplies
-     * the VkComponent base widget. The original arguments are carried through
-     * ImdArgList. ArgList.c++ and the ImdArgList method names are recovered
-     * from the original libimdIconPanel.so DWARF; the exact constructor-time
-     * resource population is still under reconstruction, so this list is
-     * intentionally empty rather than inventing resources.
+    /* make the finder base widget. the original constructor uses an
+     * ImdArgList here. no resources are supplied until their values have
+     * been recovered from the original libimdApp.so constructor.
+     *
+     * RE: ImdIconFinder::ImdIconFinder, 0x0963ec5c.
      */
     ImdArgList args;
     _baseWidget = XtCreateWidget(
@@ -38,18 +35,14 @@ ImdIconFinder::ImdIconFinder(
     if (!_baseWidget)
         return;
 
-    /*
-     * libimdApp imports SgFinderGetChild and later keeps the text child used
-     * by setContent/getContent. Selector 1 is binary-confirmed as the child at
-     * SgFinder record offset +0xf4.
+    /* remember the text child. selector 1 and the SgFinder record offset
+     * are taken from the original binary.
      */
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
 
-    /*
-     * The original constructor creates these exact widget-instance names in
-     * this order. ImdModelBasedIconPanel is not reconstructed yet; the current
-     * ImdIconPanel preserves the panel/view-widget boundary without claiming
-     * the missing model behavior.
+    /* make the icon finder panel. the original object is an
+     * ImdModelBasedIconPanel. use ImdIconPanel until that class is
+     * reconstructed; do not infer the missing model behaviour here.
      */
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
@@ -86,10 +79,8 @@ void ImdIconFinder::setContent(const char *content, bool notify)
     if (!_baseWidget)
         return;
 
-    /*
-     * The original routine sets its changing-content guard before updating
-     * the text field. Notification through ImdCompletionField is deferred
-     * until that class is reconstructed.
+    /* suppress the normal content-change path while setting the field.
+     * ImdCompletionField notification is restored with that class.
      */
     _changingContent = true;
     SgFinderSetTextString(
