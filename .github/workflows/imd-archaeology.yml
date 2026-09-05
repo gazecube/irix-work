@@ -185,3 +185,82 @@ jobs:
 
           echo '--- relocations near constructor dependencies ---'
           mips-linux-gnu-readelf -rW "$IMDAPP" | c++filt | grep -E 'ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget|XtManageChild|Xm' || true
+
+      - name: Write focused archaeology report
+        run: |
+          report=/tmp/imd-evidence/arglist-report.txt
+          : > "$report"
+
+          section()
+          {
+            printf '\n===== %s =====\n' "$1" >> "$report"
+          }
+
+          section 'ImdArgList setArg'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c23c \
+            --stop-address=0x0967c2b4 \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgList getArgList'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c2b4 \
+            --stop-address=0x0967c40c \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgList getNumArgs'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c40c \
+            --stop-address=0x0967c450 \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgList getValues'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c450 \
+            --stop-address=0x0967c4b4 \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgListImpl clear'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c4b4 \
+            --stop-address=0x0967c5bc \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgList clear'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967c5bc \
+            --stop-address=0x0967c5f0 \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdArgList setValues'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0967d06c \
+            --stop-address=0x0967d0d0 \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdModelBasedIconPanel constructor'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x09684610 \
+            --stop-address=0x09685f6c \
+            "$IMDICONPANEL" >> "$report"
+
+          section 'ImdIconFinder constructor'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0963ec5c \
+            --stop-address=0x0963f350 \
+            "$IMDAPP" >> "$report"
+
+          section 'MIPS architecture / GOT references'
+          mips-linux-gnu-readelf -A "$IMDICONPANEL" | c++filt >> "$report"
+
+          section 'resource-like strings'
+          strings -a -t x "$IMDICONPANEL" | grep -E 'XmN|SgN|Scroll|drop|drag|select|rename|visual|background|ArgList' >> "$report" || true
+
+          wc -l "$report"
+
+      - name: Upload focused archaeology report
+        uses: actions/upload-artifact@v4
+        with:
+          name: imd-arglist-archaeology
+          path: /tmp/imd-evidence/arglist-report.txt
+          if-no-files-found: error
