@@ -22,16 +22,25 @@ jobs:
       - name: Extract original libimdApp
         run: |
           mkdir -p /tmp/imd-evidence
-          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-evidence usr/lib32/internal/libimdApp.so
-          file /tmp/imd-evidence/usr/lib32/internal/libimdApp.so
-          sha256sum /tmp/imd-evidence/usr/lib32/internal/libimdApp.so
+
+          # find the archive spelling actually present in the preserved
+          # evidence. do not repack or normalize the original tar file.
+          entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdApp.so$' | head -1)"
+          test -n "$entry"
+          echo "archive entry: $entry"
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-evidence "$entry"
+
+          app="/tmp/imd-evidence/$entry"
+          file "$app"
+          sha256sum "$app"
+          echo "IMDAPP=$app" >> "$GITHUB_ENV"
 
       - name: Symbol neighborhood
         run: |
           # pull the nearby public/debug symbols before looking at the code.
           # this keeps the disassembly anchored to names recovered from the
           # original object rather than names invented during reconstruction.
-          mips-linux-gnu-readelf -Ws /tmp/imd-evidence/usr/lib32/internal/libimdApp.so | c++filt | grep -E 'ImdIconFinder|ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget' || true
+          mips-linux-gnu-readelf -Ws "$IMDAPP" | c++filt | grep -E 'ImdIconFinder|ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget' || true
 
       - name: Disassemble ImdIconFinder constructor
         run: |
@@ -40,11 +49,11 @@ jobs:
           mips-linux-gnu-objdump -drC \
             --start-address=0x0963ec5c \
             --stop-address=0x0963f350 \
-            /tmp/imd-evidence/usr/lib32/internal/libimdApp.so
+            "$IMDAPP"
 
       - name: Dump constructor strings and relocations
         run: |
           echo '--- relevant strings ---'
-          strings -a -t x /tmp/imd-evidence/usr/lib32/internal/libimdApp.so | grep -E 'iconFinder|finderSelection|findButton|IconBook|SearchBook|InfoScape|XmN|SgN' || true
+          strings -a -t x "$IMDAPP" | grep -E 'iconFinder|finderSelection|findButton|IconBook|SearchBook|InfoScape|XmN|SgN' || true
           echo '--- relocations near constructor dependencies ---'
-          mips-linux-gnu-readelf -rW /tmp/imd-evidence/usr/lib32/internal/libimdApp.so | c++filt | grep -E 'ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget|XtManageChild|Xm' || true
+          mips-linux-gnu-readelf -rW "$IMDAPP" | c++filt | grep -E 'ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget|XtManageChild|Xm' || true
