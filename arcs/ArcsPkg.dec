@@ -1,0 +1,9 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = ArcsPkg
+  PACKAGE_GUID                   = 5d2d5af3-89b2-4c5b-9ab1-923fd1aa8d80
+  PACKAGE_VERSION                = 0.1
+
+[Includes]
+  sgisrc/include
+  uefi/include
