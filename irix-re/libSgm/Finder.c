@@ -15,6 +15,7 @@
 #include <X11/Intrinsic.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -82,7 +83,7 @@ static void textActivateCB(Widget, XtPointer, XtPointer);
 static void textValueChangedCB(Widget, XtPointer, XtPointer);
 static void historyItemActivateCB(Widget, XtPointer, XtPointer);
 static void rebuildHistoryMenu(SgFinderRecCompat *);
-static void clearHistoryStorage(SgFinderRecCompat *);
+static void clearHistoryStorage(SgFinderRecCompat *, Boolean);
 
 static void defaultSetTextSection(Widget finder, int section)
 {
@@ -296,7 +297,8 @@ static void finderInitialize(Widget request, Widget new_widget,
     }
 }
 
-static void clearHistoryStorage(SgFinderRecCompat *rec)
+static void clearHistoryStorage(SgFinderRecCompat *rec,
+                                Boolean destroy_widgets)
 {
     Cardinal i;
 
@@ -305,9 +307,17 @@ static void clearHistoryStorage(SgFinderRecCompat *rec)
 
     for (i = 0; i < FINDER_HISTORY_CAPACITY; ++i)
     {
+        /*
+         * During the Finder class destroy method Xt has already entered
+         * recursive destruction of composite children.  The cached menu-item
+         * pointers are therefore ownership references, not widgets that the
+         * parent destroy method may destroy a second time.  Explicit history
+         * clearing/rebuilding still destroys live menu items normally.
+         */
         if (rec->finder.history_item[i])
         {
-            XtDestroyWidget(rec->finder.history_item[i]);
+            if (destroy_widgets)
+                XtDestroyWidget(rec->finder.history_item[i]);
             rec->finder.history_item[i] = NULL;
         }
         if (rec->finder.history[i])
@@ -323,7 +333,7 @@ static void finderDestroy(Widget w)
 {
     SgFinderRecCompat *rec = (SgFinderRecCompat *)w;
 
-    clearHistoryStorage(rec);
+    clearHistoryStorage(rec, False);
     rec->finder.drop_pocket = NULL;
     rec->finder.text = NULL;
     rec->finder.zoom_bar = NULL;
@@ -569,7 +579,7 @@ void SgFinderClearHistory(Widget finder)
         !rec->finder.use_history_menu || !rec->finder.history_menubar)
         return;
 
-    clearHistoryStorage(rec);
+    clearHistoryStorage(rec, True);
 }
 
 void SgFinderAddHistoryItem(Widget finder, char *text)
