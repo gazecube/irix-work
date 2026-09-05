@@ -1,6 +1,8 @@
 #include "ImdIconPanel.h"
 
 #include <Xm/DrawingA.h>
+#include <X11/StringDefs.h>
+#include <X11/Xlib.h>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -122,6 +124,52 @@ void reportViewPanelSuperclassOnce()
             : "XmDrawingArea fallback");
 }
 
+void reportSgVisualState(Widget widget)
+{
+    if (!widget || !usingSgVisualDrawingArea())
+        return;
+
+    Visual *visual = 0;
+    Colormap colormap = None;
+    int depth = 0;
+    Boolean installColormap = False;
+    Boolean ditherBackground = False;
+
+    XtVaGetValues(
+        widget,
+        "visual", &visual,
+        XtNcolormap, &colormap,
+        XtNdepth, &depth,
+        "installColormap", &installColormap,
+        "ditherBackground", &ditherBackground,
+        NULL);
+
+    if (visual)
+    {
+        std::fprintf(
+            stderr,
+            "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n",
+            static_cast<unsigned long>(XVisualIDFromVisual(visual)),
+            visual->class,
+            depth,
+            static_cast<unsigned long>(colormap));
+    }
+    else
+    {
+        std::fprintf(
+            stderr,
+            "ImdViewPanel visual: id=NULL class=-1 depth=%d colormap=0x%lx\n",
+            depth,
+            static_cast<unsigned long>(colormap));
+    }
+
+    std::fprintf(
+        stderr,
+        "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n",
+        installColormap ? "True" : "False",
+        ditherBackground ? "True" : "False");
+}
+
 bool isUnsupportedFallbackResource(const char *name)
 {
     if (!name || usingSgVisualDrawingArea())
@@ -184,7 +232,10 @@ extern "C" Widget ImdCreateViewPanel(
     delete [] filtered;
 
     if (widget)
+    {
         gViewPanelState[widget] = ViewPanelState();
+        reportSgVisualState(widget);
+    }
 
     return widget;
 }
