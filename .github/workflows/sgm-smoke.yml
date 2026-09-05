@@ -1,0 +1,31 @@
+name: Sgm smoke
+
+on:
+  push:
+    branches:
+      - irix-re
+    paths:
+      - 'irix-re/libSgm/**'
+      - 'irix-re/CMakeLists.txt'
+      - '.github/workflows/sgm-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  sgm-visual-drawing-area:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Motif and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libmotif-dev libx11-dev libxt-dev xvfb
+
+      - name: Configure
+        run: cmake -S irix-re -B irix-re/build
+
+      - name: Build smoke test
+        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke -j2
+
+      - name: Run smoke test
+        run: xvfb-run -a ./irix-re/build/libSgm/sgm_visual_drawing_area_smoke
