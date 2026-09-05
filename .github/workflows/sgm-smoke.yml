@@ -19,13 +19,33 @@ jobs:
       - name: Install Motif and Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libmotif-dev libx11-dev libxt-dev xvfb
+          sudo apt-get install -y build-essential cmake gdb libmotif-dev libx11-dev libxt-dev xvfb
 
       - name: Configure
-        run: cmake -S irix-re -B irix-re/build
+        run: cmake -S irix-re -B irix-re/build -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build smoke test
         run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke -j2
 
+      - name: Trace invalid XDeleteProperty
+        run: |
+          cat >/tmp/sgm.gdb <<'EOF'
+          set pagination off
+          set breakpoint pending on
+          break XDeleteProperty
+          commands
+            silent
+            if $rsi == 0
+              printf "Sg smoke: caught XDeleteProperty with window 0\n"
+              bt full
+              quit 99
+            end
+            continue
+          end
+          run
+          EOF
+          xvfb-run -a gdb -q -batch -x /tmp/sgm.gdb --args ./irix-re/build/libSgm/sgm_visual_drawing_area_smoke
+
       - name: Run smoke test
+        if: success()
         run: xvfb-run -a ./irix-re/build/libSgm/sgm_visual_drawing_area_smoke
