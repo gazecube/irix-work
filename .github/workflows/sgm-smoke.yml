@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  sgm-visual-drawing-area:
+  sgm-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,8 +31,8 @@ jobs:
       - name: Configure
         run: cmake -S irix-re -B irix-re/build -DCMAKE_BUILD_TYPE=Debug
 
-      - name: Build smoke test
-        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke -j2
+      - name: Build smoke tests
+        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke sgm_finder_smoke -j2
 
       - name: Trace invalid XDeleteProperty
         run: |
@@ -53,6 +53,10 @@ jobs:
           EOF
           xvfb-run -a gdb -q -batch -x /tmp/sgm.gdb --args ./irix-re/build/libSgm/sgm_visual_drawing_area_smoke
 
-      - name: Run smoke test
+      - name: Run VisualDrawingArea smoke test
         if: success()
         run: xvfb-run -a ./irix-re/build/libSgm/sgm_visual_drawing_area_smoke
+
+      - name: Run Finder smoke test
+        if: success()
+        run: xvfb-run -a ./irix-re/build/libSgm/sgm_finder_smoke
