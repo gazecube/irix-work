@@ -52,10 +52,13 @@ int main(int argc, char **argv)
     Widget shell;
     Widget finder;
     Widget text;
+    Widget history;
+    Widget historyItem;
     Widget optional;
     Arg args[2];
     Cardinal count;
     char *value;
+    int activateBeforeHistory;
 
     shell = XtVaAppInitialize(&app, "SgFinderSmoke",
                               NULL, 0, &argc, argv,
@@ -84,8 +87,8 @@ int main(int argc, char **argv)
             "text child is not XmTextField");
     require(SgFinderGetChild(finder, SgFINDER_ZOOM_BAR) != NULL,
             "zoom bar missing");
-    require(SgFinderGetChild(finder, SgFINDER_HISTORY_MENUBAR) != NULL,
-            "default history menubar missing");
+    history = SgFinderGetChild(finder, SgFINDER_HISTORY_MENUBAR);
+    require(history != NULL, "default history menubar missing");
 
     fprintf(stderr, "SgFinder smoke: set/get text and callbacks\n");
     SgFinderSetTextString(finder, "/usr/people/test");
@@ -104,6 +107,38 @@ int main(int argc, char **argv)
     require(activateCount == 2,
             "text activate did not forward to Finder");
 
+    fprintf(stderr, "SgFinder smoke: six-entry history compatibility\n");
+    SgFinderAddHistoryItem(finder, "/history/a");
+    SgFinderAddHistoryItem(finder, "/history/b");
+    SgFinderAddHistoryItem(finder, "/history/c");
+    SgFinderAddHistoryItem(finder, "/history/d");
+    SgFinderAddHistoryItem(finder, "/history/e");
+    SgFinderAddHistoryItem(finder, "/history/f");
+    SgFinderAddHistoryItem(finder, "/history/g");
+
+    require(XtNameToWidget(history, "historyItem0") != NULL,
+            "history item 0 missing");
+    require(XtNameToWidget(history, "historyItem5") != NULL,
+            "history item 5 missing");
+    require(XtNameToWidget(history, "historyItem6") == NULL,
+            "history grew beyond six entries");
+
+    activateBeforeHistory = activateCount;
+    historyItem = XtNameToWidget(history, "historyItem0");
+    require(historyItem != NULL, "newest history item missing");
+    XtCallCallbacks(historyItem, XmNactivateCallback, NULL);
+    value = SgFinderGetTextString(finder);
+    require(value != NULL, "history selection left text NULL");
+    require(strcmp(value, "/history/g") == 0,
+            "newest history selection did not restore Finder text");
+    XtFree(value);
+    require(activateCount == activateBeforeHistory + 1,
+            "history selection did not emit Finder activate callback");
+
+    SgFinderClearHistory(finder);
+    require(XtNameToWidget(history, "historyItem0") == NULL,
+            "clear history left menu items behind");
+
     fprintf(stderr, "SgFinder smoke: creation-time optional children\n");
     count = 0;
     XtSetArg(args[count], SgNuseDropPocket, False); ++count;
@@ -119,6 +154,10 @@ int main(int argc, char **argv)
             "minimal Finder lost text child");
     require(SgFinderGetChild(optional, SgFINDER_ZOOM_BAR) != NULL,
             "minimal Finder lost zoom bar");
+
+    /* Documented safe no-op path when history was disabled at creation. */
+    SgFinderAddHistoryItem(optional, "/ignored");
+    SgFinderClearHistory(optional);
 
     fprintf(stderr, "SgFinder smoke: realize\n");
     XtRealizeWidget(shell);
