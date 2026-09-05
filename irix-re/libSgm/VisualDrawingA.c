@@ -31,6 +31,10 @@
 #define XmInheritWidgetNavigable ((XmWidgetNavigableProc)_XtInherit)
 #endif
 
+#ifndef XmInheritParentProcess
+#define XmInheritParentProcess ((XmParentProcessProc)_XtInherit)
+#endif
+
 typedef struct
 {
     /* Original public resources: n32 +0x104 .. +0x109. */
@@ -150,10 +154,9 @@ static XmBaseClassExtRec baseClassExtRec =
 };
 
 /*
- * Static class record, matching the original inheritance contract. This is
- * intentionally not constructed by memcpy() from xmDrawingAreaClassRec.
- * Xt/Motif class records contain mutable private state; copying a live
- * superclass record and then pretending the copy is a subclass is unsafe.
+ * Static class record matching the original n32 class record field-for-field
+ * where the Xt/Motif ABI defines the slot. Values in the inherited class parts
+ * were checked against the raw bytes at 0x0b254388 rather than inferred.
  */
 SgVisualDrawingAreaClassRecCompat sgVisualDrawingAreaClassRec =
 {
@@ -214,8 +217,8 @@ SgVisualDrawingAreaClassRecCompat sgVisualDrawingAreaClassRec =
             0,
             NULL,
             0,
-            NULL,
-            (XtPointer)_XtInherit
+            XmInheritParentProcess,
+            NULL
         },
         {
             NULL
@@ -268,7 +271,6 @@ static void createDitherBackground(SgVisualDrawingAreaRecCompat *rec,
     if (!sg->dither_background)
         return;
 
-    /* Original Initialize clears the flag first and only restores it on success. */
     sg->dither_background = False;
 
     if (!sg->visual)
@@ -287,8 +289,8 @@ static void createDitherBackground(SgVisualDrawingAreaRecCompat *rec,
                       NULL,
                       ditherColorResource,
                       XtNumber(ditherColorResource),
-                      NULL,
-                      0);
+                      args,
+                      num_args);
 
     if (!sg->dither_color_name)
         return;
@@ -327,14 +329,11 @@ static void createDitherBackground(SgVisualDrawingAreaRecCompat *rec,
                                 allocated.pixel,
                                 rec->drawing_area.core.depth);
 
-    if (pixmap == XmUNSPECIFIED_PIXMAP || pixmap == None)
+    if (pixmap == None)
         return;
 
     rec->drawing_area.core.background_pixmap = pixmap;
     sg->dither_background = True;
-
-    (void)args;
-    (void)num_args;
 }
 
 void SgVisualDrawingAreaInstallColormap(Widget w)
@@ -369,6 +368,16 @@ void SgVisualDrawingAreaInstallColormap(Widget w)
                               &old_windows,
                               &count))
     {
+        for (i = 0; i < count; ++i)
+        {
+            if (old_windows[i] == widget_window)
+            {
+                XFree(old_windows);
+                sg->colormap_installed = True;
+                return;
+            }
+        }
+
         new_windows = (Window *)XtMalloc((Cardinal)(count + 1) *
                                          sizeof(Window));
         if (new_windows)
@@ -389,7 +398,6 @@ void SgVisualDrawingAreaInstallColormap(Widget w)
     }
     else
     {
-        /* Original fallback installs both the drawing-area and shell windows. */
         initial_windows[0] = widget_window;
         initial_windows[1] = shell_window;
         XSetWMColormapWindows(display, shell_window, initial_windows, 2);
@@ -496,9 +504,10 @@ static void visualDrawingAreaInitialize(Widget request,
     sg->colormap_installed = False;
     sg->dither_color_name = NULL;
 
-    createDitherBackground(rec,
-                           args,
-                           num_args ? *num_args : 0);
+    if (sg->visual == (Visual *)CopyFromParent || !sg->visual)
+        sg->visual = DefaultVisualOfScreen(XtScreen(new_widget));
+
+    createDitherBackground(rec, args, num_args ? *num_args : 0);
 }
 
 static void visualDrawingAreaRealize(Widget w,
@@ -522,18 +531,15 @@ static void visualDrawingAreaRealize(Widget w,
         ButtonPressMask |
         ButtonReleaseMask |
         PointerMotionMask;
-
     *value_mask |= CWBitGravity | CWDontPropagate;
 
     XtCreateWindow(w,
                    (unsigned int)InputOutput,
-                   sg->visual,
+                   sg->visual ? sg->visual : CopyFromParent,
                    *value_mask,
                    attributes);
 
     sg->colormap_shell = findShell(w);
-    sg->shell_override_redirect = False;
-
     if (sg->colormap_shell)
     {
         XtSetArg(arg, XtNoverrideRedirect, &sg->shell_override_redirect);
@@ -567,7 +573,10 @@ Widget SgCreateVisualDrawingArea(Widget parent,
 
 #else
 
-/* Build fallback for Motif installations without the required private ABI. */
+/*
+ * Deliberate build fallback only. It is not advertised as Sg ABI complete.
+ * This path exists for Motif installations which omit private ABI headers.
+ */
 unsigned char sgVisualDrawingAreaClassRec[208];
 WidgetClass sgVisualDrawingAreaWidgetClass = (WidgetClass)0;
 
@@ -584,11 +593,8 @@ Widget SgCreateVisualDrawingArea(Widget parent,
                                  ArgList args,
                                  Cardinal count)
 {
-    return XtCreateWidget(name,
-                          sgVisualDrawingAreaWidgetClass,
-                          parent,
-                          args,
-                          count);
+    return XtCreateWidget(name, sgVisualDrawingAreaWidgetClass,
+                          parent, args, count);
 }
 
 void SgVisualDrawingAreaInstallColormap(Widget w) { (void)w; }
