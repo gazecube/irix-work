@@ -2,6 +2,7 @@
 #define IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H
 
 #include <X11/Intrinsic.h>
+#include <X11/Xutil.h>
 #include <vector>
 
 /*
