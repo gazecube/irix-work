@@ -4,6 +4,7 @@
 #include "ModelBasedIconPanel.h"
 #include <Sgm/Finder.h>
 
+#include <Xm/Form.h>
 #include <Xm/Frame.h>
 #include <X11/StringDefs.h>
 
@@ -18,11 +19,10 @@ ImdIconFinder::ImdIconFinder(
       _changingContent(false),
       _constructorValue(constructorValue)
 {
-    /* make the finder base widget. the original constructor uses an
-     * ImdArgList here. no resources are supplied until their names have
-     * been recovered from the original libimdApp.so constructor.
+    /* make the finder base widget
      *
-     * RE: ImdIconFinder::ImdIconFinder, 0x0963ec5c.
+     * RE: the original constructor clears a local ImdArgList and creates
+     * the SgFinder with no arguments at 0x0963edc8..0x0963edf4.
      */
     ImdArgList args;
     _baseWidget = XtCreateWidget(
@@ -40,15 +40,25 @@ ImdIconFinder::ImdIconFinder(
      */
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
 
-    /* make the frame and apply its accumulated resources. the original
-     * constructor calls ImdArgList::setValues() on this widget before
-     * constructing the icon panel.
+    /* make the frame
      */
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
         xmFrameWidgetClass,
         _baseWidget,
         NULL);
+
+    /* attach the frame to three sides of the finder
+     *
+     * RE: libimdApp was built with FAST_QUARKS. the encoded resource
+     * pointers -66, -102, -70 and -103 decode through SGI FastStrDefs.h
+     * to the four attachment resources below. the values are exactly
+     * 1, 1, 1 and 0 in the original constructor.
+     */
+    args.setArg(XmNtopAttachment, XmATTACH_FORM);
+    args.setArg(XmNbottomAttachment, XmATTACH_FORM);
+    args.setArg(XmNleftAttachment, XmATTACH_FORM);
+    args.setArg(XmNrightAttachment, XmATTACH_NONE);
     args.setValues(_iconFinderFrame);
 
     /* make the model panel. this argument order is taken directly from the
@@ -57,6 +67,16 @@ ImdIconFinder::ImdIconFinder(
      * ImdModelBasedIconPanel(const char *, Widget, ImdModel *, Arg *, int)
      */
     args.clear();
+
+    /* do not traverse into the icon panel
+     *
+     * RE: encoded resource pointer -49 is XmNtraversalOn in SGI
+     * FastStrDefs.h and is passed with value 0. the original constructor
+     * adds one more string-named Boolean resource immediately after this;
+     * its spelling is not recovered yet, so it remains omitted here.
+     */
+    args.setArg(XmNtraversalOn, False);
+
     _iconFinderPanel = new ImdModelBasedIconPanel(
         "iconFinderPanel",
         _iconFinderFrame,
