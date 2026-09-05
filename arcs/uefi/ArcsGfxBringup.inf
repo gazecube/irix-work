@@ -15,6 +15,7 @@
   bootstrap_compat.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
+  input_bringup.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
@@ -36,6 +37,8 @@
 
 [Protocols]
   gEfiGraphicsOutputProtocolGuid
+  gEfiSimplePointerProtocolGuid
+  gEfiAbsolutePointerProtocolGuid
 
 [BuildOptions]
   GCC:*_*_*_CC_FLAGS = -D_LANGUAGE_C -D_STANDALONE
