@@ -111,70 +111,64 @@ GopCmov2i(VOID *Hw, INT32 X, INT32 Y)
     B->CposY = Y;
 }
 
-static VOID
-DrawBitmapRun(ARCS_GOP_HTP *B, INTN X, INTN GopY, UINTN Width)
-{
-    INTN Start = X;
-    INTN End = X + (INTN)Width - 1;
-
-    if (GopY < 0 || GopY >= (INTN)B->Height || End < 0 || Start >= (INTN)B->Width)
-        return;
-
-    if (Start < 0) Start = 0;
-    if (End >= (INTN)B->Width) End = (INTN)B->Width - 1;
-    if (End < Start)
-        return;
-
-    B->Gop->Blt(B->Gop, &B->Palette[B->ColorIndex], EfiBltVideoFill,
-                0, 0, (UINTN)Start, (UINTN)GopY,
-                (UINTN)(End - Start + 1), 1, 0);
-}
-
+/*
+ * This is the original SGI software textport bitmap walk, taken from the
+ * RAD1 framebuffer fallback and adapted only at the final pixel store.
+ *
+ * Original operation:
+ *     *dest = lut_flag;
+ *
+ * UEFI operation:
+ *     GOP Blt of the currently selected palette entry.
+ *
+ * Keep the SGI x/y origin handling, row order, shorts-per-row traversal,
+ * and MSB-first 0x8000 mask semantics intact here.  GOP is only the sink.
+ */
 static VOID
 GopDrawBitmap(VOID *Hw, struct htp_bitmap *Bitmap)
 {
     ARCS_GOP_HTP *B = (ARCS_GOP_HTP *)Hw;
-    INTN XLeft, GopY0;
-    INT32 Row;
+    unsigned short *BufPtr;
+    unsigned short Pattern, Mask;
+    int XSize, YSize, ShortsRemaining;
+    int X, Y;
 
-    if (!B || !B->Gop || !Bitmap || !Bitmap->buf || Bitmap->xsize <= 0 || Bitmap->ysize <= 0)
+    if (!B || !B->Gop || !Bitmap || !Bitmap->buf ||
+        Bitmap->xsize <= 0 || Bitmap->ysize <= 0)
         return;
 
-    /* Match the original software textport raster path (RAD1):
-     *   x = cpos_x - xorig
-     *   y = screen_h - (cpos_y - yorig)
-     * and each successive bitmap row moves one framebuffer scanline up.
-     * The font bit stream itself is MSB-first within each 16-bit word. */
-    XLeft = B->CposX - Bitmap->xorig;
-    GopY0 = (INTN)B->Height - (B->CposY - Bitmap->yorig);
+    BufPtr = Bitmap->buf;
+    Y = (int)B->Height - (B->CposY - Bitmap->yorig);
+    YSize = Bitmap->ysize;
 
-    for (Row = 0; Row < Bitmap->ysize; Row++) {
-        INT32 Col = 0;
-        while (Col < Bitmap->xsize) {
-            INT32 WordIndex = Row * Bitmap->sper + (Col >> 4);
-            UINT16 Word = Bitmap->buf[WordIndex];
-            UINT16 Mask = (UINT16)(0x8000U >> (Col & 15));
+    while (YSize--) {
+        X = B->CposX - Bitmap->xorig;
+        XSize = Bitmap->xsize;
+        ShortsRemaining = Bitmap->sper;
 
-            if ((Word & Mask) == 0) {
-                Col++;
-                continue;
-            }
+        while (ShortsRemaining-- && XSize) {
+            Mask = 0x8000;
+            Pattern = *(BufPtr++);
 
-            {
-                INT32 RunStart = Col;
-                do {
-                    Col++;
-                    if (Col >= Bitmap->xsize)
-                        break;
-                    WordIndex = Row * Bitmap->sper + (Col >> 4);
-                    Word = Bitmap->buf[WordIndex];
-                    Mask = (UINT16)(0x8000U >> (Col & 15));
-                } while (Word & Mask);
+            while (Mask && XSize) {
+                if (Mask & Pattern) {
+                    if (X >= 0 && Y >= 0 &&
+                        X < (int)B->Width && Y < (int)B->Height) {
+                        B->Gop->Blt(B->Gop,
+                                    &B->Palette[B->ColorIndex],
+                                    EfiBltVideoFill,
+                                    0, 0, (UINTN)X, (UINTN)Y,
+                                    1, 1, 0);
+                    }
+                }
 
-                DrawBitmapRun(B, XLeft + RunStart, GopY0 - Row,
-                              (UINTN)(Col - RunStart));
+                Mask >>= 1;
+                XSize--;
+                X++;
             }
         }
+
+        Y--;
     }
 
     B->CposX += Bitmap->xmove;
