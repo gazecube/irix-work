@@ -1,6 +1,7 @@
 #include "PandoraViewKit.h"
 #include "PandoraPresentation.h"
 #include "ImdIconPanel.h"
+#include "ImdFtrVisualCompat.h"
 #include "Base/PwdNameList.h"
 
 #include <Xm/Form.h>
@@ -270,8 +271,10 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
 
 void PandoraComponent::createIconAreaScaffold()
 {
-    Arg args[8];
-    int count = 0;
+    Arg args[16];
+    Cardinal count = 0;
+    int auxVisualValue = 0;
+    Boolean haveChosenVisual;
 
     _scrolledWindow = XmCreateScrolledWindow(
         _panelWindow,
@@ -280,8 +283,23 @@ void PandoraComponent::createIconAreaScaffold()
         0);
     XtManageChild(_scrolledWindow);
 
-    XtSetArg(args[count], (char *)"installColormap", False); ++count;
-    XtSetArg(args[count], (char *)"ditherBackground", False); ++count;
+    /*
+     * Binary-proven from PandoraComponent::readyToDisplay at 0x100115e8:
+     * immediately after managing scrolledWindow, Clogin calls
+     * imdFtrChooseVisualArgs(baseWidget, 2, args, &count, &aux). On success
+     * that routine appends visual, colormap, and depth in exactly that order.
+     * The returned Boolean is then used as the value for BOTH of the first
+     * two Imd panel resources: installColormap and ditherBackground.
+     */
+    haveChosenVisual = imdFtrChooseVisualArgs(
+        _baseWidget,
+        2,
+        args,
+        &count,
+        &auxVisualValue);
+
+    XtSetArg(args[count], (char *)"installColormap", haveChosenVisual); ++count;
+    XtSetArg(args[count], (char *)"ditherBackground", haveChosenVisual); ++count;
     XtSetArg(args[count], (char *)"horzScrollPolicy", 0); ++count;
     XtSetArg(args[count], (char *)"vertScrollPolicy", 1); ++count;
     XtSetArg(args[count], (char *)"dropEnabled", 0); ++count;
@@ -293,7 +311,7 @@ void PandoraComponent::createIconAreaScaffold()
         "panel",
         _scrolledWindow,
         args,
-        count);
+        static_cast<int>(count));
 
     if (_iconPanel && _iconPanel->baseWidget())
     {
