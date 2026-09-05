@@ -30,7 +30,6 @@ WidgetClass sgColorChooserWidgetClass = (WidgetClass)0;
 WidgetClass glxMDrawWidgetClass = (WidgetClass)0;
 WidgetClass sgDropPocketWidgetClass = (WidgetClass)0;
 WidgetClass sgDynaMenuWidgetClass = (WidgetClass)0;
-WidgetClass sgFinderWidgetClass = (WidgetClass)0;
 WidgetClass sgZbTextWidgetClass = (WidgetClass)0;
 WidgetClass sgZoomBarWidgetClass = (WidgetClass)0;
 WidgetClass sgColumnWidgetClass = (WidgetClass)0;
@@ -60,7 +59,6 @@ static void SgmCompatInitClasses(void)
     glxMDrawWidgetClass = xmDrawingAreaWidgetClass;
     sgDropPocketWidgetClass = xmDrawingAreaWidgetClass;
     sgDynaMenuWidgetClass = xmRowColumnWidgetClass;
-    sgFinderWidgetClass = xmFormWidgetClass;
     sgZbTextWidgetClass = xmFormWidgetClass;
     sgZoomBarWidgetClass = xmScaleWidgetClass;
     sgColumnWidgetClass = xmFormWidgetClass;
@@ -115,97 +113,6 @@ SGM_CREATOR(SgCreateThumbWheel, sgThumbWheelWidgetClass)
 SGM_CREATOR(SgCreateOsc, sgOscWidgetClass)
 SGM_CREATOR(SgCreateHorzPanedWindow, sgHorzPanedWindowWidgetClass)
 SGM_CREATOR(GlxCreateMDraw, glxMDrawWidgetClass)
-
-typedef struct FinderCompatState
-{
-    Widget finder;
-    Widget child[4];
-    struct FinderCompatState *next;
-} FinderCompatState;
-
-static FinderCompatState *finderStates;
-
-static FinderCompatState *finderState(Widget finder, Boolean create)
-{
-    FinderCompatState *state;
-
-    for (state = finderStates; state; state = state->next)
-        if (state->finder == finder)
-            return state;
-
-    if (!create || !finder)
-        return 0;
-
-    state = (FinderCompatState *)calloc(1, sizeof(FinderCompatState));
-    if (!state)
-        return 0;
-
-    state->finder = finder;
-    state->child[0] = XmCreateText(finder, "text", 0, 0);
-    state->child[1] = XmCreatePushButton(finder, "history", 0, 0);
-    state->child[2] = XmCreatePushButton(finder, "button", 0, 0);
-    state->child[3] = XmCreatePushButton(finder, "menu", 0, 0);
-
-    XtManageChild(state->child[0]);
-
-    state->next = finderStates;
-    finderStates = state;
-    return state;
-}
-
-Widget SgCreateFinder(Widget parent, char *name, ArgList args, Cardinal count)
-{
-    Widget finder = sgmCreate(parent, name, args, count,
-                              sgFinderWidgetClass, False);
-    (void)finderState(finder, True);
-    return finder;
-}
-
-char *SgFinderGetTextString(Widget finder)
-{
-    FinderCompatState *state = finderState(finder, True);
-    char *text;
-    size_t length;
-
-    if (!state || !state->child[0])
-        return 0;
-
-    text = XmTextGetString(state->child[0]);
-    if (!text)
-        return 0;
-
-    length = strlen(text);
-    if (length && text[length - 1] == '\n')
-        text[length - 1] = '\0';
-
-    return text;
-}
-
-void SgFinderSetTextString(Widget finder, char *text)
-{
-    FinderCompatState *state = finderState(finder, True);
-    XmTextPosition end;
-
-    if (!state || !state->child[0])
-        return;
-
-    if (!text)
-        text = "";
-
-    XmTextSetString(state->child[0], text);
-    end = (XmTextPosition)strlen(text);
-    XmTextSetInsertionPosition(state->child[0], end);
-}
-
-Widget SgFinderGetChild(Widget finder, int which)
-{
-    FinderCompatState *state = finderState(finder, True);
-
-    if (!state || which < 0 || which > 3)
-        return (Widget)0;
-
-    return state->child[which];
-}
 
 Widget SgCreateManagedGraph(Widget parent, char *name, ArgList args,
                             Cardinal count)
