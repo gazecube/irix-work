@@ -42,6 +42,7 @@ find_library(SGM_X11_LIBRARY
 if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LIBRARY)
     add_library(Sgm SHARED
         SgmCompat.c
+        AbiObjects.c
     )
 
     target_include_directories(Sgm
