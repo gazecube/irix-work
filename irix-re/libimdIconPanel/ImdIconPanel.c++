@@ -132,6 +132,8 @@ void reportSgVisualState(Widget widget)
     Visual *visual = 0;
     Colormap colormap = None;
     int depth = 0;
+    Pixel backgroundPixel = 0;
+    Pixmap backgroundPixmap = None;
     Boolean installColormap = False;
     Boolean ditherBackground = False;
 
@@ -140,6 +142,8 @@ void reportSgVisualState(Widget widget)
         "visual", &visual,
         XtNcolormap, &colormap,
         XtNdepth, &depth,
+        XtNbackground, &backgroundPixel,
+        XtNbackgroundPixmap, &backgroundPixmap,
         "installColormap", &installColormap,
         "ditherBackground", &ditherBackground,
         NULL);
@@ -168,6 +172,94 @@ void reportSgVisualState(Widget widget)
         "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n",
         installColormap ? "True" : "False",
         ditherBackground ? "True" : "False");
+
+    std::fprintf(
+        stderr,
+        "SgVisualDrawingArea background: pixel=0x%lx pixmap=0x%lx\n",
+        static_cast<unsigned long>(backgroundPixel),
+        static_cast<unsigned long>(backgroundPixmap));
+
+    if (colormap != None)
+    {
+        XColor color;
+        color.pixel = backgroundPixel;
+        XQueryColor(XtDisplay(widget), colormap, &color);
+        std::fprintf(
+            stderr,
+            "SgVisualDrawingArea background RGB: %u %u %u\n",
+            static_cast<unsigned int>(color.red),
+            static_cast<unsigned int>(color.green),
+            static_cast<unsigned int>(color.blue));
+    }
+
+    if (backgroundPixmap != None &&
+        backgroundPixmap != XmUNSPECIFIED_PIXMAP)
+    {
+        Display *display = XtDisplay(widget);
+        Window root = None;
+        int x = 0;
+        int y = 0;
+        unsigned int width = 0;
+        unsigned int height = 0;
+        unsigned int borderWidth = 0;
+        unsigned int pixmapDepth = 0;
+
+        if (XGetGeometry(display,
+                         backgroundPixmap,
+                         &root,
+                         &x,
+                         &y,
+                         &width,
+                         &height,
+                         &borderWidth,
+                         &pixmapDepth))
+        {
+            unsigned int sampleWidth = width < 2 ? width : 2;
+            unsigned int sampleHeight = height < 2 ? height : 2;
+            XImage *image = 0;
+
+            std::fprintf(
+                stderr,
+                "SgVisualDrawingArea dither pixmap: %ux%u depth=%u\n",
+                width,
+                height,
+                pixmapDepth);
+
+            if (sampleWidth != 0 && sampleHeight != 0)
+                image = XGetImage(display,
+                                  backgroundPixmap,
+                                  0,
+                                  0,
+                                  sampleWidth,
+                                  sampleHeight,
+                                  AllPlanes,
+                                  ZPixmap);
+
+            if (image)
+            {
+                for (unsigned int sy = 0; sy < sampleHeight; ++sy)
+                {
+                    for (unsigned int sx = 0; sx < sampleWidth; ++sx)
+                    {
+                        unsigned long pixel = XGetPixel(image, sx, sy);
+                        XColor color;
+                        color.pixel = pixel;
+                        XQueryColor(display, colormap, &color);
+                        std::fprintf(
+                            stderr,
+                            "SgVisualDrawingArea dither[%u,%u]: pixel=0x%lx RGB=%u,%u,%u\n",
+                            sx,
+                            sy,
+                            pixel,
+                            static_cast<unsigned int>(color.red),
+                            static_cast<unsigned int>(color.green),
+                            static_cast<unsigned int>(color.blue));
+                    }
+                }
+                XDestroyImage(image);
+            }
+        }
+    }
 }
 
 bool isUnsupportedFallbackResource(const char *name)
