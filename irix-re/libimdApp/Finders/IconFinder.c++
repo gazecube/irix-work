@@ -1,7 +1,7 @@
 #include "IconFinder.h"
 
-#include "ImdIconPanel.h"
 #include "ArgList.h"
+#include "ModelBasedIconPanel.h"
 #include <Sgm/Finder.h>
 
 #include <Xm/Frame.h>
@@ -19,7 +19,7 @@ ImdIconFinder::ImdIconFinder(
       _constructorValue(constructorValue)
 {
     /* make the finder base widget. the original constructor uses an
-     * ImdArgList here. no resources are supplied until their values have
+     * ImdArgList here. no resources are supplied until their names have
      * been recovered from the original libimdApp.so constructor.
      *
      * RE: ImdIconFinder::ImdIconFinder, 0x0963ec5c.
@@ -40,21 +40,29 @@ ImdIconFinder::ImdIconFinder(
      */
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
 
-    /* make the icon finder panel. the original object is an
-     * ImdModelBasedIconPanel. use ImdIconPanel until that class is
-     * reconstructed; do not infer the missing model behaviour here.
+    /* make the frame and apply its accumulated resources. the original
+     * constructor calls ImdArgList::setValues() on this widget before
+     * constructing the icon panel.
      */
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
         xmFrameWidgetClass,
         _baseWidget,
         NULL);
+    args.setValues(_iconFinderFrame);
 
-    _iconFinderPanel = new ImdIconPanel(
+    /* make the model panel. this argument order is taken directly from the
+     * imported constructor symbol in libimdApp.so:
+     *
+     * ImdModelBasedIconPanel(const char *, Widget, ImdModel *, Arg *, int)
+     */
+    args.clear();
+    _iconFinderPanel = new ImdModelBasedIconPanel(
         "iconFinderPanel",
         _iconFinderFrame,
         0,
-        0);
+        args.getArgList(),
+        args.getNumArgs());
 
     if (_iconFinderPanel && _iconFinderPanel->baseWidget())
         XtManageChild(_iconFinderPanel->baseWidget());
@@ -98,8 +106,7 @@ std::string ImdIconFinder::getContent() const
         return result;
 
     content = SgFinderGetTextString(_baseWidget);
-    if (content)
-    {
+    if (content) {
         result = content;
         XtFree(content);
     }
