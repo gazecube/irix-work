@@ -42,6 +42,20 @@ jobs:
           # original object rather than names invented during reconstruction.
           mips-linux-gnu-readelf -Ws "$IMDAPP" | c++filt | grep -E 'ImdIconFinder|ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget' || true
 
+      - name: Map dynamic GOT calls
+        run: |
+          # N32 calls imported functions through the GOT. readelf's MIPS
+          # architecture dump names those entries, allowing the constructor
+          # load offsets to be associated with their original symbols.
+          mips-linux-gnu-readelf -A "$IMDAPP" | c++filt > /tmp/imd-got.txt
+          grep -E -B1 -A1 'ImdArgList|ImdCompletionField|ImdModelBasedIconPanel|SgFinder|XtCreateWidget|XtManageChild|XtAddCallback|Xm|Vk' /tmp/imd-got.txt || true
+
+          echo '--- import stubs ---'
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x0963b7a0 \
+            --stop-address=0x0963b900 \
+            "$IMDAPP"
+
       - name: Disassemble ImdIconFinder constructor
         run: |
           # dump the complete binary-confirmed constructor. the next pass
