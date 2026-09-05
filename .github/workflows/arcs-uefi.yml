@@ -1,0 +1,63 @@
+name: ARCS UEFI bring-up
+
+on:
+  push:
+    branches:
+      - arcs-uefi
+    paths:
+      - '.github/workflows/arcs-uefi.yml'
+      - 'arcs/**'
+      - '.gitmodules'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install EDK II build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            acpica-tools \
+            build-essential \
+            nasm \
+            python3 \
+            uuid-dev
+
+      - name: Check out EDK II
+        uses: actions/checkout@v4
+        with:
+          repository: tianocore/edk2
+          path: edk2
+          submodules: recursive
+
+      - name: Build BaseTools
+        working-directory: edk2
+        run: make -C BaseTools
+
+      - name: Build ARCS graphical bring-up EFI
+        env:
+          WORKSPACE: ${{ github.workspace }}/edk2
+          TOOLCHAIN: GCC5
+          TARGET: DEBUG
+        run: |
+          chmod +x arcs/build-edk2.sh arcs/prepare-original-fonts.sh
+          ./arcs/build-edk2.sh
+
+      - name: Collect EFI image
+        run: |
+          mkdir -p out
+          cp edk2/Build/ArcsPkg/DEBUG_GCC5/X64/ArcsGfxBringup.efi out/ARCS.efi
+
+      - name: Upload EFI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARCS-UEFI-qemu
+          path: out/ARCS.efi
+          if-no-files-found: error
