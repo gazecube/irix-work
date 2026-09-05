@@ -140,11 +140,13 @@ GopDrawBitmap(VOID *Hw, struct htp_bitmap *Bitmap)
     if (!B || !B->Gop || !Bitmap || !Bitmap->buf || Bitmap->xsize <= 0 || Bitmap->ysize <= 0)
         return;
 
-    /* Match the original standalone textport raster semantics:
-     * xleft = cpos_x - xorig and raster Y begins at
-     * (height - 1 - cpos_y + yorig). */
+    /* Match the original software textport raster path (RAD1):
+     *   x = cpos_x - xorig
+     *   y = screen_h - (cpos_y - yorig)
+     * and each successive bitmap row moves one framebuffer scanline up.
+     * The font bit stream itself is MSB-first within each 16-bit word. */
     XLeft = B->CposX - Bitmap->xorig;
-    GopY0 = (INTN)B->Height - 1 - B->CposY + Bitmap->yorig;
+    GopY0 = (INTN)B->Height - (B->CposY - Bitmap->yorig);
 
     for (Row = 0; Row < Bitmap->ysize; Row++) {
         INT32 Col = 0;
@@ -169,7 +171,7 @@ GopDrawBitmap(VOID *Hw, struct htp_bitmap *Bitmap)
                     Mask = (UINT16)(0x8000U >> (Col & 15));
                 } while (Word & Mask);
 
-                DrawBitmapRun(B, XLeft + RunStart, GopY0 + Row,
+                DrawBitmapRun(B, XLeft + RunStart, GopY0 - Row,
                               (UINTN)(Col - RunStart));
             }
         }
