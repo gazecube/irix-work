@@ -9,6 +9,7 @@
 #include <Sgm/Finder.h>
 
 #include <Xm/DrawingA.h>
+#include <Xm/PushB.h>
 #include <Xm/Scale.h>
 #include <Xm/TextF.h>
 #include <X11/Intrinsic.h>
@@ -20,6 +21,8 @@
 extern WidgetClass sgDropPocketWidgetClass;
 extern WidgetClass sgDynaMenuWidgetClass;
 extern WidgetClass sgZoomBarWidgetClass;
+
+#define FINDER_HISTORY_CAPACITY 6
 
 #if defined(SGM_HAVE_MANAGERP_H)
 #include <Xm/ManagerP.h>
@@ -43,6 +46,9 @@ typedef struct
     Widget text;
     Widget zoom_bar;
     Widget history_menubar;
+    char *history[FINDER_HISTORY_CAPACITY];
+    Widget history_item[FINDER_HISTORY_CAPACITY];
+    Cardinal history_count;
 } SgFinderPartCompat;
 
 typedef struct
@@ -74,6 +80,9 @@ static void finderResize(Widget);
 static void finderChangeManaged(Widget);
 static void textActivateCB(Widget, XtPointer, XtPointer);
 static void textValueChangedCB(Widget, XtPointer, XtPointer);
+static void historyItemActivateCB(Widget, XtPointer, XtPointer);
+static void rebuildHistoryMenu(SgFinderRecCompat *);
+static void clearHistoryStorage(SgFinderRecCompat *);
 
 static void defaultSetTextSection(Widget finder, int section)
 {
@@ -223,7 +232,8 @@ SgFinderClassRecCompat sgFinderClassRec =
 
 WidgetClass sgFinderWidgetClass = (WidgetClass)&sgFinderClassRec;
 
-static Widget finderChildClass(WidgetClass preferred, WidgetClass fallback)
+static WidgetClass finderChildClass(WidgetClass preferred,
+                                    WidgetClass fallback)
 {
     return preferred ? preferred : fallback;
 }
@@ -232,6 +242,7 @@ static void finderInitialize(Widget request, Widget new_widget,
                              ArgList args, Cardinal *num_args)
 {
     SgFinderRecCompat *rec = (SgFinderRecCompat *)new_widget;
+    Cardinal i;
 
     (void)request;
     (void)args;
@@ -241,6 +252,12 @@ static void finderInitialize(Widget request, Widget new_widget,
     rec->finder.text = NULL;
     rec->finder.zoom_bar = NULL;
     rec->finder.history_menubar = NULL;
+    rec->finder.history_count = 0;
+    for (i = 0; i < FINDER_HISTORY_CAPACITY; ++i)
+    {
+        rec->finder.history[i] = NULL;
+        rec->finder.history_item[i] = NULL;
+    }
 
     if (rec->finder.use_drop_pocket)
     {
@@ -279,10 +296,34 @@ static void finderInitialize(Widget request, Widget new_widget,
     }
 }
 
+static void clearHistoryStorage(SgFinderRecCompat *rec)
+{
+    Cardinal i;
+
+    if (!rec)
+        return;
+
+    for (i = 0; i < FINDER_HISTORY_CAPACITY; ++i)
+    {
+        if (rec->finder.history_item[i])
+        {
+            XtDestroyWidget(rec->finder.history_item[i]);
+            rec->finder.history_item[i] = NULL;
+        }
+        if (rec->finder.history[i])
+        {
+            XtFree(rec->finder.history[i]);
+            rec->finder.history[i] = NULL;
+        }
+    }
+    rec->finder.history_count = 0;
+}
+
 static void finderDestroy(Widget w)
 {
     SgFinderRecCompat *rec = (SgFinderRecCompat *)w;
 
+    clearHistoryStorage(rec);
     rec->finder.drop_pocket = NULL;
     rec->finder.text = NULL;
     rec->finder.zoom_bar = NULL;
@@ -395,6 +436,67 @@ static void textValueChangedCB(Widget child, XtPointer client_data,
                        (XtPointer)&callback);
 }
 
+static void historyItemActivateCB(Widget item, XtPointer client_data,
+                                  XtPointer call_data)
+{
+    SgFinderRecCompat *rec = (SgFinderRecCompat *)client_data;
+    XmString label = NULL;
+    char *text = NULL;
+
+    (void)call_data;
+
+    if (!rec || !item)
+        return;
+
+    XtVaGetValues(item, XmNlabelString, &label, NULL);
+    if (!label || !XmStringGetLtoR(label, XmFONTLIST_DEFAULT_TAG, &text))
+        return;
+
+    SgFinderSetTextString((Widget)rec, text);
+    XtFree(text);
+}
+
+static void rebuildHistoryMenu(SgFinderRecCompat *rec)
+{
+    Cardinal i;
+
+    if (!rec || !rec->finder.history_menubar)
+        return;
+
+    for (i = 0; i < FINDER_HISTORY_CAPACITY; ++i)
+    {
+        if (rec->finder.history_item[i])
+        {
+            XtDestroyWidget(rec->finder.history_item[i]);
+            rec->finder.history_item[i] = NULL;
+        }
+    }
+
+    for (i = 0; i < rec->finder.history_count; ++i)
+    {
+        char name[32];
+        XmString label;
+
+        if (!rec->finder.history[i])
+            continue;
+
+        sprintf(name, "historyItem%u", (unsigned)i);
+        label = XmStringCreateLocalized(rec->finder.history[i]);
+        rec->finder.history_item[i] = XtVaCreateManagedWidget(
+            name,
+            xmPushButtonWidgetClass,
+            rec->finder.history_menubar,
+            XmNlabelString, label,
+            NULL);
+        XmStringFree(label);
+
+        XtAddCallback(rec->finder.history_item[i],
+                      XmNactivateCallback,
+                      historyItemActivateCB,
+                      (XtPointer)rec);
+    }
+}
+
 Widget SgCreateFinder(Widget parent, char *name, ArgList args, Cardinal count)
 {
     return XtCreateWidget(name, sgFinderWidgetClass, parent, args, count);
@@ -457,6 +559,74 @@ Widget SgFinderGetChild(Widget finder, int which)
         default:
             return NULL;
     }
+}
+
+void SgFinderClearHistory(Widget finder)
+{
+    SgFinderRecCompat *rec = (SgFinderRecCompat *)finder;
+
+    if (!finder || !XtIsSubclass(finder, sgFinderWidgetClass) ||
+        !rec->finder.use_history_menu || !rec->finder.history_menubar)
+        return;
+
+    clearHistoryStorage(rec);
+}
+
+void SgFinderAddHistoryItem(Widget finder, char *text)
+{
+    SgFinderRecCompat *rec = (SgFinderRecCompat *)finder;
+    Cardinal i;
+    Cardinal found;
+    Cardinal count;
+
+    if (!finder || !XtIsSubclass(finder, sgFinderWidgetClass) ||
+        !rec->finder.use_history_menu || !rec->finder.history_menubar ||
+        !text || !*text)
+        return;
+
+    /*
+     * Reconstructed host policy: keep the most recently added item first,
+     * promote duplicates, and retain at most six entries. The six-entry cap
+     * is documented SGI behavior; ordering/duplicate policy still needs the
+     * original Finder/DynaMenu binary path for exact confirmation.
+     */
+    found = rec->finder.history_count;
+    for (i = 0; i < rec->finder.history_count; ++i)
+    {
+        if (rec->finder.history[i] &&
+            strcmp(rec->finder.history[i], text) == 0)
+        {
+            found = i;
+            break;
+        }
+    }
+
+    if (found < rec->finder.history_count)
+    {
+        char *existing = rec->finder.history[found];
+        for (i = found; i > 0; --i)
+            rec->finder.history[i] = rec->finder.history[i - 1];
+        rec->finder.history[0] = existing;
+    }
+    else
+    {
+        count = rec->finder.history_count;
+        if (count == FINDER_HISTORY_CAPACITY)
+        {
+            XtFree(rec->finder.history[FINDER_HISTORY_CAPACITY - 1]);
+            rec->finder.history[FINDER_HISTORY_CAPACITY - 1] = NULL;
+            count = FINDER_HISTORY_CAPACITY - 1;
+        }
+
+        for (i = count; i > 0; --i)
+            rec->finder.history[i] = rec->finder.history[i - 1];
+
+        rec->finder.history[0] = XtNewString(text);
+        if (rec->finder.history_count < FINDER_HISTORY_CAPACITY)
+            ++rec->finder.history_count;
+    }
+
+    rebuildHistoryMenu(rec);
 }
 
 #else
@@ -533,6 +703,17 @@ Widget SgFinderGetChild(Widget finder, int which)
     if (!state)
         return NULL;
     return which == SgFINDER_TEXT ? state->text : NULL;
+}
+
+void SgFinderClearHistory(Widget finder)
+{
+    (void)finder;
+}
+
+void SgFinderAddHistoryItem(Widget finder, char *text)
+{
+    (void)finder;
+    (void)text;
 }
 
 #endif
