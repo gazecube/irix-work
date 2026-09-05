@@ -88,7 +88,7 @@ static XtResource visualDrawingAreaResources[] =
         "visual", "Visual", XtRVisual, sizeof(Visual *),
         XtOffsetOf(SgVisualDrawingAreaRecCompat,
                    sg_visual_drawing_area.visual),
-        XtRImmediate, (XtPointer)CopyFromParent
+        XtRImmediate, (XtPointer)NULL
     },
     {
         "installColormap", "InstallColormap", XtRBoolean, sizeof(Boolean),
@@ -504,9 +504,6 @@ static void visualDrawingAreaInitialize(Widget request,
     sg->colormap_installed = False;
     sg->dither_color_name = NULL;
 
-    if (sg->visual == (Visual *)CopyFromParent || !sg->visual)
-        sg->visual = DefaultVisualOfScreen(XtScreen(new_widget));
-
     createDitherBackground(rec, args, num_args ? *num_args : 0);
 }
 
@@ -535,7 +532,7 @@ static void visualDrawingAreaRealize(Widget w,
 
     XtCreateWindow(w,
                    (unsigned int)InputOutput,
-                   sg->visual ? sg->visual : CopyFromParent,
+                   sg->visual,
                    *value_mask,
                    attributes);
 
