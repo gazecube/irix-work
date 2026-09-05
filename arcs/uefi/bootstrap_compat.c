@@ -1,8 +1,22 @@
 #include <Uefi.h>
-#include <Library/BaseMemoryLib.h>
 #include <Library/MemoryAllocationLib.h>
 
-#include <gfxgui.h>
+#include <arcs/pvector.h>
+#include <libsc.h>
+
+int _prom = 1;
+
+static struct htp_state *
+ArcsCompatGetHtp(void)
+{
+    return 0;
+}
+
+static struct arcs_uefi_pvector ArcsCompatPvector = {
+    ArcsCompatGetHtp
+};
+
+struct arcs_uefi_pvector *__PTV = &ArcsCompatPvector;
 
 void *
 malloc(size_t Size)
@@ -39,16 +53,25 @@ strcpy(char *Dest, const char *Source)
     return Dest;
 }
 
-void *
-guimalloc(size_t Size)
+char *
+getenv(const char *Name)
 {
-    return malloc(Size);
+    /* Preserve the stock standalone GUI logo path during early bring-up.
+     * ARCS environment storage will replace this compatibility hook. */
+    static char Yes[] = "y";
+
+    if (Name && Name[0] == 's' && Name[1] == 'g' && Name[2] == 'i' &&
+        Name[3] == 'l' && Name[4] == 'o' && Name[5] == 'g' &&
+        Name[6] == 'o' && Name[7] == '\0')
+        return Yes;
+
+    return 0;
 }
 
 void
-addObject(struct gui_obj *Obj)
+panic(const char *Message)
 {
-    /* Not needed by drawBackground().  Kept only so the original text.c
-     * can be linked unchanged during the first renderer milestone. */
-    (void)Obj;
+    (void)Message;
+    for (;;)
+        ;
 }
