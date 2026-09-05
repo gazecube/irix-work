@@ -1,0 +1,33 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = ArcsGfxBringup
+  FILE_GUID                      = e17f582a-f4ec-4c27-99ef-08f3f6cd64c2
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = UefiMain
+
+[Sources]
+  entry.c
+  htp_gop.c
+  profile_reality.c
+  gfxgui_bringup.c
+  original_fonts.c
+  bootstrap_compat.c
+  drawbackground_bringup.c
+  ../sgisrc/libsc/gui/background.c
+  ../sgisrc/libsc/gui/text.c
+  ../sgisrc/libsc/gui/tport.c
+  ../vendor/sgibootscreen-src/src/ip19.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArcsPkg/ArcsPkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiApplicationEntryPoint
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
