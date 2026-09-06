@@ -169,13 +169,16 @@ ImdDirModel::rebuildChildren()
             ImdFileModel::dnaSelectorFromPath(ImdString(childPath), ImdString());
 
         /*
-         * Binary-backed part: dnaTypeFromPath() maps directories to
-         * ImdDirModel::kTypeName and ordinary filesystem objects to
-         * ImdFileModel::kTypeName. The exact RefModel child path for symlinks
-         * is intentionally deferred until its kTypeName literal and factory
-         * behavior are recovered in the native layer.
+         * dnaTypeFromPath() maps directories to ImdDirModel::kTypeName and
+         * ordinary filesystem objects to ImdFileModel::kTypeName. Local
+         * static-initialization disassembly proves those two kTypeName values
+         * are "ImdDirModel" and "ImdFileModel" respectively: each is built
+         * from the corresponding SGI type_info name. RefModel/symlink child
+         * creation is still deferred until that path is restored natively.
          */
-        const ImdString type(isDirectoryPath(childPath) ? "Directory" : "File");
+        const ImdString type(isDirectoryPath(childPath)
+                                 ? "ImdDirModel"
+                                 : "ImdFileModel");
         _children.push_back(new ImdModel(ImdDNA(type, selector)));
     }
 
