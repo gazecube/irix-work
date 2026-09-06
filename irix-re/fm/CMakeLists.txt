@@ -62,10 +62,9 @@ endif()
 
 if(TARGET fm)
     # MaXX ships its own libSgm.so.1 with the same historical SONAME as our
-    # reconstruction.  The original runtime stub does not provide every data
-    # symbol reconstructed libimdIconPanel now uses, including
-    # sgVisualDrawingAreaWidgetClass.  Keep the build-tree reconstruction ahead
-    # of MaXX for this executable, exactly as the Pandora integration probe does.
+    # reconstruction.  The reconstructed library now owns SgThumbWheel as a
+    # native widget as well as the ImdViewPanel superclass symbols.  Keep it
+    # ahead of MaXX for this executable.
     if(TARGET Sgm)
         set_property(TARGET fm PROPERTY
             BUILD_RPATH "$ORIGIN/../libSgm")
