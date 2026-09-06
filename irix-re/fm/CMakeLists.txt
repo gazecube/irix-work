@@ -60,13 +60,6 @@ else()
 endif()
 
 if(TARGET fm)
-    if(TARGET imdIconPanel)
-        target_link_libraries(fm PRIVATE imdIconPanel)
-        target_include_directories(fm PRIVATE ../libimdIconPanel)
-    else()
-        message(FATAL_ERROR "fm requires reconstructed libimdIconPanel")
-    endif()
-
     set_property(TARGET fm PROPERTY CXX_STANDARD 11)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS fm RUNTIME DESTINATION bin)
