@@ -41,6 +41,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
     target_include_directories(imdIconPanel
         PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_SOURCE_DIR}/irix-re/libimdModel/Base"
             "${IMDICONPANEL_MOTIF_INCLUDE_DIR}"
     )
 
@@ -49,6 +50,10 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
             "${IMDICONPANEL_MOTIF_LIBRARY}"
             "${IMDICONPANEL_XT_LIBRARY}"
     )
+
+    if(TARGET imdModel)
+        target_link_libraries(imdIconPanel PUBLIC imdModel)
+    endif()
 
     if(TARGET Sgm)
         target_compile_definitions(imdIconPanel PRIVATE IMDICONPANEL_HAVE_RECONSTRUCTED_SGM=1)
