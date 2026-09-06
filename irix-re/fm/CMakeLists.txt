@@ -78,3 +78,28 @@ if(TARGET fm)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS fm RUNTIME DESTINATION bin)
 endif()
+
+# Runnable background/desktop host.  This keeps the binary-proven
+# ImdBackWindow -> ImdViewPanel -> BackLayout path executable while the
+# remaining desktop model constructor path is recovered.
+if(TARGET imdIconPanel)
+    add_executable(iid-desktop DesktopMain.c++ BackLayoutPortable.c++)
+    target_link_libraries(iid-desktop PRIVATE imdIconPanel)
+
+    if(FM_MOTIF_INCLUDE_DIR)
+        target_include_directories(iid-desktop PRIVATE "${FM_MOTIF_INCLUDE_DIR}")
+    endif()
+    if(FM_MOTIF_LIBRARY)
+        target_link_libraries(iid-desktop PRIVATE "${FM_MOTIF_LIBRARY}")
+    endif()
+    if(FM_XT_LIBRARY)
+        target_link_libraries(iid-desktop PRIVATE "${FM_XT_LIBRARY}")
+    endif()
+    if(FM_X11_LIBRARY)
+        target_link_libraries(iid-desktop PRIVATE "${FM_X11_LIBRARY}")
+    endif()
+
+    set_property(TARGET iid-desktop PROPERTY CXX_STANDARD 11)
+    set_property(TARGET iid-desktop PROPERTY CXX_STANDARD_REQUIRED ON)
+    install(TARGETS iid-desktop RUNTIME DESTINATION bin)
+endif()
