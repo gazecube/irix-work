@@ -1,14 +1,13 @@
 /*
- * FmMain.c++ - first runnable file manager reconstruction
+ * FmMain.c++ - runnable file manager reconstruction
  *
- * This is the application-side bootstrap for the Linux reconstruction.  The
- * window/panel classes will move toward the recovered FmApp/FmWindow split as
- * those bodies are reconstructed.  Keep this path useful in the meantime: it
- * should be possible to use fm as an ordinary directory browser while the IMD
- * panel and FTR icon machinery is brought online.
+ * Keep the application useful while the recovered FmApp/FmWindow and IMD
+ * panel bodies are brought online.  Widget names and the top-level menu
+ * vocabulary in this file follow the recovered FileManager app-defaults.
  */
 
 #include <Xm/Xm.h>
+#include <Xm/CascadeB.h>
 #include <Xm/Form.h>
 #include <Xm/Label.h>
 #include <Xm/List.h>
@@ -16,7 +15,9 @@
 #include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
 #include <Xm/ScrolledW.h>
+#include <Xm/Separator.h>
 #include <Xm/TextF.h>
+#include <Xm/ToggleB.h>
 
 #include <X11/Shell.h>
 
@@ -45,8 +46,56 @@ struct FmState {
     Widget location;
     Widget list;
     Widget status;
+    bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
+};
+
+/*
+ * These are only fallbacks.  A real FileManager app-default database, when
+ * present, remains authoritative because this application now uses the
+ * original FileManager application class.
+ */
+static String fallbackResources[] = {
+    (char *)"FileManager.width: 575",
+    (char *)"FileManager.height: 600",
+    (char *)"*ApplicationShell.minWidth: 300",
+    (char *)"*ApplicationShell.minHeight: 200",
+    (char *)"*actionsMenu.labelString: Actions",
+    (char *)"*fileMenu.labelString: Selected",
+    (char *)"*arrangeMenu.labelString: Sort",
+    (char *)"*viewMenu.labelString: View",
+    (char *)"*optionsMenu.labelString: Options",
+    (char *)"*internetMenu.labelString: Internet",
+    (char *)"*newDirMenuItem.labelString: Add New Directory",
+    (char *)"*showFiltersMenuItem.labelString: Search / Filter Files",
+    (char *)"*selectAllMenuItem.labelString: Select All",
+    (char *)"*fetchMenuItem.labelString: File QuickFind...",
+    (char *)"*quitMenuItem.labelString: Close",
+    (char *)"*openMenuItem.labelString: Open",
+    (char *)"*copyMenuItem.labelString: Make Copy",
+    (char *)"*referenceMenuItem.labelString: Make Reference",
+    (char *)"*removeMenuItem.labelString: Remove",
+    (char *)"*printMenuItem.labelString: Print",
+    (char *)"*getInfoMenuItem.labelString: Get Info",
+    (char *)"*arrangeMenu.sortByNameMenuItem.labelString: by Name",
+    (char *)"*arrangeMenu.sortByDateMenuItem.labelString: by Date",
+    (char *)"*arrangeMenu.sortBySizeMenuItem.labelString: by Size",
+    (char *)"*arrangeMenu.sortByTypeMenuItem.labelString: by Type",
+    (char *)"*viewMenu.viewAsIconsMenuItem.labelString: as Icons",
+    (char *)"*viewMenu.viewAsListMenuItem.labelString: as List",
+    (char *)"*viewMenu.viewAsColumnsMenuItem.labelString: as Columns",
+    (char *)"*viewMenu.viewAsGalleryMenuItem.labelString: as Thumbnail Images",
+    (char *)"*viewMenu.showHiddenMenuItem.labelString: Hidden Files",
+    (char *)"*viewMenu.truncateLabelsMenuItem.labelString: Truncate Names",
+    (char *)"*applyDefaultLayoutMenuItem.labelString: Apply Default Layout",
+    (char *)"*defaultLayoutMenuItem.labelString: Default Layout...",
+    (char *)"*ignoreLayoutMenuItem.labelString: Preserve Layout",
+    (char *)"*showShelfMenuItem.labelString: Show Shelf",
+    (char *)"*showContentMenuItem.labelString: Show Content Viewer",
+    (char *)"*httpMenuItem.labelString: Icon View of a Web Site",
+    (char *)"*ftpMenuItem.labelString: Icon View of an FTP Site",
+    NULL
 };
 
 static std::string
@@ -118,6 +167,8 @@ populateDirectory(FmState *state, const std::string &directory)
 
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
             continue;
+        if (!state->showHidden && de->d_name[0] == '.')
+            continue;
 
         entry.name = de->d_name;
         path = joinPath(directory, entry.name);
@@ -185,6 +236,34 @@ openFile(FmState *state, const std::string &path)
     setStatus(state, "Opening file");
 }
 
+static bool
+selectedEntry(FmState *state, FmEntry *entry)
+{
+    int *positions = NULL;
+    int count = 0;
+
+    if (!XmListGetSelectedPos(state->list, &positions, &count) || count < 1)
+        return false;
+
+    const int index = positions[0] - 1;
+    XtFree((char *)positions);
+    if (index < 0 || (size_t)index >= state->entries.size())
+        return false;
+
+    *entry = state->entries[(size_t)index];
+    return true;
+}
+
+static void
+openEntry(FmState *state, const FmEntry &entry)
+{
+    std::string path = joinPath(state->directory, entry.name);
+    if (entry.directory)
+        changeDirectory(state, path.c_str());
+    else
+        openFile(state, path);
+}
+
 static void
 locationActivateCB(Widget widget, XtPointer client, XtPointer call)
 {
@@ -241,15 +320,157 @@ listDefaultActionCB(Widget widget, XtPointer client, XtPointer call)
     index = cbs->item_position - 1;
     if (index < 0 || (size_t)index >= state->entries.size())
         return;
+    openEntry(state, state->entries[(size_t)index]);
+}
 
-    {
-        const FmEntry &entry = state->entries[(size_t)index];
-        std::string path = joinPath(state->directory, entry.name);
-        if (entry.directory)
-            changeDirectory(state, path.c_str());
-        else
-            openFile(state, path);
+static void
+openSelectedCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    FmEntry entry;
+
+    (void)widget;
+    (void)call;
+    if (!selectedEntry(state, &entry)) {
+        setStatus(state, "No item selected");
+        return;
     }
+    openEntry(state, entry);
+}
+
+static void
+selectAllCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+
+    (void)widget;
+    (void)call;
+    for (size_t i = 0; i < state->entries.size(); ++i)
+        XmListSelectPos(state->list, (int)i + 1, False);
+}
+
+static void
+showHiddenCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    XmToggleButtonCallbackStruct *cbs = (XmToggleButtonCallbackStruct *)call;
+
+    state->showHidden = cbs->set ? true : false;
+    populateDirectory(state, state->directory);
+    (void)widget;
+}
+
+static void
+closeCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+
+    (void)widget;
+    (void)call;
+    XtDestroyWidget(state->shell);
+    exit(0);
+}
+
+static void
+unimplementedCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    const char *name = XtName(widget);
+    char text[256];
+
+    (void)call;
+    snprintf(text, sizeof(text), "%s is not reconstructed yet", name ? name : "Command");
+    setStatus(state, text);
+}
+
+static Widget
+makeMenu(Widget menuBar, const char *name)
+{
+    Widget menu = XmCreatePulldownMenu(menuBar, (char *)name, NULL, 0);
+    XtVaCreateManagedWidget(name,
+                            xmCascadeButtonWidgetClass,
+                            menuBar,
+                            XmNsubMenuId, menu,
+                            NULL);
+    return menu;
+}
+
+static Widget
+makePush(Widget menu, const char *name, XtCallbackProc callback, FmState *state)
+{
+    Widget item = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass, menu, NULL);
+    if (callback)
+        XtAddCallback(item, XmNactivateCallback, callback, state);
+    return item;
+}
+
+static void
+makeSeparator(Widget menu)
+{
+    XtVaCreateManagedWidget("separator", xmSeparatorWidgetClass, menu, NULL);
+}
+
+static Widget
+createMenuBar(Widget parent, FmState *state)
+{
+    Widget menuBar;
+    Widget menu;
+    Widget hidden;
+
+    menuBar = XmCreateMenuBar(parent, (char *)"menuBar", NULL, 0);
+
+    menu = makeMenu(menuBar, "actionsMenu");
+    makePush(menu, "newDirMenuItem", unimplementedCB, state);
+    makePush(menu, "showFiltersMenuItem", unimplementedCB, state);
+    makePush(menu, "selectAllMenuItem", selectAllCB, state);
+    makeSeparator(menu);
+    makePush(menu, "fetchMenuItem", unimplementedCB, state);
+    makeSeparator(menu);
+    makePush(menu, "quitMenuItem", closeCB, state);
+
+    menu = makeMenu(menuBar, "fileMenu");
+    makePush(menu, "openMenuItem", openSelectedCB, state);
+    makePush(menu, "copyMenuItem", unimplementedCB, state);
+    makePush(menu, "referenceMenuItem", unimplementedCB, state);
+    makePush(menu, "removeMenuItem", unimplementedCB, state);
+    makeSeparator(menu);
+    makePush(menu, "printMenuItem", unimplementedCB, state);
+    makePush(menu, "getInfoMenuItem", unimplementedCB, state);
+
+    menu = makeMenu(menuBar, "arrangeMenu");
+    makePush(menu, "sortByNameMenuItem", refreshCB, state);
+    makePush(menu, "sortByDateMenuItem", unimplementedCB, state);
+    makePush(menu, "sortBySizeMenuItem", unimplementedCB, state);
+    makePush(menu, "sortByTypeMenuItem", unimplementedCB, state);
+
+    menu = makeMenu(menuBar, "viewMenu");
+    makePush(menu, "viewAsIconsMenuItem", unimplementedCB, state);
+    makePush(menu, "viewAsListMenuItem", refreshCB, state);
+    makePush(menu, "viewAsColumnsMenuItem", unimplementedCB, state);
+    makePush(menu, "viewAsGalleryMenuItem", unimplementedCB, state);
+    makeSeparator(menu);
+    hidden = XtVaCreateManagedWidget("showHiddenMenuItem",
+                                     xmToggleButtonWidgetClass,
+                                     menu,
+                                     XmNset, False,
+                                     NULL);
+    XtAddCallback(hidden, XmNvalueChangedCallback, showHiddenCB, state);
+    makePush(menu, "truncateLabelsMenuItem", unimplementedCB, state);
+
+    menu = makeMenu(menuBar, "optionsMenu");
+    makePush(menu, "applyDefaultLayoutMenuItem", unimplementedCB, state);
+    makePush(menu, "defaultLayoutMenuItem", unimplementedCB, state);
+    makePush(menu, "ignoreLayoutMenuItem", unimplementedCB, state);
+    makeSeparator(menu);
+    makePush(menu, "showShelfMenuItem", unimplementedCB, state);
+    makePush(menu, "showContentMenuItem", unimplementedCB, state);
+
+    menu = makeMenu(menuBar, "internetMenu");
+    makePush(menu, "httpMenuItem", unimplementedCB, state);
+    makePush(menu, "ftpMenuItem", unimplementedCB, state);
+
+    XtManageChild(menuBar);
+    return menuBar;
 }
 
 static void
@@ -271,6 +492,7 @@ main(int argc, char **argv)
     XtAppContext app;
     FmState state;
     Widget mainWindow;
+    Widget menuBar;
     Widget form;
     Widget controls;
     Widget up;
@@ -280,21 +502,21 @@ main(int argc, char **argv)
 
     memset(&state, 0, sizeof(state));
 
-    state.shell = XtVaAppInitialize(&app, (char *)"Fm",
+    state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
                                     NULL, 0, &argc, argv,
-                                    NULL,
-                                    XmNwidth, 620,
-                                    XmNheight, 480,
+                                    fallbackResources,
                                     NULL);
 
     mainWindow = XtVaCreateManagedWidget("mainWindow",
                                          xmMainWindowWidgetClass,
                                          state.shell, NULL);
-    form = XtVaCreateManagedWidget("fileManagerForm",
+    menuBar = createMenuBar(mainWindow, &state);
+
+    form = XtVaCreateManagedWidget("form",
                                     xmFormWidgetClass,
                                     mainWindow, NULL);
 
-    controls = XtVaCreateManagedWidget("navigation",
+    controls = XtVaCreateManagedWidget("rc1",
                                         xmRowColumnWidgetClass,
                                         form,
                                         XmNorientation, XmHORIZONTAL,
@@ -313,7 +535,7 @@ main(int argc, char **argv)
     state.location = XtVaCreateManagedWidget("location",
                                               xmTextFieldWidgetClass,
                                               controls,
-                                              XmNcolumns, 48,
+                                              XmNcolumns, 42,
                                               NULL);
 
     state.status = XtVaCreateManagedWidget("status",
@@ -325,7 +547,7 @@ main(int argc, char **argv)
                                             XmNalignment, XmALIGNMENT_BEGINNING,
                                             NULL);
 
-    scroller = XtVaCreateManagedWidget("scroller",
+    scroller = XtVaCreateManagedWidget("scrollW",
                                         xmScrolledWindowWidgetClass,
                                         form,
                                         XmNscrollingPolicy, XmAUTOMATIC,
@@ -337,7 +559,8 @@ main(int argc, char **argv)
                                         XmNbottomWidget, state.status,
                                         NULL);
 
-    state.list = XtVaCreateManagedWidget("directoryList",
+    /* RE: temporary list view occupying the recovered main panel slot. */
+    state.list = XtVaCreateManagedWidget("panel",
                                           xmListWidgetClass,
                                           scroller,
                                           XmNselectionPolicy, XmEXTENDED_SELECT,
@@ -351,7 +574,7 @@ main(int argc, char **argv)
     XtAddCallback(state.list, XmNdefaultActionCallback,
                   listDefaultActionCB, &state);
 
-    XmMainWindowSetAreas(mainWindow, NULL, NULL, NULL, NULL, form);
+    XmMainWindowSetAreas(mainWindow, menuBar, NULL, NULL, NULL, form);
 
     changeDirectory(&state, initial);
     XtRealizeWidget(state.shell);
