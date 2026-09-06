@@ -19,26 +19,85 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils-mips-linux-gnu
 
-      - name: Extract original fm
+      - name: Locate original fm specimen
         run: |
-          mkdir -p /tmp/fm-evidence
+          set -eu
+          mkdir -p /tmp/fm-evidence/extracted
 
-          fm_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/usr/sbin/fm$' | head -1)"
-          if test -z "$fm_entry"; then
-            fm_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/fm$' | grep -E '/usr/(sbin|bin)/fm$' | head -1)"
+          fm=""
+          source_desc=""
+
+          # Prefer a separately preserved specimen when one is committed.
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q 'ELF 32-bit MSB'; then
+              fm="$candidate"
+              source_desc="standalone:$candidate"
+              break
+            fi
+          done < <(find irix-re/evidence -type f -name fm -print | sort)
+
+          # Otherwise search every preserved tar-family filesystem archive.
+          # shared_objects.tar is only one evidence set and is not expected to
+          # contain /usr/sbin/fm.
+          if test -z "$fm"; then
+            while IFS= read -r archive; do
+              echo "searching archive: $archive"
+              case "$archive" in
+                *.tar)
+                  entries="$(tar -tf "$archive" 2>/dev/null || true)"
+                  ;;
+                *.tar.gz|*.tgz)
+                  entries="$(tar -tzf "$archive" 2>/dev/null || true)"
+                  ;;
+                *)
+                  continue
+                  ;;
+              esac
+
+              fm_entry="$(printf '%s\n' "$entries" | grep -E '(^|/)usr/sbin/fm$' | head -1 || true)"
+              if test -z "$fm_entry"; then
+                fm_entry="$(printf '%s\n' "$entries" | grep -E '(^|/)usr/bin/fm$' | head -1 || true)"
+              fi
+              if test -z "$fm_entry"; then
+                continue
+              fi
+
+              echo "fm archive entry: $fm_entry"
+              rm -rf /tmp/fm-evidence/extracted/*
+              case "$archive" in
+                *.tar)
+                  tar -xf "$archive" -C /tmp/fm-evidence/extracted "$fm_entry"
+                  ;;
+                *.tar.gz|*.tgz)
+                  tar -xzf "$archive" -C /tmp/fm-evidence/extracted "$fm_entry"
+                  ;;
+              esac
+
+              candidate="/tmp/fm-evidence/extracted/$fm_entry"
+              if file "$candidate" | grep -q 'ELF 32-bit MSB'; then
+                fm="$candidate"
+                source_desc="archive:$archive:$fm_entry"
+                break
+              fi
+            done < <(find irix-re/evidence -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' \) -print | sort)
           fi
-          test -n "$fm_entry"
 
-          echo "fm archive entry: $fm_entry"
-          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/fm-evidence "$fm_entry"
+          if test -z "$fm"; then
+            echo 'ERROR: no original IRIX fm ELF found in committed evidence.' >&2
+            echo 'Expected a standalone fm specimen or an archive such as desktop_eoe.tar/sysadmdesktop.tar containing usr/sbin/fm.' >&2
+            exit 1
+          fi
 
-          fm="/tmp/fm-evidence/$fm_entry"
+          echo "fm source: $source_desc"
           file "$fm"
           sha256sum "$fm"
           echo "FM_ORIGINAL=$fm" >> "$GITHUB_ENV"
+          echo "FM_SOURCE=$source_desc" >> "$GITHUB_ENV"
 
       - name: Binary identity and dependencies
         run: |
+          echo '--- evidence source ---'
+          echo "$FM_SOURCE"
           echo '--- ELF header ---'
           mips-linux-gnu-readelf -h "$FM_ORIGINAL"
           echo '--- program headers ---'
@@ -76,8 +135,6 @@ jobs:
 
       - name: Disassemble FmApp processArgs
         run: |
-          # Binary-proven symbol from the preserved original fm:
-          # processArgs__5FmAppGiPPc at 0x10022b18, size 3160.
           mips-linux-gnu-objdump -drC \
             --start-address=0x10022b18 \
             --stop-address=0x10023770 \
@@ -86,9 +143,6 @@ jobs:
 
       - name: Disassemble FmWindow createPanels
         run: |
-          # Binary-proven start recovered previously. Capture a broad bounded
-          # neighborhood; exact function size will be taken from this run's
-          # symbol table before narrowing subsequent passes.
           mips-linux-gnu-objdump -drC \
             --start-address=0x100187e0 \
             --stop-address=0x1001a800 \
@@ -104,6 +158,9 @@ jobs:
           {
             printf '\n===== %s =====\n' "$1" >> "$report"
           }
+
+          section 'provenance'
+          printf 'source=%s\n' "$FM_SOURCE" >> "$report"
 
           section 'file and sha256'
           file "$FM_ORIGINAL" >> "$report"
