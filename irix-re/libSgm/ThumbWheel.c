@@ -491,8 +491,12 @@ replayNativeFrame(SgThumbWheelRecCompat *tw, Drawable d, int frameIndex)
     unsigned int width = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
     unsigned int height = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
     unsigned short i;
-    XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
-    XFillRectangle(dpy, d, tw->thumbwheel.gc, 0, 0, width, height);
+
+    /* RE: captured native render logs differ between the two four-frame
+     * banks only in the initial fill GC: bank A uses gray 4, bank B gray 5. */
+    XFillRectangle(dpy, d,
+                   tw->thumbwheel.gray_gc[(frameIndex >= TW_BANK_COUNT) ? 5 : 4],
+                   0, 0, width, height);
     for (i = 0; i < frame->count; ++i) {
         const unsigned char *op = frame->ops + (i * 5u);
         unsigned int gray = op[0];
