@@ -38,6 +38,38 @@ MapAbsolute(UINT64 Value, UINT64 Min, UINT64 Max, UINTN Pixels)
     return (UINTN)(((Value - Min) * (UINT64)(Pixels - 1)) / Span);
 }
 
+/*
+ * UEFI drivers are not required to have already expanded every controller
+ * tree before an application starts.  In particular, a USB HID device may
+ * exist below a host-controller handle while EFI_SIMPLE_POINTER_PROTOCOL or
+ * EFI_ABSOLUTE_POINTER_PROTOCOL has not yet been produced on its child
+ * handle.  Follow the ConnectController() "connect all handles" pattern from
+ * the UEFI specification before discovering pointer protocols.
+ *
+ * This is intentionally an adapter-side operation.  The original SGI GUI
+ * still consumes only htp mouse deltas/buttons through guiCheckMouse().
+ */
+static VOID
+ConnectAllControllers(VOID)
+{
+    EFI_HANDLE *AllHandles = NULL;
+    UINTN HandleCount = 0;
+    UINTN I;
+
+    if (EFI_ERROR(gBS->LocateHandleBuffer(
+            AllHandles,
+            NULL,
+            NULL,
+            &HandleCount,
+            &AllHandles)))
+        return;
+
+    for (I = 0; I < HandleCount; ++I)
+        (VOID)gBS->ConnectController(AllHandles[I], NULL, NULL, TRUE);
+
+    FreePool(AllHandles);
+}
+
 static UINT8
 SimplePointerButtons(const EFI_SIMPLE_POINTER_STATE *State)
 {
@@ -97,6 +129,10 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
     if (SystemTable->ConIn->Reset)
         (VOID)SystemTable->ConIn->Reset(SystemTable->ConIn, FALSE);
+
+    /* Force firmware drivers to bind recursively before asking which pointer
+     * protocols exist.  OVMF can otherwise leave HID child handles latent. */
+    ConnectAllControllers();
 
     SimpleCount = 0;
     AbsoluteCount = 0;
