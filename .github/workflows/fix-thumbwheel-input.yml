@@ -1,0 +1,37 @@
+name: Fix ThumbWheel input
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-thumbwheel-input.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Install recovered translations explicitly
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('irix-re/libSgm/ThumbWheel.c')
+          s=p.read_text()
+          old='''    tw->thumbwheel.press_coordinate = 0;\n    tw->thumbwheel.press_value = tw->thumbwheel.value;\n\n    if (tw->core.width == 0)\n'''
+          new='''    tw->thumbwheel.press_coordinate = 0;\n    tw->thumbwheel.press_value = tw->thumbwheel.value;\n\n    /*\n     * RE: MaXX's native SgThumbWheel relies entirely on its class\n     * translations for pointer interaction. OpenMotif does not always\n     * compile inherited subclass tm_table data the same way as IRIX Motif,\n     * so install the binary-recovered table explicitly on the host widget.\n     */\n    XtOverrideTranslations(newWidget,\n                           XtParseTranslationTable(thumbTranslations));\n\n    if (tw->core.width == 0)\n'''
+          if s.count(old)!=1:
+              raise SystemExit('initialize insertion point not unique')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Commit
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/libSgm/ThumbWheel.c
+          git diff --cached --check
+          git commit -m "libSgm: activate ThumbWheel pointer translations"
+          git push origin HEAD:irix-re
