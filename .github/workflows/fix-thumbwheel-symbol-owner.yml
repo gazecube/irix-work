@@ -1,0 +1,40 @@
+name: Fix ThumbWheel symbol ownership
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-thumbwheel-symbol-owner.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Let SgmCompat own exported shims during native class bring-up
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('irix-re/libSgm/ThumbWheel.c')
+          s=p.read_text()
+          old='WidgetClass sgThumbWheelWidgetClass = (WidgetClass)&sgThumbWheelClassRec;\n'
+          new='''extern WidgetClass sgThumbWheelWidgetClass;\n\n#if defined(__GNUC__)\n__attribute__((constructor))\n#endif\nstatic void\ninstallThumbWheelClass(void)\n{\n    sgThumbWheelWidgetClass = (WidgetClass)&sgThumbWheelClassRec;\n}\n'''
+          if s.count(old)!=1: raise SystemExit('class pointer block not unique')
+          s=s.replace(old,new,1)
+          tail='''Widget\nSgCreateThumbWheel(Widget parent, char *name, ArgList arglist, Cardinal argcount)\n{\n    return XtCreateWidget(name, sgThumbWheelWidgetClass,\n                          parent, arglist, argcount);\n}\n\nvoid\nSgThumbWheelGetValue(Widget widget, int *value)\n{\n    SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;\n    if (value)\n        *value = tw->thumbwheel.value;\n}\n\nvoid\nSgThumbWheelSetValue(Widget widget, int value)\n{\n    SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;\n    setValueInternal(tw, value, XmCR_VALUE_CHANGED, NULL, False);\n}\n'''
+          if s.count(tail)!=1: raise SystemExit('public tail not unique')
+          s=s.replace(tail,'',1)
+          p.write_text(s)
+          PY
+      - name: Commit
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/libSgm/ThumbWheel.c
+          git diff --cached --check
+          git commit -m "libSgm: install native ThumbWheel class behind ABI shims"
+          git push origin HEAD:irix-re
