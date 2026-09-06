@@ -8,6 +8,7 @@ on:
       - 'irix-re/libSgm/**'
       - 'irix-re/libimdApp/**'
       - 'irix-re/libimdIconPanel/**'
+      - 'irix-re/fm/**'
       - 'irix-re/clogin/ImdFtrVisualCompat.*'
       - 'irix-re/CMakeLists.txt'
       - '.github/workflows/sgm-smoke.yml'
@@ -34,7 +35,7 @@ jobs:
         run: cmake -S irix-re -B irix-re/build -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build smoke tests
-        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke sgm_finder_smoke imd_icon_finder_smoke -j2
+        run: cmake --build irix-re/build --target sgm_visual_drawing_area_smoke sgm_finder_smoke imd_icon_finder_smoke fm -j2
 
       - name: Verify application linkage
         run: |
