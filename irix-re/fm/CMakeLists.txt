@@ -3,7 +3,7 @@
 # the installed application entry point.
 
 if(TARGET viewklass AND TARGET imdIconPanel)
-    add_executable(fm FmMain.c++)
+    add_executable(fm FmMain.c++ FmIconSurface.c++)
     target_link_libraries(fm PRIVATE viewklass imdIconPanel)
 else()
     find_path(FM_MOTIF_INCLUDE_DIR
@@ -47,7 +47,7 @@ else()
 
     if(FM_MOTIF_INCLUDE_DIR AND FM_MOTIF_LIBRARY AND
        FM_XT_LIBRARY AND FM_X11_LIBRARY AND TARGET imdIconPanel)
-        add_executable(fm FmMain.c++)
+        add_executable(fm FmMain.c++ FmIconSurface.c++)
         target_include_directories(fm PRIVATE "${FM_MOTIF_INCLUDE_DIR}")
         target_link_libraries(fm PRIVATE
             imdIconPanel
