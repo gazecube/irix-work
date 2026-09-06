@@ -256,7 +256,6 @@ static int
 hitMargin(const SgThumbWheelRecCompat *tw)
 {
     Dimension margin = 0;
-
     XtVaGetValues((Widget)tw, XmNhighlightThickness, &margin, NULL);
     return (int)margin;
 }
@@ -277,7 +276,6 @@ eventPoint(const XEvent *event, int *x, int *y)
     default:
         return False;
     }
-
     /* RE: MaXX Motion normalizes both event axes this way at 0x5440. */
     if (*x > 1) *x -= 4;
     if (*y > 1) *y -= 4;
@@ -320,7 +318,6 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     Dimension preferredWidth, preferredHeight;
     int i;
     (void)request; (void)args; (void)count;
-
     if (tw->thumbwheel.maximum <= tw->thumbwheel.minimum)
         tw->thumbwheel.maximum = tw->thumbwheel.minimum + 1;
     if (tw->thumbwheel.value < tw->thumbwheel.minimum ||
@@ -333,16 +330,13 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     tw->thumbwheel.home_pressed = False;
     tw->thumbwheel.press_coordinate = 0;
     tw->thumbwheel.press_value = tw->thumbwheel.value;
-
     XtOverrideTranslations(newWidget, XtParseTranslationTable(thumbTranslations));
     XtAddEventHandler(newWidget,
                       ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
                       False, thumbPointerEH, NULL);
-
     preferredSize(tw, &preferredWidth, &preferredHeight);
     if (tw->core.width == 0) tw->core.width = preferredWidth;
     if (tw->core.height == 0) tw->core.height = preferredHeight;
-
     values.foreground = tw->primitive.foreground;
     values.background = tw->core.background_pixel;
     tw->thumbwheel.gc = XtGetGC(newWidget, GCForeground | GCBackground, &values);
@@ -494,17 +488,13 @@ drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
 {
     Display *dpy = XtDisplay((Widget)tw);
     GC gc = tw->thumbwheel.gc;
-    GC top = tw->primitive.top_shadow_GC;
-    GC bottom = tw->primitive.bottom_shadow_GC;
 
+    /* RE: native home pixmaps contain the interior only; redraw applies the
+     * raised/recessed Motif shadow separately according to the armed state. */
     XSetForeground(dpy, gc,
                    hover ? tw->primitive.top_shadow_color
                          : tw->core.background_pixel);
     XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
-    XDrawLine(dpy, d, top, 0, 0, TW_HOME_SIZE - 1, 0);
-    XDrawLine(dpy, d, top, 0, 0, 0, TW_HOME_SIZE - 1);
-    XDrawLine(dpy, d, bottom, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
-    XDrawLine(dpy, d, bottom, TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
     XSetForeground(dpy, gc, tw->primitive.foreground);
     if (tw->thumbwheel.orientation == XmVERTICAL)
         XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
@@ -562,6 +552,8 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     if (tw->thumbwheel.show_home_button) {
         int hx = ox, hy = oy;
         Pixmap home;
+        GC top;
+        GC bottom;
         if (tw->thumbwheel.orientation == XmVERTICAL) hy += faceHeight;
         else hx += faceWidth;
         home = tw->thumbwheel.home_frames[tw->thumbwheel.home_hover ? 1 : 0];
@@ -569,16 +561,18 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
             XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
                       TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
 
-        if (tw->thumbwheel.home_pressed) {
-            GC ptop = tw->primitive.bottom_shadow_GC;
-            GC pbottom = tw->primitive.top_shadow_GC;
-            XDrawLine(dpy, win, ptop, hx, hy, hx + TW_HOME_SIZE - 1, hy);
-            XDrawLine(dpy, win, ptop, hx, hy, hx, hy + TW_HOME_SIZE - 1);
-            XDrawLine(dpy, win, pbottom, hx, hy + TW_HOME_SIZE - 1,
-                      hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
-            XDrawLine(dpy, win, pbottom, hx + TW_HOME_SIZE - 1, hy,
-                      hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
-        }
+        /* RE: MaXX redraw always applies one Motif shadow after XCopyArea().
+         * +0x240 changes only whether that shadow is raised or recessed. */
+        top = tw->thumbwheel.home_pressed
+            ? tw->primitive.bottom_shadow_GC : tw->primitive.top_shadow_GC;
+        bottom = tw->thumbwheel.home_pressed
+            ? tw->primitive.top_shadow_GC : tw->primitive.bottom_shadow_GC;
+        XDrawLine(dpy, win, top, hx, hy, hx + TW_HOME_SIZE - 1, hy);
+        XDrawLine(dpy, win, top, hx, hy, hx, hy + TW_HOME_SIZE - 1);
+        XDrawLine(dpy, win, bottom, hx, hy + TW_HOME_SIZE - 1,
+                  hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
+        XDrawLine(dpy, win, bottom, hx + TW_HOME_SIZE - 1, hy,
+                  hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
     }
 }
 
@@ -800,7 +794,8 @@ static void actionEndLine(Widget w, XEvent *e, String *p, Cardinal *n)
 Widget
 SgCreateThumbWheel(Widget parent, char *name, ArgList arglist, Cardinal argcount)
 {
-    return XtCreateWidget(name, sgThumbWheelWidgetClass, parent, arglist, argcount);
+    return XtCreateWidget(name, sgThumbWheelWidgetClass,
+                          parent, arglist, argcount);
 }
 
 void
