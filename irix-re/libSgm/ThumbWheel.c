@@ -252,6 +252,15 @@ controlOrigin(const SgThumbWheelRecCompat *tw, int *x, int *y)
     if (*y < 0) *y = 0;
 }
 
+static int
+hitMargin(const SgThumbWheelRecCompat *tw)
+{
+    Dimension margin = 0;
+
+    XtVaGetValues((Widget)tw, XmNhighlightThickness, &margin, NULL);
+    return (int)margin;
+}
+
 static Boolean
 eventPoint(const XEvent *event, int *x, int *y)
 {
@@ -259,41 +268,48 @@ eventPoint(const XEvent *event, int *x, int *y)
     switch (event->type) {
     case ButtonPress:
     case ButtonRelease:
-        *x = event->xbutton.x; *y = event->xbutton.y; return True;
+        *x = event->xbutton.x; *y = event->xbutton.y; break;
     case MotionNotify:
-        *x = event->xmotion.x; *y = event->xmotion.y; return True;
+        *x = event->xmotion.x; *y = event->xmotion.y; break;
     case EnterNotify:
     case LeaveNotify:
-        *x = event->xcrossing.x; *y = event->xcrossing.y; return True;
+        *x = event->xcrossing.x; *y = event->xcrossing.y; break;
     default:
         return False;
     }
+
+    /* RE: MaXX Motion normalizes both event axes this way at 0x5440. */
+    if (*x > 1) *x -= 4;
+    if (*y > 1) *y -= 4;
+    return True;
 }
 
 static Boolean
 pointInWheel(const SgThumbWheelRecCompat *tw, int x, int y)
 {
     int ox, oy;
+    int margin = hitMargin(tw);
     controlOrigin(tw, &ox, &oy);
     if (tw->thumbwheel.orientation == XmVERTICAL)
-        return x >= ox && x < ox + TW_NATIVE_FACE_SHORT &&
-               y >= oy && y < oy + TW_NATIVE_FACE_LONG;
-    return x >= ox && x < ox + TW_NATIVE_FACE_LONG &&
-           y >= oy && y < oy + TW_NATIVE_FACE_SHORT;
+        return x >= ox - margin && x <= ox + TW_NATIVE_FACE_SHORT - 1 &&
+               y >= oy - margin && y <= oy + TW_NATIVE_FACE_LONG - 1;
+    return x >= ox - margin && x <= ox + TW_NATIVE_FACE_LONG - 1 &&
+           y >= oy - margin && y <= oy + TW_NATIVE_FACE_SHORT - 1;
 }
 
 static Boolean
 pointInHome(const SgThumbWheelRecCompat *tw, int x, int y)
 {
     int ox, oy;
+    int margin = hitMargin(tw);
     if (!tw->thumbwheel.show_home_button) return False;
     controlOrigin(tw, &ox, &oy);
     if (tw->thumbwheel.orientation == XmVERTICAL)
         oy += TW_NATIVE_FACE_LONG;
     else
         ox += TW_NATIVE_FACE_LONG;
-    return x >= ox && x < ox + TW_HOME_SIZE &&
-           y >= oy && y < oy + TW_HOME_SIZE;
+    return x >= ox - margin && x <= ox + TW_HOME_SIZE - 1 &&
+           y >= oy - margin && y <= oy + TW_HOME_SIZE - 1;
 }
 
 static void
@@ -481,13 +497,6 @@ drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
     GC top = tw->primitive.top_shadow_GC;
     GC bottom = tw->primitive.bottom_shadow_GC;
 
-    /*
-     * Keep the home glyph and shadow geometry identical in both states.
-     * The previous host approximation added two inset lines on hover; that
-     * made the fixed 16x16 control appear to jump as the pointer crossed it.
-     * Use only a fill change here until the native home-pixmap setup path is
-     * fully proven on the host.
-     */
     XSetForeground(dpy, gc,
                    hover ? tw->primitive.top_shadow_color
                          : tw->core.background_pixel);
@@ -545,8 +554,6 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
                    (unsigned int)tw->core.width, (unsigned int)tw->core.height);
 
-    /* RE: +0x208 selects which four-frame bank is visible; both banks use
-     * the same active frame index and are advanced together by text+0x1940. */
     frame = tw->thumbwheel.wheel_frames[(tw->thumbwheel.wheel_hover ? 4 : 0) + tw->thumbwheel.active_frame];
     if (frame != None)
         XCopyArea(dpy, frame, win, tw->thumbwheel.gc, 0, 0,
@@ -562,8 +569,6 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
             XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
                       TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
 
-        /* RE: +0x240 is the separate armed state. Native Btn1Down/Up draws
-         * the home control shadow in/out without changing the hover pixmap. */
         if (tw->thumbwheel.home_pressed) {
             GC ptop = tw->primitive.bottom_shadow_GC;
             GC pbottom = tw->primitive.top_shadow_GC;
@@ -655,8 +660,8 @@ actionMotion(Widget w, XEvent *e, String *p, Cardinal *n)
     Boolean wheel, home;
     (void)p; (void)n;
     if (!eventPoint(e, &x, &y)) return;
-    wheel = pointInWheel(tw, x, y);
     home = pointInHome(tw, x, y);
+    wheel = home ? False : pointInWheel(tw, x, y);
     if (wheel != tw->thumbwheel.wheel_hover || home != tw->thumbwheel.home_hover) {
         tw->thumbwheel.wheel_hover = wheel;
         tw->thumbwheel.home_hover = home;
