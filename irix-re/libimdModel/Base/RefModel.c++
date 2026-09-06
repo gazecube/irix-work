@@ -72,12 +72,15 @@ ImdRefModel::desktopContainerDNA()
      *   ImdFileModel::dnaSelectorFromPath(path, ImdString::kNull)
      *   ImdDNA(ImdDirModel::kTypeName, selector)
      *
-     * libimdModel.so exports ImdDirModel::kTypeName and contains the matching
-     * static type string "Directory" in the class' recovered constant set.
+     * Fresh local static-initialization disassembly resolves
+     * ImdDirModel::kTypeName itself: the library initializes it from
+     * name__9type_info(__T_11ImdDirModel), whose type-info name string is
+     * exactly "ImdDirModel". The nearby "Directory" string belongs to a
+     * different semantic layer and must not be substituted for kTypeName.
      */
     const ImdString desktopPath(path);
     const ImdString selector =
         ImdFileModel::dnaSelectorFromPath(desktopPath, ImdString());
 
-    return ImdDNA(ImdString("Directory"), selector);
+    return ImdDNA(ImdString("ImdDirModel"), selector);
 }
