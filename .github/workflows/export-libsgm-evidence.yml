@@ -1,0 +1,28 @@
+name: Export libSgm evidence
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-libsgm-evidence.yml'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Extract preserved libSgm
+        run: |
+          set -eux
+          mkdir -p /tmp/shared /tmp/export
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/shared
+          LIB=$(find /tmp/shared -type f -name 'libSgm.so.1' | head -n1)
+          cp "$LIB" /tmp/export/libSgm.so.1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preserved-libSgm
+          path: /tmp/export/libSgm.so.1
