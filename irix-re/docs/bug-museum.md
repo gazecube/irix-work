@@ -6,7 +6,22 @@ This file is intentionally separate from `ai-mishaps.md`, which is reserved for 
 
 ## Exhibit 1: Refresh recursively negotiates geometry until Motif explodes
 
-While the bootstrap file browser was still using an `XmList` as a temporary child of the reconstructed `ImdViewPanel`, both `Refresh` and `Hidden Files` reliably caused a hard crash after the window had been realized.
+While the bootstrap file browser was still using an `XmList` as a temporary child of the reconstructed `ImdViewPanel`, in-place updates of the current directory view could send the realized widget hierarchy into a recursive geometry feedback loop.
+
+The funniest part was the split behavior:
+
+```text
+works:
+  double-click into a directory
+  Go Up
+  enter another path
+
+crashes:
+  Refresh
+  Hidden Files
+```
+
+So ordinary directory navigation worked, including the Go Up button, while rebuilding the current view in place could make Motif die hard.
 
 The initial symptom looked unrelated:
 
@@ -36,16 +51,16 @@ In short:
 
 ```text
 Refresh / Hidden Files
-    -> repopulate XmList
+    -> rebuild current XmList in place
     -> preferred geometry changes
     -> parent resize callback
     -> XtVaSetValues(child geometry)
     -> child geometry request
     -> parent geometry manager
     -> parent resize callback
-    -> repeat until death
+    -> repeat until Motif dies
 ```
 
 The fix is to configure the child from the parent's resize path with parent-side geometry operations such as `XtMoveWidget()` / `XtResizeWidget()` rather than issuing a new negotiated `XtSetValues()` geometry request from inside the resize callback.
 
-Verdict: the filesystem code was innocent. The bootstrap geometry shim had built a recursive Motif feedback loop.
+Verdict: the filesystem code was innocent. The bootstrap geometry shim had built a recursive Motif feedback loop, and Motif eventually just died in the input-method code.
