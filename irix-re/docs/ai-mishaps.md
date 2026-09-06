@@ -44,17 +44,23 @@ The resulting response was exactly the kind of accidental presentation bug that 
 
 ## Implementing ARCS Bringup In The File Manager
 
-While restarting binary-first archaeology for the IRIX `fm` reimplementation, the project context briefly crossed wires with the separate SGI ARCS/UEFI bringup effort.
+While restarting binary-first archaeology for the IRIX `fm` reimplementation, the project context briefly collapsed three completely separate lines of work into one glorious mental blob:
 
-For one glorious moment, the file-manager reconstruction appeared to be heading toward firmware bringup instead of locating the original `/usr/sbin/fm` specimen.
+```text
+IID fm reconstruction
++ SGI ARCS/UEFI bringup
++ EFX II
+```
+
+For one moment, the file-manager reconstruction was being reasoned about as though firmware bringup and EFX II belonged in the same implementation thread as locating the original `/usr/sbin/fm` specimen.
 
 The correction was immediate:
 
 > Woah, woah, woah, this isn't the ARCs thing, you good?
 
-No ARCS firmware was actually implemented in `fm`.
+No ARCS firmware was implemented in `fm`, and EFX II was not smuggled into the file manager either.
 
-Lesson: when two SGI archaeology projects are active at once, confirm which century of the boot process we are currently reverse engineering.
+Lesson: when several SGI-flavored projects are active at once, confirm which completely unrelated subsystem we are currently reverse engineering before trying to merge the universe.
 
 ## Museum Policy
 
