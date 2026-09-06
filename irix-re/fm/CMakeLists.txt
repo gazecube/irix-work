@@ -61,6 +61,20 @@ else()
 endif()
 
 if(TARGET fm)
+    # MaXX ships its own libSgm.so.1 with the same historical SONAME as our
+    # reconstruction.  The original runtime stub does not provide every data
+    # symbol reconstructed libimdIconPanel now uses, including
+    # sgVisualDrawingAreaWidgetClass.  Keep the build-tree reconstruction ahead
+    # of MaXX for this executable, exactly as the Pandora integration probe does.
+    if(TARGET Sgm)
+        set_property(TARGET fm PROPERTY
+            BUILD_RPATH "$ORIGIN/../libSgm")
+        set_property(TARGET fm PROPERTY BUILD_RPATH_USE_ORIGIN TRUE)
+        if(UNIX AND NOT APPLE)
+            target_link_options(fm PRIVATE "-Wl,--disable-new-dtags")
+        endif()
+    endif()
+
     set_property(TARGET fm PROPERTY CXX_STANDARD 11)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS fm RUNTIME DESTINATION bin)
