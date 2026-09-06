@@ -230,14 +230,33 @@ clampValue(const SgThumbWheelRecCompat *tw, int value)
 }
 
 static void
+primitiveInsets(const SgThumbWheelRecCompat *tw, int *highlight, int *shadow)
+{
+    Dimension h = 0;
+    Dimension s = 0;
+    XtVaGetValues((Widget)tw,
+                  XmNhighlightThickness, &h,
+                  XmNshadowThickness, &s,
+                  NULL);
+    *highlight = (int)h;
+    *shadow = (int)s;
+}
+
+static void
 preferredSize(const SgThumbWheelRecCompat *tw, Dimension *width, Dimension *height)
 {
-    Dimension longSize = TW_NATIVE_FACE_LONG +
-        (tw->thumbwheel.show_home_button ? TW_HOME_SIZE : 0);
+    int highlight, shadow;
+    Dimension shortSize;
+    Dimension longSize;
+    primitiveInsets(tw, &highlight, &shadow);
+    shortSize = (Dimension)(TW_NATIVE_FACE_SHORT + 2 * (highlight + shadow));
+    longSize = (Dimension)(TW_NATIVE_FACE_LONG + 2 * (highlight + shadow));
+    if (tw->thumbwheel.show_home_button)
+        longSize = (Dimension)(longSize + TW_HOME_SIZE + 2 * shadow);
     if (tw->thumbwheel.orientation == XmVERTICAL) {
-        *width = TW_NATIVE_FACE_SHORT; *height = longSize;
+        *width = shortSize; *height = longSize;
     } else {
-        *width = longSize; *height = TW_NATIVE_FACE_SHORT;
+        *width = longSize; *height = shortSize;
     }
 }
 
@@ -245,19 +264,22 @@ static void
 controlOrigin(const SgThumbWheelRecCompat *tw, int *x, int *y)
 {
     Dimension width, height;
+    int highlight, shadow;
     preferredSize(tw, &width, &height);
-    *x = ((int)tw->core.width - (int)width) / 2;
-    *y = ((int)tw->core.height - (int)height) / 2;
-    if (*x < 0) *x = 0;
-    if (*y < 0) *y = 0;
+    primitiveInsets(tw, &highlight, &shadow);
+    *x = ((int)tw->core.width - (int)width) / 2 + highlight + shadow;
+    *y = ((int)tw->core.height - (int)height) / 2 + highlight + shadow;
+    if (*x < highlight + shadow) *x = highlight + shadow;
+    if (*y < highlight + shadow) *y = highlight + shadow;
 }
 
 static int
 hitMargin(const SgThumbWheelRecCompat *tw)
 {
-    Dimension margin = 0;
-    XtVaGetValues((Widget)tw, XmNhighlightThickness, &margin, NULL);
-    return (int)margin;
+    int highlight, shadow;
+    primitiveInsets(tw, &highlight, &shadow);
+    (void)shadow;
+    return highlight;
 }
 
 static Boolean
@@ -489,17 +511,17 @@ drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
     Display *dpy = XtDisplay((Widget)tw);
     GC gc = tw->thumbwheel.gc;
 
-    /* RE: native home pixmaps contain the interior only; redraw applies the
-     * raised/recessed Motif shadow separately according to the armed state. */
-    XSetForeground(dpy, gc,
-                   hover ? tw->primitive.top_shadow_color
-                         : tw->core.background_pixel);
+    /* RE: text+0x40d2 creates two identical-geometry 16x16 interiors.
+     * Normal uses grayscale 4, hover uses grayscale 5. Both use grayscale 0
+     * for the 3..12 box and the centered 4x4 square. */
+    XSetForeground(dpy, gc, tw->thumbwheel.gray_pixel[hover ? 5 : 4]);
     XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
-    XSetForeground(dpy, gc, tw->primitive.foreground);
-    if (tw->thumbwheel.orientation == XmVERTICAL)
-        XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
-    else
-        XFillRectangle(dpy, d, gc, 5, 7, 6, 2);
+    XSetForeground(dpy, gc, tw->thumbwheel.gray_pixel[0]);
+    XDrawLine(dpy, d, gc, 3, 3, 12, 3);
+    XDrawLine(dpy, d, gc, 12, 3, 12, 12);
+    XDrawLine(dpy, d, gc, 12, 12, 3, 12);
+    XDrawLine(dpy, d, gc, 3, 12, 3, 3);
+    XFillRectangle(dpy, d, gc, 6, 6, 4, 4);
 }
 
 static void
@@ -528,17 +550,41 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
 }
 
 static void
+drawShadowBox(SgThumbWheelRecCompat *tw, Display *dpy, Window win,
+              int x, int y, int width, int height, int thickness,
+              Boolean recessed)
+{
+    GC top = recessed ? tw->primitive.bottom_shadow_GC : tw->primitive.top_shadow_GC;
+    GC bottom = recessed ? tw->primitive.top_shadow_GC : tw->primitive.bottom_shadow_GC;
+    int i;
+    for (i = 0; i < thickness; ++i) {
+        int l = x + i;
+        int t = y + i;
+        int r = x + width - 1 - i;
+        int b = y + height - 1 - i;
+        if (r < l || b < t) break;
+        XDrawLine(dpy, win, top, l, t, r, t);
+        XDrawLine(dpy, win, top, l, t, l, b);
+        XDrawLine(dpy, win, bottom, l, b, r, b);
+        XDrawLine(dpy, win, bottom, r, t, r, b);
+    }
+}
+
+static void
 drawThumbWheel(SgThumbWheelRecCompat *tw)
 {
     Display *dpy;
     Window win;
     Pixmap frame;
     int ox, oy, faceWidth, faceHeight;
+    int highlight, shadow;
     if (!XtIsRealized((Widget)tw)) return;
     ensureRenderAssets(tw);
     dpy = XtDisplay((Widget)tw); win = XtWindow((Widget)tw);
     faceWidth = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
     faceHeight = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    primitiveInsets(tw, &highlight, &shadow);
+    (void)highlight;
     controlOrigin(tw, &ox, &oy);
     XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
@@ -549,11 +595,16 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
         XCopyArea(dpy, frame, win, tw->thumbwheel.gc, 0, 0,
                   (unsigned int)faceWidth, (unsigned int)faceHeight, ox, oy);
 
+    /* RE: text+0x5179 copies the 16x122 face, then text+0x520e calls
+     * XmeDrawShadows around it using the primitive shadow thickness. */
+    drawShadowBox(tw, dpy, win,
+                  ox - shadow, oy - shadow,
+                  faceWidth + 2 * shadow, faceHeight + 2 * shadow,
+                  shadow, False);
+
     if (tw->thumbwheel.show_home_button) {
         int hx = ox, hy = oy;
         Pixmap home;
-        GC top;
-        GC bottom;
         if (tw->thumbwheel.orientation == XmVERTICAL) hy += faceHeight;
         else hx += faceWidth;
         home = tw->thumbwheel.home_frames[tw->thumbwheel.home_hover ? 1 : 0];
@@ -561,18 +612,12 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
             XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
                       TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
 
-        /* RE: MaXX redraw always applies one Motif shadow after XCopyArea().
-         * +0x240 changes only whether that shadow is raised or recessed. */
-        top = tw->thumbwheel.home_pressed
-            ? tw->primitive.bottom_shadow_GC : tw->primitive.top_shadow_GC;
-        bottom = tw->thumbwheel.home_pressed
-            ? tw->primitive.top_shadow_GC : tw->primitive.bottom_shadow_GC;
-        XDrawLine(dpy, win, top, hx, hy, hx + TW_HOME_SIZE - 1, hy);
-        XDrawLine(dpy, win, top, hx, hy, hx, hy + TW_HOME_SIZE - 1);
-        XDrawLine(dpy, win, bottom, hx, hy + TW_HOME_SIZE - 1,
-                  hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
-        XDrawLine(dpy, win, bottom, hx + TW_HOME_SIZE - 1, hy,
-                  hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
+        /* RE: text+0x53ba draws the home shadow separately. +0x240 selects
+         * raised vs recessed; the pixmap itself never moves. */
+        drawShadowBox(tw, dpy, win,
+                      hx - shadow, hy - shadow,
+                      TW_HOME_SIZE + 2 * shadow, TW_HOME_SIZE + 2 * shadow,
+                      shadow, tw->thumbwheel.home_pressed);
     }
 }
 
