@@ -53,6 +53,8 @@ public:
     virtual ~ImdIconView() {}
 };
 
+class ImdIconPanel;
+
 extern WidgetClass imdViewPanelWidgetClass;
 
 extern "C" Widget ImdCreateViewPanel(
@@ -66,6 +68,12 @@ extern "C" void ImdViewPanelAdoptLayout(Widget, ImdLayout *);
 extern "C" void ImdViewPanelSetScale(Widget, float, long, long);
 extern "C" void ImdViewPanelBeginBlockChanges(Widget);
 extern "C" void ImdViewPanelEndBlockChanges(Widget);
+
+/*
+ * Original overload recovered from libimdIconPanel.so:
+ *   ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
+ */
+void ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *);
 
 class ImdIconPanel
 {
