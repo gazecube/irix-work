@@ -72,3 +72,12 @@ jobs:
       - name: Run ImdIconFinder application smoke test
         if: success()
         run: xvfb-run -a ./irix-re/build/libimdApp/imd_icon_finder_smoke
+
+      - name: Run fm startup smoke
+        if: success()
+        run: |
+          set +e
+          timeout 3s xvfb-run -a ./irix-re/build/fm/fm /tmp
+          rc=$?
+          set -e
+          test "$rc" -eq 124
