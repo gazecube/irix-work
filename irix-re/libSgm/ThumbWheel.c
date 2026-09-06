@@ -100,7 +100,11 @@ typedef struct _SgThumbWheelRec
     SgThumbWheelPartCompat thumbwheel;
 } SgThumbWheelRecCompat;
 
-typedef struct { XtPointer extension; } SgThumbWheelClassPartCompat;
+typedef struct
+{
+    XtPointer extension;
+} SgThumbWheelClassPartCompat;
+
 typedef struct _SgThumbWheelClassRec
 {
     CoreClassPart core_class;
@@ -114,6 +118,7 @@ static void thumbResize(Widget);
 static void thumbExpose(Widget, XEvent *, Region);
 static Boolean thumbSetValues(Widget, Widget, Widget, ArgList, Cardinal *);
 static XtGeometryResult thumbQueryGeometry(Widget, XtWidgetGeometry *, XtWidgetGeometry *);
+
 static void actionMotion(Widget, XEvent *, String *, Cardinal *);
 static void actionBtn1Down(Widget, XEvent *, String *, Cardinal *);
 static void actionBtn2Down(Widget, XEvent *, String *, Cardinal *);
@@ -135,6 +140,7 @@ static void actionRight(Widget, XEvent *, String *, Cardinal *);
 static void actionHelp(Widget, XEvent *, String *, Cardinal *);
 static void actionBeginLine(Widget, XEvent *, String *, Cardinal *);
 static void actionEndLine(Widget, XEvent *, String *, Cardinal *);
+
 static void setValueInternal(SgThumbWheelRecCompat *, int, int, XEvent *, Boolean);
 static void drawThumbWheel(SgThumbWheelRecCompat *);
 static int eventCoordinate(const SgThumbWheelRecCompat *, const XEvent *);
@@ -282,8 +288,10 @@ pointInHome(const SgThumbWheelRecCompat *tw, int x, int y)
     int ox, oy;
     if (!tw->thumbwheel.show_home_button) return False;
     controlOrigin(tw, &ox, &oy);
-    if (tw->thumbwheel.orientation == XmVERTICAL) oy += TW_NATIVE_FACE_LONG;
-    else ox += TW_NATIVE_FACE_LONG;
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+        oy += TW_NATIVE_FACE_LONG;
+    else
+        ox += TW_NATIVE_FACE_LONG;
     return x >= ox && x < ox + TW_HOME_SIZE &&
            y >= oy && y < oy + TW_HOME_SIZE;
 }
@@ -296,6 +304,7 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     Dimension preferredWidth, preferredHeight;
     int i;
     (void)request; (void)args; (void)count;
+
     if (tw->thumbwheel.maximum <= tw->thumbwheel.minimum)
         tw->thumbwheel.maximum = tw->thumbwheel.minimum + 1;
     if (tw->thumbwheel.value < tw->thumbwheel.minimum ||
@@ -308,13 +317,16 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     tw->thumbwheel.home_pressed = False;
     tw->thumbwheel.press_coordinate = 0;
     tw->thumbwheel.press_value = tw->thumbwheel.value;
+
     XtOverrideTranslations(newWidget, XtParseTranslationTable(thumbTranslations));
     XtAddEventHandler(newWidget,
                       ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
                       False, thumbPointerEH, NULL);
+
     preferredSize(tw, &preferredWidth, &preferredHeight);
     if (tw->core.width == 0) tw->core.width = preferredWidth;
     if (tw->core.height == 0) tw->core.height = preferredHeight;
+
     values.foreground = tw->primitive.foreground;
     values.background = tw->core.background_pixel;
     tw->thumbwheel.gc = XtGetGC(newWidget, GCForeground | GCBackground, &values);
@@ -465,20 +477,24 @@ static void
 drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
 {
     Display *dpy = XtDisplay((Widget)tw);
-    GC fill = tw->thumbwheel.gray_gc[hover ? 5 : 4];
-    GC outline = tw->thumbwheel.gray_gc[0];
-
-    /*
-     * RE: MaXX text+0x40d2 creates two 16x16 home pixmaps. +0x210 is
-     * filled with grayscale GC 4 and +0x218 with GC 5. Both then receive
-     * the same black 10x10 outline at coordinates 3..12. The hover state
-     * therefore changes fill only; it does not move or reshape the glyph.
-     */
-    XFillRectangle(dpy, d, fill, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
-    XDrawLine(dpy, d, outline, 3, 3, 12, 3);
-    XDrawLine(dpy, d, outline, 12, 3, 12, 12);
-    XDrawLine(dpy, d, outline, 12, 12, 3, 12);
-    XDrawLine(dpy, d, outline, 3, 12, 3, 3);
+    GC gc = tw->thumbwheel.gc;
+    GC top = tw->primitive.top_shadow_GC;
+    GC bottom = tw->primitive.bottom_shadow_GC;
+    XSetForeground(dpy, gc, tw->core.background_pixel);
+    XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
+    XDrawLine(dpy, d, top, 0, 0, TW_HOME_SIZE - 1, 0);
+    XDrawLine(dpy, d, top, 0, 0, 0, TW_HOME_SIZE - 1);
+    XDrawLine(dpy, d, bottom, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
+    XDrawLine(dpy, d, bottom, TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
+    if (hover) {
+        XDrawLine(dpy, d, top, 1, 1, TW_HOME_SIZE - 2, 1);
+        XDrawLine(dpy, d, top, 1, 1, 1, TW_HOME_SIZE - 2);
+    }
+    XSetForeground(dpy, gc, tw->primitive.foreground);
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+        XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
+    else
+        XFillRectangle(dpy, d, gc, 5, 7, 6, 2);
 }
 
 static void
@@ -522,10 +538,14 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
                    (unsigned int)tw->core.width, (unsigned int)tw->core.height);
+
+    /* RE: +0x208 selects which four-frame bank is visible; both banks use
+     * the same active frame index and are advanced together by text+0x1940. */
     frame = tw->thumbwheel.wheel_frames[(tw->thumbwheel.wheel_hover ? 4 : 0) + tw->thumbwheel.active_frame];
     if (frame != None)
         XCopyArea(dpy, frame, win, tw->thumbwheel.gc, 0, 0,
                   (unsigned int)faceWidth, (unsigned int)faceHeight, ox, oy);
+
     if (tw->thumbwheel.show_home_button) {
         int hx = ox, hy = oy;
         Pixmap home;
@@ -535,6 +555,9 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
         if (home != None)
             XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
                       TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
+
+        /* RE: +0x240 is the separate armed state. Native Btn1Down/Up draws
+         * the home control shadow in/out without changing the hover pixmap. */
         if (tw->thumbwheel.home_pressed) {
             GC top = tw->primitive.bottom_shadow_GC;
             GC bottom = tw->primitive.top_shadow_GC;
