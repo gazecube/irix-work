@@ -44,10 +44,10 @@
 #define XmInheritBorderUnhighlight ((XtWidgetProc)_XtInherit)
 #endif
 
-#define TW_DEFAULT_WIDTH 22
-#define TW_DEFAULT_LENGTH 104
 #define TW_NATIVE_FACE_SHORT 16
 #define TW_NATIVE_FACE_LONG 122
+#define TW_DEFAULT_WIDTH TW_NATIVE_FACE_SHORT
+#define TW_DEFAULT_LENGTH TW_NATIVE_FACE_LONG
 #define TW_FRAME_COUNT 8
 #define TW_BANK_COUNT 4
 #define TW_VALUE_STEP 1
@@ -495,14 +495,6 @@ drawShadowBox(Display *dpy, Drawable d, GC top, GC bottom,
               x + width - 1, y, x + width - 1, y + height - 1);
 }
 
-static int
-scaleNativeCoord(int coordinate, int nativeLength, int actualLength)
-{
-    if (actualLength <= 1)
-        return 0;
-    return (coordinate * (actualLength - 1)) / (nativeLength - 1);
-}
-
 static void
 drawWheelFrame(SgThumbWheelRecCompat *tw, Drawable d, int frame)
 {
@@ -514,8 +506,10 @@ drawWheelFrame(SgThumbWheelRecCompat *tw, Drawable d, int frame)
     GC gc = tw->thumbwheel.gc;
     GC top = tw->primitive.top_shadow_GC;
     GC bottom = tw->primitive.bottom_shadow_GC;
-    int width = (int)tw->core.width;
-    int height = (int)tw->core.height;
+    int width = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    int height = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
     int longLength;
     int shortLength;
     int phase;
@@ -537,8 +531,7 @@ drawWheelFrame(SgThumbWheelRecCompat *tw, Drawable d, int frame)
     for (i = 0; i < (int)(sizeof(nativeRibs) / sizeof(nativeRibs[0])); ++i)
     {
         int nativePos = (int)nativeRibs[i] + phase;
-        int pos = scaleNativeCoord(nativePos,
-                                   TW_NATIVE_FACE_LONG, longLength);
+        int pos = nativePos;
         int nativeDistance = abs(nativePos - (TW_NATIVE_FACE_LONG / 2));
         int inset = 2 + (nativeDistance * 3) / (TW_NATIVE_FACE_LONG / 2);
         int near;
@@ -594,13 +587,17 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
 {
     Display *dpy;
     Window win;
+    Dimension faceWidth = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    Dimension faceHeight = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
     int i;
 
     if (!XtIsRealized((Widget)tw))
         return;
 
-    if (tw->thumbwheel.render_width == tw->core.width &&
-        tw->thumbwheel.render_height == tw->core.height &&
+    if (tw->thumbwheel.render_width == faceWidth &&
+        tw->thumbwheel.render_height == faceHeight &&
         tw->thumbwheel.wheel_frames[0] != None)
         return;
 
@@ -613,8 +610,8 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
     {
         tw->thumbwheel.wheel_frames[i] = XCreatePixmap(
             dpy, win,
-            (unsigned int)tw->core.width,
-            (unsigned int)tw->core.height,
+            (unsigned int)faceWidth,
+            (unsigned int)faceHeight,
             (unsigned int)tw->core.depth);
         drawWheelFrame(tw, tw->thumbwheel.wheel_frames[i], i);
     }
@@ -626,8 +623,8 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
         drawHomeFrame(tw, tw->thumbwheel.home_frames[i], i != 0);
     }
 
-    tw->thumbwheel.render_width = tw->core.width;
-    tw->thumbwheel.render_height = tw->core.height;
+    tw->thumbwheel.render_width = faceWidth;
+    tw->thumbwheel.render_height = faceHeight;
 }
 
 static void
@@ -638,6 +635,10 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     Pixmap frame;
     int width;
     int height;
+    int faceWidth;
+    int faceHeight;
+    int faceX;
+    int faceY;
 
     if (!XtIsRealized((Widget)tw))
         return;
@@ -648,6 +649,20 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     win = XtWindow((Widget)tw);
     width = (int)tw->core.width;
     height = (int)tw->core.height;
+    faceWidth = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    faceHeight = tw->thumbwheel.orientation == XmVERTICAL
+        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    faceX = (width - faceWidth) / 2;
+    faceY = (height - faceHeight) / 2;
+    if (faceX < 0)
+        faceX = 0;
+    if (faceY < 0)
+        faceY = 0;
+
+    XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
+    XFillRectangle(dpy, win, tw->thumbwheel.gc,
+                   0, 0, (unsigned int)width, (unsigned int)height);
 
     frame = tw->thumbwheel.forward_motion
         ? tw->thumbwheel.wheel_frames[tw->thumbwheel.forward_frame]
@@ -655,15 +670,19 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
 
     if (frame != None)
         XCopyArea(dpy, frame, win, tw->thumbwheel.gc,
-                  0, 0, (unsigned int)width, (unsigned int)height, 0, 0);
+                  0, 0,
+                  (unsigned int)faceWidth, (unsigned int)faceHeight,
+                  faceX, faceY);
 
     if (tw->thumbwheel.show_home_button &&
         tw->thumbwheel.home_frames[0] != None)
     {
-        int x = (width - 16) / 2;
-        int y = (height - 16) / 2;
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
+        int x = faceX + (faceWidth - 16) / 2;
+        int y = faceY + (faceHeight - 16) / 2;
+        if (x < 0)
+            x = 0;
+        if (y < 0)
+            y = 0;
         XCopyArea(dpy,
                   tw->thumbwheel.home_frames[0], win,
                   tw->thumbwheel.gc,
