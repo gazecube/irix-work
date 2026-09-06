@@ -82,7 +82,7 @@ ArcsInputDiagDraw(
     )
 {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out;
-    CHAR16 Line[96];
+    CHAR16 Line[112];
     CHAR16 *P;
 
     if (!SystemTable || !Diag || !SystemTable->ConOut)
@@ -104,37 +104,50 @@ ArcsInputDiagDraw(
     EmitLine(Out, 0, Line);
 
     P = Line;
-    AppendText(&P, L"ABS status=");
+    AppendText(&P, L"ABS state=");
     AppendHexU64(&P, (UINT64)Diag->AbsoluteStatus);
-    AppendText(&P, L" events=");
+    AppendText(&P, L" ev=");
     AppendDecU64(&P, Diag->AbsoluteEvents);
-    AppendText(&P, L" raw=");
-    AppendDecU64(&P, Diag->RawAbsoluteX);
-    AppendChar(&P, L',');
-    AppendDecU64(&P, Diag->RawAbsoluteY);
+    AppendText(&P, L" wait=");
+    AppendHexU64(&P, (UINT64)Diag->AbsoluteWaitStatus);
+    AppendText(&P, L" sig=");
+    AppendDecU64(&P, Diag->AbsoluteWaitSignals);
     AppendText(&P, L"                    ");
     *P = 0;
     EmitLine(Out, 1, Line);
 
     P = Line;
-    AppendText(&P, L"SIMPLE status=");
-    AppendHexU64(&P, (UINT64)Diag->SimpleStatus);
-    AppendText(&P, L" events=");
-    AppendDecU64(&P, Diag->SimpleEvents);
-    AppendText(&P, L" delta=");
-    AppendDecI32(&P, Diag->LastSimpleDx);
+    AppendText(&P, L"ABS raw=");
+    AppendDecU64(&P, Diag->RawAbsoluteX);
     AppendChar(&P, L',');
-    AppendDecI32(&P, Diag->LastSimpleDy);
-    AppendText(&P, L"                    ");
+    AppendDecU64(&P, Diag->RawAbsoluteY);
+    AppendText(&P, L"                                      ");
     *P = 0;
     EmitLine(Out, 2, Line);
 
     P = Line;
-    AppendText(&P, L"mapped cursor=");
+    AppendText(&P, L"SIMPLE state=");
+    AppendHexU64(&P, (UINT64)Diag->SimpleStatus);
+    AppendText(&P, L" ev=");
+    AppendDecU64(&P, Diag->SimpleEvents);
+    AppendText(&P, L" wait=");
+    AppendHexU64(&P, (UINT64)Diag->SimpleWaitStatus);
+    AppendText(&P, L" sig=");
+    AppendDecU64(&P, Diag->SimpleWaitSignals);
+    AppendText(&P, L"               ");
+    *P = 0;
+    EmitLine(Out, 3, Line);
+
+    P = Line;
+    AppendText(&P, L"SIMPLE delta=");
+    AppendDecI32(&P, Diag->LastSimpleDx);
+    AppendChar(&P, L',');
+    AppendDecI32(&P, Diag->LastSimpleDy);
+    AppendText(&P, L" mapped=");
     AppendDecI32(&P, Diag->CurrentX);
     AppendChar(&P, L',');
     AppendDecI32(&P, Diag->CurrentY);
-    AppendText(&P, L"   ESC exits                                  ");
+    AppendText(&P, L"   ESC exits                    ");
     *P = 0;
-    EmitLine(Out, 3, Line);
+    EmitLine(Out, 4, Line);
 }
