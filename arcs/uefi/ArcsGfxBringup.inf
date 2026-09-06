@@ -23,6 +23,7 @@
   ../sgisrc/libsc/gui/pcbm.c
   ../sgisrc/libsc/gui/text.c
   ../sgisrc/libsc/gui/tport.c
+  ../sgisrc/libsk/graphics/CURSOR/vc1cursor.c
   ../vendor/sgibootscreen-src/src/ip19.c
 
 [Packages]
