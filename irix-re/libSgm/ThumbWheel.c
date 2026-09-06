@@ -480,16 +480,22 @@ drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
     GC gc = tw->thumbwheel.gc;
     GC top = tw->primitive.top_shadow_GC;
     GC bottom = tw->primitive.bottom_shadow_GC;
-    XSetForeground(dpy, gc, tw->core.background_pixel);
+
+    /*
+     * Keep the home glyph and shadow geometry identical in both states.
+     * The previous host approximation added two inset lines on hover; that
+     * made the fixed 16x16 control appear to jump as the pointer crossed it.
+     * Use only a fill change here until the native home-pixmap setup path is
+     * fully proven on the host.
+     */
+    XSetForeground(dpy, gc,
+                   hover ? tw->primitive.top_shadow_color
+                         : tw->core.background_pixel);
     XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
     XDrawLine(dpy, d, top, 0, 0, TW_HOME_SIZE - 1, 0);
     XDrawLine(dpy, d, top, 0, 0, 0, TW_HOME_SIZE - 1);
     XDrawLine(dpy, d, bottom, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
     XDrawLine(dpy, d, bottom, TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
-    if (hover) {
-        XDrawLine(dpy, d, top, 1, 1, TW_HOME_SIZE - 2, 1);
-        XDrawLine(dpy, d, top, 1, 1, 1, TW_HOME_SIZE - 2);
-    }
     XSetForeground(dpy, gc, tw->primitive.foreground);
     if (tw->thumbwheel.orientation == XmVERTICAL)
         XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
@@ -559,13 +565,13 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
         /* RE: +0x240 is the separate armed state. Native Btn1Down/Up draws
          * the home control shadow in/out without changing the hover pixmap. */
         if (tw->thumbwheel.home_pressed) {
-            GC top = tw->primitive.bottom_shadow_GC;
-            GC bottom = tw->primitive.top_shadow_GC;
-            XDrawLine(dpy, win, top, hx, hy, hx + TW_HOME_SIZE - 1, hy);
-            XDrawLine(dpy, win, top, hx, hy, hx, hy + TW_HOME_SIZE - 1);
-            XDrawLine(dpy, win, bottom, hx, hy + TW_HOME_SIZE - 1,
+            GC ptop = tw->primitive.bottom_shadow_GC;
+            GC pbottom = tw->primitive.top_shadow_GC;
+            XDrawLine(dpy, win, ptop, hx, hy, hx + TW_HOME_SIZE - 1, hy);
+            XDrawLine(dpy, win, ptop, hx, hy, hx, hy + TW_HOME_SIZE - 1);
+            XDrawLine(dpy, win, pbottom, hx, hy + TW_HOME_SIZE - 1,
                       hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
-            XDrawLine(dpy, win, bottom, hx + TW_HOME_SIZE - 1, hy,
+            XDrawLine(dpy, win, pbottom, hx + TW_HOME_SIZE - 1, hy,
                       hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
         }
     }
