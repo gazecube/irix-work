@@ -157,8 +157,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                     &gEfiAbsolutePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
                 Absolute[AbsoluteCount++] = Protocol;
-                if (Protocol->Reset)
-                    (VOID)Protocol->Reset(Protocol, FALSE);
             }
         }
         FreePool(Handles);
@@ -182,8 +180,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                     &gEfiSimplePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
                 Simple[SimpleCount++] = Protocol;
-                if (Protocol->Reset)
-                    (VOID)Protocol->Reset(Protocol, FALSE);
             }
         }
         FreePool(Handles);
@@ -193,6 +189,10 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     Diag.SimpleCount = SimpleCount;
     Diag.AbsoluteStatus = AbsoluteCount ? EFI_NOT_READY : EFI_NOT_FOUND;
     Diag.SimpleStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
+    Diag.AbsoluteWaitStatus = AbsoluteCount ? EFI_NOT_READY : EFI_NOT_FOUND;
+    Diag.SimpleWaitStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
+    Diag.AbsoluteWaitSignals = 0;
+    Diag.SimpleWaitSignals = 0;
     Diag.AbsoluteEvents = 0;
     Diag.SimpleEvents = 0;
     Diag.RawAbsoluteX = 0;
@@ -217,6 +217,18 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
             if (!Protocol || !Protocol->GetState || !Protocol->Mode)
                 continue;
+
+            if (Protocol->WaitForInput) {
+                EFI_STATUS WaitStatus = gBS->CheckEvent(Protocol->WaitForInput);
+                if (Diag.AbsoluteWaitStatus != WaitStatus) {
+                    Diag.AbsoluteWaitStatus = WaitStatus;
+                    DiagDirty = TRUE;
+                }
+                if (!EFI_ERROR(WaitStatus)) {
+                    ++Diag.AbsoluteWaitSignals;
+                    DiagDirty = TRUE;
+                }
+            }
 
             for (;;) {
                 EFI_STATUS PointerStatus = Protocol->GetState(Protocol, &State);
@@ -276,6 +288,18 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
                 if (!Protocol || !Protocol->GetState)
                     continue;
+
+                if (Protocol->WaitForInput) {
+                    EFI_STATUS WaitStatus = gBS->CheckEvent(Protocol->WaitForInput);
+                    if (Diag.SimpleWaitStatus != WaitStatus) {
+                        Diag.SimpleWaitStatus = WaitStatus;
+                        DiagDirty = TRUE;
+                    }
+                    if (!EFI_ERROR(WaitStatus)) {
+                        ++Diag.SimpleWaitSignals;
+                        DiagDirty = TRUE;
+                    }
+                }
 
                 for (;;) {
                     EFI_STATUS PointerStatus = Protocol->GetState(Protocol, &State);
