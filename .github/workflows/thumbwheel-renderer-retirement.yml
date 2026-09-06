@@ -1,0 +1,199 @@
+name: ThumbWheel renderer retirement
+
+on:
+  push:
+    paths:
+      - '.github/workflows/thumbwheel-renderer-retirement.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Retire temporary renderer and install pixmap renderer
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('irix-re/libSgm/ThumbWheel.c')
+          s = p.read_text()
+
+          s = s.replace('''    GC gc;\n} SgThumbWheelPartCompat;\n''', '''    GC gc;\n    GC top_shadow_gc;\n    GC bottom_shadow_gc;\n    Pixmap face_pixmap;\n    Dimension face_width;\n    Dimension face_height;\n    int face_phase;\n} SgThumbWheelPartCompat;\n''', 1)
+
+          old_init = '''    values.foreground = tw->primitive.foreground;\n    values.background = tw->core.background_pixel;\n    tw->thumbwheel.gc = XtGetGC(newWidget,\n                                GCForeground | GCBackground,\n                                &values);\n}\n'''
+          new_init = '''    values.foreground = tw->primitive.foreground;\n    values.background = tw->core.background_pixel;\n    tw->thumbwheel.gc = XtGetGC(newWidget,\n                                GCForeground | GCBackground,\n                                &values);\n\n    values.foreground = tw->primitive.top_shadow_color;\n    tw->thumbwheel.top_shadow_gc = XtGetGC(newWidget, GCForeground, &values);\n    values.foreground = tw->primitive.bottom_shadow_color;\n    tw->thumbwheel.bottom_shadow_gc = XtGetGC(newWidget, GCForeground, &values);\n\n    tw->thumbwheel.face_pixmap = None;\n    tw->thumbwheel.face_width = 0;\n    tw->thumbwheel.face_height = 0;\n    tw->thumbwheel.face_phase = -1;\n}\n'''
+          if old_init not in s:
+              raise SystemExit('init block not found')
+          s = s.replace(old_init, new_init, 1)
+
+          old_destroy = '''    if (tw->thumbwheel.gc)\n        XtReleaseGC(widget, tw->thumbwheel.gc);\n    tw->thumbwheel.gc = 0;\n}\n'''
+          new_destroy = '''    if (tw->thumbwheel.face_pixmap != None)\n        XFreePixmap(XtDisplay(widget), tw->thumbwheel.face_pixmap);\n    if (tw->thumbwheel.gc)\n        XtReleaseGC(widget, tw->thumbwheel.gc);\n    if (tw->thumbwheel.top_shadow_gc)\n        XtReleaseGC(widget, tw->thumbwheel.top_shadow_gc);\n    if (tw->thumbwheel.bottom_shadow_gc)\n        XtReleaseGC(widget, tw->thumbwheel.bottom_shadow_gc);\n    tw->thumbwheel.face_pixmap = None;\n    tw->thumbwheel.gc = 0;\n    tw->thumbwheel.top_shadow_gc = 0;\n    tw->thumbwheel.bottom_shadow_gc = 0;\n}\n'''
+          if old_destroy not in s:
+              raise SystemExit('destroy block not found')
+          s = s.replace(old_destroy, new_destroy, 1)
+
+          start = s.index('static void\ndrawThumbWheel(SgThumbWheelRecCompat *tw)\n{')
+          end = s.index('\nstatic void\ncallThumbCallback', start)
+          new_draw = r'''static void
+shadowFrame(Display *dpy, Drawable d, GC top, GC bottom,
+            int x, int y, int width, int height, int thickness,
+            Boolean raised)
+{
+    GC tl = raised ? top : bottom;
+    GC br = raised ? bottom : top;
+    int i;
+
+    for (i = 0; i < thickness; ++i)
+    {
+        XDrawLine(dpy, d, tl,
+                  x + i, y + i,
+                  x + width - 1 - i, y + i);
+        XDrawLine(dpy, d, tl,
+                  x + i, y + i,
+                  x + i, y + height - 1 - i);
+        XDrawLine(dpy, d, br,
+                  x + i, y + height - 1 - i,
+                  x + width - 1 - i, y + height - 1 - i);
+        XDrawLine(dpy, d, br,
+                  x + width - 1 - i, y + i,
+                  x + width - 1 - i, y + height - 1 - i);
+    }
+}
+
+static void
+drawWheelFace(SgThumbWheelRecCompat *tw, Drawable face,
+              int width, int height, int phase)
+{
+    Display *dpy = XtDisplay((Widget)tw);
+    GC gc = tw->thumbwheel.gc;
+    GC top = tw->thumbwheel.top_shadow_gc;
+    GC bottom = tw->thumbwheel.bottom_shadow_gc;
+    int i;
+    int center;
+
+    XSetForeground(dpy, gc, tw->core.background_pixel);
+    XFillRectangle(dpy, face, gc, 0, 0,
+                   (unsigned int)width, (unsigned int)height);
+
+    /*
+     * RE: MaXX ThumbWheel redraws from cached pixmaps and then applies
+     * Motif top/bottom shadow GCs. This host renderer follows that model.
+     */
+    shadowFrame(dpy, face, top, bottom,
+                1, 1, width - 2, height - 2, 2, False);
+
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+    {
+        center = height / 2;
+        for (i = 7 + phase; i < height - 7; i += TW_RIB_SPACING)
+        {
+            if (i <= 4 || i >= height - 5)
+                continue;
+            XDrawLine(dpy, face, top, 5, i - 1, width - 6, i - 1);
+            XDrawLine(dpy, face, bottom, 5, i, width - 6, i);
+        }
+
+        if (tw->thumbwheel.show_home_button)
+        {
+            int bx = width / 2 - 3;
+            int by = center - 4;
+            XSetForeground(dpy, gc, tw->core.background_pixel);
+            XFillRectangle(dpy, face, gc, bx, by, 7, 9);
+            shadowFrame(dpy, face, top, bottom, bx, by, 7, 9, 1, True);
+        }
+    }
+    else
+    {
+        center = width / 2;
+        for (i = 7 + phase; i < width - 7; i += TW_RIB_SPACING)
+        {
+            if (i <= 4 || i >= width - 5)
+                continue;
+            XDrawLine(dpy, face, top, i - 1, 5, i - 1, height - 6);
+            XDrawLine(dpy, face, bottom, i, 5, i, height - 6);
+        }
+
+        if (tw->thumbwheel.show_home_button)
+        {
+            int bx = center - 4;
+            int by = height / 2 - 3;
+            XSetForeground(dpy, gc, tw->core.background_pixel);
+            XFillRectangle(dpy, face, gc, bx, by, 9, 7);
+            shadowFrame(dpy, face, top, bottom, bx, by, 9, 7, 1, True);
+        }
+    }
+}
+
+static void
+drawThumbWheel(SgThumbWheelRecCompat *tw)
+{
+    Display *dpy;
+    Window win;
+    int width, height;
+    int phase;
+
+    if (!XtIsRealized((Widget)tw))
+        return;
+
+    dpy = XtDisplay((Widget)tw);
+    win = XtWindow((Widget)tw);
+    width = (int)tw->core.width;
+    height = (int)tw->core.height;
+    if (width < 4 || height < 4)
+        return;
+
+    phase = (tw->thumbwheel.value % TW_RIB_SPACING + TW_RIB_SPACING)
+        % TW_RIB_SPACING;
+
+    if (tw->thumbwheel.face_pixmap == None ||
+        tw->thumbwheel.face_width != tw->core.width ||
+        tw->thumbwheel.face_height != tw->core.height ||
+        tw->thumbwheel.face_phase != phase)
+    {
+        if (tw->thumbwheel.face_pixmap != None)
+            XFreePixmap(dpy, tw->thumbwheel.face_pixmap);
+
+        tw->thumbwheel.face_pixmap = XCreatePixmap(
+            dpy, win,
+            (unsigned int)width, (unsigned int)height,
+            (unsigned int)tw->core.depth);
+        tw->thumbwheel.face_width = tw->core.width;
+        tw->thumbwheel.face_height = tw->core.height;
+        tw->thumbwheel.face_phase = phase;
+
+        drawWheelFace(tw, tw->thumbwheel.face_pixmap,
+                      width, height, phase);
+    }
+
+    XCopyArea(dpy, tw->thumbwheel.face_pixmap, win,
+              tw->thumbwheel.gc,
+              0, 0, (unsigned int)width, (unsigned int)height,
+              0, 0);
+}
+'''
+          s = s[:start] + new_draw + s[end:]
+          p.write_text(s)
+
+          grave = Path('irix-re/docs/graveyard.md')
+          if grave.exists():
+              text = grave.read_text()
+          else:
+              text = '# Reconstruction Graveyard\n\nTemporary implementations that did their job and were deliberately retired.\n\n'
+          entry = '''## Temporary SgThumbWheel line renderer\n\n**Born:** 2026-09-06  \n**Retired:** 2026-09-06  \n**Cause of death:** Successfully proved the reconstructed widget class, expose path, pointer interaction, callbacks, and live fm icon scaling, then became visually indefensible.\n\nIt drew the wheel using one flat rectangle and a stack of `XDrawLine()` ribs. It was never intended to survive native renderer archaeology. Once the MaXX x86-64 `libSgm.so.1.1` specimen proved that the real widget redraws from cached pixmaps and uses Motif-style top/bottom shadow treatment, the ASCII-looking renderer was taken out back.\n\nIt did its job. RIP.\n\n'''
+          if '## Temporary SgThumbWheel line renderer' not in text:
+              text += entry
+          grave.write_text(text)
+          PY
+      - name: Commit
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/libSgm/ThumbWheel.c irix-re/docs/graveyard.md
+          git diff --cached --check
+          git commit -m "libSgm: bury temporary ThumbWheel renderer"
+          git push origin HEAD:irix-re
