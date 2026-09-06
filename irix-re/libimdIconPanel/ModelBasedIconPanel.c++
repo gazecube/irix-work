@@ -1,7 +1,127 @@
 #include "ModelBasedIconPanel.h"
-#include "Model.h"
 
-#include <cstdio>
+#include "Attribute.h"
+#include "Broker.h"
+#include "Model.h"
+#include "ModelBasedIconView.h"
+
+ImdModelBasedIconPanel::NotifyReceiver::NotifyReceiver(
+    ImdModelBasedIconPanel *panel,
+    ImdModelBasedIconView *view,
+    ImdModel *model,
+    bool childCapabilities)
+    : _panel(panel),
+      _view(view),
+      _model(0),
+      _childCapabilities(childCapabilities)
+{
+    /*
+     * Original constructor @ 0x096b111c stores model->getSelf() and then
+     * registers receiveNotification twice, normal first and child second.
+     * getSelf() owns one model ref and each callback registration owns one.
+     */
+    if (model)
+        _model = model->getSelf();
+
+    if (_model) {
+        _model->addClientCallback(receiveNotification, this, false);
+        _model->addClientCallback(receiveNotification, this, true);
+    }
+}
+
+ImdModelBasedIconPanel::NotifyReceiver::~NotifyReceiver()
+{
+    if (!_model)
+        return;
+
+    /*
+     * Exact destructor tail @ 0x0968cd74: child callback is removed first,
+     * then normal callback, then the getSelf() reference is returned through
+     * ImdBroker::releaseModel().
+     */
+    _model->removeClientCallback(receiveNotification, this, true);
+    _model->removeClientCallback(receiveNotification, this, false);
+    ImdBroker::contextBroker()->releaseModel(_model);
+    _model = 0;
+}
+
+void
+ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
+    const ImdDNA &dna,
+    const ImdAttribute **attributes,
+    int attributeCount,
+    void *clientData)
+{
+    (void)dna;
+
+    NotifyReceiver *receiver = static_cast<NotifyReceiver *>(clientData);
+    if (!receiver || !receiver->_panel || !attributes || attributeCount <= 0)
+        return;
+
+    bool changed = false;
+
+    for (int i = 0; i < attributeCount; ++i) {
+        const ImdAttribute *attribute = attributes[i];
+        if (!attribute)
+            continue;
+
+        switch (attribute->getName()) {
+        case 0xEFFF004B:
+            /*
+             * Exact receiveNotification existence-batch branch:
+             * beginExists(), then ImdViewPanelBeginBlockChanges().
+             */
+            receiver->_panel->beginExists();
+            ImdViewPanelBeginBlockChanges(receiver->_panel->baseWidget());
+            break;
+
+        case 0xEFFF004C:
+        {
+            ImdDNA childDNA;
+            if (!imdGetAttrValue(*attribute, childDNA))
+                break;
+
+            /*
+             * Original allocates 88 bytes and constructs
+             * ImdModelBasedIconView(childDNA, childCapabilities), then calls
+             * ImdIconPanel::adoptView(newView, receiver->_view).
+             *
+             * For the root desktop receiver the constructor flag is false and
+             * the original relationship-derived branch also resolves false.
+             * A true receiver flag is proven to force true. The remaining
+             * nested false-case derivation is intentionally not guessed.
+             */
+            bool childCapabilities = receiver->_childCapabilities;
+            if (!receiver->_view && !receiver->_childCapabilities)
+                childCapabilities = false;
+
+            ImdModelBasedIconView *view =
+                new ImdModelBasedIconView(childDNA, childCapabilities);
+            receiver->_panel->adoptView(view, receiver->_view);
+            changed = true;
+            break;
+        }
+
+        case 0xEFFF004D:
+            /* Exact end ordering from the original callback. */
+            ImdViewPanelEndBlockChanges(receiver->_panel->baseWidget());
+            receiver->_panel->endExists();
+            break;
+
+        default:
+            /*
+             * Other recovered 0xEFFF.... notification branches cover
+             * rename/delete/change/invalidation and remain under archaeology.
+             * Do not synthesize their behavior into the initial-population
+             * checkpoint.
+             */
+            break;
+        }
+    }
+
+    if (changed)
+        receiver->_panel->addOrDelete();
+}
 
 ImdModelBasedIconPanel::ImdModelBasedIconPanel(
     const char *name,
@@ -10,8 +130,7 @@ ImdModelBasedIconPanel::ImdModelBasedIconPanel(
     Arg *args,
     int count)
     : ImdIconPanel(name, parent, args, count),
-      _model(0),
-      _portableChildCount(0)
+      _model(0)
 {
     if (model)
         changeModel(model);
@@ -19,40 +138,41 @@ ImdModelBasedIconPanel::ImdModelBasedIconPanel(
 
 ImdModelBasedIconPanel::~ImdModelBasedIconPanel()
 {
+    destroyReceivers();
     _model = 0;
-    _portableChildCount = 0;
+}
+
+void
+ImdModelBasedIconPanel::destroyReceivers()
+{
+    for (std::vector<NotifyReceiver *>::iterator it = _receivers.begin();
+         it != _receivers.end(); ++it)
+        delete *it;
+    _receivers.clear();
 }
 
 void
 ImdModelBasedIconPanel::changeModel(ImdModel *model)
 {
     /*
-     * Binary-backed lifecycle correction:
+     * Binary-backed lifecycle from original changeModel() @ 0x09685f6c:
+     * block changes, tear down receiver/model relationships, transition views,
+     * setModel(), install a root NotifyReceiver when a model exists, unblock.
      *
-     * Original changeModel() brackets the operation with
-     * ImdViewPanelBeginBlockChanges()/EndBlockChanges(), tears down the old
-     * receiver/model relationships, iterates existing views, calls setModel(),
-     * and installs a root NotifyReceiver when a model exists.
-     *
-     * NotifyReceiver and the broker callback path are not yet reconstructed in
-     * the portable build. Keep the block boundary and model handoff, but keep
-     * the temporary view reset explicitly marked as a portable seam rather
-     * than attributing it to the original implementation.
+     * The exact existing-view transition virtual is not yet fully restored;
+     * portableResetViews() remains explicitly host-only at that seam.
      */
     ImdViewPanelBeginBlockChanges(baseWidget());
 
-    /* RE portable seam: original code manages views through receiver state. */
+    destroyReceivers();
     portableResetViews(true);
-
     setModel(model);
-    _portableChildCount = 0;
 
-    /*
-     * Preserve the existing diagnostic probe under an explicitly reconstructed
-     * name. This is not the SGI showChildren() method.
-     */
-    if (_model)
-        portableEnumerateModelChildren();
+    if (_model) {
+        NotifyReceiver *receiver =
+            new NotifyReceiver(this, 0, _model, false);
+        _receivers.push_back(receiver);
+    }
 
     ImdViewPanelEndBlockChanges(baseWidget());
 }
@@ -61,10 +181,9 @@ void
 ImdModelBasedIconPanel::setModel(ImdModel *model)
 {
     /*
-     * The original setModel() stores the model (original object offset +0x64)
-     * and maintains an ImdString selector/type-cache field at +0x68. The
-     * portable class does not yet carry that embedded ImdString, so only the
-     * proven model association is restored here.
+     * Original setModel() stores the model at N32 object offset +0x64 and also
+     * maintains an embedded ImdString beginning at +0x68. The latter remains
+     * unresolved and is not invented in the portable object.
      */
     _model = model;
 }
@@ -75,41 +194,29 @@ ImdModelBasedIconPanel::showChildren(ImdIconView &view)
     (void)view;
 
     /*
-     * Original libimdIconPanel.so @ 0x096a0fa4, size 576:
-     *
-     *   1. obtain the supplied view's ImdDNA through its virtual interface;
-     *   2. scan the panel's NotifyReceiver collection for matching DNA;
-     *   3. if absent, ImdBroker::contextBroker()->getModel(dna);
-     *   4. allocate a 24-byte NotifyReceiver;
-     *   5. NotifyReceiver(panel, &view, model, false);
-     *   6. insert it into the receiver collection;
-     *   7. release the broker model reference.
-     *
-     * Do not replace this with direct child enumeration. The exact receiver
-     * collection/callback implementation is the next reconstruction seam.
+     * Original @ 0x096a0fa4 is completely receiver-based:
+     * obtain view DNA, reject duplicate receiver DNA, broker->getModel(dna),
+     * construct NotifyReceiver(this, &view, model, false), insert receiver,
+     * release broker model. The root population checkpoint does not need this
+     * path. Its base ImdIconView DNA virtual seam remains to be restored before
+     * implementing it rather than using a cast-based substitute.
      */
 }
 
 void
-ImdModelBasedIconPanel::portableEnumerateModelChildren()
+ImdModelBasedIconPanel::beginExists()
 {
-    if (!_model)
-        return;
+    /* Original body dispatches the panel's begin-exists callback hook. */
+}
 
-    _portableChildCount = 0;
+void
+ImdModelBasedIconPanel::endExists()
+{
+    /* Original body dispatches the panel's end-exists callback hook. */
+}
 
-    void *iterator = _model->createChildIterator();
-    if (!iterator)
-        return;
-
-    for (ImdModel *child = _model->getNextChild(iterator);
-         child;
-         child = _model->getNextChild(iterator))
-        ++_portableChildCount;
-
-    _model->destroyChildIterator(iterator);
-
-    std::fprintf(stderr,
-                 "ImdModelBasedIconPanel: portable probe enumerated %u model children\n",
-                 _portableChildCount);
+void
+ImdModelBasedIconPanel::addOrDelete()
+{
+    /* Original body dispatches the panel's add/delete callback hook. */
 }
