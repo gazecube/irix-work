@@ -8,6 +8,7 @@
 
 #include "ModelBasedIconPanel.h"
 #include "ImdIconPanel.h"
+#include "IconLayout.h"
 
 #include <Xm/Xm.h>
 #include <Xm/CascadeB.h>
@@ -53,6 +54,7 @@ struct FmState {
     Widget panelWidget;
     Widget scaleZoom;
     ImdModelBasedIconPanel *dirPanel;
+    ImdIconLayout *iconLayout;
     bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
@@ -421,7 +423,8 @@ layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
      * ImdIControlBoard modes. The portable list remains the only populated
      * view until ImdIconLayout/model view creation is online.
      */
-    if (name && !strcmp(name, "listLayout")) {
+    if (name && (!strcmp(name, "listLayout") ||
+                 !strcmp(name, "viewAsListMenuItem"))) {
         populateDirectory(state, state->directory);
         setStatus(state, "List layout");
         return;
@@ -608,12 +611,13 @@ panelResizeCB(Widget widget, XtPointer client, XtPointer call)
                   XmNwidth, &width,
                   XmNheight, &height,
                   NULL);
-    XtVaSetValues(state->list,
-                  XmNx, 0,
-                  XmNy, 0,
-                  XmNwidth, width,
-                  XmNheight, height,
-                  NULL);
+    /*
+     * This callback runs from the parent resize path. XtVaSetValues() on
+     * child geometry re-enters Motif geometry negotiation and recursively
+     * invokes this callback. Configure the child directly as its parent.
+     */
+    XtMoveWidget(state->list, 0, 0);
+    XtResizeWidget(state->list, width, height, 0);
 }
 
 static void
@@ -652,6 +656,7 @@ main(int argc, char **argv)
     state.panelWidget = 0;
     state.scaleZoom = 0;
     state.dirPanel = 0;
+    state.iconLayout = 0;
     state.showHidden = false;
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
@@ -681,7 +686,7 @@ main(int argc, char **argv)
                                          XmNrightAttachment, XmATTACH_FORM,
                                          NULL);
 
-    up = XtVaCreateManagedWidget("pathfinder",
+    up = XtVaCreateManagedWidget("Up",
                                  xmPushButtonWidgetClass,
                                  finderForm,
                                  XmNtopAttachment, XmATTACH_FORM,
@@ -750,6 +755,13 @@ main(int argc, char **argv)
 
     renderer = new ImdInvertedTeeRenderer;
     ImdViewPanelAdoptRenderer(state.panelWidget, renderer);
+
+    /*
+     * RE: original FmWindow::_createPanels constructs ImdIconLayout with
+     * the live panel widget and adopts it before normal directory viewing.
+     */
+    state.iconLayout = new ImdIconLayout(state.panelWidget);
+    ImdViewPanelAdoptLayout(state.panelWidget, state.iconLayout);
 
     state.list = XtVaCreateManagedWidget("directoryList",
                                          xmListWidgetClass,
