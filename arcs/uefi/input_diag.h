@@ -8,6 +8,10 @@
 typedef struct {
     UINTN AbsoluteCount;
     UINTN SimpleCount;
+    UINTN EnumeratedAbsoluteCount;
+    UINTN EnumeratedSimpleCount;
+    BOOLEAN ConsoleAbsolute;
+    BOOLEAN ConsoleSimple;
     EFI_STATUS AbsoluteStatus;
     EFI_STATUS SimpleStatus;
     EFI_STATUS AbsoluteWaitStatus;
