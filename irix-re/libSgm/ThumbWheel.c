@@ -21,10 +21,10 @@
  *   dragCallback:     +0xd4
  *   valueChanged:     +0xd8
  *
- * The original private drawing state extends through +0x14f. Host-only
- * fields below preserve the recovered semantics but do not claim n32 ABI
- * offsets. Drawing is a portable reconstruction of the original ribbed
- * wheel until every private raster helper is recovered.
+ * MaXX x86-64 libSgm additionally proves that the native renderer keeps
+ * eight cached wheel pixmaps in two four-frame banks, two 16x16 home-button
+ * pixmaps, copies the active frame with XCopyArea(), and applies Motif
+ * top/bottom shadow treatment around the wheel and home button.
  */
 #include <Sgm/ThumbWheel.h>
 
@@ -46,7 +46,10 @@
 
 #define TW_DEFAULT_WIDTH 22
 #define TW_DEFAULT_LENGTH 104
-#define TW_RIB_SPACING 5
+#define TW_NATIVE_FACE_SHORT 16
+#define TW_NATIVE_FACE_LONG 122
+#define TW_FRAME_COUNT 8
+#define TW_BANK_COUNT 4
 #define TW_VALUE_STEP 1
 #define TW_PAGE_STEP 10
 
@@ -69,6 +72,19 @@ typedef struct
     int press_coordinate;
     int press_value;
     GC gc;
+
+    /*
+     * RE: MaXX keeps eight wheel pixmaps at host offsets +0x1b8..+0x1f0,
+     * active forward/reverse frame pointers at +0x1f8/+0x200, two home
+     * pixmaps at +0x210/+0x218, and the copy GC at +0x228.
+     */
+    Pixmap wheel_frames[TW_FRAME_COUNT];
+    Pixmap home_frames[2];
+    int forward_frame;
+    int reverse_frame;
+    Boolean forward_motion;
+    Dimension render_width;
+    Dimension render_height;
 } SgThumbWheelPartCompat;
 
 typedef struct _SgThumbWheelRec
@@ -123,6 +139,8 @@ static void setValueInternal(SgThumbWheelRecCompat *, int, int, XEvent *, Boolea
 static void drawThumbWheel(SgThumbWheelRecCompat *);
 static int eventCoordinate(const SgThumbWheelRecCompat *, const XEvent *);
 static void thumbPointerEH(Widget, XtPointer, XEvent *, Boolean *);
+static void invalidateRenderAssets(SgThumbWheelRecCompat *);
+static void ensureRenderAssets(SgThumbWheelRecCompat *);
 
 /*
  * Original resource table at 0x0b243f20, 11 XtResource entries.
@@ -303,6 +321,7 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)newWidget;
     XGCValues values;
+    int i;
 
     (void)request;
     (void)args;
@@ -321,21 +340,10 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     tw->thumbwheel.press_coordinate = 0;
     tw->thumbwheel.press_value = tw->thumbwheel.value;
 
-    /*
-     * RE: MaXX's native SgThumbWheel relies entirely on its class
-     * translations for pointer interaction. OpenMotif does not always
-     * compile inherited subclass tm_table data the same way as IRIX Motif,
-     * so install the binary-recovered table explicitly on the host widget.
-     */
     XtOverrideTranslations(newWidget,
                            XtParseTranslationTable(thumbTranslations));
 
-    /*
-     * RE: MaXX uses the class translation table directly. Some host Xt/Motif
-     * combinations do not reliably dispatch these legacy Btn1 translations
-     * from a reconstructed XmPrimitive subclass, so bridge the same pointer
-     * events into the binary-proven action bodies. This is host glue only.
-     */
+    /* Host glue for OpenMotif legacy Btn1 translation dispatch. */
     XtAddEventHandler(newWidget,
                       ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
                       False, thumbPointerEH, NULL);
@@ -352,12 +360,48 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     tw->thumbwheel.gc = XtGetGC(newWidget,
                                 GCForeground | GCBackground,
                                 &values);
+
+    for (i = 0; i < TW_FRAME_COUNT; ++i)
+        tw->thumbwheel.wheel_frames[i] = None;
+    tw->thumbwheel.home_frames[0] = None;
+    tw->thumbwheel.home_frames[1] = None;
+    tw->thumbwheel.forward_frame = 0;
+    tw->thumbwheel.reverse_frame = 4;
+    tw->thumbwheel.forward_motion = True;
+    tw->thumbwheel.render_width = 0;
+    tw->thumbwheel.render_height = 0;
+}
+
+static void
+invalidateRenderAssets(SgThumbWheelRecCompat *tw)
+{
+    Display *dpy = XtDisplay((Widget)tw);
+    int i;
+
+    for (i = 0; i < TW_FRAME_COUNT; ++i)
+    {
+        if (tw->thumbwheel.wheel_frames[i] != None)
+            XFreePixmap(dpy, tw->thumbwheel.wheel_frames[i]);
+        tw->thumbwheel.wheel_frames[i] = None;
+    }
+
+    for (i = 0; i < 2; ++i)
+    {
+        if (tw->thumbwheel.home_frames[i] != None)
+            XFreePixmap(dpy, tw->thumbwheel.home_frames[i]);
+        tw->thumbwheel.home_frames[i] = None;
+    }
+
+    tw->thumbwheel.render_width = 0;
+    tw->thumbwheel.render_height = 0;
 }
 
 static void
 thumbDestroy(Widget widget)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
+
+    invalidateRenderAssets(tw);
     if (tw->thumbwheel.gc)
         XtReleaseGC(widget, tw->thumbwheel.gc);
     tw->thumbwheel.gc = 0;
@@ -366,7 +410,9 @@ thumbDestroy(Widget widget)
 static void
 thumbResize(Widget widget)
 {
-    drawThumbWheel((SgThumbWheelRecCompat *)widget);
+    SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
+    invalidateRenderAssets(tw);
+    drawThumbWheel(tw);
 }
 
 static void
@@ -394,6 +440,9 @@ thumbSetValues(Widget oldWidget, Widget requestWidget, Widget newWidget,
 
     tw->thumbwheel.home_position = clampValue(tw, tw->thumbwheel.home_position);
     tw->thumbwheel.value = clampValue(tw, tw->thumbwheel.value);
+
+    if (oldTw->thumbwheel.orientation != tw->thumbwheel.orientation)
+        invalidateRenderAssets(tw);
 
     if (oldTw->thumbwheel.value != tw->thumbwheel.value ||
         oldTw->thumbwheel.minimum != tw->thumbwheel.minimum ||
@@ -429,67 +478,196 @@ thumbQueryGeometry(Widget widget, XtWidgetGeometry *intended,
 }
 
 static void
-drawThumbWheel(SgThumbWheelRecCompat *tw)
+drawShadowBox(Display *dpy, Drawable d, GC top, GC bottom,
+              int x, int y, int width, int height, Boolean raised)
+{
+    GC tl = raised ? top : bottom;
+    GC br = raised ? bottom : top;
+
+    if (width < 2 || height < 2)
+        return;
+
+    XDrawLine(dpy, d, tl, x, y, x + width - 1, y);
+    XDrawLine(dpy, d, tl, x, y, x, y + height - 1);
+    XDrawLine(dpy, d, br,
+              x, y + height - 1, x + width - 1, y + height - 1);
+    XDrawLine(dpy, d, br,
+              x + width - 1, y, x + width - 1, y + height - 1);
+}
+
+static int
+scaleNativeCoord(int coordinate, int nativeLength, int actualLength)
+{
+    if (actualLength <= 1)
+        return 0;
+    return (coordinate * (actualLength - 1)) / (nativeLength - 1);
+}
+
+static void
+drawWheelFrame(SgThumbWheelRecCompat *tw, Drawable d, int frame)
+{
+    static const unsigned char nativeRibs[] =
+    {
+        7, 13, 19, 26, 33, 40, 48, 57, 65, 74, 82, 91, 99, 106, 113
+    };
+    Display *dpy = XtDisplay((Widget)tw);
+    GC gc = tw->thumbwheel.gc;
+    GC top = tw->primitive.top_shadow_GC;
+    GC bottom = tw->primitive.bottom_shadow_GC;
+    int width = (int)tw->core.width;
+    int height = (int)tw->core.height;
+    int longLength;
+    int shortLength;
+    int phase;
+    int i;
+
+    XSetForeground(dpy, gc, tw->core.background_pixel);
+    XFillRectangle(dpy, d, gc, 0, 0,
+                   (unsigned int)width, (unsigned int)height);
+
+    drawShadowBox(dpy, d, top, bottom,
+                  1, 1, width - 2, height - 2, False);
+
+    longLength = tw->thumbwheel.orientation == XmVERTICAL ? height : width;
+    shortLength = tw->thumbwheel.orientation == XmVERTICAL ? width : height;
+    phase = (frame & 3) - 1;
+    if (frame >= 4)
+        phase = -phase;
+
+    for (i = 0; i < (int)(sizeof(nativeRibs) / sizeof(nativeRibs[0])); ++i)
+    {
+        int nativePos = (int)nativeRibs[i] + phase;
+        int pos = scaleNativeCoord(nativePos,
+                                   TW_NATIVE_FACE_LONG, longLength);
+        int nativeDistance = abs(nativePos - (TW_NATIVE_FACE_LONG / 2));
+        int inset = 2 + (nativeDistance * 3) / (TW_NATIVE_FACE_LONG / 2);
+        int near;
+        int far;
+
+        if (inset > shortLength / 3)
+            inset = shortLength / 3;
+
+        near = inset;
+        far = shortLength - 1 - inset;
+        if (far <= near)
+            continue;
+
+        /*
+         * RE: native frames use paired highlight/shadow strokes whose
+         * lengths change toward the ends of the wheel, producing the
+         * characteristic curved SGI thumbwheel instead of flat ASCII ribs.
+         */
+        if (tw->thumbwheel.orientation == XmVERTICAL)
+        {
+            XDrawLine(dpy, d, top, near, pos - 1, far, pos - 1);
+            XDrawLine(dpy, d, bottom, near, pos, far, pos);
+        }
+        else
+        {
+            XDrawLine(dpy, d, top, pos - 1, near, pos - 1, far);
+            XDrawLine(dpy, d, bottom, pos, near, pos, far);
+        }
+    }
+}
+
+static void
+drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean pressed)
+{
+    Display *dpy = XtDisplay((Widget)tw);
+    GC gc = tw->thumbwheel.gc;
+    GC top = tw->primitive.top_shadow_GC;
+    GC bottom = tw->primitive.bottom_shadow_GC;
+
+    XSetForeground(dpy, gc, tw->core.background_pixel);
+    XFillRectangle(dpy, d, gc, 0, 0, 16, 16);
+    drawShadowBox(dpy, d, top, bottom, 0, 0, 16, 16, !pressed);
+
+    XSetForeground(dpy, gc, tw->primitive.foreground);
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+        XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
+    else
+        XFillRectangle(dpy, d, gc, 5, 7, 6, 2);
+}
+
+static void
+ensureRenderAssets(SgThumbWheelRecCompat *tw)
 {
     Display *dpy;
     Window win;
-    GC gc;
-    int width, height;
     int i;
-    int center;
 
     if (!XtIsRealized((Widget)tw))
         return;
 
+    if (tw->thumbwheel.render_width == tw->core.width &&
+        tw->thumbwheel.render_height == tw->core.height &&
+        tw->thumbwheel.wheel_frames[0] != None)
+        return;
+
+    invalidateRenderAssets(tw);
+
     dpy = XtDisplay((Widget)tw);
     win = XtWindow((Widget)tw);
-    gc = tw->thumbwheel.gc;
+
+    for (i = 0; i < TW_FRAME_COUNT; ++i)
+    {
+        tw->thumbwheel.wheel_frames[i] = XCreatePixmap(
+            dpy, win,
+            (unsigned int)tw->core.width,
+            (unsigned int)tw->core.height,
+            (unsigned int)tw->core.depth);
+        drawWheelFrame(tw, tw->thumbwheel.wheel_frames[i], i);
+    }
+
+    for (i = 0; i < 2; ++i)
+    {
+        tw->thumbwheel.home_frames[i] = XCreatePixmap(
+            dpy, win, 16, 16, (unsigned int)tw->core.depth);
+        drawHomeFrame(tw, tw->thumbwheel.home_frames[i], i != 0);
+    }
+
+    tw->thumbwheel.render_width = tw->core.width;
+    tw->thumbwheel.render_height = tw->core.height;
+}
+
+static void
+drawThumbWheel(SgThumbWheelRecCompat *tw)
+{
+    Display *dpy;
+    Window win;
+    Pixmap frame;
+    int width;
+    int height;
+
+    if (!XtIsRealized((Widget)tw))
+        return;
+
+    ensureRenderAssets(tw);
+
+    dpy = XtDisplay((Widget)tw);
+    win = XtWindow((Widget)tw);
     width = (int)tw->core.width;
     height = (int)tw->core.height;
 
-    XSetForeground(dpy, gc, tw->core.background_pixel);
-    XFillRectangle(dpy, win, gc, 0, 0,
-                   (unsigned int)width, (unsigned int)height);
+    frame = tw->thumbwheel.forward_motion
+        ? tw->thumbwheel.wheel_frames[tw->thumbwheel.forward_frame]
+        : tw->thumbwheel.wheel_frames[tw->thumbwheel.reverse_frame];
 
-    XSetForeground(dpy, gc, tw->primitive.foreground);
-    XDrawRectangle(dpy, win, gc, 1, 1,
-                   (unsigned int)(width > 3 ? width - 3 : 1),
-                   (unsigned int)(height > 3 ? height - 3 : 1));
+    if (frame != None)
+        XCopyArea(dpy, frame, win, tw->thumbwheel.gc,
+                  0, 0, (unsigned int)width, (unsigned int)height, 0, 0);
 
-    if (tw->thumbwheel.orientation == XmVERTICAL)
+    if (tw->thumbwheel.show_home_button &&
+        tw->thumbwheel.home_frames[0] != None)
     {
-        center = height / 2;
-        for (i = 7; i < height - 7; i += TW_RIB_SPACING)
-        {
-            int phase = (tw->thumbwheel.value % TW_RIB_SPACING + TW_RIB_SPACING) % TW_RIB_SPACING;
-            int y = i + phase - (TW_RIB_SPACING / 2);
-            if (y > 4 && y < height - 4)
-                XDrawLine(dpy, win, gc, 4, y, width - 5, y);
-        }
-        XDrawLine(dpy, win, gc, 3, center, width - 4, center);
-
-        if (tw->thumbwheel.show_home_button)
-        {
-            int y = center - 3;
-            XFillRectangle(dpy, win, gc,
-                           width / 2 - 2, y, 4, 6);
-        }
-    }
-    else
-    {
-        center = width / 2;
-        for (i = 7; i < width - 7; i += TW_RIB_SPACING)
-        {
-            int phase = (tw->thumbwheel.value % TW_RIB_SPACING + TW_RIB_SPACING) % TW_RIB_SPACING;
-            int x = i + phase - (TW_RIB_SPACING / 2);
-            if (x > 4 && x < width - 4)
-                XDrawLine(dpy, win, gc, x, 4, x, height - 5);
-        }
-        XDrawLine(dpy, win, gc, center, 3, center, height - 4);
-
-        if (tw->thumbwheel.show_home_button)
-            XFillRectangle(dpy, win, gc,
-                           center - 3, height / 2 - 2, 6, 4);
+        int x = (width - 16) / 2;
+        int y = (height - 16) / 2;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        XCopyArea(dpy,
+                  tw->thumbwheel.home_frames[0], win,
+                  tw->thumbwheel.gc,
+                  0, 0, 16, 16, x, y);
     }
 }
 
@@ -507,6 +685,35 @@ callThumbCallback(SgThumbWheelRecCompat *tw, XtCallbackList list,
 }
 
 static void
+advanceRenderFrame(SgThumbWheelRecCompat *tw, int oldValue, int newValue)
+{
+    int steps;
+
+    if (newValue == oldValue)
+        return;
+
+    steps = abs(newValue - oldValue);
+    if (steps < 1)
+        steps = 1;
+    steps %= TW_BANK_COUNT;
+    if (steps == 0)
+        steps = 1;
+
+    if (newValue > oldValue)
+    {
+        tw->thumbwheel.forward_frame =
+            (tw->thumbwheel.forward_frame + steps) % TW_BANK_COUNT;
+        tw->thumbwheel.forward_motion = True;
+    }
+    else
+    {
+        tw->thumbwheel.reverse_frame = 4 +
+            ((tw->thumbwheel.reverse_frame - 4 + steps) % TW_BANK_COUNT);
+        tw->thumbwheel.forward_motion = False;
+    }
+}
+
+static void
 setValueInternal(SgThumbWheelRecCompat *tw, int value, int reason,
                  XEvent *event, Boolean callback)
 {
@@ -515,6 +722,7 @@ setValueInternal(SgThumbWheelRecCompat *tw, int value, int reason,
     if (old == value)
         return;
 
+    advanceRenderFrame(tw, old, value);
     tw->thumbwheel.value = value;
     drawThumbWheel(tw);
 
@@ -609,11 +817,7 @@ actionBtn1Motion(Widget w, XEvent *e, String *p, Cardinal *n)
     coordinate = eventCoordinate(tw, e);
     delta = coordinate - tw->thumbwheel.press_coordinate;
 
-    /*
-     * RE: MaXX x86-64 SgThumbWheel feeds the active-axis coordinate
-     * delta directly into its value mapping.  The earlier vertical sign
-     * inversion made fm's wheel turn opposite to the native control.
-     */
+    /* MaXX feeds the active-axis coordinate delta into its value mapping. */
     value = tw->thumbwheel.press_value + delta;
     setValueInternal(tw, value, XmCR_DRAG, e, True);
 }
