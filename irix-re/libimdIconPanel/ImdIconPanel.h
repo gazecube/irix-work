@@ -1,6 +1,8 @@
 #ifndef IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H
 #define IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H
 
+#include "ImdString.h"
+
 #include <X11/Intrinsic.h>
 #include <X11/Xutil.h>
 #include <vector>
@@ -50,7 +52,37 @@ public:
 class ImdIconView : public ImdView
 {
 public:
-    virtual ~ImdIconView() {}
+    ImdIconView();
+    virtual ~ImdIconView();
+
+    /*
+     * Original exported symbols:
+     *   setFlag__11ImdIconViewGQ2_10ImdFtrIcon10EIconStateb
+     *   getFlag__11ImdIconViewGQ2_10ImdFtrIcon10EIconState
+     *
+     * The original parameter type is ImdFtrIcon::EIconState. The portable
+     * reconstruction carries the recovered bitmask value as unsigned int until
+     * the FTR enum declaration itself is reconstructed.
+     */
+    virtual void setFlag(unsigned int flag, bool value);
+    virtual bool getFlag(unsigned int flag) const;
+
+    /* Original exported label accessors. */
+    virtual ImdString getLabel() const;
+    virtual void setLabel(const ImdString &label);
+
+    /* RE portable inspection only. */
+    unsigned int portableFlags() const { return _portableFlags; }
+
+private:
+    /*
+     * Source-level storage only; do not infer SGI offsets from these members.
+     * Original N32 disassembly proves:
+     *   +0x28 : icon-state bitmask
+     *   +0x2c : ImdString label
+     */
+    unsigned int _portableFlags;
+    ImdString _portableLabel;
 };
 
 class ImdIconPanel;
