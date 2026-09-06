@@ -75,6 +75,8 @@ if(TARGET fm)
         endif()
     endif()
 
+    target_link_libraries(fm PRIVATE ${CMAKE_DL_LIBS})
+
     set_property(TARGET fm PROPERTY CXX_STANDARD 11)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS fm RUNTIME DESTINATION bin)

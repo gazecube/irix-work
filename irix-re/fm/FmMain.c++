@@ -25,6 +25,7 @@
 #include <Xm/ToggleB.h>
 
 #include <X11/Shell.h>
+#include <dlfcn.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -424,18 +425,70 @@ layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
     setStatus(state, text);
 }
 
+/*
+ * RE: the preserved libSgm.so.1 exports sgThumbWheelWidgetClass,
+ * SgCreateThumbWheel(), SgThumbWheelGetValue() and SgThumbWheelSetValue().
+ * MaXX already ships that original widget, so prefer its class directly.
+ * The XmScale fallback exists only for hosts without the historical Sgm.
+ */
+static WidgetClass
+resolveThumbWheelWidgetClass()
+{
+    static WidgetClass thumbWheelClass = 0;
+    static bool resolved = false;
+    static void *sgmHandle = 0;
+
+    if (resolved)
+        return thumbWheelClass;
+    resolved = true;
+
+    void *symbol = dlsym(RTLD_DEFAULT, "sgThumbWheelWidgetClass");
+    if (symbol)
+        thumbWheelClass = *(WidgetClass *)symbol;
+
+    if (thumbWheelClass)
+        return thumbWheelClass;
+
+    /*
+     * fm deliberately loads the reconstructed libSgm first. Load MaXX's
+     * preserved Sgm by pathname so the original ThumbWheel class can coexist
+     * while the reconstruction is still incomplete.
+     */
+    static const char *const candidates[] = {
+        "/opt/MaXX/lib64/libSgm.so.1",
+        "/opt/MaXX/lib/libSgm.so.1",
+        0
+    };
+
+    for (int i = 0; candidates[i] && !thumbWheelClass; ++i)
+    {
+        sgmHandle = dlopen(candidates[i], RTLD_LAZY | RTLD_LOCAL);
+        if (!sgmHandle)
+            continue;
+        symbol = dlsym(sgmHandle, "sgThumbWheelWidgetClass");
+        if (symbol)
+            thumbWheelClass = *(WidgetClass *)symbol;
+    }
+
+    return thumbWheelClass;
+}
+
 static void
 scaleZoomCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-    XmScaleCallbackStruct *cbs = (XmScaleCallbackStruct *)call;
-    float scale = (float)cbs->value / 100.0f;
+    int value = 100;
+    float scale;
     char text[64];
 
+    /* Both SgThumbWheel and the bootstrap XmScale expose the value resource. */
+    XtVaGetValues(widget, XmNvalue, &value, NULL);
+    scale = (float)value / 100.0f;
+
     ImdViewPanelSetScale(state->panelWidget, scale, 0, 0);
-    snprintf(text, sizeof(text), "Icon scale %d%%", cbs->value);
+    snprintf(text, sizeof(text), "Icon scale %d%%", value);
     setStatus(state, text);
-    (void)widget;
+    (void)call;
 }
 
 static Widget
@@ -567,16 +620,43 @@ createControlBoard(Widget parent, FmState *state)
     makePush(rc2, "galleryMode", layoutButtonCB, state);
     makePush(rc2, "shelf", unimplementedCB, state);
 
-    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
-                                                xmScaleWidgetClass,
-                                                rc1,
-                                                XmNorientation, XmVERTICAL,
-                                                XmNprocessingDirection, XmMAX_ON_TOP,
-                                                XmNminimum, 60,
-                                                XmNmaximum, 500,
-                                                XmNvalue, 100,
-                                                XmNshowValue, False,
-                                                NULL);
+    WidgetClass thumbWheelClass = resolveThumbWheelWidgetClass();
+
+    if (thumbWheelClass)
+    {
+        /*
+         * Binary/resource-backed scaleZoom settings. homePosition is an
+         * SgThumbWheel resource and is intentionally passed by its original
+         * resource name so this source does not require MaXX headers.
+         */
+        state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
+                                                    thumbWheelClass,
+                                                    rc1,
+                                                    XmNorientation, XmVERTICAL,
+                                                    XmNminimum, 60,
+                                                    XmNmaximum, 500,
+                                                    XmNvalue, 100,
+                                                    "homePosition", 100,
+                                                    XmNshowValue, False,
+                                                    XmNtraversalOn, False,
+                                                    NULL);
+        std::fprintf(stderr, "fm: scaleZoom uses SgThumbWheel\n");
+    }
+    else
+    {
+        state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
+                                                    xmScaleWidgetClass,
+                                                    rc1,
+                                                    XmNorientation, XmVERTICAL,
+                                                    XmNprocessingDirection, XmMAX_ON_TOP,
+                                                    XmNminimum, 60,
+                                                    XmNmaximum, 500,
+                                                    XmNvalue, 100,
+                                                    XmNshowValue, False,
+                                                    XmNtraversalOn, False,
+                                                    NULL);
+        std::fprintf(stderr, "fm: SgThumbWheel unavailable; using XmScale fallback\n");
+    }
     XtAddCallback(state->scaleZoom, XmNvalueChangedCallback,
                   scaleZoomCB, state);
     XtAddCallback(state->scaleZoom, XmNdragCallback,
