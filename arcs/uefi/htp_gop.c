@@ -235,5 +235,10 @@ ArcsGopHtpAttach(
     Htp->xscreensize = X;
     Htp->yscreensize = Y;
 
+    /* SGI GUI mouse buttons are active-low.  A zero-initialized htp_state
+     * therefore means "all buttons held", which prevents the first real
+     * UEFI pointer transition from being interpreted correctly. */
+    Htp->buttons = 0x07;
+
     return EFI_SUCCESS;
 }
