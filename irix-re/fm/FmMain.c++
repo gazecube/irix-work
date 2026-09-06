@@ -8,8 +8,6 @@
  * panel and FTR icon machinery is brought online.
  */
 
-#include "../libimdIconPanel/ModelBasedIconPanel.h"
-
 #include <Xm/Xm.h>
 #include <Xm/Form.h>
 #include <Xm/Label.h>
@@ -17,6 +15,7 @@
 #include <Xm/MainW.h>
 #include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
+#include <Xm/ScrolledW.h>
 #include <Xm/TextF.h>
 
 #include <X11/Shell.h>
@@ -44,10 +43,8 @@ struct FmEntry {
 struct FmState {
     Widget shell;
     Widget location;
-    Widget panelWidget;
     Widget list;
     Widget status;
-    ImdModelBasedIconPanel *dirPanel;
     std::string directory;
     std::vector<FmEntry> entries;
 };
@@ -256,29 +253,6 @@ listDefaultActionCB(Widget widget, XtPointer client, XtPointer call)
 }
 
 static void
-panelResizeCB(Widget widget, XtPointer client, XtPointer call)
-{
-    FmState *state = (FmState *)client;
-    Dimension width = 1;
-    Dimension height = 1;
-
-    (void)call;
-
-    XtVaGetValues(widget,
-                  XmNwidth, &width,
-                  XmNheight, &height,
-                  NULL);
-
-    if (state->list)
-        XtVaSetValues(state->list,
-                      XmNx, 0,
-                      XmNy, 0,
-                      XmNwidth, width,
-                      XmNheight, height,
-                      NULL);
-}
-
-static void
 reapChildren(XtPointer client, XtIntervalId *id)
 {
     FmState *state = (FmState *)client;
@@ -301,8 +275,7 @@ main(int argc, char **argv)
     Widget controls;
     Widget up;
     Widget refresh;
-    Arg panelArgs[6];
-    int panelArgCount = 0;
+    Widget scroller;
     const char *initial = (argc > 1) ? argv[1] : ".";
 
     memset(&state, 0, sizeof(state));
@@ -352,46 +325,25 @@ main(int argc, char **argv)
                                             XmNalignment, XmALIGNMENT_BEGINNING,
                                             NULL);
 
-    /* main directory panel *************************************************/
-    /*
-     * The original FmWindow::_createPanels() constructs an
-     * ImdModelBasedIconPanel here.  The model/view renderer is still being
-     * reconstructed, so keep the working XmList as a temporary child of the
-     * real panel widget rather than beside it.  This puts the running fm on
-     * the recovered ImdViewPanel -> SgVisualDrawingArea path now.
-     */
-    XtSetArg(panelArgs[panelArgCount], XmNtopAttachment, XmATTACH_WIDGET);
-    ++panelArgCount;
-    XtSetArg(panelArgs[panelArgCount], XmNtopWidget, controls);
-    ++panelArgCount;
-    XtSetArg(panelArgs[panelArgCount], XmNleftAttachment, XmATTACH_FORM);
-    ++panelArgCount;
-    XtSetArg(panelArgs[panelArgCount], XmNrightAttachment, XmATTACH_FORM);
-    ++panelArgCount;
-    XtSetArg(panelArgs[panelArgCount], XmNbottomAttachment, XmATTACH_WIDGET);
-    ++panelArgCount;
-    XtSetArg(panelArgs[panelArgCount], XmNbottomWidget, state.status);
-    ++panelArgCount;
-
-    state.dirPanel = new ImdModelBasedIconPanel("dirPanel",
-                                                form,
-                                                0,
-                                                panelArgs,
-                                                panelArgCount);
-    state.panelWidget = state.dirPanel->baseWidget();
-    XtManageChild(state.panelWidget);
+    scroller = XtVaCreateManagedWidget("scroller",
+                                        xmScrolledWindowWidgetClass,
+                                        form,
+                                        XmNscrollingPolicy, XmAUTOMATIC,
+                                        XmNtopAttachment, XmATTACH_WIDGET,
+                                        XmNtopWidget, controls,
+                                        XmNleftAttachment, XmATTACH_FORM,
+                                        XmNrightAttachment, XmATTACH_FORM,
+                                        XmNbottomAttachment, XmATTACH_WIDGET,
+                                        XmNbottomWidget, state.status,
+                                        NULL);
 
     state.list = XtVaCreateManagedWidget("directoryList",
                                           xmListWidgetClass,
-                                          state.panelWidget,
-                                          XmNx, 0,
-                                          XmNy, 0,
+                                          scroller,
                                           XmNselectionPolicy, XmEXTENDED_SELECT,
                                           XmNvisibleItemCount, 18,
                                           NULL);
 
-    XtAddCallback(state.panelWidget, XmNresizeCallback,
-                  panelResizeCB, &state);
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
     XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
     XtAddCallback(state.location, XmNactivateCallback,
@@ -403,7 +355,6 @@ main(int argc, char **argv)
 
     changeDirectory(&state, initial);
     XtRealizeWidget(state.shell);
-    panelResizeCB(state.panelWidget, &state, 0);
     XtAppAddTimeOut(app, 1000, reapChildren, &state);
     XtAppMainLoop(app);
     return 0;
