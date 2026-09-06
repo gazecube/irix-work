@@ -608,9 +608,12 @@ actionBtn1Motion(Widget w, XEvent *e, String *p, Cardinal *n)
 
     coordinate = eventCoordinate(tw, e);
     delta = coordinate - tw->thumbwheel.press_coordinate;
-    if (tw->thumbwheel.orientation == XmVERTICAL)
-        delta = -delta;
 
+    /*
+     * RE: MaXX x86-64 SgThumbWheel feeds the active-axis coordinate
+     * delta directly into its value mapping.  The earlier vertical sign
+     * inversion made fm's wheel turn opposite to the native control.
+     */
     value = tw->thumbwheel.press_value + delta;
     setValueInternal(tw, value, XmCR_DRAG, e, True);
 }
