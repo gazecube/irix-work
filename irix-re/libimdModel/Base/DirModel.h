@@ -11,6 +11,13 @@ public:
     explicit ImdDirModel(const ImdDNA &dna);
     virtual ~ImdDirModel();
 
+    virtual bool addClientCallback(Callback callback,
+                                   void *clientData,
+                                   bool childCallback);
+    virtual bool removeClientCallback(Callback callback,
+                                      void *clientData,
+                                      bool childCallback);
+
     virtual void *createChildIterator();
     virtual ImdModel *getNextChild(void *iterator);
     virtual void resetChildIterator(void *iterator);
