@@ -2,13 +2,17 @@ add_library(imdModel SHARED
     c++init.cxx
     Base/ImdString.c++
     Base/ImdDNA.c++
+    Base/Model.c++
     Base/FileModel.c++
+    Base/DirModel.c++
     Base/RefModel.c++
+    Broker/Broker.c++
 )
 
 target_include_directories(imdModel
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/Base"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Broker"
 )
 
 target_link_libraries(imdModel PRIVATE imdUtil)
