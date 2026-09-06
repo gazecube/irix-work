@@ -99,6 +99,22 @@ if(TARGET imdIconPanel)
         target_link_libraries(iid-desktop PRIVATE "${FM_X11_LIBRARY}")
     endif()
 
+    # RE: libimdIconPanel directly references the historical
+    # sgVisualDrawingAreaWidgetClass data symbol.  MaXX also ships a
+    # libSgm.so.1, but that compatibility library does not provide this
+    # reconstructed symbol.  Keep our sibling libSgm first here exactly as fm
+    # already does, otherwise the dynamic loader can bind libimdIconPanel to
+    # MaXX's libSgm and fail before main().
+    if(TARGET Sgm)
+        target_link_libraries(iid-desktop PRIVATE Sgm)
+        set_property(TARGET iid-desktop PROPERTY
+            BUILD_RPATH "$ORIGIN/../libSgm")
+        set_property(TARGET iid-desktop PROPERTY BUILD_RPATH_USE_ORIGIN TRUE)
+        if(UNIX AND NOT APPLE)
+            target_link_options(iid-desktop PRIVATE "-Wl,--disable-new-dtags")
+        endif()
+    endif()
+
     set_property(TARGET iid-desktop PROPERTY CXX_STANDARD 11)
     set_property(TARGET iid-desktop PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS iid-desktop RUNTIME DESTINATION bin)
