@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - '.github/workflows/fm-archaeology.yml'
+      - 'irix-re/evidence/**'
 
 jobs:
   original-fm:
@@ -27,7 +28,6 @@ jobs:
           fm=""
           source_desc=""
 
-          # Prefer a separately preserved specimen when one is committed.
           while IFS= read -r candidate; do
             if file "$candidate" | grep -q 'ELF 32-bit MSB'; then
               fm="$candidate"
@@ -36,9 +36,6 @@ jobs:
             fi
           done < <(find irix-re/evidence -type f -name fm -print | sort)
 
-          # Otherwise search every preserved tar-family filesystem archive.
-          # shared_objects.tar is only one evidence set and is not expected to
-          # contain /usr/sbin/fm.
           if test -z "$fm"; then
             while IFS= read -r archive; do
               echo "searching archive: $archive"
@@ -62,7 +59,6 @@ jobs:
                 continue
               fi
 
-              echo "fm archive entry: $fm_entry"
               rm -rf /tmp/fm-evidence/extracted/*
               case "$archive" in
                 *.tar)
@@ -84,7 +80,6 @@ jobs:
 
           if test -z "$fm"; then
             echo 'ERROR: no original IRIX fm ELF found in committed evidence.' >&2
-            echo 'Expected a standalone fm specimen or an archive such as desktop_eoe.tar/sysadmdesktop.tar containing usr/sbin/fm.' >&2
             exit 1
           fi
 
@@ -93,6 +88,24 @@ jobs:
           sha256sum "$fm"
           echo "FM_ORIGINAL=$fm" >> "$GITHUB_ENV"
           echo "FM_SOURCE=$source_desc" >> "$GITHUB_ENV"
+
+      - name: Inventory recovered FM companion evidence
+        run: |
+          echo '--- evidence files ---'
+          find irix-re/evidence -maxdepth 1 -type f -printf '%f\n' | sort
+
+          for name in FileManager Desktop DtUtilities fmprefs 'Fmprefs(1)' Fm.icon Fmprefs.icon; do
+            path="irix-re/evidence/$name"
+            if test -f "$path"; then
+              echo "--- $name ---"
+              file "$path" || true
+              sha256sum "$path" || true
+            fi
+          done
+
+          if test -f irix-re/evidence/FileManager; then
+            cp irix-re/evidence/FileManager /tmp/fm-evidence/FileManager.app-defaults
+          fi
 
       - name: Binary identity and dependencies
         run: |
@@ -127,6 +140,11 @@ jobs:
 
           echo '--- widget/resource-like strings ---'
           grep -E 'panel|Panel|finder|Finder|menu|Menu|shelf|Shelf|status|Status|XmN|SgN|visual|Visual|layout|Layout' /tmp/fm-strings.txt | head -400 || true
+
+          if test -f irix-re/evidence/FileManager; then
+            echo '--- app-default resource cross-check ---'
+            grep -E 'FileManager\*|iconFinder|panel\.|scrollW|viewMenu|actionsMenu|fileMenu|optionsMenu|scaleZoom|finderTypingTimeout' irix-re/evidence/FileManager | head -500 || true
+          fi
 
       - name: Map dynamic GOT calls
         run: |
@@ -181,6 +199,11 @@ jobs:
           section 'GOT neighborhood'
           grep -E -B1 -A1 'ImdModelBasedIconPanel|ImdViewPanel|ImdIconLayout|ImdInvertedTeeRenderer|ImdBroker|ImdDNA|ImdRefModel|FmMenuActions|FmMenuHandler|ImdViewerFinder|XmCreateForm|XtVaCreateManagedWidget|VkSimpleWindow|VkWindow' /tmp/fm-got.txt >> "$report" || true
 
+          if test -f irix-re/evidence/FileManager; then
+            section 'FileManager app-defaults'
+            cat irix-re/evidence/FileManager >> "$report"
+          fi
+
           section 'FmApp::processArgs'
           cat /tmp/fm-processargs.txt >> "$report"
 
@@ -191,5 +214,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fm-binary-archaeology
-          path: /tmp/fm-evidence/fm-binary-report.txt
+          path: /tmp/fm-evidence/
           if-no-files-found: error
