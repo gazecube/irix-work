@@ -11,13 +11,15 @@
 #include "input_bringup.h"
 #include "input_diag.h"
 #include "maintenance_menu_bringup.h"
+#include "usb_hid_pointer.h"
 
 #define MAX_POINTER_PROTOCOLS 16
-#define MAX_INPUT_EVENTS (1 + MAX_POINTER_PROTOCOLS * 2)
+#define MAX_INPUT_EVENTS (2 + MAX_POINTER_PROTOCOLS * 2)
 
 #define WAIT_KIND_KEY     0
 #define WAIT_KIND_ABS     1
 #define WAIT_KIND_SIMPLE  2
+#define WAIT_KIND_USB     3
 
 static INT32
 ClampCoord(INT32 Value, INT32 Limit)
@@ -227,6 +229,52 @@ DrainSimple(
     return DidWork;
 }
 
+static BOOLEAN
+DrainUsbHid(
+    INT32 Width,
+    INT32 Height,
+    INT32 *CurrentX,
+    INT32 *CurrentY,
+    ARCS_INPUT_DIAG *Diag
+    )
+{
+    ARCS_USB_POINTER_STATE State;
+    EFI_STATUS Status;
+
+    Status = ArcsUsbHidPointerGetState(&State);
+    Diag->UsbStatus = Status;
+    Diag->UsbPackets = ArcsUsbHidPointerPacketCount();
+    if (EFI_ERROR(Status))
+        return FALSE;
+
+    if (State.Kind == ArcsUsbPointerRelative) {
+        guiCheckMouse(State.Dx, State.Dy, State.Buttons);
+        *CurrentX = ClampCoord(*CurrentX + State.Dx, Width);
+        *CurrentY = ClampCoord(*CurrentY + State.Dy, Height);
+        Diag->LastSimpleDx = State.Dx;
+        Diag->LastSimpleDy = State.Dy;
+    } else if (State.Kind == ArcsUsbPointerAbsolute) {
+        INT32 NewX = (INT32)MapAbsolute(
+            State.X, State.MinX, State.MaxX, (UINTN)Width);
+        INT32 NewY = (INT32)MapAbsolute(
+            State.Y, State.MinY, State.MaxY, (UINTN)Height);
+        INT32 Dx = NewX - *CurrentX;
+        INT32 Dy = NewY - *CurrentY;
+
+        guiCheckMouse(Dx, Dy, State.Buttons);
+        *CurrentX = NewX;
+        *CurrentY = NewY;
+        Diag->RawAbsoluteX = State.X;
+        Diag->RawAbsoluteY = State.Y;
+    } else {
+        return FALSE;
+    }
+
+    Diag->CurrentX = *CurrentX;
+    Diag->CurrentY = *CurrentY;
+    return TRUE;
+}
+
 EFI_STATUS
 ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -237,6 +285,7 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     UINTN WaitIndices[MAX_INPUT_EVENTS];
     EFI_HANDLE *Handles;
     EFI_STATUS Status;
+    EFI_STATUS ReturnStatus = EFI_SUCCESS;
     EFI_INPUT_KEY Key;
     UINTN SimpleCount;
     UINTN AbsoluteCount;
@@ -247,6 +296,9 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     INT32 Width;
     INT32 Height;
     ARCS_INPUT_DIAG Diag;
+    EFI_ABSOLUTE_POINTER_PROTOCOL *ConsoleAbsolute = NULL;
+    EFI_SIMPLE_POINTER_PROTOCOL *ConsoleSimple = NULL;
+    BOOLEAN HaveDirectPointer;
 
     if (!SystemTable || !SystemTable->ConIn)
         return EFI_INVALID_PARAMETER;
@@ -270,39 +322,36 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     SimpleCount = 0;
     AbsoluteCount = 0;
 
-    /* Prefer the standard ConsoleIn aggregate when it exposes pointer
-     * protocols. A console splitter can hide whether the input originated
-     * from USB, PS/2 compatibility, or another firmware-specific source. */
+    if (SystemTable->ConsoleInHandle) {
+        if (!EFI_ERROR(gBS->HandleProtocol(
+                SystemTable->ConsoleInHandle,
+                &gEfiAbsolutePointerProtocolGuid,
+                (VOID **)&ConsoleAbsolute)) && ConsoleAbsolute)
+            Diag.ConsoleAbsolute = TRUE;
+        if (!EFI_ERROR(gBS->HandleProtocol(
+                SystemTable->ConsoleInHandle,
+                &gEfiSimplePointerProtocolGuid,
+                (VOID **)&ConsoleSimple)) && ConsoleSimple)
+            Diag.ConsoleSimple = TRUE;
+    }
+
+    /* Prefer real device handles over the console splitter aggregate. OVMF's
+     * ConSplitter may publish pathless pointer protocols even when no mouse
+     * DXE is feeding them. */
     Handles = NULL;
     HandleCount = 0;
     Status = gBS->LocateHandleBuffer(
         ByProtocol, &gEfiAbsolutePointerProtocolGuid, NULL,
         &HandleCount, &Handles);
-    if (!EFI_ERROR(Status))
+    if (!EFI_ERROR(Status)) {
         Diag.EnumeratedAbsoluteCount = HandleCount;
-
-    if (SystemTable->ConsoleInHandle) {
-        EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = NULL;
-        if (!EFI_ERROR(gBS->HandleProtocol(
-                SystemTable->ConsoleInHandle,
-                &gEfiAbsolutePointerProtocolGuid,
-                (VOID **)&Protocol)) && Protocol) {
-            Diag.ConsoleAbsolute = TRUE;
-            Absolute[AbsoluteCount++] = Protocol;
-            CaptureDevicePathSignature(
-                SystemTable->ConsoleInHandle,
-                Diag.AbsolutePathType,
-                Diag.AbsolutePathSubType,
-                &Diag.AbsolutePathCount);
-        }
-    }
-
-    if (AbsoluteCount == 0 && !EFI_ERROR(Status)) {
         for (I = 0; I < HandleCount && AbsoluteCount < MAX_POINTER_PROTOCOLS; ++I) {
             EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = NULL;
+
+            if (Handles[I] == SystemTable->ConsoleInHandle)
+                continue;
             if (!EFI_ERROR(gBS->HandleProtocol(
-                    Handles[I],
-                    &gEfiAbsolutePointerProtocolGuid,
+                    Handles[I], &gEfiAbsolutePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
                 if (AbsoluteCount == 0)
                     CaptureDevicePathSignature(
@@ -313,40 +362,23 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                 Absolute[AbsoluteCount++] = Protocol;
             }
         }
-    }
-    if (Handles)
         FreePool(Handles);
+    }
 
     Handles = NULL;
     HandleCount = 0;
     Status = gBS->LocateHandleBuffer(
         ByProtocol, &gEfiSimplePointerProtocolGuid, NULL,
         &HandleCount, &Handles);
-    if (!EFI_ERROR(Status))
+    if (!EFI_ERROR(Status)) {
         Diag.EnumeratedSimpleCount = HandleCount;
-
-    if (SystemTable->ConsoleInHandle) {
-        EFI_SIMPLE_POINTER_PROTOCOL *Protocol = NULL;
-        if (!EFI_ERROR(gBS->HandleProtocol(
-                SystemTable->ConsoleInHandle,
-                &gEfiSimplePointerProtocolGuid,
-                (VOID **)&Protocol)) && Protocol) {
-            Diag.ConsoleSimple = TRUE;
-            Simple[SimpleCount++] = Protocol;
-            CaptureDevicePathSignature(
-                SystemTable->ConsoleInHandle,
-                Diag.SimplePathType,
-                Diag.SimplePathSubType,
-                &Diag.SimplePathCount);
-        }
-    }
-
-    if (SimpleCount == 0 && !EFI_ERROR(Status)) {
         for (I = 0; I < HandleCount && SimpleCount < MAX_POINTER_PROTOCOLS; ++I) {
             EFI_SIMPLE_POINTER_PROTOCOL *Protocol = NULL;
+
+            if (Handles[I] == SystemTable->ConsoleInHandle)
+                continue;
             if (!EFI_ERROR(gBS->HandleProtocol(
-                    Handles[I],
-                    &gEfiSimplePointerProtocolGuid,
+                    Handles[I], &gEfiSimplePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
                 if (SimpleCount == 0)
                     CaptureDevicePathSignature(
@@ -357,9 +389,33 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                 Simple[SimpleCount++] = Protocol;
             }
         }
-    }
-    if (Handles)
         FreePool(Handles);
+    }
+
+    HaveDirectPointer = (AbsoluteCount != 0 || SimpleCount != 0);
+
+    /* If the firmware did not produce a real pointer protocol, consume the
+     * standard EFI_USB_IO_PROTOCOL directly. This is still a UEFI service,
+     * but it avoids depending on the firmware vendor shipping a mouse DXE. */
+    if (!HaveDirectPointer) {
+        Diag.UsbStatus = ArcsUsbHidPointerInit();
+        Diag.UsbFallbackActive = ArcsUsbHidPointerPresent();
+        Diag.UsbFallbackAbsolute =
+            ArcsUsbHidPointerKind() == ArcsUsbPointerAbsolute;
+        Diag.UsbIoCount = ArcsUsbHidPointerUsbIoCount();
+        Diag.UsbHidCount = ArcsUsbHidPointerHidCount();
+        Diag.UsbPackets = ArcsUsbHidPointerPacketCount();
+    }
+
+    /* Last resort: retain a console aggregate even if it is pathless. This
+     * keeps compatibility with firmware that genuinely exposes its only PS/2
+     * or legacy-USB pointer through ConsoleInHandle. */
+    if (!HaveDirectPointer && !Diag.UsbFallbackActive) {
+        if (ConsoleAbsolute && AbsoluteCount < MAX_POINTER_PROTOCOLS)
+            Absolute[AbsoluteCount++] = ConsoleAbsolute;
+        if (ConsoleSimple && SimpleCount < MAX_POINTER_PROTOCOLS)
+            Simple[SimpleCount++] = ConsoleSimple;
+    }
 
     Diag.AbsoluteCount = AbsoluteCount;
     Diag.SimpleCount = SimpleCount;
@@ -401,16 +457,26 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             }
         }
 
+        if (Diag.UsbFallbackActive && ArcsUsbHidPointerEvent() &&
+            EventCount < MAX_INPUT_EVENTS) {
+            WaitEvents[EventCount] = ArcsUsbHidPointerEvent();
+            WaitKinds[EventCount] = WAIT_KIND_USB;
+            WaitIndices[EventCount] = 0;
+            ++EventCount;
+        }
+
         if (EventCount != 0) {
             Status = gBS->WaitForEvent(EventCount, WaitEvents, &Which);
-            if (EFI_ERROR(Status))
-                return Status;
+            if (EFI_ERROR(Status)) {
+                ReturnStatus = Status;
+                break;
+            }
 
             if (WaitKinds[Which] == WAIT_KIND_KEY) {
                 while (!EFI_ERROR(SystemTable->ConIn->ReadKeyStroke(
                             SystemTable->ConIn, &Key))) {
                     if (Key.ScanCode == SCAN_ESC)
-                        return EFI_SUCCESS;
+                        goto Exit;
                     if (Key.UnicodeChar >= L'1' && Key.UnicodeChar <= L'5')
                         ArcsMaintenanceMenuSelect((UINTN)(Key.UnicodeChar - L'0'));
                 }
@@ -430,11 +496,12 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                     Simple[I], Width, Height,
                     &CurrentX, &CurrentY, &Diag);
                 DiagDirty = TRUE;
+            } else if (WaitKinds[Which] == WAIT_KIND_USB) {
+                (VOID)DrainUsbHid(
+                    Width, Height, &CurrentX, &CurrentY, &Diag);
+                DiagDirty = TRUE;
             }
         } else {
-            /* Non-conforming or minimal firmware may expose GetState without
-             * a WaitForInput event. Preserve a standards-compatible polling
-             * fallback rather than requiring any firmware-specific API. */
             for (I = 0; I < AbsoluteCount; ++I)
                 if (DrainAbsolute(Absolute[I], Width, Height,
                                   &CurrentX, &CurrentY, &Diag))
@@ -443,21 +510,34 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                 if (DrainSimple(Simple[I], Width, Height,
                                 &CurrentX, &CurrentY, &Diag))
                     DiagDirty = TRUE;
+            if (Diag.UsbFallbackActive &&
+                DrainUsbHid(Width, Height, &CurrentX, &CurrentY, &Diag))
+                DiagDirty = TRUE;
 
             while (!EFI_ERROR(SystemTable->ConIn->ReadKeyStroke(
                         SystemTable->ConIn, &Key))) {
                 if (Key.ScanCode == SCAN_ESC)
-                    return EFI_SUCCESS;
+                    goto Exit;
                 if (Key.UnicodeChar >= L'1' && Key.UnicodeChar <= L'5')
                     ArcsMaintenanceMenuSelect((UINTN)(Key.UnicodeChar - L'0'));
             }
 
             Status = gBS->Stall(1000);
-            if (EFI_ERROR(Status))
-                return Status;
+            if (EFI_ERROR(Status)) {
+                ReturnStatus = Status;
+                break;
+            }
         }
 
+        if (Diag.UsbFallbackActive) {
+            Diag.UsbPackets = ArcsUsbHidPointerPacketCount();
+            Diag.UsbStatus = ArcsUsbHidPointerLastStatus();
+        }
         if (DiagDirty)
             ArcsInputDiagDraw(SystemTable, &Diag);
     }
+
+Exit:
+    ArcsUsbHidPointerShutdown();
+    return ReturnStatus;
 }
