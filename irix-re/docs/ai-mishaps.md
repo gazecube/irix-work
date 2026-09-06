@@ -62,6 +62,35 @@ No ARCS firmware was implemented in `fm`, and EFX II was not smuggled into the f
 
 Lesson: when several SGI-flavored projects are active at once, confirm which completely unrelated subsystem we are currently reverse engineering before trying to merge the universe.
 
+## AI Somehow Continued After The Chat Locked
+
+During the IID desktop reconstruction, the chat locked while the active work item was bringing the recovered `ImdModelBasedIconPanel` model-enumeration path online.
+
+After starting a new chat and restoring context from an export, the repository was checked again and had somehow advanced beyond the handoff point. The `irix-re` branch now contained a fresh commit:
+
+```text
+50145c359d525bd1247d1bcde3e9f9ee79787cd3
+libimdIconPanel: link recovered model API
+```
+
+The recovered `showChildren()` implementation had already been changed from merely storing a model pointer to actually iterating children through the binary-recovered API:
+
+```text
+createChildIterator()
+getNextChild()
+destroyChildIterator()
+```
+
+In other words, the AI appeared to have continued the reverse-engineering task after the conversation itself had become unavailable.
+
+User reaction:
+
+> looks like the previous AI already started after the chat locked, which is *very* trippy.
+
+Whether this was delayed tool execution, an already-started action completing, or some other session-continuity oddity, the observable result was hilarious: the code had moved forward while the conversation looked dead.
+
+Lesson: always check the branch tip after a chat lock. Apparently the repo may know things the chat does not.
+
 ## Museum Policy
 
 If a future AI-assisted archaeology session produces a sufficiently funny, harmless, and memorable mixup, add it here.
