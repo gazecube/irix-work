@@ -10,6 +10,8 @@
 
 #include "FmIconSurface.h"
 
+#include <Xm/DrawingA.h>
+#include <Xm/Xm.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
 #include <algorithm>
@@ -50,8 +52,14 @@ FmIconSurface::FmIconSurface(ImdIconPanel *panel, Widget widget)
       _lastClickTime(0),
       _lastClickIndex(-1)
 {
+    /*
+     * The panel is an XmDrawingArea-family widget on the reconstructed path.
+     * Use its expose callback for drawing so the temporary surface follows the
+     * widget's own repaint lifecycle instead of relying on a raw Expose mask.
+     */
+    XtAddCallback(_widget, XmNexposeCallback, exposeCB, (XtPointer)this);
     XtAddEventHandler(_widget,
-                      ExposureMask | ButtonPressMask,
+                      ButtonPressMask,
                       False,
                       eventHandler,
                       (XtPointer)this);
@@ -60,11 +68,14 @@ FmIconSurface::FmIconSurface(ImdIconPanel *panel, Widget widget)
 FmIconSurface::~FmIconSurface()
 {
     if (_widget)
+    {
+        XtRemoveCallback(_widget, XmNexposeCallback, exposeCB, (XtPointer)this);
         XtRemoveEventHandler(_widget,
-                             ExposureMask | ButtonPressMask,
+                             ButtonPressMask,
                              False,
                              eventHandler,
                              (XtPointer)this);
+    }
 
     if (_panel)
         _panel->portableResetViews(true);
@@ -98,11 +109,7 @@ FmIconSurface::setEntries(const std::vector<FmIconSurfaceEntry> &entries)
         _panel->adoptView(new View(_entries[i].name, _entries[i].directory, i));
     ImdViewPanelEndBlockChanges(_widget);
 
-    if (XtIsRealized(_widget))
-    {
-        XClearWindow(XtDisplay(_widget), XtWindow(_widget));
-        draw();
-    }
+    redraw();
 }
 
 bool
@@ -124,6 +131,16 @@ void
 FmIconSurface::selectAll()
 {
     std::fill(_selected.begin(), _selected.end(), true);
+    redraw();
+}
+
+void
+FmIconSurface::redraw()
+{
+    if (!_widget || !XtIsRealized(_widget))
+        return;
+
+    XClearWindow(XtDisplay(_widget), XtWindow(_widget));
     draw();
 }
 
@@ -137,6 +154,17 @@ FmIconSurface::indexAtY(int y) const
     if (index < 0 || (size_t)index >= _entries.size())
         return -1;
     return index;
+}
+
+void
+FmIconSurface::exposeCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmIconSurface *surface = (FmIconSurface *)client;
+    (void)widget;
+    (void)call;
+
+    if (surface)
+        surface->draw();
 }
 
 void
@@ -158,13 +186,6 @@ FmIconSurface::handleEvent(XEvent *event)
     if (!event)
         return;
 
-    if (event->type == Expose)
-    {
-        if (event->xexpose.count == 0)
-            draw();
-        return;
-    }
-
     if (event->type == ButtonPress && event->xbutton.button == Button1)
     {
         int index = indexAtY(event->xbutton.y);
@@ -180,7 +201,7 @@ FmIconSurface::handleEvent(XEvent *event)
         _selected[(size_t)index] = true;
         _lastClickIndex = index;
         _lastClickTime = event->xbutton.time;
-        draw();
+        redraw();
 
         if (doubleClick && _activateProc)
         {
@@ -199,9 +220,11 @@ FmIconSurface::draw()
 
     Display *display = XtDisplay(_widget);
     Window window = XtWindow(_widget);
-    int screen = DefaultScreen(display);
+    Pixel foreground = 0;
     GC gc = XCreateGC(display, window, 0, 0);
-    XSetForeground(display, gc, BlackPixel(display, screen));
+
+    XtVaGetValues(_widget, XmNforeground, &foreground, NULL);
+    XSetForeground(display, gc, foreground);
 
     Dimension width = 1;
     XtVaGetValues(_widget, XtNwidth, &width, NULL);
