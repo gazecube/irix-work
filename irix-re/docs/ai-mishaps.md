@@ -42,6 +42,20 @@ At one point, markdown formatting turned an ordinary reaction into giant headlin
 
 The resulting response was exactly the kind of accidental presentation bug that deserves preservation here.
 
+## Implementing ARCS Bringup In The File Manager
+
+While restarting binary-first archaeology for the IRIX `fm` reimplementation, the project context briefly crossed wires with the separate SGI ARCS/UEFI bringup effort.
+
+For one glorious moment, the file-manager reconstruction appeared to be heading toward firmware bringup instead of locating the original `/usr/sbin/fm` specimen.
+
+The correction was immediate:
+
+> Woah, woah, woah, this isn't the ARCs thing, you good?
+
+No ARCS firmware was actually implemented in `fm`.
+
+Lesson: when two SGI archaeology projects are active at once, confirm which century of the boot process we are currently reverse engineering.
+
 ## Museum Policy
 
 If a future AI-assisted archaeology session produces a sufficiently funny, harmless, and memorable mixup, add it here.
