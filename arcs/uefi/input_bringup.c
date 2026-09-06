@@ -7,6 +7,7 @@
 #include <gfxgui.h>
 
 #include "input_bringup.h"
+#include "input_diag.h"
 #include "maintenance_menu_bringup.h"
 
 #define MAX_POINTER_PROTOCOLS 16
@@ -114,6 +115,7 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     INT32 CurrentY;
     INT32 Width;
     INT32 Height;
+    ARCS_INPUT_DIAG Diag;
 
     if (!SystemTable || !SystemTable->ConIn)
         return EFI_INVALID_PARAMETER;
@@ -187,9 +189,24 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
         FreePool(Handles);
     }
 
+    Diag.AbsoluteCount = AbsoluteCount;
+    Diag.SimpleCount = SimpleCount;
+    Diag.AbsoluteStatus = AbsoluteCount ? EFI_NOT_READY : EFI_NOT_FOUND;
+    Diag.SimpleStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
+    Diag.AbsoluteEvents = 0;
+    Diag.SimpleEvents = 0;
+    Diag.RawAbsoluteX = 0;
+    Diag.RawAbsoluteY = 0;
+    Diag.LastSimpleDx = 0;
+    Diag.LastSimpleDy = 0;
+    Diag.CurrentX = CurrentX;
+    Diag.CurrentY = CurrentY;
+    ArcsInputDiagDraw(SystemTable, &Diag);
+
     for (;;) {
         BOOLEAN DidWork = FALSE;
         BOOLEAN AbsoluteWorked = FALSE;
+        BOOLEAN DiagDirty = FALSE;
 
         /* UEFI may publish several instances of a pointer protocol.  Do not
          * assume LocateProtocol's arbitrary first instance is the active
@@ -201,33 +218,51 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             if (!Protocol || !Protocol->GetState || !Protocol->Mode)
                 continue;
 
-            while (!EFI_ERROR(Protocol->GetState(Protocol, &State))) {
-                INT32 NewX;
-                INT32 NewY;
-                INT32 Dx;
-                INT32 Dy;
+            for (;;) {
+                EFI_STATUS PointerStatus = Protocol->GetState(Protocol, &State);
 
-                NewX = (INT32)MapAbsolute(
-                    State.CurrentX,
-                    Protocol->Mode->AbsoluteMinX,
-                    Protocol->Mode->AbsoluteMaxX,
-                    (UINTN)Width
-                    );
-                NewY = (INT32)MapAbsolute(
-                    State.CurrentY,
-                    Protocol->Mode->AbsoluteMinY,
-                    Protocol->Mode->AbsoluteMaxY,
-                    (UINTN)Height
-                    );
+                if (Diag.AbsoluteStatus != PointerStatus) {
+                    Diag.AbsoluteStatus = PointerStatus;
+                    DiagDirty = TRUE;
+                }
+                if (EFI_ERROR(PointerStatus))
+                    break;
 
-                Dx = NewX - CurrentX;
-                Dy = NewY - CurrentY;
-                CurrentX = NewX;
-                CurrentY = NewY;
+                {
+                    INT32 NewX;
+                    INT32 NewY;
+                    INT32 Dx;
+                    INT32 Dy;
 
-                guiCheckMouse(Dx, Dy, AbsolutePointerButtons(&State));
-                DidWork = TRUE;
-                AbsoluteWorked = TRUE;
+                    NewX = (INT32)MapAbsolute(
+                        State.CurrentX,
+                        Protocol->Mode->AbsoluteMinX,
+                        Protocol->Mode->AbsoluteMaxX,
+                        (UINTN)Width
+                        );
+                    NewY = (INT32)MapAbsolute(
+                        State.CurrentY,
+                        Protocol->Mode->AbsoluteMinY,
+                        Protocol->Mode->AbsoluteMaxY,
+                        (UINTN)Height
+                        );
+
+                    Dx = NewX - CurrentX;
+                    Dy = NewY - CurrentY;
+                    CurrentX = NewX;
+                    CurrentY = NewY;
+
+                    ++Diag.AbsoluteEvents;
+                    Diag.RawAbsoluteX = State.CurrentX;
+                    Diag.RawAbsoluteY = State.CurrentY;
+                    Diag.CurrentX = CurrentX;
+                    Diag.CurrentY = CurrentY;
+                    DiagDirty = TRUE;
+
+                    guiCheckMouse(Dx, Dy, AbsolutePointerButtons(&State));
+                    DidWork = TRUE;
+                    AbsoluteWorked = TRUE;
+                }
             }
         }
 
@@ -242,14 +277,32 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                 if (!Protocol || !Protocol->GetState)
                     continue;
 
-                while (!EFI_ERROR(Protocol->GetState(Protocol, &State))) {
-                    INT32 Dx = State.RelativeMovementX;
-                    INT32 Dy = State.RelativeMovementY;
+                for (;;) {
+                    EFI_STATUS PointerStatus = Protocol->GetState(Protocol, &State);
 
-                    guiCheckMouse(Dx, Dy, SimplePointerButtons(&State));
-                    CurrentX = ClampCoord(CurrentX + Dx, Width);
-                    CurrentY = ClampCoord(CurrentY + Dy, Height);
-                    DidWork = TRUE;
+                    if (Diag.SimpleStatus != PointerStatus) {
+                        Diag.SimpleStatus = PointerStatus;
+                        DiagDirty = TRUE;
+                    }
+                    if (EFI_ERROR(PointerStatus))
+                        break;
+
+                    {
+                        INT32 Dx = State.RelativeMovementX;
+                        INT32 Dy = State.RelativeMovementY;
+
+                        guiCheckMouse(Dx, Dy, SimplePointerButtons(&State));
+                        CurrentX = ClampCoord(CurrentX + Dx, Width);
+                        CurrentY = ClampCoord(CurrentY + Dy, Height);
+
+                        ++Diag.SimpleEvents;
+                        Diag.LastSimpleDx = Dx;
+                        Diag.LastSimpleDy = Dy;
+                        Diag.CurrentX = CurrentX;
+                        Diag.CurrentY = CurrentY;
+                        DiagDirty = TRUE;
+                        DidWork = TRUE;
+                    }
                 }
             }
         }
@@ -265,6 +318,9 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             if (Key.UnicodeChar >= L'1' && Key.UnicodeChar <= L'5')
                 ArcsMaintenanceMenuSelect((UINTN)(Key.UnicodeChar - L'0'));
         }
+
+        if (DiagDirty)
+            ArcsInputDiagDraw(SystemTable, &Diag);
 
         if (!DidWork) {
             Status = gBS->Stall(1000);
