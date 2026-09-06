@@ -46,6 +46,7 @@
 
 #define TW_NATIVE_FACE_SHORT 16
 #define TW_NATIVE_FACE_LONG 122
+#define TW_HOME_SIZE 16
 #define TW_FRAME_COUNT 8
 #define TW_BANK_COUNT 4
 #define TW_GRAY_COUNT 7
@@ -320,10 +321,32 @@ clampValue(const SgThumbWheelRecCompat *tw, int value)
 }
 
 static void
+preferredSize(const SgThumbWheelRecCompat *tw, Dimension *width, Dimension *height)
+{
+    Dimension longSize = TW_NATIVE_FACE_LONG;
+
+    if (tw->thumbwheel.show_home_button)
+        longSize += TW_HOME_SIZE;
+
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+    {
+        *width = TW_NATIVE_FACE_SHORT;
+        *height = longSize;
+    }
+    else
+    {
+        *width = longSize;
+        *height = TW_NATIVE_FACE_SHORT;
+    }
+}
+
+static void
 thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)newWidget;
     XGCValues values;
+    Dimension preferredWidth;
+    Dimension preferredHeight;
     int i;
 
     (void)request;
@@ -350,12 +373,11 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
                       ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
                       False, thumbPointerEH, NULL);
 
+    preferredSize(tw, &preferredWidth, &preferredHeight);
     if (tw->core.width == 0)
-        tw->core.width = (tw->thumbwheel.orientation == XmVERTICAL)
-            ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+        tw->core.width = preferredWidth;
     if (tw->core.height == 0)
-        tw->core.height = (tw->thumbwheel.orientation == XmVERTICAL)
-            ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+        tw->core.height = preferredHeight;
 
     values.foreground = tw->primitive.foreground;
     values.background = tw->core.background_pixel;
@@ -486,10 +508,10 @@ thumbQueryGeometry(Widget widget, XtWidgetGeometry *intended,
                    XtWidgetGeometry *preferred)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
-    Dimension pw = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
-    Dimension ph = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    Dimension pw;
+    Dimension ph;
+
+    preferredSize(tw, &pw, &ph);
 
     preferred->request_mode = CWWidth | CWHeight;
     preferred->width = pw;
@@ -593,12 +615,14 @@ drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean pressed)
                         : tw->primitive.bottom_shadow_GC;
 
     XSetForeground(dpy, gc, tw->core.background_pixel);
-    XFillRectangle(dpy, d, gc, 0, 0, 16, 16);
+    XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
 
-    XDrawLine(dpy, d, top, 0, 0, 15, 0);
-    XDrawLine(dpy, d, top, 0, 0, 0, 15);
-    XDrawLine(dpy, d, bottom, 0, 15, 15, 15);
-    XDrawLine(dpy, d, bottom, 15, 0, 15, 15);
+    XDrawLine(dpy, d, top, 0, 0, TW_HOME_SIZE - 1, 0);
+    XDrawLine(dpy, d, top, 0, 0, 0, TW_HOME_SIZE - 1);
+    XDrawLine(dpy, d, bottom,
+              0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
+    XDrawLine(dpy, d, bottom,
+              TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
 
     XSetForeground(dpy, gc, tw->primitive.foreground);
     if (tw->thumbwheel.orientation == XmVERTICAL)
@@ -643,7 +667,8 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
     for (i = 0; i < 2; ++i)
     {
         tw->thumbwheel.home_frames[i] = XCreatePixmap(
-            dpy, win, 16, 16, (unsigned int)tw->core.depth);
+            dpy, win, TW_HOME_SIZE, TW_HOME_SIZE,
+            (unsigned int)tw->core.depth);
         drawHomeFrame(tw, tw->thumbwheel.home_frames[i], i != 0);
     }
 
@@ -658,6 +683,10 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     Pixmap frame;
     int faceWidth;
     int faceHeight;
+    int controlWidth;
+    int controlHeight;
+    int controlX;
+    int controlY;
     int faceX;
     int faceY;
 
@@ -672,10 +701,24 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
         ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
     faceHeight = (tw->thumbwheel.orientation == XmVERTICAL)
         ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
-    faceX = ((int)tw->core.width - faceWidth) / 2;
-    faceY = ((int)tw->core.height - faceHeight) / 2;
-    if (faceX < 0) faceX = 0;
-    if (faceY < 0) faceY = 0;
+
+    controlWidth = faceWidth;
+    controlHeight = faceHeight;
+    if (tw->thumbwheel.show_home_button)
+    {
+        if (tw->thumbwheel.orientation == XmVERTICAL)
+            controlHeight += TW_HOME_SIZE;
+        else
+            controlWidth += TW_HOME_SIZE;
+    }
+
+    controlX = ((int)tw->core.width - controlWidth) / 2;
+    controlY = ((int)tw->core.height - controlHeight) / 2;
+    if (controlX < 0) controlX = 0;
+    if (controlY < 0) controlY = 0;
+
+    faceX = controlX;
+    faceY = controlY;
 
     XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
@@ -692,16 +735,25 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
                   faceX, faceY);
 
     if (tw->thumbwheel.show_home_button &&
-        tw->thumbwheel.home_frames[tw->thumbwheel.button_down ? 1 : 0] != None)
+        tw->thumbwheel.home_frames[0] != None)
     {
-        int x = faceX + ((faceWidth - 16) / 2);
-        int y = faceY + ((faceHeight - 16) / 2);
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
-        XCopyArea(dpy,
-                  tw->thumbwheel.home_frames[tw->thumbwheel.button_down ? 1 : 0],
-                  win, tw->thumbwheel.gc,
-                  0, 0, 16, 16, x, y);
+        int x;
+        int y;
+
+        if (tw->thumbwheel.orientation == XmVERTICAL)
+        {
+            x = controlX;
+            y = controlY + faceHeight;
+        }
+        else
+        {
+            x = controlX + faceWidth;
+            y = controlY;
+        }
+
+        XCopyArea(dpy, tw->thumbwheel.home_frames[0], win,
+                  tw->thumbwheel.gc,
+                  0, 0, TW_HOME_SIZE, TW_HOME_SIZE, x, y);
     }
 }
 
@@ -828,7 +880,6 @@ actionBtn1Down(Widget w, XEvent *e, String *p, Cardinal *n)
     tw->thumbwheel.button_down = True;
     tw->thumbwheel.press_coordinate = eventCoordinate(tw, e);
     tw->thumbwheel.press_value = tw->thumbwheel.value;
-    drawThumbWheel(tw);
 }
 
 /* Binary proves button 2/3 down, motion and up action bodies are no-ops. */
@@ -871,7 +922,6 @@ actionBtn1Up(Widget w, XEvent *e, String *p, Cardinal *n)
     if (!tw->thumbwheel.button_down)
         return;
     tw->thumbwheel.button_down = False;
-    drawThumbWheel(tw);
     if (tw->thumbwheel.value != before)
         callThumbCallback(tw, tw->thumbwheel.value_changed_callback,
                           XmCR_VALUE_CHANGED, e);
