@@ -1,8 +1,10 @@
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Protocol/SimplePointer.h>
 #include <Protocol/AbsolutePointer.h>
+#include <Protocol/DevicePath.h>
 
 #include <gfxgui.h>
 
@@ -39,17 +41,49 @@ MapAbsolute(UINT64 Value, UINT64 Min, UINT64 Max, UINTN Pixels)
     return (UINTN)(((Value - Min) * (UINT64)(Pixels - 1)) / Span);
 }
 
-/*
- * UEFI drivers are not required to have already expanded every controller
- * tree before an application starts.  In particular, a USB HID device may
- * exist below a host-controller handle while EFI_SIMPLE_POINTER_PROTOCOL or
- * EFI_ABSOLUTE_POINTER_PROTOCOL has not yet been produced on its child
- * handle.  Follow the ConnectController() "connect all handles" pattern from
- * the UEFI specification before discovering pointer protocols.
- *
- * This is intentionally an adapter-side operation.  The original SGI GUI
- * still consumes only htp mouse deltas/buttons through guiCheckMouse().
- */
+static VOID
+CaptureDevicePathSignature(
+    EFI_HANDLE Handle,
+    UINT8 *Types,
+    UINT8 *SubTypes,
+    UINTN *Count
+    )
+{
+    EFI_DEVICE_PATH_PROTOCOL *Node = NULL;
+    UINTN N = 0;
+
+    if (!Handle || !Types || !SubTypes || !Count)
+        return;
+
+    *Count = 0;
+    if (EFI_ERROR(gBS->HandleProtocol(
+            Handle,
+            &gEfiDevicePathProtocolGuid,
+            (VOID **)&Node)) || !Node)
+        return;
+
+    while (N < ARCS_DIAG_PATH_NODES) {
+        UINTN Length;
+
+        Types[N] = Node->Type;
+        SubTypes[N] = Node->SubType;
+        ++N;
+
+        if (Node->Type == 0x7f)
+            break;
+
+        Length = (UINTN)Node->Length[0] | ((UINTN)Node->Length[1] << 8);
+        if (Length < sizeof(EFI_DEVICE_PATH_PROTOCOL))
+            break;
+
+        Node = (EFI_DEVICE_PATH_PROTOCOL *)((UINT8 *)Node + Length);
+    }
+
+    *Count = N;
+}
+
+/* Expand controller trees before protocol discovery. This uses only standard
+ * UEFI Boot Services and is not tied to any particular firmware. */
 static VOID
 ConnectAllControllers(VOID)
 {
@@ -76,8 +110,6 @@ SimplePointerButtons(const EFI_SIMPLE_POINTER_STATE *State)
 {
     UINT8 Buttons = 0x07;
 
-    /* The original SGI GUI consumes three active-low button bits.  Preserve
-     * that convention at the adapter boundary: left is bit 2, right bit 0. */
     if (State->LeftButton)
         Buttons &= (UINT8)~0x04;
     if (State->RightButton)
@@ -120,6 +152,8 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     if (!SystemTable || !SystemTable->ConIn)
         return EFI_INVALID_PARAMETER;
 
+    ZeroMem(&Diag, sizeof(Diag));
+
     Width = gfxWidth();
     Height = gfxHeight();
     if (Width <= 0 || Height <= 0)
@@ -132,13 +166,15 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     if (SystemTable->ConIn->Reset)
         (VOID)SystemTable->ConIn->Reset(SystemTable->ConIn, FALSE);
 
-    /* Force firmware drivers to bind recursively before asking which pointer
-     * protocols exist.  OVMF can otherwise leave HID child handles latent. */
     ConnectAllControllers();
 
     SimpleCount = 0;
     AbsoluteCount = 0;
 
+    /* Prefer the firmware's ConsoleIn aggregate when it exposes pointer
+     * protocols. Console splitters can hide whether input originates from
+     * USB, PS/2 compatibility, or another firmware-specific source. Fall
+     * back to individual protocol handles when no aggregate is available. */
     Handles = NULL;
     HandleCount = 0;
     Status = gBS->LocateHandleBuffer(
@@ -148,19 +184,44 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
         &HandleCount,
         &Handles
         );
-    if (!EFI_ERROR(Status)) {
+    if (!EFI_ERROR(Status))
+        Diag.EnumeratedAbsoluteCount = HandleCount;
+
+    if (SystemTable->ConsoleInHandle) {
+        EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = NULL;
+        if (!EFI_ERROR(gBS->HandleProtocol(
+                SystemTable->ConsoleInHandle,
+                &gEfiAbsolutePointerProtocolGuid,
+                (VOID **)&Protocol)) && Protocol) {
+            Diag.ConsoleAbsolute = TRUE;
+            Absolute[AbsoluteCount++] = Protocol;
+            CaptureDevicePathSignature(
+                SystemTable->ConsoleInHandle,
+                Diag.AbsolutePathType,
+                Diag.AbsolutePathSubType,
+                &Diag.AbsolutePathCount);
+        }
+    }
+
+    if (AbsoluteCount == 0 && !EFI_ERROR(Status)) {
         for (I = 0; I < HandleCount && AbsoluteCount < MAX_POINTER_PROTOCOLS; ++I) {
             EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = NULL;
-
             if (!EFI_ERROR(gBS->HandleProtocol(
                     Handles[I],
                     &gEfiAbsolutePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
+                if (AbsoluteCount == 0)
+                    CaptureDevicePathSignature(
+                        Handles[I],
+                        Diag.AbsolutePathType,
+                        Diag.AbsolutePathSubType,
+                        &Diag.AbsolutePathCount);
                 Absolute[AbsoluteCount++] = Protocol;
             }
         }
-        FreePool(Handles);
     }
+    if (Handles)
+        FreePool(Handles);
 
     Handles = NULL;
     HandleCount = 0;
@@ -171,19 +232,44 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
         &HandleCount,
         &Handles
         );
-    if (!EFI_ERROR(Status)) {
+    if (!EFI_ERROR(Status))
+        Diag.EnumeratedSimpleCount = HandleCount;
+
+    if (SystemTable->ConsoleInHandle) {
+        EFI_SIMPLE_POINTER_PROTOCOL *Protocol = NULL;
+        if (!EFI_ERROR(gBS->HandleProtocol(
+                SystemTable->ConsoleInHandle,
+                &gEfiSimplePointerProtocolGuid,
+                (VOID **)&Protocol)) && Protocol) {
+            Diag.ConsoleSimple = TRUE;
+            Simple[SimpleCount++] = Protocol;
+            CaptureDevicePathSignature(
+                SystemTable->ConsoleInHandle,
+                Diag.SimplePathType,
+                Diag.SimplePathSubType,
+                &Diag.SimplePathCount);
+        }
+    }
+
+    if (SimpleCount == 0 && !EFI_ERROR(Status)) {
         for (I = 0; I < HandleCount && SimpleCount < MAX_POINTER_PROTOCOLS; ++I) {
             EFI_SIMPLE_POINTER_PROTOCOL *Protocol = NULL;
-
             if (!EFI_ERROR(gBS->HandleProtocol(
                     Handles[I],
                     &gEfiSimplePointerProtocolGuid,
                     (VOID **)&Protocol)) && Protocol) {
+                if (SimpleCount == 0)
+                    CaptureDevicePathSignature(
+                        Handles[I],
+                        Diag.SimplePathType,
+                        Diag.SimplePathSubType,
+                        &Diag.SimplePathCount);
                 Simple[SimpleCount++] = Protocol;
             }
         }
-        FreePool(Handles);
     }
+    if (Handles)
+        FreePool(Handles);
 
     Diag.AbsoluteCount = AbsoluteCount;
     Diag.SimpleCount = SimpleCount;
@@ -191,14 +277,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     Diag.SimpleStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
     Diag.AbsoluteWaitStatus = AbsoluteCount ? EFI_NOT_READY : EFI_NOT_FOUND;
     Diag.SimpleWaitStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
-    Diag.AbsoluteWaitSignals = 0;
-    Diag.SimpleWaitSignals = 0;
-    Diag.AbsoluteEvents = 0;
-    Diag.SimpleEvents = 0;
-    Diag.RawAbsoluteX = 0;
-    Diag.RawAbsoluteY = 0;
-    Diag.LastSimpleDx = 0;
-    Diag.LastSimpleDy = 0;
     Diag.CurrentX = CurrentX;
     Diag.CurrentY = CurrentY;
     ArcsInputDiagDraw(SystemTable, &Diag);
@@ -208,9 +286,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
         BOOLEAN AbsoluteWorked = FALSE;
         BOOLEAN DiagDirty = FALSE;
 
-        /* UEFI may publish several instances of a pointer protocol.  Do not
-         * assume LocateProtocol's arbitrary first instance is the active
-         * mouse; poll every discovered Absolute Pointer instance. */
         for (I = 0; I < AbsoluteCount; ++I) {
             EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = Absolute[I];
             EFI_ABSOLUTE_POINTER_STATE State;
@@ -258,7 +333,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
                         Protocol->Mode->AbsoluteMaxY,
                         (UINTN)Height
                         );
-
                     Dx = NewX - CurrentX;
                     Dy = NewY - CurrentY;
                     CurrentX = NewX;
@@ -278,9 +352,6 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             }
         }
 
-        /* If no absolute device produced an event, poll every Simple Pointer
-         * instance too.  This covers firmware with multiple mouse/touchpad
-         * handles or a dead first instance. */
         if (!AbsoluteWorked) {
             for (I = 0; I < SimpleCount; ++I) {
                 EFI_SIMPLE_POINTER_PROTOCOL *Protocol = Simple[I];
@@ -331,14 +402,10 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             }
         }
 
-        while (!EFI_ERROR(SystemTable->ConIn->ReadKeyStroke(
-                    SystemTable->ConIn,
-                    &Key))) {
+        while (!EFI_ERROR(SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &Key))) {
             DidWork = TRUE;
-
             if (Key.ScanCode == SCAN_ESC)
                 return EFI_SUCCESS;
-
             if (Key.UnicodeChar >= L'1' && Key.UnicodeChar <= L'5')
                 ArcsMaintenanceMenuSelect((UINTN)(Key.UnicodeChar - L'0'));
         }
