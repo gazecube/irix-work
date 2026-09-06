@@ -320,6 +320,15 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     tw->thumbwheel.press_coordinate = 0;
     tw->thumbwheel.press_value = tw->thumbwheel.value;
 
+    /*
+     * RE: MaXX's native SgThumbWheel relies entirely on its class
+     * translations for pointer interaction. OpenMotif does not always
+     * compile inherited subclass tm_table data the same way as IRIX Motif,
+     * so install the binary-recovered table explicitly on the host widget.
+     */
+    XtOverrideTranslations(newWidget,
+                           XtParseTranslationTable(thumbTranslations));
+
     if (tw->core.width == 0)
         tw->core.width = (tw->thumbwheel.orientation == XmVERTICAL)
             ? TW_DEFAULT_WIDTH : TW_DEFAULT_LENGTH;
