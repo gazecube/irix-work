@@ -5,32 +5,61 @@ set -euo pipefail
 #
 # Usage:
 #   ./irix-re/libimdIconPanel/tools/dump_model_based_icon_view.sh /path/to/libimdIconPanel.so
+#   ./irix-re/libimdIconPanel/tools/dump_model_based_icon_view.sh /path/to/all-irix-shared-objects.tar
 #
-# If no path is supplied, this script searches the common reconstructed/evidence
-# locations in this checkout. It does not download anything and does not use
-# GitHub Actions.
+# If a tar archive is supplied, the script locates libimdIconPanel.so inside it,
+# extracts only that specimen to /tmp, and analyzes it. If no path is supplied,
+# common reconstructed/evidence locations are searched. No network or Actions use.
 
-bin="${1:-}"
+input="${1:-}"
+bin=""
+outdir="${TMPDIR:-/tmp}/imd-model-view-archaeology"
+rm -rf "$outdir"
+mkdir -p "$outdir"
 
-if [[ -z "$bin" ]]; then
+resolve_input() {
+    local candidate="$1"
+
+    if [[ -f "$candidate" ]] && file "$candidate" | grep -q 'tar archive'; then
+        local entry
+        entry="$(tar -tf "$candidate" | grep -E '(^|/)libimdIconPanel\.so(\.1)?$' | head -1 || true)"
+        if [[ -z "$entry" ]]; then
+            echo "error: libimdIconPanel.so not found in $candidate" >&2
+            exit 1
+        fi
+
+        mkdir -p "$outdir/extracted"
+        tar -xf "$candidate" -C "$outdir/extracted" "$entry"
+        bin="$outdir/extracted/$entry"
+        return
+    fi
+
+    if [[ -f "$candidate" ]]; then
+        bin="$candidate"
+    fi
+}
+
+if [[ -n "$input" ]]; then
+    resolve_input "$input"
+else
     candidates=(
         "irix-re/evidence/shared_objects/libimdIconPanel.so"
         "irix-re/evidence/shared_objects/libimdIconPanel.so.1"
         "irix-re/evidence/libimdIconPanel.so"
         "irix-re/evidence/libimdIconPanel.so.1"
+        "irix-re/evidence/shared_objects.tar"
     )
 
     for candidate in "${candidates[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            bin="$candidate"
-            break
-        fi
+        [[ -e "$candidate" ]] || continue
+        resolve_input "$candidate"
+        [[ -n "$bin" ]] && break
     done
 fi
 
 if [[ -z "$bin" || ! -f "$bin" ]]; then
     echo "error: original libimdIconPanel.so not found" >&2
-    echo "usage: $0 /path/to/libimdIconPanel.so" >&2
+    echo "usage: $0 /path/to/libimdIconPanel.so-or-install-tree.tar" >&2
     exit 1
 fi
 
@@ -40,10 +69,6 @@ for tool in mips-linux-gnu-readelf mips-linux-gnu-objdump c++filt; do
         exit 1
     fi
 done
-
-outdir="${TMPDIR:-/tmp}/imd-model-view-archaeology"
-rm -rf "$outdir"
-mkdir -p "$outdir"
 
 raw="$outdir/symbols.raw"
 demangled="$outdir/symbols.txt"
@@ -94,10 +119,7 @@ mips-linux-gnu-readelf -Ws "$bin" | c++filt > "$demangled"
         done
     }
 
-    # Constructor/destructor and the exact model/view population seam.
     dump_matching 'ImdModelBasedIconView|ImdModelBasedIconPanel'
-
-    # Lower-level adoption/deletion functions called by the panel path.
     dump_matching 'ImdViewPanel(AdoptView|DeleteView|DeleteAllViews|BeginBlockChanges|EndBlockChanges)'
 } > "$report"
 
