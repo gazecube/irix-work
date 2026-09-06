@@ -7,8 +7,8 @@ class ImdModel;
 
 /* ImdModelBasedIconPanel - an icon panel associated with a model.
  *
- * the constructor argument list and method names below are recovered from
- * the original libimdIconPanel.so/libimdApp.so symbols.
+ * Constructor and original method names/signatures below are recovered from
+ * the original IRIX libimdIconPanel.so symbols and local MIPS disassembly.
  */
 class ImdModelBasedIconPanel : public ImdIconPanel
 {
@@ -23,11 +23,21 @@ public:
 
     void changeModel(ImdModel *model);
     void setModel(ImdModel *model);
-    void showChildren();
 
-    /* RE: inspection helpers; not original public interface. */
+    /*
+     * Original exported signature:
+     *   showChildren__22ImdModelBasedIconPanelGR11ImdIconView
+     *
+     * The argument is an existing icon view. The original implementation uses
+     * that view's DNA to install a NotifyReceiver for the corresponding model;
+     * it is not a zero-argument child-model enumerator.
+     */
+    void showChildren(ImdIconView &view);
+
+    /* RE: inspection/helpers only; not original public interface. */
     ImdModel *portableModel() const { return _model; }
     unsigned int portableChildCount() const { return _portableChildCount; }
+    void portableEnumerateModelChildren();
 
 private:
     ImdModel *_model;
