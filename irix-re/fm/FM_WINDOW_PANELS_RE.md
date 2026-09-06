@@ -5,7 +5,18 @@ Target symbol:
 ```text
 _createPanels__8FmWindowGv
 0x100187e0
+size 3596 bytes
 ```
+
+Current specimen:
+
+```text
+irix-re/evidence/fm
+ELF 32-bit MSB MIPS N32 MIPS-III
+sha256 65430bf4937027314b1a940b1e7f109d01f3dc48275223216360e3b50a809818
+```
+
+The symbol size and the details below were rechecked against the recovered standalone `fm` specimen by the `FM binary archaeology` workflow on 2026-09-06.
 
 This function is the main composition root for a normal directory window.
 
@@ -18,7 +29,7 @@ ImdBroker::contextBroker()
 ImdBroker::getModel(ImdDNA const &)
 ```
 
-The resolved model becomes the backing model for the main directory panel.
+The resolved model becomes the backing model for the main directory panel. In the recovered object, the returned model is stored at `FmWindow +0x78` before panel construction.
 
 ## Window/UI shell
 
@@ -39,35 +50,41 @@ The primary directory view is constructed as:
 ImdModelBasedIconPanel
 ```
 
-using the resolved `ImdModel` and an `ImdArgList` of visual/resources parameters.
-
-Immediately after creation it is registered with `FmMenuActions` through:
+The imported constructor is exactly:
 
 ```text
-FmMenuActions::setDirPanel()
+__ct__22ImdModelBasedIconPanelGPCcP10_WidgetRecP8ImdModelP3Argi
 ```
 
-and later through:
+The new panel object is stored at `FmWindow +0xa4` (`164` decimal). Immediately afterward `_createPanels()` calls:
 
 ```text
-FmMenuActions::setSelectionHolder()
+FmMenuActions::setDirPanel(ImdModelBasedIconPanel *)
 ```
 
-This establishes the main directory panel as both the action target and selection source for menu/file operations.
+with the `FmMenuActions` object at `FmWindow +0x1e4`.
+
+The panel later becomes the selection holder as well. This establishes the main directory panel as both the action target and selection source for menu/file operations.
 
 ## Visual/resource setup
 
-Before creating the model-based icon panel, FM inspects the window/display visual and builds an argument list with:
+Before creating the model-based icon panel, FM inspects the window/display visual and builds an argument list with calls including:
 
 ```text
 XGetWindowAttributes
-ImdViewPanelIsOverlayVisual
+ImdViewPanelHasOverlayVisual
 imdFtrChooseXdbeVisual
 imdFtrChooseVisual
 ImdArgList::setArg
 ```
 
-This confirms that visual selection and double-buffer/overlay capability are resolved before the panel is instantiated.
+The recovered executable imports:
+
+```text
+ImdViewPanelHasOverlayVisual(Display *)
+```
+
+at `0x100131a4`. This confirms that visual selection and double-buffer/overlay capability are resolved before the panel is instantiated.
 
 ## View pipeline
 
@@ -80,25 +97,25 @@ renderer
 layout
 ```
 
-through the IID panel adoption APIs:
+through the IID panel adoption APIs.
+
+The recovered executable imports:
 
 ```text
-ImdViewPanelAdoptOrder()
-ImdViewPanelAdoptFilter()
-ImdViewPanelAdoptRenderer()
-ImdViewPanelAdoptLayout()
+ImdViewPanelAdoptRenderer(Widget, ImdRenderer *)
+ImdViewPanelAdoptLayout(Widget, ImdLayout *)
 ```
 
-The concrete renderer is:
+The concrete renderer constructor imported by `fm` is:
 
 ```text
-ImdInvertedTeeRenderer
+__ct__22ImdInvertedTeeRendererGv
 ```
 
-and the icon layout is:
+and the icon layout constructor is:
 
 ```text
-ImdIconLayout
+__ct__13ImdIconLayoutGP10_WidgetRec
 ```
 
 This is an important architectural seam: model ordering/filtering, rendering and layout are separate objects attached to the same model-based panel.
@@ -107,7 +124,19 @@ This is an important architectural seam: model ordering/filtering, rendering and
 
 The directory panel receives a dense callback set through `VkCallbackObject::addCallback()`.
 
-The original constructor wires callbacks for selection/model/view events before exposing the panel through menu actions. The exact callback names should be recovered in a later callback-specific pass, but their location and ownership are now established.
+The standalone specimen imports the following `ImdModelBasedIconPanel` callback tokens, among others:
+
+```text
+kBeginExistsCallback
+kEndExistsCallback
+kAddOrDeleteCallback
+kDeleteCallback
+kModelInvalidCallback
+kChangedDNACallback
+kViewRenamedCallback
+```
+
+The exact callback-to-FmWindow method mapping is still being recovered and should not be guessed.
 
 ## Reference-container state
 
@@ -176,3 +205,9 @@ FmWindow
 ```
 
 This is the key object boundary for the Linux FM port: the model, filter/order pipeline, renderer, layout and action layer can be reconstructed independently and then composed in the same place.
+
+## Current portable bring-up boundary
+
+The runnable Linux `fm` now places a reconstructed `ImdModelBasedIconPanel` named `panel` in the recovered directory-panel slot and adopts an `ImdInvertedTeeRenderer` on its underlying `ImdViewPanel` widget.
+
+The portable `ImdBroker`/directory model and `ImdIconLayout` implementations are not complete yet. Until they are binary-backed and present, the panel receives a null model and the already-working `XmList` browser remains as a temporary child of that IMD panel widget. This preserves a usable file manager without claiming that the model/view body has already been reconstructed.
