@@ -32,6 +32,13 @@ typedef struct {
     UINT8 AbsolutePathSubType[ARCS_DIAG_PATH_NODES];
     UINT8 SimplePathType[ARCS_DIAG_PATH_NODES];
     UINT8 SimplePathSubType[ARCS_DIAG_PATH_NODES];
+
+    BOOLEAN UsbFallbackActive;
+    BOOLEAN UsbFallbackAbsolute;
+    UINTN UsbIoCount;
+    UINTN UsbHidCount;
+    UINT64 UsbPackets;
+    EFI_STATUS UsbStatus;
 } ARCS_INPUT_DIAG;
 
 VOID
