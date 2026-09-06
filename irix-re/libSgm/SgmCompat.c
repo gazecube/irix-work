@@ -44,7 +44,7 @@ WidgetClass sgListWidgetClass = (WidgetClass)0;
 WidgetClass sgRubberBoardWidgetClass = (WidgetClass)0;
 WidgetClass sgScrollBarWidgetClass = (WidgetClass)0;
 WidgetClass sgSpringBoxWidgetClass = (WidgetClass)0;
-WidgetClass sgThumbWheelWidgetClass = (WidgetClass)0;
+extern WidgetClass sgThumbWheelWidgetClass;
 extern WidgetClass sgVisualDrawingAreaWidgetClass;
 WidgetClass sgOscWidgetClass = (WidgetClass)0;
 
@@ -73,7 +73,6 @@ static void SgmCompatInitClasses(void)
     sgRubberBoardWidgetClass = xmBulletinBoardWidgetClass;
     sgScrollBarWidgetClass = xmScrollBarWidgetClass;
     sgSpringBoxWidgetClass = xmBulletinBoardWidgetClass;
-    sgThumbWheelWidgetClass = xmScaleWidgetClass;
     sgOscWidgetClass = xmDrawingAreaWidgetClass;
 }
 
@@ -109,7 +108,6 @@ SGM_CREATOR(SgCreateList, sgListWidgetClass)
 SGM_CREATOR(SgCreateRubberBoard, sgRubberBoardWidgetClass)
 SGM_CREATOR(SgCreateScrollBar, sgScrollBarWidgetClass)
 SGM_CREATOR(SgCreateSpringBox, sgSpringBoxWidgetClass)
-SGM_CREATOR(SgCreateThumbWheel, sgThumbWheelWidgetClass)
 SGM_CREATOR(SgCreateOsc, sgOscWidgetClass)
 SGM_CREATOR(SgCreateHorzPanedWindow, sgHorzPanedWindowWidgetClass)
 SGM_CREATOR(GlxCreateMDraw, glxMDrawWidgetClass)
@@ -175,23 +173,6 @@ Widget SgCreateMediaViewer(Widget parent, char *name, ArgList args,
                            Cardinal count)
 {
     return XmCreateForm(parent, name, args, count);
-}
-
-/* Original n32 ABI: getters write through the second argument. */
-void SgThumbWheelGetValue(Widget w, int *value)
-{
-    if (!value)
-        return;
-
-    *value = 0;
-    if (w)
-        XmScaleGetValue(w, value);
-}
-
-void SgThumbWheelSetValue(Widget w, int value)
-{
-    if (w)
-        XmScaleSetValue(w, value);
 }
 
 void SgDialGetValue(Widget w, int *value)
