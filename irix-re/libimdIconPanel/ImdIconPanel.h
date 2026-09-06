@@ -70,9 +70,11 @@ extern "C" void ImdViewPanelBeginBlockChanges(Widget);
 extern "C" void ImdViewPanelEndBlockChanges(Widget);
 
 /*
- * Original overload recovered from libimdIconPanel.so:
+ * Original overloads recovered from libimdIconPanel.so:
+ *   ImdViewPanelAdoptView(Widget, ImdView *, ImdView *)
  *   ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
  */
+void ImdViewPanelAdoptView(Widget, ImdView *, ImdView *);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *);
 
 class ImdIconPanel
@@ -83,8 +85,21 @@ public:
 
     Widget baseWidget() const { return _baseWidget; }
 
-    /* Original public method name recovered from libimdIconPanel DWARF. */
-    void adoptView(ImdView *view);
+    /*
+     * Exact original symbol:
+     *   adoptView__12ImdIconPanelGP11ImdIconViewT1
+     *
+     * Local vtable/disassembly proof resolves the second argument as the
+     * parent view. A null parent selects the ImdIconPanel ownership overload
+     * of ImdViewPanelAdoptView().
+     */
+    virtual void adoptView(ImdIconView *view, ImdIconView *parentView);
+
+    /*
+     * Vtable slot +656 reached by adoptView() resolves exactly to the original
+     * applySelectStrings(ImdIconView &) method.
+     */
+    virtual void applySelectStrings(ImdIconView &view);
 
     /* Portable inspection only; not claimed as original public interface. */
     const std::vector<ImdView *> &portableViews() const { return _views; }
