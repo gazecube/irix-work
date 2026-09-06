@@ -10,6 +10,7 @@
 
 #include "FmIconSurface.h"
 
+#include <X11/StringDefs.h>
 #include <X11/Xlib.h>
 #include <algorithm>
 #include <cstring>
