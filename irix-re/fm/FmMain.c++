@@ -6,6 +6,9 @@
  * vocabulary in this file follow the recovered FileManager app-defaults.
  */
 
+#include "ModelBasedIconPanel.h"
+#include "ImdIconPanel.h"
+
 #include <Xm/Xm.h>
 #include <Xm/CascadeB.h>
 #include <Xm/Form.h>
@@ -46,6 +49,8 @@ struct FmState {
     Widget location;
     Widget list;
     Widget status;
+    Widget panelWidget;
+    ImdModelBasedIconPanel *dirPanel;
     bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
@@ -474,6 +479,29 @@ createMenuBar(Widget parent, FmState *state)
 }
 
 static void
+panelResizeCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    Dimension width = 1;
+    Dimension height = 1;
+
+    (void)call;
+    if (!state->list)
+        return;
+
+    XtVaGetValues(widget,
+                  XmNwidth, &width,
+                  XmNheight, &height,
+                  NULL);
+    XtVaSetValues(state->list,
+                  XmNx, 0,
+                  XmNy, 0,
+                  XmNwidth, width,
+                  XmNheight, height,
+                  NULL);
+}
+
+static void
 reapChildren(XtPointer client, XtIntervalId *id)
 {
     FmState *state = (FmState *)client;
@@ -498,9 +526,16 @@ main(int argc, char **argv)
     Widget up;
     Widget refresh;
     Widget scroller;
+    ImdInvertedTeeRenderer *renderer;
     const char *initial = (argc > 1) ? argv[1] : ".";
 
-    memset(&state, 0, sizeof(state));
+    state.shell = 0;
+    state.location = 0;
+    state.list = 0;
+    state.status = 0;
+    state.panelWidget = 0;
+    state.dirPanel = 0;
+    state.showHidden = false;
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
                                     NULL, 0, &argc, argv,
@@ -559,13 +594,33 @@ main(int argc, char **argv)
                                         XmNbottomWidget, state.status,
                                         NULL);
 
-    /* RE: temporary list view occupying the recovered main panel slot. */
-    state.list = XtVaCreateManagedWidget("panel",
+    /*
+     * RE: original fm constructs ImdModelBasedIconPanel in _createPanels(),
+     * stores it at FmWindow +0xa4 and immediately registers it as the
+     * FmMenuActions directory panel.  The portable broker/model path is not
+     * online yet, so the model argument remains null in this bring-up slice.
+     * The working list browser is retained as a child of the real IMD panel
+     * widget instead of occupying the panel slot itself.
+     */
+    state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
+    state.panelWidget = state.dirPanel->baseWidget();
+    XtManageChild(state.panelWidget);
+
+    /*
+     * RE: _createPanels() constructs ImdInvertedTeeRenderer and adopts it on
+     * the main panel.  Layout adoption follows when the recovered
+     * ImdIconLayout class is present on the portable side.
+     */
+    renderer = new ImdInvertedTeeRenderer;
+    ImdViewPanelAdoptRenderer(state.panelWidget, renderer);
+
+    state.list = XtVaCreateManagedWidget("directoryList",
                                           xmListWidgetClass,
-                                          scroller,
+                                          state.panelWidget,
                                           XmNselectionPolicy, XmEXTENDED_SELECT,
                                           XmNvisibleItemCount, 18,
                                           NULL);
+    XtAddCallback(state.panelWidget, XmNresizeCallback, panelResizeCB, &state);
 
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
     XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
@@ -578,6 +633,7 @@ main(int argc, char **argv)
 
     changeDirectory(&state, initial);
     XtRealizeWidget(state.shell);
+    panelResizeCB(state.panelWidget, &state, 0);
     XtAppAddTimeOut(app, 1000, reapChildren, &state);
     XtAppMainLoop(app);
     return 0;
