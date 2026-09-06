@@ -8,6 +8,8 @@
  *   - BackLayout operates on an ImdViewPanel and its adopted renderer
  *   - fm publishes the desktop child window through
  *     _SGI_DESKS_DESKTOP_WINDOW on the root window
+ *   - Xsession.dt uses $HOME/.desktop-$host for the user desktop database
+ *     directory and $HOME/.desktophost/$host for system/overlay desktop state
  *
  * The top-level Xt shell below is only a Linux host seam. It is not claimed
  * as the original ImdBackWindow implementation. Desktop model population is
@@ -23,7 +25,12 @@
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define SGI_DESKTOP_WINDOW_ATOM "_SGI_DESKS_DESKTOP_WINDOW"
 
@@ -33,6 +40,8 @@ struct DesktopState
     Widget panel;
     ImdRenderer *renderer;
     BackLayout *layout;
+    char userDesktopDir[PATH_MAX];
+    char systemDesktopDir[PATH_MAX];
 };
 
 static void
@@ -48,6 +57,67 @@ sizeToScreen(Widget shell)
                   XtNwidth, width,
                   XtNheight, height,
                   NULL);
+}
+
+static int
+directoryExists(const char *path)
+{
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static int
+resolveDesktopDirectories(DesktopState *state)
+{
+    const char *home = getenv("HOME");
+    char host[256];
+
+    if (!state || !home || !*home)
+        return 0;
+
+    memset(host, 0, sizeof(host));
+    if (gethostname(host, sizeof(host) - 1) != 0 || !host[0])
+        return 0;
+
+    /*
+     * RE: extracted IRIX Xsession.dt sets:
+     *
+     *   desktopdir=$HOME/.desktop-$host
+     *   sysdesktopdir=.desktophost/$host
+     *
+     * Xsession runs this state beneath the user's home directory.  Keep both
+     * paths absolute in the host reconstruction so the working directory of
+     * iid-desktop cannot accidentally select the wrong desktop database.
+     */
+    if (snprintf(state->userDesktopDir,
+                 sizeof(state->userDesktopDir),
+                 "%s/.desktop-%s", home, host) >=
+        (int)sizeof(state->userDesktopDir))
+        return 0;
+
+    if (snprintf(state->systemDesktopDir,
+                 sizeof(state->systemDesktopDir),
+                 "%s/.desktophost/%s", home, host) >=
+        (int)sizeof(state->systemDesktopDir))
+        return 0;
+
+    return 1;
+}
+
+static void
+reportDesktopDirectories(const DesktopState *state)
+{
+    if (!state)
+        return;
+
+    fprintf(stderr,
+            "iid-desktop: user desktop directory: %s [%s]\n",
+            state->userDesktopDir,
+            directoryExists(state->userDesktopDir) ? "present" : "missing");
+    fprintf(stderr,
+            "iid-desktop: system desktop directory: %s [%s]\n",
+            state->systemDesktopDir,
+            directoryExists(state->systemDesktopDir) ? "present" : "missing");
 }
 
 static void
@@ -98,6 +168,16 @@ main(int argc, char **argv)
     XtAppContext app;
     Display *display;
     DesktopState state;
+
+    memset(&state, 0, sizeof(state));
+
+    if (!resolveDesktopDirectories(&state)) {
+        fprintf(stderr,
+                "iid-desktop: cannot resolve IRIX host desktop directories\n");
+        return 1;
+    }
+
+    reportDesktopDirectories(&state);
 
     XtToolkitInitialize();
     app = XtCreateApplicationContext();
