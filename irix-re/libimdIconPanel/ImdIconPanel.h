@@ -78,8 +78,15 @@ public:
     /* Original public method name recovered from libimdIconPanel DWARF. */
     void adoptView(ImdView *view);
 
-    /* Portable inspection only; not claimed as an original public method. */
+    /* Portable inspection only; not claimed as original public interface. */
     const std::vector<ImdView *> &portableViews() const { return _views; }
+
+    /*
+     * Portable ownership seam used while ImdViewPanelDeleteAllViews() and the
+     * original ImdIconPanel::deleteView() contract are still being restored.
+     * Callers must opt in to destroying adopted views.
+     */
+    void portableResetViews(bool destroyViews);
 
 private:
     Widget _baseWidget;
