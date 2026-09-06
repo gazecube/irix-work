@@ -37,6 +37,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
         IconLayout.c++
         ModelBasedIconPanel.c++
         ModelBasedIconView.c++
+        ViewPanelAdopt.c++
     )
 
     target_include_directories(imdIconPanel
