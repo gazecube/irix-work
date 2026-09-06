@@ -2,6 +2,8 @@ add_library(imdModel SHARED
     c++init.cxx
     Base/ImdString.c++
     Base/ImdDNA.c++
+    Base/FileModel.c++
+    Base/RefModel.c++
 )
 
 target_include_directories(imdModel
