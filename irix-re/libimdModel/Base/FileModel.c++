@@ -50,3 +50,30 @@ ImdFileModel::dnaSelectorFromPath(const ImdString &path,
 
     return ImdString(selector);
 }
+
+ImdString
+ImdFileModel::fileNameFromDNA(const ImdDNA &dna)
+{
+    /*
+     * Binary-backed reconstruction from libimdModel.so
+     * fileNameFromDNA__12ImdFileModelSGRC6ImdDNA
+     * at 0x0974146c, size 360.
+     *
+     * Proven behavior: require the "file://" prefix, find the first slash
+     * following the host component, and return that slash through the end of
+     * the selector. No locality check is performed here by the original.
+     */
+    const std::string &selector = dna.selector().stdString();
+    const std::string prefix("file://");
+
+    if (selector.size() <= prefix.size())
+        return ImdString();
+    if (selector.compare(0, prefix.size(), prefix) != 0)
+        return ImdString();
+
+    const std::string::size_type slash = selector.find('/', prefix.size());
+    if (slash == std::string::npos)
+        return ImdString();
+
+    return ImdString(selector.substr(slash));
+}
