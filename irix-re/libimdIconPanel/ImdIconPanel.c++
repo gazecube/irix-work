@@ -252,6 +252,53 @@ extern "C" void ImdViewPanelEndBlockChanges(Widget widget)
         --state.blockDepth;
 }
 
+ImdIconView::ImdIconView()
+    : _portableFlags(0),
+      _portableLabel()
+{
+    /*
+     * Original constructor @ 0x0968412c zeroes content pointers at +0x20 and
+     * +0x24, zeroes the icon-state bitmask at +0x28, and constructs the
+     * ImdString label at +0x2c. Only the proven state represented by the
+     * portable class is restored here.
+     */
+}
+
+ImdIconView::~ImdIconView()
+{
+}
+
+void
+ImdIconView::setFlag(unsigned int flag, bool value)
+{
+    /* Exact bit operation from original 0x0967bd40. */
+    if (value)
+        _portableFlags |= flag;
+    else
+        _portableFlags &= ~flag;
+}
+
+bool
+ImdIconView::getFlag(unsigned int flag) const
+{
+    /* Exact all-bits-set test from original 0x0967c88c. */
+    return (_portableFlags & flag) == flag;
+}
+
+ImdString
+ImdIconView::getLabel() const
+{
+    /* Original 0x09679d08 copy-constructs from the label at N32 +0x2c. */
+    return _portableLabel;
+}
+
+void
+ImdIconView::setLabel(const ImdString &label)
+{
+    /* Original 0x096840f8 assigns directly into the label at N32 +0x2c. */
+    _portableLabel = label;
+}
+
 ImdIconPanel::ImdIconPanel(const char *name,
                            Widget parent,
                            Arg *args,
