@@ -122,6 +122,7 @@ static void actionEndLine(Widget, XEvent *, String *, Cardinal *);
 static void setValueInternal(SgThumbWheelRecCompat *, int, int, XEvent *, Boolean);
 static void drawThumbWheel(SgThumbWheelRecCompat *);
 static int eventCoordinate(const SgThumbWheelRecCompat *, const XEvent *);
+static void thumbPointerEH(Widget, XtPointer, XEvent *, Boolean *);
 
 /*
  * Original resource table at 0x0b243f20, 11 XtResource entries.
@@ -329,6 +330,16 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
     XtOverrideTranslations(newWidget,
                            XtParseTranslationTable(thumbTranslations));
 
+    /*
+     * RE: MaXX uses the class translation table directly. Some host Xt/Motif
+     * combinations do not reliably dispatch these legacy Btn1 translations
+     * from a reconstructed XmPrimitive subclass, so bridge the same pointer
+     * events into the binary-proven action bodies. This is host glue only.
+     */
+    XtAddEventHandler(newWidget,
+                      ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
+                      False, thumbPointerEH, NULL);
+
     if (tw->core.width == 0)
         tw->core.width = (tw->thumbwheel.orientation == XmVERTICAL)
             ? TW_DEFAULT_WIDTH : TW_DEFAULT_LENGTH;
@@ -530,6 +541,35 @@ eventCoordinate(const SgThumbWheelRecCompat *tw, const XEvent *event)
         return tw->thumbwheel.orientation == XmVERTICAL
             ? event->xmotion.y : event->xmotion.x;
     return 0;
+}
+
+static void
+thumbPointerEH(Widget w, XtPointer closure, XEvent *event, Boolean *cont)
+{
+    Cardinal n = 0;
+
+    (void)closure;
+    (void)cont;
+
+    switch (event->type)
+    {
+    case ButtonPress:
+        if (event->xbutton.button == Button1)
+            actionBtn1Down(w, event, NULL, &n);
+        break;
+    case MotionNotify:
+        if (event->xmotion.state & Button1Mask)
+            actionBtn1Motion(w, event, NULL, &n);
+        else
+            actionMotion(w, event, NULL, &n);
+        break;
+    case ButtonRelease:
+        if (event->xbutton.button == Button1)
+            actionBtn1Up(w, event, NULL, &n);
+        break;
+    default:
+        break;
+    }
 }
 
 static void
