@@ -101,17 +101,6 @@ resolveDesktopDirectories(DesktopState *state)
     if (gethostname(host, sizeof(host) - 1) != 0 || !host[0])
         return 0;
 
-    /*
-     * RE: extracted IRIX Xsession.dt sets:
-     *
-     *   desktopdir=$HOME/.desktop-$host
-     *   sysdesktopdir=.desktophost/$host
-     *   sysdesktopicondir=$sysdesktopdir/Icons
-     *
-     * Xsession runs this state beneath the user's home directory. Keep the
-     * host reconstruction absolute so iid-desktop cannot select state from
-     * its launch directory.
-     */
     if (snprintf(state->userDesktopDir,
                  sizeof(state->userDesktopDir),
                  "%s/.desktop-%s", home, host) >=
@@ -148,12 +137,6 @@ prepareDesktopDirectories(const DesktopState *state)
         (int)sizeof(desktopHostRoot))
         return 0;
 
-    /*
-     * Host seam: the extracted Xsession.dt/bgicons startup path prepares this
-     * state before fm -b. iid-desktop is currently run directly during RE, so
-     * perform that session-owned first-run preparation here to keep the live
-     * desktop testable. This is not attributed to ImdBackWindow itself.
-     */
     if (!ensureDirectory(state->userDesktopDir))
         return 0;
     if (!ensureDirectory(desktopHostRoot))
@@ -197,10 +180,6 @@ publishDesktopWindow(Widget panel)
     if (desktop == None || property == None)
         return;
 
-    /*
-     * RE: original fm calls setWindowAsProperty(root, desktopChild,
-     * _SGI_DESKS_DESKTOP_WINDOW) during desktop initialization.
-     */
     XChangeProperty(display,
                     root,
                     property,
@@ -220,10 +199,6 @@ placeBehindApplications(Widget shell)
     if (window == None)
         return;
 
-    /*
-     * Host seam: the desktop surface occupies screen geometry but belongs at
-     * the bottom of the top-level stack, underneath normal applications.
-     */
     XLowerWindow(display, window);
     XFlush(display);
 }
@@ -262,29 +237,11 @@ main(int argc, char **argv)
         return 1;
     }
 
-    /*
-     * RE: the original app-defaults address the desktop as
-     * FileManager*rootShell*panel. Use that proven shell name here.
-     *
-     * The override shell class is a host-only compatibility seam so the
-     * runnable background surface is not decorated by the Linux WM while the
-     * exact ImdBackWindow shell construction is still being recovered.
-     */
     state.shell = XtAppCreateShell("rootShell", "FileManager",
                                    overrideShellWidgetClass,
                                    display, NULL, 0);
     sizeToScreen(state.shell);
 
-    /*
-     * Binary-backed desktop model path:
-     *   ImdRefModel::desktopContainerDNA()
-     *   -> ImdBroker::contextBroker()
-     *   -> getModel(Directory DNA)
-     *   -> ImdModelBasedIconPanel
-     *
-     * The current native broker has only the built-in Directory factory seam;
-     * callback/NotifyReceiver adoption is the next layer.
-     */
     const ImdDNA desktopDNA = ImdRefModel::desktopContainerDNA();
     state.broker = ImdBroker::contextBroker();
     state.desktopModel = state.broker->getModel(desktopDNA);
@@ -299,12 +256,22 @@ main(int argc, char **argv)
             "iid-desktop: desktop container DNA: %s\n",
             desktopDNA.serialize().c_str());
 
+    /*
+     * Original model-backed construction now reaches the recovered root
+     * NotifyReceiver. ImdDirModel's child callback registration sends the
+     * original 0xEFFF004B/4C/4D existence batch synchronously, creating and
+     * adopting one ImdModelBasedIconView per current desktop child.
+     */
     state.panel = new ImdModelBasedIconPanel("panel",
                                              state.shell,
                                              state.desktopModel,
                                              0,
                                              0);
     state.panelWidget = state.panel->baseWidget();
+
+    fprintf(stderr,
+            "iid-desktop: root NotifyReceiver active; adopted %lu model-backed views\n",
+            (unsigned long)state.panel->portableViews().size());
 
     XtVaSetValues(state.panelWidget,
                   XtNx, 0,
@@ -314,15 +281,9 @@ main(int argc, char **argv)
                   NULL);
     XtManageChild(state.panelWidget);
 
-    /*
-     * RE: the background path asks ImdViewPanel for its renderer. Reuse the
-     * reconstructed IMD renderer abstraction rather than drawing desktop
-     * icons independently.
-     */
     state.renderer = new ImdInvertedTeeRenderer;
     ImdViewPanelAdoptRenderer(state.panelWidget, state.renderer);
 
-    /* RE: BackLayout derives from ImdIconLayout and owns desktop placement. */
     state.layout = new BackLayout(state.panelWidget);
     ImdViewPanelAdoptLayout(state.panelWidget, state.layout);
 
