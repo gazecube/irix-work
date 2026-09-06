@@ -9,12 +9,12 @@
 #include "ModelBasedIconPanel.h"
 #include "ImdIconPanel.h"
 #include "IconLayout.h"
+#include "FmIconSurface.h"
 
 #include <Xm/Xm.h>
 #include <Xm/CascadeB.h>
 #include <Xm/Form.h>
 #include <Xm/Label.h>
-#include <Xm/List.h>
 #include <Xm/MainW.h>
 #include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
@@ -49,13 +49,12 @@ struct FmEntry {
 struct FmState {
     Widget shell;
     Widget location;
-    Widget list;
+    FmIconSurface *surface;
     Widget status;
     Widget panelWidget;
     Widget scaleZoom;
     ImdModelBasedIconPanel *dirPanel;
     ImdIconLayout *iconLayout;
-    bool panelResizeActive;
     bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
@@ -211,16 +210,16 @@ populateDirectory(FmState *state, const std::string &directory)
 
     std::sort(next.begin(), next.end(), entryLess);
 
-    XmListDeleteAllItems(state->list);
+    std::vector<FmIconSurfaceEntry> surfaceEntries;
+    surfaceEntries.reserve(next.size());
     for (std::vector<FmEntry>::const_iterator it = next.begin();
          it != next.end(); ++it) {
-        std::string visible = it->name;
-        if (it->directory)
-            visible += "/";
-        XmString item = XmStringCreateLocalized((char *)visible.c_str());
-        XmListAddItemUnselected(state->list, item, 0);
-        XmStringFree(item);
+        FmIconSurfaceEntry surfaceEntry;
+        surfaceEntry.name = it->name;
+        surfaceEntry.directory = it->directory;
+        surfaceEntries.push_back(surfaceEntry);
     }
+    state->surface->setEntries(surfaceEntries);
 
     state->entries.swap(next);
     state->directory = directory;
@@ -271,18 +270,12 @@ openFile(FmState *state, const std::string &path)
 static bool
 selectedEntry(FmState *state, FmEntry *entry)
 {
-    int *positions = NULL;
-    int count = 0;
+    size_t index = 0;
 
-    if (!XmListGetSelectedPos(state->list, &positions, &count) || count < 1)
+    if (!state->surface->selectedIndex(&index) || index >= state->entries.size())
         return false;
 
-    const int index = positions[0] - 1;
-    XtFree((char *)positions);
-    if (index < 0 || (size_t)index >= state->entries.size())
-        return false;
-
-    *entry = state->entries[(size_t)index];
+    *entry = state->entries[index];
     return true;
 }
 
@@ -337,17 +330,13 @@ refreshCB(Widget widget, XtPointer client, XtPointer call)
 }
 
 static void
-listDefaultActionCB(Widget widget, XtPointer client, XtPointer call)
+surfaceActivateCB(size_t index, void *closure)
 {
-    FmState *state = (FmState *)client;
-    XmListCallbackStruct *cbs = (XmListCallbackStruct *)call;
-    int index;
+    FmState *state = (FmState *)closure;
 
-    (void)widget;
-    index = cbs->item_position - 1;
-    if (index < 0 || (size_t)index >= state->entries.size())
+    if (index >= state->entries.size())
         return;
-    openEntry(state, state->entries[(size_t)index]);
+    openEntry(state, state->entries[index]);
 }
 
 static void
@@ -372,8 +361,7 @@ selectAllCB(Widget widget, XtPointer client, XtPointer call)
     (void)widget;
     (void)call;
 
-    for (size_t i = 0; i < state->entries.size(); ++i)
-        XmListSelectPos(state->list, (int)i + 1, False);
+    state->surface->selectAll();
 }
 
 static void
@@ -422,7 +410,7 @@ layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
     /*
      * RE: IconicLayout, ListLayout and ColumnLayout are binary-proven
      * ImdIControlBoard modes. The portable list remains the only populated
-     * view until ImdIconLayout/model view creation is online.
+     * view population now runs through adopted ImdIconView objects.
      */
     if (name && (!strcmp(name, "listLayout") ||
                  !strcmp(name, "viewAsListMenuItem"))) {
@@ -598,47 +586,6 @@ createControlBoard(Widget parent, FmState *state)
 }
 
 static void
-panelResizeCB(Widget widget, XtPointer client, XtPointer call)
-{
-    FmState *state = (FmState *)client;
-    Dimension width = 1;
-    Dimension height = 1;
-
-    Dimension childWidth = 1;
-    Dimension childHeight = 1;
-
-    (void)call;
-    if (!state->list || state->panelResizeActive)
-        return;
-
-    XtVaGetValues(widget,
-                  XmNwidth, &width,
-                  XmNheight, &height,
-                  NULL);
-    XtVaGetValues(state->list,
-                  XmNwidth, &childWidth,
-                  XmNheight, &childHeight,
-                  NULL);
-
-    if (childWidth == width && childHeight == height)
-        return;
-
-    /*
-     * bootstrap-only reentrancy guard. The temporary XmList negotiates
-     * geometry through the IMD panel and can synchronously trigger this
-     * callback again while XtVaSetValues() is still on the stack.
-     */
-    state->panelResizeActive = true;
-    XtVaSetValues(state->list,
-                  XmNx, 0,
-                  XmNy, 0,
-                  XmNwidth, width,
-                  XmNheight, height,
-                  NULL);
-    state->panelResizeActive = false;
-}
-
-static void
 reapChildren(XtPointer client, XtIntervalId *id)
 {
     FmState *state = (FmState *)client;
@@ -669,13 +616,12 @@ main(int argc, char **argv)
 
     state.shell = 0;
     state.location = 0;
-    state.list = 0;
+    state.surface = 0;
     state.status = 0;
     state.panelWidget = 0;
     state.scaleZoom = 0;
     state.dirPanel = 0;
     state.iconLayout = 0;
-    state.panelResizeActive = false;
     state.showHidden = false;
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
@@ -765,8 +711,8 @@ main(int argc, char **argv)
     /*
      * RE: original fm constructs ImdModelBasedIconPanel in _createPanels(),
      * stores it at FmWindow +0xa4 and registers it through setDirPanel().
-     * The broker/model path is not online yet, so the temporary list remains
-     * a child of the real reconstructed IMD panel widget.
+     * The broker/model path is not online yet. Directory entries are now
+     * adopted as ImdIconView objects directly by the reconstructed panel.
      */
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
     state.panelWidget = state.dirPanel->baseWidget();
@@ -782,26 +728,24 @@ main(int argc, char **argv)
     state.iconLayout = new ImdIconLayout(state.panelWidget);
     ImdViewPanelAdoptLayout(state.panelWidget, state.iconLayout);
 
-    state.list = XtVaCreateManagedWidget("directoryList",
-                                         xmListWidgetClass,
-                                         state.panelWidget,
-                                         XmNselectionPolicy, XmEXTENDED_SELECT,
-                                         XmNvisibleItemCount, 18,
-                                         NULL);
-    XtAddCallback(state.panelWidget, XmNresizeCallback, panelResizeCB, &state);
+    /*
+     * RE: libimdIconPanel proves ImdIconPanel::adoptView(ImdIconView *, ...)
+     * and ImdViewPanelDeleteAllViews(). FmIconSurface uses that recovered
+     * ownership direction while renderer/view drawing is brought online.
+     * There is intentionally no Motif child widget inside the IMD panel.
+     */
+    state.surface = new FmIconSurface(state.dirPanel, state.panelWidget);
+    state.surface->setActivateProc(surfaceActivateCB, &state);
 
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
     XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
     XtAddCallback(state.location, XmNactivateCallback,
                   locationActivateCB, &state);
-    XtAddCallback(state.list, XmNdefaultActionCallback,
-                  listDefaultActionCB, &state);
 
     XmMainWindowSetAreas(mainWindow, menuBar, NULL, NULL, NULL, form);
 
     changeDirectory(&state, initial);
     XtRealizeWidget(state.shell);
-    panelResizeCB(state.panelWidget, &state, 0);
     XtAppAddTimeOut(app, 1000, reapChildren, &state);
     XtAppMainLoop(app);
     return 0;
