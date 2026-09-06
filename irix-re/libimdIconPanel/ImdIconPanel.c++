@@ -20,21 +20,11 @@ namespace
 WidgetClass resolveViewPanelWidgetClass()
 {
 #if defined(IMDICONPANEL_HAVE_RECONSTRUCTED_SGM)
-    /*
-     * Our reconstructed libSgm exports the historical IRIX symbol directly.
-     * Keeping a real reference here also prevents --as-needed from dropping
-     * libSgm from the final executable before runtime symbol probing occurs.
-     */
     if (sgVisualDrawingAreaWidgetClass)
         return sgVisualDrawingAreaWidgetClass;
 #endif
 
 #if defined(IMDICONPANEL_HAVE_DLFCN)
-    /*
-     * IRIX 6.5.0's ImdViewPanel class record inherits from the exported
-     * sgVisualDrawingAreaWidgetClass data symbol. External compatibility
-     * libraries may omit it, so this remains as the fallback probe path.
-     */
     void *symbol = dlsym(RTLD_DEFAULT, "sgVisualDrawingAreaWidgetClass");
     if (symbol)
     {
@@ -116,12 +106,11 @@ void reportViewPanelSuperclassOnce()
         return;
 
     reported = true;
-    std::fprintf(
-        stderr,
-        "ImdViewPanel superclass: %s\n",
-        usingSgVisualDrawingArea()
-            ? "SgVisualDrawingArea"
-            : "XmDrawingArea fallback");
+    std::fprintf(stderr,
+                 "ImdViewPanel superclass: %s\n",
+                 usingSgVisualDrawingArea()
+                     ? "SgVisualDrawingArea"
+                     : "XmDrawingArea fallback");
 }
 
 void reportSgVisualState(Widget widget)
@@ -137,128 +126,48 @@ void reportSgVisualState(Widget widget)
     Boolean installColormap = False;
     Boolean ditherBackground = False;
 
-    XtVaGetValues(
-        widget,
-        "visual", &visual,
-        XtNcolormap, &colormap,
-        XtNdepth, &depth,
-        XtNbackground, &backgroundPixel,
-        XtNbackgroundPixmap, &backgroundPixmap,
-        "installColormap", &installColormap,
-        "ditherBackground", &ditherBackground,
-        NULL);
+    XtVaGetValues(widget,
+                  "visual", &visual,
+                  XtNcolormap, &colormap,
+                  XtNdepth, &depth,
+                  XtNbackground, &backgroundPixel,
+                  XtNbackgroundPixmap, &backgroundPixmap,
+                  "installColormap", &installColormap,
+                  "ditherBackground", &ditherBackground,
+                  NULL);
 
     if (visual)
-    {
-        std::fprintf(
-            stderr,
-            "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n",
-            static_cast<unsigned long>(XVisualIDFromVisual(visual)),
-            visual->c_class,
-            depth,
-            static_cast<unsigned long>(colormap));
-    }
+        std::fprintf(stderr,
+                     "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n",
+                     static_cast<unsigned long>(XVisualIDFromVisual(visual)),
+                     visual->c_class,
+                     depth,
+                     static_cast<unsigned long>(colormap));
     else
-    {
-        std::fprintf(
-            stderr,
-            "ImdViewPanel visual: id=NULL class=-1 depth=%d colormap=0x%lx\n",
-            depth,
-            static_cast<unsigned long>(colormap));
-    }
+        std::fprintf(stderr,
+                     "ImdViewPanel visual: id=NULL class=-1 depth=%d colormap=0x%lx\n",
+                     depth,
+                     static_cast<unsigned long>(colormap));
 
-    std::fprintf(
-        stderr,
-        "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n",
-        installColormap ? "True" : "False",
-        ditherBackground ? "True" : "False");
-
-    std::fprintf(
-        stderr,
-        "SgVisualDrawingArea background: pixel=0x%lx pixmap=0x%lx\n",
-        static_cast<unsigned long>(backgroundPixel),
-        static_cast<unsigned long>(backgroundPixmap));
+    std::fprintf(stderr,
+                 "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n",
+                 installColormap ? "True" : "False",
+                 ditherBackground ? "True" : "False");
+    std::fprintf(stderr,
+                 "SgVisualDrawingArea background: pixel=0x%lx pixmap=0x%lx\n",
+                 static_cast<unsigned long>(backgroundPixel),
+                 static_cast<unsigned long>(backgroundPixmap));
 
     if (colormap != None)
     {
         XColor color;
         color.pixel = backgroundPixel;
         XQueryColor(XtDisplay(widget), colormap, &color);
-        std::fprintf(
-            stderr,
-            "SgVisualDrawingArea background RGB: %u %u %u\n",
-            static_cast<unsigned int>(color.red),
-            static_cast<unsigned int>(color.green),
-            static_cast<unsigned int>(color.blue));
-    }
-
-    if (backgroundPixmap != None &&
-        backgroundPixmap != XmUNSPECIFIED_PIXMAP)
-    {
-        Display *display = XtDisplay(widget);
-        Window root = None;
-        int x = 0;
-        int y = 0;
-        unsigned int width = 0;
-        unsigned int height = 0;
-        unsigned int borderWidth = 0;
-        unsigned int pixmapDepth = 0;
-
-        if (XGetGeometry(display,
-                         backgroundPixmap,
-                         &root,
-                         &x,
-                         &y,
-                         &width,
-                         &height,
-                         &borderWidth,
-                         &pixmapDepth))
-        {
-            unsigned int sampleWidth = width < 2 ? width : 2;
-            unsigned int sampleHeight = height < 2 ? height : 2;
-            XImage *image = 0;
-
-            std::fprintf(
-                stderr,
-                "SgVisualDrawingArea dither pixmap: %ux%u depth=%u\n",
-                width,
-                height,
-                pixmapDepth);
-
-            if (sampleWidth != 0 && sampleHeight != 0)
-                image = XGetImage(display,
-                                  backgroundPixmap,
-                                  0,
-                                  0,
-                                  sampleWidth,
-                                  sampleHeight,
-                                  AllPlanes,
-                                  ZPixmap);
-
-            if (image)
-            {
-                for (unsigned int sy = 0; sy < sampleHeight; ++sy)
-                {
-                    for (unsigned int sx = 0; sx < sampleWidth; ++sx)
-                    {
-                        unsigned long pixel = XGetPixel(image, sx, sy);
-                        XColor color;
-                        color.pixel = pixel;
-                        XQueryColor(display, colormap, &color);
-                        std::fprintf(
-                            stderr,
-                            "SgVisualDrawingArea dither[%u,%u]: pixel=0x%lx RGB=%u,%u,%u\n",
-                            sx,
-                            sy,
-                            pixel,
-                            static_cast<unsigned int>(color.red),
-                            static_cast<unsigned int>(color.green),
-                            static_cast<unsigned int>(color.blue));
-                    }
-                }
-                XDestroyImage(image);
-            }
-        }
+        std::fprintf(stderr,
+                     "SgVisualDrawingArea background RGB: %u %u %u\n",
+                     static_cast<unsigned int>(color.red),
+                     static_cast<unsigned int>(color.green),
+                     static_cast<unsigned int>(color.blue));
     }
 }
 
@@ -267,17 +176,11 @@ bool isUnsupportedFallbackResource(const char *name)
     if (!name || usingSgVisualDrawingArea())
         return false;
 
-    /* These are SgVisualDrawingArea resources, not XmDrawingArea resources. */
     return std::strcmp(name, "installColormap") == 0 ||
            std::strcmp(name, "ditherBackground") == 0;
 }
 }
 
-/*
- * imdViewPanelClassRec at 0x096caaa0 has a relocation to
- * sgVisualDrawingAreaWidgetClass. Use that class when the runtime provides the
- * historical symbol, otherwise retain XmDrawingArea as the portable fallback.
- */
 WidgetClass imdViewPanelWidgetClass = resolveViewPanelWidgetClass();
 
 extern "C" Widget ImdCreateViewPanel(
@@ -286,15 +189,6 @@ extern "C" Widget ImdCreateViewPanel(
     Arg *args,
     Cardinal count)
 {
-    /*
-     * Original IRIX behavior is XtCreateWidget(name,
-     * imdViewPanelWidgetClass, parent, args, count).
-     *
-     * Our reconstructed class record does not yet implement ImdViewPanel's
-     * private resource table, so those names are filtered. Superclass
-     * resources are preserved when SgVisualDrawingArea was resolved. The
-     * XmDrawingArea fallback filters the two Sgm-only resources.
-     */
     reportViewPanelSuperclassOnce();
 
     Arg *filtered = 0;
@@ -308,19 +202,15 @@ extern "C" Widget ImdCreateViewPanel(
             const char *resourceName = args[i].name;
             if (!isPrivateImdResource(resourceName) &&
                 !isUnsupportedFallbackResource(resourceName))
-            {
                 filtered[filteredCount++] = args[i];
-            }
         }
     }
 
-    Widget widget = XtCreateWidget(
-        name,
-        imdViewPanelWidgetClass,
-        parent,
-        filtered,
-        filteredCount);
-
+    Widget widget = XtCreateWidget(name,
+                                   imdViewPanelWidgetClass,
+                                   parent,
+                                   filtered,
+                                   filteredCount);
     delete [] filtered;
 
     if (widget)
@@ -342,11 +232,7 @@ extern "C" void ImdViewPanelAdoptLayout(Widget widget, ImdLayout *layout)
     gViewPanelState[widget].layout = layout;
 }
 
-extern "C" void ImdViewPanelSetScale(
-    Widget widget,
-    float scale,
-    long arg0,
-    long arg1)
+extern "C" void ImdViewPanelSetScale(Widget widget, float scale, long arg0, long arg1)
 {
     ViewPanelState &state = gViewPanelState[widget];
     state.scale = scale;
@@ -366,31 +252,49 @@ extern "C" void ImdViewPanelEndBlockChanges(Widget widget)
         --state.blockDepth;
 }
 
-ImdIconPanel::ImdIconPanel(
-    const char *name,
-    Widget parent,
-    Arg *args,
-    int count)
+ImdIconPanel::ImdIconPanel(const char *name,
+                           Widget parent,
+                           Arg *args,
+                           int count)
     : _baseWidget(0)
 {
-    _baseWidget = ImdCreateViewPanel(
-        parent,
-        const_cast<char *>(name),
-        args,
-        static_cast<Cardinal>(count));
+    _baseWidget = ImdCreateViewPanel(parent,
+                                     const_cast<char *>(name),
+                                     args,
+                                     static_cast<Cardinal>(count));
 }
 
-void ImdIconPanel::adoptView(ImdView *view)
+void
+ImdIconPanel::adoptView(ImdIconView *view, ImdIconView *parentView)
 {
     if (!view)
         return;
 
     /*
-     * Original method name/ownership direction are recovered from DWARF and
-     * clogin displayIcon() call flow. Destruction ownership is deliberately
-     * still left with the probe until the original destructor path is traced.
+     * Original libimdIconPanel.so @ 0x09682c90:
+     *   parent != 0 -> ImdViewPanelAdoptView(widget, view, parent)
+     *   parent == 0 -> ImdViewPanelAdoptView(widget, view, this)
+     *   then virtual applySelectStrings(*view) at vtable +656.
      */
+    if (parentView)
+        ImdViewPanelAdoptView(_baseWidget, view, parentView);
+    else
+        ImdViewPanelAdoptView(_baseWidget, view, this);
+
+    /* RE portable inspection bookkeeping; not an original container. */
     _views.push_back(view);
+
+    applySelectStrings(*view);
+}
+
+void
+ImdIconPanel::applySelectStrings(ImdIconView &view)
+{
+    (void)view;
+    /*
+     * Exact original method/vtable target recovered. Its selection-string
+     * grammar is outside the current model population seam and remains pending.
+     */
 }
 
 void ImdIconPanel::portableResetViews(bool destroyViews)
