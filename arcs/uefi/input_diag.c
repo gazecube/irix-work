@@ -78,7 +78,7 @@ VOID
 ArcsInputDiagDraw(EFI_SYSTEM_TABLE *SystemTable, const ARCS_INPUT_DIAG *Diag)
 {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out;
-    CHAR16 Line[144];
+    CHAR16 Line[160];
     CHAR16 *P;
 
     if (!SystemTable || !Diag || !SystemTable->ConOut) return;
@@ -147,4 +147,18 @@ ArcsInputDiagDraw(EFI_SYSTEM_TABLE *SystemTable, const ARCS_INPUT_DIAG *Diag)
     AppendText(&P, L"   ESC exits                              ");
     *P = 0;
     EmitLine(Out, 5, Line);
+
+    P = Line;
+    AppendText(&P, L"USB HID fallback: active=");
+    AppendText(&P, Diag->UsbFallbackActive ? L"yes" : L"no");
+    AppendText(&P, L" kind=");
+    if (!Diag->UsbFallbackActive) AppendText(&P, L"none");
+    else AppendText(&P, Diag->UsbFallbackAbsolute ? L"absolute" : L"relative");
+    AppendText(&P, L" usbio="); AppendDecU64(&P, Diag->UsbIoCount);
+    AppendText(&P, L" hid="); AppendDecU64(&P, Diag->UsbHidCount);
+    AppendText(&P, L" packets="); AppendDecU64(&P, Diag->UsbPackets);
+    AppendText(&P, L" status="); AppendHexU64(&P, (UINT64)Diag->UsbStatus);
+    AppendText(&P, L"       ");
+    *P = 0;
+    EmitLine(Out, 6, Line);
 }
