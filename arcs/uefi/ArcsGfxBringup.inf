@@ -41,6 +41,7 @@
   gEfiGraphicsOutputProtocolGuid
   gEfiSimplePointerProtocolGuid
   gEfiAbsolutePointerProtocolGuid
+  gEfiDevicePathProtocolGuid
 
 [BuildOptions]
   GCC:*_*_*_CC_FLAGS = -D_LANGUAGE_C -D_STANDALONE
