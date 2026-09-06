@@ -2,9 +2,9 @@
 # When the reconstructed FmApp/FmWindow layer comes online this target remains
 # the installed application entry point.
 
-if(TARGET viewklass)
+if(TARGET viewklass AND TARGET imdIconPanel)
     add_executable(fm FmMain.c++)
-    target_link_libraries(fm PRIVATE viewklass)
+    target_link_libraries(fm PRIVATE viewklass imdIconPanel)
 else()
     find_path(FM_MOTIF_INCLUDE_DIR
         NAMES Xm/Xm.h
@@ -46,16 +46,17 @@ else()
     )
 
     if(FM_MOTIF_INCLUDE_DIR AND FM_MOTIF_LIBRARY AND
-       FM_XT_LIBRARY AND FM_X11_LIBRARY)
+       FM_XT_LIBRARY AND FM_X11_LIBRARY AND TARGET imdIconPanel)
         add_executable(fm FmMain.c++)
         target_include_directories(fm PRIVATE "${FM_MOTIF_INCLUDE_DIR}")
         target_link_libraries(fm PRIVATE
+            imdIconPanel
             "${FM_MOTIF_LIBRARY}"
             "${FM_XT_LIBRARY}"
             "${FM_X11_LIBRARY}"
         )
     else()
-        message(STATUS "Motif/Xt/X11 unavailable; skipping fm")
+        message(STATUS "Motif/Xt/X11 or reconstructed imdIconPanel unavailable; skipping fm")
     endif()
 endif()
 
