@@ -8,6 +8,10 @@ typedef struct {
     UINTN SimpleCount;
     EFI_STATUS AbsoluteStatus;
     EFI_STATUS SimpleStatus;
+    EFI_STATUS AbsoluteWaitStatus;
+    EFI_STATUS SimpleWaitStatus;
+    UINT64 AbsoluteWaitSignals;
+    UINT64 SimpleWaitSignals;
     UINT64 AbsoluteEvents;
     UINT64 SimpleEvents;
     UINT64 RawAbsoluteX;
