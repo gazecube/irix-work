@@ -1,0 +1,511 @@
+!!!! defaults for the file manager
+
+! These control the default sizes of the various panels
+
+FileManager.width:  575
+FileManager.height:  600
+FileManager*shelfPane.panel.height: 120
+FileManager*contentPane.panel.height: 400
+FileManager*heightRatioContentbyWindow: 0.71
+FileManager*panel.minPanelHeight: 10
+
+FileManager*textViewerSW.shadowThickness: 0
+FileManager*textViewerSW.scrolledWindowMarginHeight: 0
+FileManager*textViewerSW.scrolledWindowMarginWidth: 0
+
+*finderForm.iconFinder.height: 48
+
+FileManager*hideFinder: False
+FileManager*saveViewAsGallery: True
+
+FileManager*busyDialog*cancelLabelString: Cancel
+
+!!
+!! These accelerators are for propagating events from the input-only
+!! window that the background uses for receiving events to the background
+!! ViewPanel wigdet.  These accelerators are not used by dirviews.
+!!
+FileManager*panel.accelerators: #override\
+~s ~m ~a <Key>Return:Command()\n\
+a <Key>Return:Command(Alt)\n\
+<Key>osfActivate:Command()\n\
+<Key>osfCancel:Deselect()\n\
+:<Key>osfPageUp:PageUp()\n\
+:<Key>osfPageDown:PageDown()\n\
+:<Key>osfBeginLine:Top()\n\
+:<Key>osfEndLine:Bottom()\n\
+:<Key>osfUp:Up()\n\
+:<Key>osfDown:Down()\n\
+<Key>:TypeToSelect()\n\
+s c <Btn1Motion>:BoxSelect() DragStart(Link)\n\
+c ~s <Btn1Motion>:BoxSelect() DragStart(Copy)\n\
+<Btn1Motion>:BoxSelect() DragStart(Move)\n\
+s c <Btn2Down>:Select() Paste() DragStart(Link)\n\
+c ~s <Btn2Down>:Select() Paste() DragStart(Copy)\n\
+<Btn2Down>:Select() Paste() DragStart(Move)\n\
+s ~c <Btn1Down>:ExtendSelect() Expand() BoxSelectArm() MouseClick() CheckForDoubleClick()\n\
+a <Btn1Down>:Select() MouseClick() CheckForDoubleClick(Alt)\n\
+<Btn1Down>:Select() CheckForDoubleClick() Expand() MouseClick() BoxSelectArm()\n\
+<Btn1Up>:Rename() BoxSelectEnd() BoxSelectDisarm()\n\
+<Btn2Up>:Rename()\n\
+<Motion>:Motion()\n\
+<EnterNotify>:EnterPanel()\n\
+<LeaveNotify>:LeavePanel()
+
+!!
+!! These colors come from the various schemes.
+!!
+FileManager*panel.darkSchemeTextForeground: #ffffff
+FileManager*panel.lightSchemeTextForeground: #000000
+FileManager*panel.darkSchemeRefTextForeground: #ffffbf
+FileManager*panel.lightSchemeRefTextForeground: #210030
+
+FileManager*clientFunctions:     -resize -minimize -maximize
+
+FileManager*schemeFileList: SgiSpec, ImdSpec, FmNewSpec
+FileManager*paletteFileList: ImdPalette
+FileManager*useSchemes: all
+FileManager*sgiMode: True
+*showLaunchEffect: TRUE
+
+! All except f.quit_app
+FileManager*mwmFunctions: 8388609
+
+! Disable Dropsite highlighting
+FileManager*animationStyle: DRAG_UNDER_NONE
+FileManager*panel.horzScrollPolicy: ALWAYS
+FileManager*panel.vertScrollPolicy: ALWAYS
+
+FileManager*panel.columnFormat: -1L -1L 20VL 20R 20L 50L 50L
+FileManager*panel.detailTextSpacing: 25
+
+!
+! Resources for File and Host Finders.
+!
+#include "/usr/lib/X11/app-defaults/ImdFinders"
+
+#*FileManager*sgiMode:	true
+#*FileManager*useSchemes:	true
+*FileManager*useEnhancedFSB:	true
+
+! Constrain min size
+*ApplicationShell.minWidth: 300
+*ApplicationShell.minHeight: 200
+
+*FileManager*dragInitiatorProtocolStyle: DRAG_PREFER_DYNAMIC
+*FileManager*dragReceiverProtocolStyle: DRAG_PREFER_DYNAMIC
+*FileManager*arrowsType:            XmNO_THUMB_WHEN_EMPTY
+
+*FileManager*rc1.orientation: HORIZONTAL
+*FileManager*rc2.orientation: VERTICAL
+*FileManager*rc2.packing: PACK_TIGHT
+*FileManager*rc2.XmPushButton.marginLeft: 2
+*FileManager*rc2.XmPushButton.marginRight: 2
+*FileManager*rc2.XmPushButton.marginWidth: 2
+
+*FileManager*pathfinder.labelType: PIXMAP
+*FileManager*pathfinder.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/pathfinder.bm
+*FileManager*iconicLayout.labelType: PIXMAP
+*FileManager*iconicLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/iconicDirView.bm
+*FileManager*listLayout.labelType: PIXMAP
+*FileManager*listLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/listDirView.bm
+*FileManager*treeLayout.labelType: PIXMAP
+*FileManager*treeLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/treeDirView.bm
+*FileManager*columnLayout.labelType: PIXMAP
+*FileManager*columnLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/columnDirView.bm
+*FileManager*galleryMode.labelType: PIXMAP
+*FileManager*galleryMode.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/galleryDirView.bm
+*FileManager*shelf.labelType: PIXMAP
+*FileManager*shelf.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/shelf.bm
+
+! Use double-buffering extension (if available) to dramatically
+! smooth scaling.  Be careful not to wildcard this resource, because
+! ImdViewPanel widgets have a resource of the same name that causes
+! problems if globally set to true.
+*FileManager.useDoubleBuffer: true
+
+*FileManager*scaleZoom.orientation: VERTICAL
+*FileManager*scaleZoom.processingDirection: MAX_ON_TOP
+*FileManager*scaleZoom..decimalPoints: 2
+*FileManager*scaleZoom.maximum: 500
+*FileManager*scaleZoom.minimum: 60
+*FileManager*scaleZoom.value: 100
+*FileManager*scaleZoom.homePosition: 100
+*FileManager*scaleZoom.showValue: false
+*FileManager*scaleZoom.traversalOn: false
+
+*FileManager*form.accelerators: #replace
+
+! Icon Layout parameters for dirview but not the background
+
+*FileManager*scrollW.panel.gridWidth: 30
+*FileManager*scrollW.panel.staggerOffset: 120
+*FileManager*scrollW.panel.minimumRightIconPadding: 10
+*FileManager*scrollW.panel.baseOfIconPadding: 10
+*FileManager*scrollW.panel.topMargin: 20
+*FileManager*scrollW.panel.bottomMargin: 20
+*FileManager*scrollW.panel.leftMargin: 5
+*FileManager*scrollW.panel.rightMargin: 3
+*FileManager*scrollW.panel.overlapLimit: 20
+*FileManager*scrollW.panel.minimumIconWidth: 70
+
+! maximumIconWidth is enforced in truncate label mode
+*FileManager*scrollW.panel.maximumIconWidth: 100
+*FileManager*scrollW.panel.ellipsis: \ ...\ \
+ 
+!  Icon Layout parameters for the background
+
+*FileManager*rootShell*panel.gridWidth: 50
+*FileManager*rootShell*panel.minimumRightIconPadding: 25
+*FileManager*rootShell*panel.baseOfIconPadding: 10
+*FileManager*rootShell*panel.topMargin: 5
+*FileManager*rootShell*panel.bottomMargin: 0
+*FileManager*rootShell*panel.leftMargin: 20
+*FileManager*rootShell*panel.rightMargin: 6
+*FileManager*rootShell*panel.overlapLimit: 20
+*FileManager*rootShell*panel.minimumIconWidth: 50
+*FileManager*rootShell*panel.maxViewsNoUnmapWidget: 5
+
+
+*FileManager*infoDialogTitle: Info View Information
+*FileManager*shelfCreateError: The desktop was unable to create a shelf for this icon view.
+*FileManager*nonFileSys: This operation cannot be performed on non-filesystem objects.
+*FileManager*nonFileSysCopy: To copy this object, ctl-drag it to a directory view or to the desktop.
+*FileManager*nonFileSysReference: To create a reference to this object, drag it to a directory view, a shelf, or the desktop."
+
+*FileManager*ERRMSG_hungMount: The server for %s is not responding.
+
+*FileManager*actionsMenu.labelString: Actions
+*FileManager*actionsMenu.mnemonic: A
+
+*FileManager*newDirMenuItem.labelString: Add New Directory
+*FileManager*newDirMenuItem.mnemonic: N
+*FileManager*newDirMenuItem.acceleratorText: Ctrl+N
+*FileManager*newDirMenuItem.accelerator: Ctrl<Key>n
+
+*FileManager*showFiltersMenuItem.labelString: Search / Filter Files
+*FileManager*showFiltersMenuItem.mnemonic: S
+*FileManager*showFiltersMenuItem.acceleratorText: Ctrl+S
+*FileManager*showFiltersMenuItem.accelerator: Ctrl<Key>s
+
+*FileManager*selectAllMenuItem.labelString: Select All
+*FileManager*selectAllMenuItem.mnemonic: A
+*FileManager*selectAllMenuItem.acceleratorText: Ctrl+A
+*FileManager*selectAllMenuItem.accelerator: Ctrl<Key>a
+
+*FileManager*accessFilesMenuItem.labelString: Access Files
+*FileManager*accessFilesMenuItem.mnemonic: F
+
+*FileManager*homeMenuItem.labelString: In my Home Directory
+*FileManager*homeMenuItem.mnemonic: H
+
+*FileManager*automountMenuItem.labelString: In Automounted Directory
+*FileManager*automountMenuItem.mnemonic: A
+
+*FileManager*fetchMenuItem.labelString: File QuickFind...
+*FileManager*fetchMenuItem.mnemonic: F
+*FileManager*fetchMenuItem.acceleratorText: Ctrl+F
+*FileManager*fetchMenuItem.accelerator: Ctrl<Key>f
+
+*FileManager*quitMenuItem.labelString: Close
+*FileManager*quitMenuItem.mnemonic: C
+*FileManager*quitMenuItem.acceleratorText: Ctrl+W
+*FileManager*quitMenuItem.accelerator: Ctrl<Key>w
+
+
+
+*FileManager*fileMenu.labelString: Selected
+*FileManager*fileMenu.mnemonic: S
+
+*FileManager*openMenuItem.labelString: Open
+*FileManager*openMenuItem.mnemonic: O
+*FileManager*openMenuItem.acceleratorText: Ctrl+O
+*FileManager*openMenuItem.accelerator: Ctrl<Key>o
+*FileManager*copyMenuItem.labelString: Make Copy
+*FileManager*copyMenuItem.mnemonic: C
+*FileManager*copyMenuItem.acceleratorText: Ctrl+C
+*FileManager*copyMenuItem.accelerator: Ctrl<Key>c
+*FileManager*referenceMenuItem.labelString: Make Reference
+*FileManager*referenceMenuItem.mnemonic: R
+*FileManager*referenceMenuItem.acceleratorText: Ctrl+R
+*FileManager*referenceMenuItem.accelerator: Ctrl<Key>R
+*FileManager*removeMenuItem.labelString: Remove
+*FileManager*removeMenuItem.mnemonic: e
+*FileManager*printMenuItem.labelString: Print
+*FileManager*printMenuItem.mnemonic: P
+*FileManager*printMenuItem.acceleratorText: Ctrl+P
+*FileManager*printMenuItem.accelerator: Ctrl<Key>p
+*FileManager*shareMenuItem.labelString: Share
+*FileManager*shareMenuItem.mnemonic: h
+*FileManager*getInfoMenuItem.labelString: Get Info
+*FileManager*getInfoMenuItem.mnemonic: I
+*FileManager*getInfoMenuItem.acceleratorText: Ctrl+I
+*FileManager*getInfoMenuItem.accelerator: Ctrl<Key>i
+*FileManager*changePermsMenuItem.labelString: Change Permissions...
+*FileManager*changePermsMenuItem.mnemonic: e
+*FileManager*changePermsMenuItem.acceleratorText: Ctrl+E
+*FileManager*changePermsMenuItem.accelerator: Ctrl<Key>e
+*FileManager*startShareMenuItem.labelString: Share with Network...
+*FileManager*startShareMenuItem.mnemonic: S
+*FileManager*stopShareMenuItem.labelString: Stop Sharing...
+*FileManager*stopShareMenuItem.mnemonic: t
+*FileManager*publishMenuItem.labelString: Publish To Outbox...
+*FileManager*publishMenuItem.mnemonic: P
+*FileManager*newMenuItem.labelString: New
+*FileManager*newMenuItem.mnemonic: N
+
+*FileManager*arrangeMenu.labelString: Sort
+*FileManager*arrangeMenu.mnemonic: r
+*FileManager*arrangeMenu.sortByNameMenuItem.labelString: by Name
+*FileManager*arrangeMenu.sortByNameMenuItem.mnemonic: N
+! time sort not available
+! *FileManager*arrangeMenu.sortByTimeMenuItem.labelString: by Time
+! *FileManager*arrangeMenu.sortByTimeMenuItem.mnemonic: T
+*FileManager*arrangeMenu.sortByDateMenuItem.labelString: by Date
+*FileManager*arrangeMenu.sortByDateMenuItem.mnemonic: D
+*FileManager*arrangeMenu.sortBySizeMenuItem.labelString: by Size
+*FileManager*arrangeMenu.sortBySizeMenuItem.mnemonic: S
+*FileManager*arrangeMenu.sortByTypeMenuItem.labelString: by Type
+*FileManager*arrangeMenu.sortByTypeMenuItem.mnemonic: T
+
+
+
+
+*FileManager*viewMenu.labelString: View
+*FileManager*viewMenu.mnemonic: V
+*FileManager*viewMenu.viewAsIconsMenuItem.labelString: as Icons
+*FileManager*viewMenu.viewAsIconsMenuItem.mnemonic: I
+*FileManager*viewMenu.viewAsListMenuItem.labelString: as List
+*FileManager*viewMenu.viewAsListMenuItem.mnemonic: L
+*FileManager*viewMenu.viewAsColumnsMenuItem.labelString: as Columns
+*FileManager*viewMenu.viewAsColumnsMenuItem.mnemonic: C
+
+!! 5 spaces after \
+*FileManager*viewMenu.alignToGridMenuItem.labelString: \     Align To Grid
+*FileManager*viewMenu.alignToGridMenuItem.mnemonic: G
+*FileManager*viewMenu.cleanUpMenuItem.labelString: \     Align All Now
+*FileManager*viewMenu.cleanUpMenuItem.mnemonic: N
+
+!*FileManager*viewMenu.viewAsTreeMenuItem.labelString: as Tree
+!*FileManager*viewMenu.viewAsTreeMenuItem.mnemonic: T
+
+*FileManager*viewMenu.showDirSizesMenuItem.labelString: \     Directory Sizes
+*FileManager*viewMenu.showDirSizesMenuItem.mnemonic: D
+
+*FileManager*viewMenu.viewAsGalleryMenuItem.labelString: as Thumbnail Images
+*FileManager*viewMenu.viewAsGalleryMenuItem.mnemonic: u
+*FileManager*viewMenu.showHiddenMenuItem.labelString: Hidden Files
+*FileManager*viewMenu.showHiddenMenuItem.mnemonic: H
+*FileManager*viewMenu.truncateLabelsMenuItem.labelString: Truncate Names
+*FileManager*viewMenu.truncateLabelsMenuItem.mnemonic: T
+
+
+
+*FileManager*optionsMenu.labelString: Options
+*FileManager*optionsMenu.mnemonic: O
+
+*FileManager*applyDefaultLayoutMenuItem.labelString: Apply Default Layout
+*FileManager*applyDefaultLayoutMenuItem.mnemonic: A
+*FileManager*defaultLayoutMenuItem.labelString: Default Layout...
+*FileManager*defaultLayoutMenuItem.mnemonic: L
+*FileManager*ignoreLayoutMenuItem.labelString: Preserve Layout
+*FileManager*ignoreLayoutMenuItem.mnemonic: P
+*FileManager*showShelfMenuItem.labelString: Show Shelf
+*FileManager*showShelfMenuItem.mnemonic: S
+*FileManager*showContentMenuItem.labelString: Show Content Viewer
+*FileManager*showContentMenuItem.mnemonic: V
+
+*FileManager*internetMenu.labelString: Internet
+*FileManager*internetMenu.mnemonic: I
+
+*FileManager*httpMenuItem.labelString: Icon View of a Web Site
+*FileManager*httpMenuItem.mnemonic: W
+*FileManager*ftpMenuItem.labelString: Icon View of an FTP Site
+*FileManager*ftpMenuItem.mnemonic: F
+
+*FileManager*iconFinder.leftAttachment:		XmATTACH_FORM
+*FileManager*iconFinder.rightAttachment:	XmATTACH_FORM
+*FileManager*iconFinder.topAttachment:		XmATTACH_FORM
+*FileManager*iconFinder.bottomAttachment:	XmATTACH_NONE
+*FileManager*iconFinderPanel.traversalOn: False
+! For the timeout below, all values are in seconds. -1 disables timeout
+*FileManager*finderTypingTimeout:               -1
+
+*FileManager*interruptDialog.dialogTitle: Directory Sizes
+*FileManager*interruptDialog*labelString: Calculating sizes of all subdirectories...
+
+*URLPasswdDialog*anonCheckBox.labelString: Use anonymous FTP
+*URLPasswdDialog*passwdLabel.labelString: Password:
+*URLPasswdDialog*urlLabel.labelString: Authentication required for URL
+*URLPasswdDialog*userLabel.labelString: User:
+*URLPasswdDialog*cancelLabelString: Cancel
+
+*FileManager*iconicLayout.highlightThickness: 0
+*FileManager*listLayout.highlightThickness: 0
+*FileManager*treeLayout.highlightThickness: 0
+*FileManager*columnLayout.highlightThickness: 0
+*FileManager*galleryMode.highlightThickness: 0
+*FileManager*shelf.highlightThickness: 0
+*finderSelectionMenu.labelType: PIXMAP
+*finderSelectionMenu.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/iconFinderPrevious
+
+! Filter resources
+*FileManager*filterLabel.labelString: Show files that match name:
+*FileManager*filterContentLabel.labelString: Show files containing text:
+
+*FileManager*sizeCompareMenu.greaterThanMenuItem.labelString: greater
+*FileManager*sizeCompareMenu.lessThanMenuItem.labelString: less
+*FileManager*sizeCompareMenu.equalToMenuItem.labelString: equal
+
+*FileManager*sizeUnitMenu.megaBytesMenuItem.labelString: Megabytes
+*FileManager*sizeUnitMenu.kiloBytesMenuItem.labelString: KiloBytes
+*FileManager*sizeUnitMenu.blocksMenuItem.labelString: Blocks
+*FileManager*sizeUnitMenu.bytesMenuItem.labelString: Bytes
+
+*FileManager*dateCompareMenu.daysNewerMenuItem.labelString: ...days newer
+*FileManager*dateCompareMenu.daysOlderMenuItem.labelString: ...days older
+
+*FileManager*filterForm*optionLabel.marginHeight: 5
+*FileManager*filterForm*optionLabel.marginBottom: 5
+
+*FileManager*filterSizeField.width: 50
+*FileManager*filterPatternField.width: 200
+
+*FileManager*filterDateField.width: 50
+*FileManager*filterContentField.width: 200
+
+*FileManager*showAllToggleButton.labelString: Show All
+*matchMessageLabel.fontList: -*-helvetica-medium-r-normal-*-12-*-*-*-*-*-iso8859-1
+
+*FileManager*rc2.leftOffset: 4
+
+
+! Help messages
+*FileManager*onContext.labelString: Click for Help
+*FileManager*onContext.mnemonic:    C
+*FileManager*onContext.accelerator: Shift<Key>F1
+*FileManager*onContext.acceleratorText: Shift+F1
+*FileManager*onWindow.labelString:  Overview
+*FileManager*onWindow.mnemonic:     O
+*FileManager*onIndex.labelString:   Index
+*FileManager*onIndex.mnemonic:      I
+*FileManager*onKeys.labelString:    Keys & Shortcuts
+*FileManager*onKeys.mnemonic:       K
+*FileManager*onTutorial.labelString:Tutorial
+*FileManager*onTutorial.mnemonic:   T
+*FileManager*onVersion.labelString: Product Info
+*FileManager*onVersion.mnemonic:    P
+
+! Error messages
+*FileManager*msg0:	Could not find icon database file: %s .\n As administrator, try typing 'cd /usr/lib/filetype; make'
+*FileManager*msg1:  Could not connect with /usr/etc/fam.
+*FileManager*msg2:	Essential system service famd died. Restart system.
+*FileManager*msg3:	Could not open directory %s. Check permissions.
+*FileManager*msg4:	Could not read directory %s. Check permissions.
+*FileManager*msg5:	Could not access host %s. Check network status.
+*FileManager*msg6:	To save a dumpster file from deletion,\n you must drop it in a directory view.
+*FileManager*msg7:	Can't create new directory. Check permissions.
+*FileManager*msg8:	Can't contact objectserver (%s).\n Device icons will not respond to media insertion and removal.
+*FileManager*cantWatchFmState:  Communication Is Blocked
+*FileManager*cantWatchFmStateMsg: The customization panels cannot communicate with\nthe FileManager.  Please restart the system.
+
+! This is a string attribute of the form:
+	! "<width>['V']<just> <width><just> <width><just>" 
+	! where <width> is an integer pixel field width or '-1' if not fixed, 
+	! ['V'] is an optional flag indicating that the column width should
+	! decrease with nesting level.  <just> is
+	! a single letter indicating justification.
+	! 'L' - left, 'C' - center, 'R' - right
+	! These fields apply to all text and icons.
+
+! XXX: Nuke this when old fm goes away
+*FileManager*labelColumnWidths: -1L -1L 150VL 120R 200L 250L
+
+! International messages
+! Items with a value of "IGNORED" are not put into the desktop popupmenu
+! or the toolchest menu.  Their entries are just placeholders to keep in
+! sync with the dirview selected menu.  The string IGNORED must not be
+! localized, it is strictly used for internal checks and does not
+! appear in the interface.
+!
+*fileManagerIntl.geometryFormat:   =%dx%d+%d+%d
+*fileManagerIntl.versionsFormat1:   %s:%s (ver %s)
+*fileManagerIntl.versionsFormat2:   %s (ver %s)
+*fileManagerIntl.badCommand:       External command: %s not recognized\n
+*fileManagerIntl.t_open:		\"Open\"	     %s  \"open\"\n
+*fileManagerIntl.t_makec:		\"Make Copy\"        %s  \"copy\"\n
+*fileManagerIntl.t_maker:		\"Make Reference\"   %s  \"reference\"\n
+*fileManagerIntl.t_remove:		\"Remove\"           %s  \"remove\"\n
+*fileManagerIntl.t_print:		\"Print\"            %s  \"print\"\n
+*fileManagerIntl.t_share:		IGNORED
+*fileManagerIntl.t_perm:		\"Change Permissions...\"      %s  \"permissions\"\n
+*fileManagerIntl.t_getinfo:	\"Get Info\"         %s  \"get Info\"\n
+*fileManagerIntl.t_startShare:		\"Share with Network...\"          %s  \"startShare\"\n
+*fileManagerIntl.t_stopShare:		\"Stop Sharing...\"          %s  \"stopShare\"\n
+*fileManagerIntl.t_publish:		\"Publish to Outbox...\"          %s  \"publish\"\n
+*fileManagerIntl.t_newdir:		\"Add New Directory\"    %s  \"new directory\"\n
+*fileManagerIntl.t_selectall:	        \"Select All\"     %s  \"select all\"\n
+*fileManagerIntl.t_find:	        \"File QuickFind...\"     %s  \"fetch\"\n
+
+*fileManagerIntl.matchMessage: %d of %d files match these name and contents criteria.
+*fileManagerIntl.quickHelpInfoMessage: \   %d of total %d file(s) shown; last sorted by %s
+
+*fiProgressDialog.messageString: Copy in Progress
+*fiProgressScale.orientation: HORIZONTAL
+*fiProgressScale.showValue: TRUE
+
+*fatalErrorTitle: FileManager Fatal Error
+*errorTitle: FileManager Error
+*warningTitle: FileManager Warning
+
+
+!! For message when book not installed
+*helpSubSys:         desktop_eoe.books.Desktop_UG
+*helpTitle:          Desktop Manager
+
+
+*iconicLayout.labelType: PIXMAP
+*iconicLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/iconicDirView.bm
+*listLayout.labelType: PIXMAP
+*listLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/listDirView.bm
+*columnLayout.labelType: PIXMAP
+*columnLayout.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/columnDirView.bm
+*galleryMode.labelType: PIXMAP
+*galleryMode.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/galleryDirView.bm
+*shelfMode.labelType: PIXMAP
+*shelfMode.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/shelf.bm
+*contentMode.labelType: PIXMAP
+*contentMode.labelPixmap: /usr/include/X11/bitmaps/sgidesktop/contentView.bm
+
+!------------------------------------------------------------------------
+!
+! Layout and contents for the GetInfo dialog
+!
+#include "/usr/lib/X11/app-defaults/ImdGetInfo"
+
+!
+!------------------------------------------------------------------------
+
+! QuickHelp strings
+!   - when specified, these strings are displayed when the pointer
+!     is over the associated widget.
+FileManager*panel*quickHelpText: Click, type, or sweep to select icons
+FileManager*columnLayout.quickHelpText: Displays files in columns
+FileManager*contentMode.quickHelpText: Displays the contents of a selected file
+FileManager*finderSelectionMenu.quickHelpText: Lets you return to a previously accessed view
+FileManager*galleryMode.quickHelpText: Displays image file icons as thumbnails of the images
+FileManager*iconFinderFrame.quickHelpText: Drop in a directory folder, WebJumper, or ftp site icon to view associated files
+FileManager*iconicLayout.quickHelpText: Displays files as icons
+FileManager*listLayout.quickHelpText: Displays files in a list; includes size, date, and permissions for files
+FileManager*menuBar.quickHelpText: Click to go back up the hierarchy
+FileManager*scaleZoom.quickHelpText: Click and drag the wheel to scale icons
+FileManager*shelfMode.quickHelpText: Displays a shelf onto which you can drag frequently used application icons
+FileManager*text.quickHelpText: Type in a directory path, URL, or ftp site to view associated files
+FileManager*zoomBar.quickHelpText: Use this bar to move backward through the directory path hierarchy
+FileManager*filterContentField.quickHelpText: Type text to scan icons.  Example: "Quick Brown Fox"
+FileManager*filterPatternField.quickHelpText: Enter a pattern here to display only matching icons.   Example: "*.html"
+FileManager*filterForm.quickHelpText: Use these controls to constrain the primary viewer contents
+FileManager*showAllToggleButton.quickHelpText: Use these controls to constrain the primary viewer contents
+FileManager*filterContentLabel.quickHelpText: Use these controls to constrain the primary viewer contents
+FileManager*filterLabel.quickHelpText: Use these controls to constrain the primary viewer contents
+FileManager*matchMessageLabel.quickHelpText: Use these controls to constrain the primary viewer contents

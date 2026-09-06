@@ -1,0 +1,42 @@
+! Floppy test from the desktop confidence tests
+!
+*useSchemes:    all
+*sgiMode:       true
+!
+*floppyType0:     unknown floppy type
+*floppyType1:     720KB 3.5 inch, low density floppy
+*floppyType2:     1.44MB 3.5 inch, high density floppy
+*floppyType3:     21MB 3.5 inch, floptical disk
+!
+*Busy: Busy...
+*dialogTitle:         Floppy Confidence Test XX
+*writeMsg: This test will overwrite the floppy disk\n\
+and cannot be interrupted.  Continue?
+*floppyRadio.label.labelString:  Type of floppy?
+*floppyID:            floppy %d,%d
+*floppyRO:            Floppy disk is read-only
+*floppyOpenErr:       Cannot open floppy device
+*floppyNoConn:        Drive not connected
+*floppyNoDev:         Device file not found
+*floppyDevBusy:       Device is busy
+*floppyAccess:        Can't read from device
+*floppyOpenUnknown:   Device open error (errno = %d)
+*floppyMediadBusy:    Mediad busy (returns %d)
+*floppyExclusive:     Getting exclusive access from mediad...
+*floppyCapacity:      This floppy appears to be: %s
+*floppyCanceled:      Test canceled
+*floppyFormatRO:      Format failed - media is read-only
+*floppyFormatBusy:    Format failed - device is busy
+*floppyFormatIOErr:   Format failed - IO error
+*floppyFormatUnknown: Format failed (errno = %d)
+*floppyFormatPass:    Formated successfully
+*floppyFormatDone:    Floppy test was successful
+*floppyCapacity1.labelString:     \ 720KB - (takes aprox 1.5 minutes)
+*floppyCapacity2.labelString:     1.44MB - (takes aprox 1.5 minutes)
+*floppyCapacity3.labelString:     \  21MB - (takes aprox  23 minutes)
+*floppyFormatStart:   Formatting device as %s ...
+*floppyWriteMsg:      Writing %d bytes of random data to disk...
+*floppyWriteErr:      Write to floppy failed (errno = %d)
+*floppyReadBack:      Reading pattern back...
+*floppyReadErr:       Cannot read floppy
+*floppyCompareErr:    Compare error
