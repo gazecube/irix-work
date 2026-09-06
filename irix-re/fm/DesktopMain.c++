@@ -25,6 +25,7 @@
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ struct DesktopState
     BackLayout *layout;
     char userDesktopDir[PATH_MAX];
     char systemDesktopDir[PATH_MAX];
+    char systemDesktopIconDir[PATH_MAX];
 };
 
 static void
@@ -67,6 +69,18 @@ directoryExists(const char *path)
 }
 
 static int
+ensureDirectory(const char *path)
+{
+    if (directoryExists(path))
+        return 1;
+
+    if (mkdir(path, 0700) == 0)
+        return 1;
+
+    return errno == EEXIST && directoryExists(path);
+}
+
+static int
 resolveDesktopDirectories(DesktopState *state)
 {
     const char *home = getenv("HOME");
@@ -84,10 +98,11 @@ resolveDesktopDirectories(DesktopState *state)
      *
      *   desktopdir=$HOME/.desktop-$host
      *   sysdesktopdir=.desktophost/$host
+     *   sysdesktopicondir=$sysdesktopdir/Icons
      *
-     * Xsession runs this state beneath the user's home directory.  Keep both
-     * paths absolute in the host reconstruction so the working directory of
-     * iid-desktop cannot accidentally select the wrong desktop database.
+     * Xsession runs this state beneath the user's home directory. Keep the
+     * host reconstruction absolute so iid-desktop cannot select state from
+     * its launch directory.
      */
     if (snprintf(state->userDesktopDir,
                  sizeof(state->userDesktopDir),
@@ -99,6 +114,45 @@ resolveDesktopDirectories(DesktopState *state)
                  sizeof(state->systemDesktopDir),
                  "%s/.desktophost/%s", home, host) >=
         (int)sizeof(state->systemDesktopDir))
+        return 0;
+
+    if (snprintf(state->systemDesktopIconDir,
+                 sizeof(state->systemDesktopIconDir),
+                 "%s/Icons", state->systemDesktopDir) >=
+        (int)sizeof(state->systemDesktopIconDir))
+        return 0;
+
+    return 1;
+}
+
+static int
+prepareDesktopDirectories(const DesktopState *state)
+{
+    const char *home = getenv("HOME");
+    char desktopHostRoot[PATH_MAX];
+
+    if (!state || !home || !*home)
+        return 0;
+
+    if (snprintf(desktopHostRoot,
+                 sizeof(desktopHostRoot),
+                 "%s/.desktophost", home) >=
+        (int)sizeof(desktopHostRoot))
+        return 0;
+
+    /*
+     * Host seam: the extracted Xsession.dt/bgicons startup path prepares this
+     * state before fm -b. iid-desktop is currently run directly during RE, so
+     * perform that session-owned first-run preparation here to keep the live
+     * desktop testable. This is not attributed to ImdBackWindow itself.
+     */
+    if (!ensureDirectory(state->userDesktopDir))
+        return 0;
+    if (!ensureDirectory(desktopHostRoot))
+        return 0;
+    if (!ensureDirectory(state->systemDesktopDir))
+        return 0;
+    if (!ensureDirectory(state->systemDesktopIconDir))
         return 0;
 
     return 1;
@@ -118,6 +172,10 @@ reportDesktopDirectories(const DesktopState *state)
             "iid-desktop: system desktop directory: %s [%s]\n",
             state->systemDesktopDir,
             directoryExists(state->systemDesktopDir) ? "present" : "missing");
+    fprintf(stderr,
+            "iid-desktop: system icon directory: %s [%s]\n",
+            state->systemDesktopIconDir,
+            directoryExists(state->systemDesktopIconDir) ? "present" : "missing");
 }
 
 static void
@@ -174,6 +232,13 @@ main(int argc, char **argv)
     if (!resolveDesktopDirectories(&state)) {
         fprintf(stderr,
                 "iid-desktop: cannot resolve IRIX host desktop directories\n");
+        return 1;
+    }
+
+    if (!prepareDesktopDirectories(&state)) {
+        fprintf(stderr,
+                "iid-desktop: cannot prepare IRIX host desktop directories: %s\n",
+                strerror(errno));
         return 1;
     }
 
