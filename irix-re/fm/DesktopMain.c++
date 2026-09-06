@@ -3,6 +3,7 @@
  *
  * Binary-proven pieces used here:
  *   - fm background mode constructs ImdBackWindow("backWindow", ...)
+ *   - ImdBackWindow imports ImdModelBasedIconPanel construction directly
  *   - desktop resources live below FileManager*rootShell*panel
  *   - desktop/background layout is BackLayout : ImdIconLayout
  *   - BackLayout operates on an ImdViewPanel and its adopted renderer
@@ -12,12 +13,13 @@
  *     directory and $HOME/.desktophost/$host for system/overlay desktop state
  *
  * The top-level Xt shell below is only a Linux host seam. It is not claimed
- * as the original ImdBackWindow implementation. Desktop model population is
- * intentionally deferred until the constructor/model path is proven.
+ * as the original ImdBackWindow implementation. The panel class itself now
+ * follows the binary-proven desktop construction path.
  */
 
 #include "BackLayout.h"
 #include "ImdIconPanel.h"
+#include "ModelBasedIconPanel.h"
 
 #include <Xm/Xm.h>
 #include <X11/Shell.h>
@@ -38,7 +40,8 @@
 struct DesktopState
 {
     Widget shell;
-    Widget panel;
+    ImdModelBasedIconPanel *panel;
+    Widget panelWidget;
     ImdRenderer *renderer;
     BackLayout *layout;
     char userDesktopDir[PATH_MAX];
@@ -267,16 +270,25 @@ main(int argc, char **argv)
                                    display, NULL, 0);
     sizeToScreen(state.shell);
 
-    state.panel = ImdCreateViewPanel(state.shell,
-                                     (char *)"panel",
-                                     NULL, 0);
-    XtVaSetValues(state.panel,
+    /*
+     * RE: ImdBackWindow imports and constructs ImdModelBasedIconPanel. Keep
+     * the model null only until the desktopContainerDNA -> broker -> getModel
+     * path is brought online; do not fall back to a plain ImdViewPanel here.
+     */
+    state.panel = new ImdModelBasedIconPanel("panel",
+                                             state.shell,
+                                             0,
+                                             0,
+                                             0);
+    state.panelWidget = state.panel->baseWidget();
+
+    XtVaSetValues(state.panelWidget,
                   XtNx, 0,
                   XtNy, 0,
                   XtNwidth, (Dimension)WidthOfScreen(XtScreen(state.shell)),
                   XtNheight, (Dimension)HeightOfScreen(XtScreen(state.shell)),
                   NULL);
-    XtManageChild(state.panel);
+    XtManageChild(state.panelWidget);
 
     /*
      * RE: the background path asks ImdViewPanel for its renderer. Reuse the
@@ -284,18 +296,18 @@ main(int argc, char **argv)
      * icons independently.
      */
     state.renderer = new ImdInvertedTeeRenderer;
-    ImdViewPanelAdoptRenderer(state.panel, state.renderer);
+    ImdViewPanelAdoptRenderer(state.panelWidget, state.renderer);
 
     /* RE: BackLayout derives from ImdIconLayout and owns desktop placement. */
-    state.layout = new BackLayout(state.panel);
-    ImdViewPanelAdoptLayout(state.panel, state.layout);
+    state.layout = new BackLayout(state.panelWidget);
+    ImdViewPanelAdoptLayout(state.panelWidget, state.layout);
 
     XtRealizeWidget(state.shell);
-    publishDesktopWindow(state.panel);
+    publishDesktopWindow(state.panelWidget);
     placeBehindApplications(state.shell);
 
     fprintf(stderr,
-            "iid-desktop: rootShell online behind applications; desktop model population pending binary proof\n");
+            "iid-desktop: model-backed rootShell online behind applications; desktop container model pending\n");
     XtAppMainLoop(app);
     return 0;
 }
