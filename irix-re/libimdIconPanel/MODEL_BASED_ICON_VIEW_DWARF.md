@@ -66,7 +66,33 @@ ImdDNA typeDNA = getType();
 
 The last point is important: despite the method name, the original `getType()` returns an `ImdDNA` value, not a plain string or enum.
 
-## Base ImdIconView label storage - RESOLVED
+## Base ImdIconView state - RESOLVED
+
+Original `ImdIconView::ImdIconView()` at `0x0968412c` initializes:
+
+```
++0x20  0
++0x24  0
++0x28  0
++0x2c  ImdString()
+```
+
+The two pointers at `+0x20` and `+0x24` are the renderer-facing content pointers populated by `ImdModelBasedIconView::createContents()` as described below.
+
+Original `ImdIconView::setFlag(ImdFtrIcon::EIconState, bool)` at `0x0967bd40` performs the exact bit operations:
+
+```
+value == true  -> flags |= mask
+value == false -> flags &= ~mask
+```
+
+Original `ImdIconView::getFlag(ImdFtrIcon::EIconState)` at `0x0967c88c` returns true only when all bits in the requested mask are set:
+
+```
+(flags & mask) == mask
+```
+
+The bitmask is stored at N32 offset `+0x28`.
 
 Original `ImdIconView::getLabel()` at `0x09679d08` copy-constructs an `ImdString` from original object offset `+0x2c`.
 
@@ -124,6 +150,23 @@ if (mode == 4) {
 ```
 
 This is the original model-view label path.
+
+## Broker alternate-name dispatch - RESOLVED
+
+Original `ImdBroker::altNameFromDNA()` is at `0x09741610`, size 228 in `libimdModel.so`.
+
+GOT resolution proves the opening calls are:
+
+```
+ImdString type(dna.type());
+FactoryEntry *entry = _getFactoryEntry(type);
+```
+
+If no factory entry exists, the function returns a copy of `dna.selector()`.
+
+If an entry exists, it dispatches through that factory's virtual `altNameFromDNA(dna)` method and returns the resulting `ImdString`.
+
+This proves that model-view label selection is factory-backed, with selector fallback only when no registered factory exists.
 
 ## getLabel() override - RESOLVED
 
@@ -213,13 +256,40 @@ ImdFtrGalleryX(const ImdFtrType &)
 
 The resulting object is stored at original `ImdModelBasedIconView + 0x20`.
 
-Before storing it, the function calls two virtual operations on the gallery object. One receives the incoming `force` boolean. The other receives the pathname recovered through:
+### Primary gallery configuration virtuals - RESOLVED
+
+Fresh local vtable resolution against original `libimdFtrIcon.so` identifies both virtual calls made immediately after `ImdFtrGalleryX` construction.
+
+The gallery object's SGI vtable is `__vtbl__14ImdFtrGalleryX` at `0x09824570`.
+
+The first call in `createContents()` loads the virtual entry with adjustment at table `+0x6c` and function at `+0x74`. The function pointer is:
+
+```
+0x0980a130  ImdFtrIcon::setGallery(bool)
+```
+
+The argument is the incoming `force` boolean from `createContents(bool)`.
+
+The second call loads the virtual entry with adjustment at table `+0xc0` and function at `+0xc8`. The function pointer is:
+
+```
+0x09809f48  ImdFtrGalleryX::setGalleryFileName(const char *)
+```
+
+The filename passed to it is produced by:
 
 ```
 ImdFileModel::fileNameFromDNA(dna)
 ```
 
-Their exact original virtual method names still need independent vtable resolution before they are named in reconstructed source.
+Therefore the proven primary configuration sequence is:
+
+```
+ImdFtrGalleryX *gallery = new ImdFtrGalleryX(*type);
+gallery->setGallery(force);
+ImdString path = ImdFileModel::fileNameFromDNA(dna);
+gallery->setGalleryFileName(path);
+```
 
 The temporary FTR type is released with `imdFtrFreeIconType()` and the temporary DB with `imdFtrFreeDB()`.
 
@@ -326,12 +396,11 @@ The current desktop host already adopts `ImdInvertedTeeRenderer`, so reconstruct
 
 ## Next hard gates
 
-The original disassembly has now crossed the previous FTR-construction gate. Before implementing full `createContents()` or `update()`, resolve:
+The original disassembly has now crossed the primary FTR configuration gate. Before implementing full `createContents()` or `update()`, resolve:
 
-1. the two `ImdFtrGalleryX` virtuals called immediately after construction;
-2. the original symbolic names for model attributes `0xEFFF00C9`, `0xEFFF00C5`, `0xEFFF00C4`, `0xEFFF00C1`, and `0xEFFF00CD`;
-3. the exact member/flag semantics at original view offsets `+0x34`, `+0x38`, `+0x40`, `+0x48`, and `+0x50`;
-4. the view-panel iterator virtual calls inside `update()`;
-5. the exact `ImdRefModel::kTypeName` string before reproducing constructor type classification with host string literals.
+1. the original symbolic names for model attributes `0xEFFF00C9`, `0xEFFF00C5`, `0xEFFF00C4`, `0xEFFF00C1`, and `0xEFFF00CD`;
+2. the exact member/flag semantics at original view offsets `+0x34`, `+0x38`, `+0x40`, `+0x48`, and `+0x50`;
+3. the view-panel iterator virtual calls inside `update()`;
+4. the exact `ImdRefModel::kTypeName` string before reproducing constructor type classification with host string literals.
 
-The label member, constructor classification algorithm, `getLabel()` behavior, FTR object classes, FTR database/type selection, and `setChildCapabilities()` flag writes are now binary-proven and can be implemented source-level once the corresponding portable base storage is introduced without claiming SGI N32 layout compatibility.
+The base icon-view flag/label semantics, constructor classification algorithm, `getLabel()` behavior, FTR object classes, FTR database/type selection, gallery configuration, and `setChildCapabilities()` flag writes are now binary-proven and can be implemented source-level once the corresponding portable storage is introduced without claiming SGI N32 layout compatibility.
