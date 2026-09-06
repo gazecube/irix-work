@@ -1,0 +1,48 @@
+name: ThumbWheel host event bridge
+
+on:
+  push:
+    paths:
+      - '.github/workflows/thumbwheel-host-event-bridge.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Install host pointer event bridge
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('irix-re/libSgm/ThumbWheel.c')
+          s=p.read_text()
+
+          needle='static int eventCoordinate(const SgThumbWheelRecCompat *, const XEvent *);\n'
+          repl=needle+'static void thumbPointerEH(Widget, XtPointer, XEvent *, Boolean *);\n'
+          if s.count(needle)!=1: raise SystemExit('prototype anchor missing')
+          s=s.replace(needle,repl,1)
+
+          needle='''    XtOverrideTranslations(newWidget,\n                           XtParseTranslationTable(thumbTranslations));\n'''
+          repl=needle+'''\n    /*\n     * RE: MaXX uses the class translation table directly. Some host Xt/Motif\n     * combinations do not reliably dispatch these legacy Btn1 translations\n     * from a reconstructed XmPrimitive subclass, so bridge the same pointer\n     * events into the binary-proven action bodies. This is host glue only.\n     */\n    XtAddEventHandler(newWidget,\n                      ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,\n                      False, thumbPointerEH, NULL);\n'''
+          if s.count(needle)!=1: raise SystemExit('initialize translation anchor missing')
+          s=s.replace(needle,repl,1)
+
+          anchor='''static void\nactionMotion(Widget w, XEvent *e, String *p, Cardinal *n)\n{\n    (void)w; (void)e; (void)p; (void)n;\n}\n'''
+          bridge='''static void\nthumbPointerEH(Widget w, XtPointer closure, XEvent *event, Boolean *cont)\n{\n    Cardinal n = 0;\n\n    (void)closure;\n    (void)cont;\n\n    switch (event->type)\n    {\n    case ButtonPress:\n        if (event->xbutton.button == Button1)\n            actionBtn1Down(w, event, NULL, &n);\n        break;\n    case MotionNotify:\n        if (event->xmotion.state & Button1Mask)\n            actionBtn1Motion(w, event, NULL, &n);\n        else\n            actionMotion(w, event, NULL, &n);\n        break;\n    case ButtonRelease:\n        if (event->xbutton.button == Button1)\n            actionBtn1Up(w, event, NULL, &n);\n        break;\n    default:\n        break;\n    }\n}\n\n'''
+          if s.count(anchor)!=1: raise SystemExit('action anchor missing')
+          s=s.replace(anchor,bridge+anchor,1)
+          p.write_text(s)
+          PY
+      - name: Commit
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/libSgm/ThumbWheel.c
+          git diff --cached --check
+          git commit -m "libSgm: bridge ThumbWheel pointer events on host Xt"
+          git push origin HEAD:irix-re
