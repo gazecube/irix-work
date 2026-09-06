@@ -1,6 +1,11 @@
 #include "htp_gop.h"
 #include <Library/BaseMemoryLib.h>
 
+#include <cursor.h>
+
+extern unsigned char vc1_ptr_bits[];
+extern unsigned char vc1_ptr_ol_bits[];
+
 static VOID
 GopBlankScreen(VOID *Hw, INT32 Mode)
 {
@@ -10,9 +15,6 @@ GopBlankScreen(VOID *Hw, INT32 Mode)
     if (!B || !B->Gop)
         return;
 
-    /* UEFI GOP has no portable DPMS equivalent. Preserve the PROM
-     * blanking contract as closely as possible by blacking the display
-     * when asked to blank; unblanking is satisfied by the next redraw. */
     if (Mode)
         B->Gop->Blt(B->Gop, &Pixel, EfiBltVideoFill,
                     0, 0, 0, 0, B->Width, B->Height, 0);
@@ -111,19 +113,6 @@ GopCmov2i(VOID *Hw, INT32 X, INT32 Y)
     B->CposY = Y;
 }
 
-/*
- * This is the original SGI software textport bitmap walk, taken from the
- * RAD1 framebuffer fallback and adapted only at the final pixel store.
- *
- * Original operation:
- *     *dest = lut_flag;
- *
- * UEFI operation:
- *     GOP Blt of the currently selected palette entry.
- *
- * Keep the SGI x/y origin handling, row order, shorts-per-row traversal,
- * and MSB-first 0x8000 mask semantics intact here.  GOP is only the sink.
- */
 static VOID
 GopDrawBitmap(VOID *Hw, struct htp_bitmap *Bitmap)
 {
@@ -191,14 +180,118 @@ GopInit(VOID *Hw, INT32 *X, INT32 *Y)
 }
 
 static VOID
+GopRestoreCursor(ARCS_GOP_HTP *B)
+{
+    if (!B || !B->Gop || !B->CursorDrawn ||
+        B->CursorSaveW == 0 || B->CursorSaveH == 0)
+        return;
+
+    B->Gop->Blt(B->Gop, B->CursorSave, EfiBltBufferToVideo,
+                0, 0, B->CursorSaveX, B->CursorSaveY,
+                B->CursorSaveW, B->CursorSaveH,
+                B->CursorSaveW * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
+    B->CursorDrawn = FALSE;
+}
+
+static VOID
 GopMoveCursor(VOID *Hw, INT32 X, INT32 Y)
 {
-    /* The historical htp_fncs cursor hook controls the hardware pointer.
-     * UEFI GOP has no cursor primitive; the input port will supply a
-     * software cursor later. */
-    (VOID)Hw;
-    (VOID)X;
-    (VOID)Y;
+    ARCS_GOP_HTP *B = (ARCS_GOP_HTP *)Hw;
+
+    if (!B)
+        return;
+
+    /* SGI hardware backends position the cursor at the requested hotspot.
+     * Restore the old software cursor now, but defer drawing the new one
+     * until after guiCheckMouse() has redrawn hover/press state. */
+    GopRestoreCursor(B);
+    B->CursorX = X;
+    B->CursorY = Y;
+    B->CursorPending = TRUE;
+}
+
+VOID
+ArcsGopCursorRefresh(ARCS_GOP_HTP *B)
+{
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL Red = {0, 0, 0xff, 0};
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL White = {0xff, 0xff, 0xff, 0};
+    INTN Left;
+    INTN Top;
+    INTN X0;
+    INTN Y0;
+    INTN X1;
+    INTN Y1;
+    UINTN W;
+    UINTN H;
+    UINTN Row;
+    UINTN Col;
+
+    if (!B || !B->Gop || !B->CursorPending || B->Width == 0 || B->Height == 0)
+        return;
+
+    GopRestoreCursor(B);
+
+    Left = B->CursorX - tp_ptr_x_hot;
+    Top = B->CursorY - tp_ptr_y_hot;
+
+    X0 = Left < 0 ? 0 : Left;
+    Y0 = Top < 0 ? 0 : Top;
+    X1 = Left + tp_ptr_width;
+    Y1 = Top + tp_ptr_height;
+    if (X1 > (INTN)B->Width) X1 = (INTN)B->Width;
+    if (Y1 > (INTN)B->Height) Y1 = (INTN)B->Height;
+
+    if (X1 <= X0 || Y1 <= Y0) {
+        B->CursorPending = FALSE;
+        return;
+    }
+
+    W = (UINTN)(X1 - X0);
+    H = (UINTN)(Y1 - Y0);
+    B->CursorSaveX = (UINTN)X0;
+    B->CursorSaveY = (UINTN)Y0;
+    B->CursorSaveW = W;
+    B->CursorSaveH = H;
+
+    if (EFI_ERROR(B->Gop->Blt(B->Gop, B->CursorSave, EfiBltVideoToBltBuffer,
+                              B->CursorSaveX, B->CursorSaveY,
+                              0, 0, W, H,
+                              W * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL)))) {
+        B->CursorPending = FALSE;
+        return;
+    }
+
+    /* vc1cursor.c is the original standalone PROM cursor.  Its two masks are
+     * 16 rows of 16 MSB-first pixels.  LIGHT/EXPRESS initialize the pointer
+     * foreground red and the secondary/outline color white. */
+    for (Row = 0; Row < tp_ptr_height; ++Row) {
+        UINT16 Body = ((UINT16)vc1_ptr_bits[Row * 2] << 8) |
+                      (UINT16)vc1_ptr_bits[Row * 2 + 1];
+        UINT16 Outline = ((UINT16)vc1_ptr_ol_bits[Row * 2] << 8) |
+                         (UINT16)vc1_ptr_ol_bits[Row * 2 + 1];
+
+        for (Col = 0; Col < tp_ptr_width; ++Col) {
+            UINT16 Mask = (UINT16)(0x8000U >> Col);
+            INTN PX = Left + (INTN)Col;
+            INTN PY = Top + (INTN)Row;
+            EFI_GRAPHICS_OUTPUT_BLT_PIXEL *Pixel;
+
+            if (PX < X0 || PX >= X1 || PY < Y0 || PY >= Y1)
+                continue;
+
+            Pixel = &B->CursorSave[(UINTN)(PY - Y0) * W + (UINTN)(PX - X0)];
+            if (Outline & Mask)
+                *Pixel = White;
+            if (Body & Mask)
+                *Pixel = Red;
+        }
+    }
+
+    B->Gop->Blt(B->Gop, B->CursorSave, EfiBltBufferToVideo,
+                0, 0, B->CursorSaveX, B->CursorSaveY, W, H,
+                W * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL));
+    B->CursorDrawn = TRUE;
+    B->CursorPending = FALSE;
 }
 
 struct htp_fncs ArcsGopHtpFncs = {
@@ -234,10 +327,6 @@ ArcsGopHtpAttach(
     Htp->hw = Backend;
     Htp->xscreensize = X;
     Htp->yscreensize = Y;
-
-    /* SGI GUI mouse buttons are active-low.  A zero-initialized htp_state
-     * therefore means "all buttons held", which prevents the first real
-     * UEFI pointer transition from being interpreted correctly. */
     Htp->buttons = 0x07;
 
     return EFI_SUCCESS;
