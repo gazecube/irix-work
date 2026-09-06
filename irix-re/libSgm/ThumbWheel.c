@@ -252,7 +252,7 @@ preferredSize(const SgThumbWheelRecCompat *tw, Dimension *width, Dimension *heig
     shortSize = (Dimension)(TW_NATIVE_FACE_SHORT + 2 * (highlight + shadow));
     longSize = (Dimension)(TW_NATIVE_FACE_LONG + 2 * (highlight + shadow));
     if (tw->thumbwheel.show_home_button)
-        longSize = (Dimension)(longSize + TW_HOME_SIZE + 2 * shadow);
+        longSize = (Dimension)(longSize + TW_HOME_SIZE + 2 * shadow + 2 * highlight);
     if (tw->thumbwheel.orientation == XmVERTICAL) {
         *width = shortSize; *height = longSize;
     } else {
@@ -324,10 +324,13 @@ pointInHome(const SgThumbWheelRecCompat *tw, int x, int y)
     int margin = hitMargin(tw);
     if (!tw->thumbwheel.show_home_button) return False;
     controlOrigin(tw, &ox, &oy);
+    /* RE: text+0x50bd..0x50e7 clamps the home origin after the wheel face
+     * plus twice the primitive highlight thickness. This keeps the two
+     * XmeDrawShadows regions adjacent instead of overlapping. */
     if (tw->thumbwheel.orientation == XmVERTICAL)
-        oy += TW_NATIVE_FACE_LONG;
+        oy += TW_NATIVE_FACE_LONG + 2 * margin;
     else
-        ox += TW_NATIVE_FACE_LONG;
+        ox += TW_NATIVE_FACE_LONG + 2 * margin;
     return x >= ox - margin && x <= ox + TW_HOME_SIZE - 1 &&
            y >= oy - margin && y <= oy + TW_HOME_SIZE - 1;
 }
@@ -588,7 +591,7 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     faceWidth = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
     faceHeight = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
     primitiveInsets(tw, &highlight, &shadow);
-    (void)highlight;
+    (void)shadow;
     controlOrigin(tw, &ox, &oy);
     XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
@@ -600,28 +603,35 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
                   (unsigned int)faceWidth, (unsigned int)faceHeight, ox, oy);
 
     /* RE: text+0x5179 copies the 16x122 face, then text+0x520e calls
-     * XmeDrawShadows around it using the primitive shadow thickness. */
+     * XmeDrawShadows around it using the primitive highlight thickness
+     * loaded from +0xd8. */
     drawShadowBox(tw, dpy, win,
-                  ox - shadow, oy - shadow,
-                  faceWidth + 2 * shadow, faceHeight + 2 * shadow,
-                  shadow, False);
+                  ox - highlight, oy - highlight,
+                  faceWidth + 2 * highlight, faceHeight + 2 * highlight,
+                  highlight, False);
 
     if (tw->thumbwheel.show_home_button) {
         int hx = ox, hy = oy;
         Pixmap home;
-        if (tw->thumbwheel.orientation == XmVERTICAL) hy += faceHeight;
-        else hx += faceWidth;
+        /* RE: text+0x50bd..0x50e7 places the home control beyond the
+         * complete wheel shadow box, not directly against the face raster. */
+        if (tw->thumbwheel.orientation == XmVERTICAL)
+            hy += faceHeight + 2 * highlight;
+        else
+            hx += faceWidth + 2 * highlight;
         home = tw->thumbwheel.home_frames[tw->thumbwheel.home_hover ? 1 : 0];
         if (home != None)
             XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
                       TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
 
-        /* RE: text+0x53ba draws the home shadow separately. +0x240 selects
-         * raised vs recessed; the pixmap itself never moves. */
+        /* RE: text+0x532e..0x53ba uses the same +0xd8 thickness around
+         * the home pixmap. +0x240 selects shadow type 8 (raised) or 7
+         * (recessed); the pixmap itself never moves. */
         drawShadowBox(tw, dpy, win,
-                      hx - shadow, hy - shadow,
-                      TW_HOME_SIZE + 2 * shadow, TW_HOME_SIZE + 2 * shadow,
-                      shadow, tw->thumbwheel.home_pressed);
+                      hx - highlight, hy - highlight,
+                      TW_HOME_SIZE + 2 * highlight,
+                      TW_HOME_SIZE + 2 * highlight,
+                      highlight, tw->thumbwheel.home_pressed);
     }
 }
 
