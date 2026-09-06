@@ -17,6 +17,7 @@
   maintenance_menu_bringup.c
   input_bringup.c
   input_diag.c
+  usb_hid_pointer.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
@@ -42,6 +43,7 @@
   gEfiSimplePointerProtocolGuid
   gEfiAbsolutePointerProtocolGuid
   gEfiDevicePathProtocolGuid
+  gEfiUsbIoProtocolGuid
 
 [BuildOptions]
   GCC:*_*_*_CC_FLAGS = -D_LANGUAGE_C -D_STANDALONE
