@@ -1,0 +1,112 @@
+name: ImdIconLayout binary archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/imd-icon-layout-archaeology.yml'
+      - 'irix-re/evidence/shared_objects.tar'
+
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install MIPS binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu
+
+      - name: Extract original libimdIconPanel
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-layout
+          entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdIconPanel.so$' | head -1)"
+          test -n "$entry"
+          echo "archive entry: $entry"
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-layout "$entry"
+          panel="/tmp/imd-layout/$entry"
+          file "$panel"
+          sha256sum "$panel"
+          echo "IMDICONPANEL=$panel" >> "$GITHUB_ENV"
+
+      - name: Recover ImdIconLayout symbols
+        run: |
+          set -eu
+          mips-linux-gnu-readelf -Ws "$IMDICONPANEL" > /tmp/layout-symbols.raw
+          mips-linux-gnu-readelf -Ws "$IMDICONPANEL" | c++filt > /tmp/layout-symbols.txt
+          grep -E 'ImdIconLayout|ImdLayout|ImdViewPanelAdoptLayout' /tmp/layout-symbols.txt | tee /tmp/layout-focused.txt
+
+      - name: Disassemble recovered methods
+        run: |
+          set -eu
+          out=/tmp/layout-disassembly.txt
+          : > "$out"
+          dump_symbol()
+          {
+            sym="$1"
+            line="$(grep -F "$sym" /tmp/layout-symbols.raw | head -1 || true)"
+            if test -z "$line"; then
+              echo "missing symbol: $sym" | tee -a "$out"
+              return
+            fi
+            addr="$(printf '%s\n' "$line" | awk '{print $2}')"
+            size="$(printf '%s\n' "$line" | awk '{print $3}')"
+            start=$((16#$addr))
+            stop=$((start + size))
+            printf '\n===== %s 0x%x size %d =====\n' "$sym" "$start" "$size" | tee -a "$out"
+            mips-linux-gnu-objdump -drC \
+              --start-address="$start" \
+              --stop-address="$stop" \
+              "$IMDICONPANEL" | tee -a "$out"
+          }
+
+          dump_symbol '__ct__13ImdIconLayoutGP10_WidgetRec'
+          dump_symbol '__dt__13ImdIconLayoutGv'
+          dump_symbol 'setSnapToGrid__13ImdIconLayoutGb'
+          dump_symbol 'truncate__13ImdIconLayoutGb'
+          dump_symbol 'setScrollIncrement__13ImdIconLayoutGv'
+          dump_symbol 'initY__13ImdIconLayoutGRl'
+          dump_symbol 'applyMappings__13ImdIconLayoutGR7ImdView'
+          dump_symbol 'addView__13ImdIconLayoutGR7ImdView'
+          dump_symbol 'removeView__13ImdIconLayoutGR7ImdView'
+          dump_symbol 'moveView__13ImdIconLayoutGR7ImdViewlT2'
+          dump_symbol 'fixOverlap__13ImdIconLayoutGR7ImdViewRlT2'
+
+      - name: Recover class strings and DWARF
+        run: |
+          strings -a -t x "$IMDICONPANEL" | grep -Ei 'gridWidth|staggerOffset|minimumRightIconPadding|baseOfIconPadding|topMargin|bottomMargin|leftMargin|rightMargin|overlapLimit|minimumIconWidth|maximumIconWidth|snap|truncate|mapping' > /tmp/layout-strings.txt || true
+          mips-linux-gnu-readelf --debug-dump=info "$IMDICONPANEL" | c++filt | grep -E -A8 -B3 'ImdIconLayout' > /tmp/layout-dwarf.txt || true
+
+      - name: Assemble report
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-layout-report
+          report=/tmp/imd-layout-report/imd-icon-layout-report.txt
+          {
+            echo '===== specimen ====='
+            file "$IMDICONPANEL"
+            sha256sum "$IMDICONPANEL"
+            echo
+            echo '===== symbols ====='
+            cat /tmp/layout-focused.txt
+            echo
+            echo '===== strings ====='
+            cat /tmp/layout-strings.txt
+            echo
+            echo '===== dwarf ====='
+            cat /tmp/layout-dwarf.txt
+            echo
+            echo '===== disassembly ====='
+            cat /tmp/layout-disassembly.txt
+          } > "$report"
+
+      - name: Upload ImdIconLayout archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: imd-icon-layout-archaeology
+          path: /tmp/imd-layout-report/
+          if-no-files-found: error
