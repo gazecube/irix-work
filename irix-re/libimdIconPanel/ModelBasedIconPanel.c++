@@ -1,4 +1,7 @@
 #include "ModelBasedIconPanel.h"
+#include "Model.h"
+
+#include <cstdio>
 
 ImdModelBasedIconPanel::ImdModelBasedIconPanel(
     const char *name,
@@ -7,23 +10,69 @@ ImdModelBasedIconPanel::ImdModelBasedIconPanel(
     Arg *args,
     int count)
     : ImdIconPanel(name, parent, args, count),
-      _model(model)
+      _model(0),
+      _portableChildCount(0)
 {
-    /* the original class builds model views here. defer that work until
-     * the callback and child-enumeration paths have been recovered.
-     */
+    if (model)
+        changeModel(model);
 }
 
 ImdModelBasedIconPanel::~ImdModelBasedIconPanel()
 {
     _model = 0;
+    _portableChildCount = 0;
+}
+
+void
+ImdModelBasedIconPanel::changeModel(ImdModel *model)
+{
+    /*
+     * RE: changeModel(), setModel(), and showChildren() are original exported
+     * methods. The original panel rebuilds its child views while panel changes
+     * are blocked. Keep that ownership/order here while the exact callback
+     * registration body is recovered.
+     */
+    ImdViewPanelBeginBlockChanges(baseWidget());
+    portableResetViews(true);
+    _model = model;
+    _portableChildCount = 0;
+
+    if (_model)
+        showChildren();
+
+    ImdViewPanelEndBlockChanges(baseWidget());
 }
 
 void
 ImdModelBasedIconPanel::setModel(ImdModel *model)
 {
-    /* remember the model. model callbacks are installed by the original
-     * implementation and will be restored with changeModel()/showChildren().
+    changeModel(model);
+}
+
+void
+ImdModelBasedIconPanel::showChildren()
+{
+    if (!_model)
+        return;
+
+    /*
+     * RE: ImdModel's child iterator virtuals and the showChildren() method are
+     * binary-recovered. Enumerate through those original virtual slots now.
+     * ImdModelBasedIconView construction is the next restored seam; do not
+     * synthesize a different view type here.
      */
-    _model = model;
+    void *iterator = _model->createChildIterator();
+    if (!iterator)
+        return;
+
+    for (ImdModel *child = _model->getNextChild(iterator);
+         child;
+         child = _model->getNextChild(iterator))
+        ++_portableChildCount;
+
+    _model->destroyChildIterator(iterator);
+
+    std::fprintf(stderr,
+                 "ImdModelBasedIconPanel: enumerated %u model children\n",
+                 _portableChildCount);
 }
