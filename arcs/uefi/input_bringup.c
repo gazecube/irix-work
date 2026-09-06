@@ -113,10 +113,13 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
     for (;;) {
         BOOLEAN DidWork = FALSE;
+        BOOLEAN AbsoluteWorked = FALSE;
 
-        /* Prefer an absolute device when firmware exposes one (for example
-         * QEMU's USB tablet).  Falling back to Simple Pointer covers normal
-         * relative USB/PS2 mice. */
+        /* Some firmware exposes both Absolute Pointer and Simple Pointer,
+         * but only one of them may actually be wired to the active device.
+         * Prefer absolute events when they are arriving, and otherwise poll
+         * Simple Pointer in the same iteration instead of suppressing it just
+         * because an idle Absolute Pointer protocol happens to exist. */
         if (Absolute && Absolute->GetState && Absolute->Mode) {
             EFI_ABSOLUTE_POINTER_STATE State;
 
@@ -146,9 +149,11 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
                 guiCheckMouse(Dx, Dy, AbsolutePointerButtons(&State));
                 DidWork = TRUE;
+                AbsoluteWorked = TRUE;
             }
         }
-        else if (Simple && Simple->GetState) {
+
+        if (!AbsoluteWorked && Simple && Simple->GetState) {
             EFI_SIMPLE_POINTER_STATE State;
 
             while (!EFI_ERROR(Simple->GetState(Simple, &State))) {
