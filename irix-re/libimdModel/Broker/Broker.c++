@@ -92,7 +92,7 @@ ImdBroker::normalizeDNA(ImdDNA &dna)
     /*
      * Original Broker::normalizeDNA() dispatches to the registered factory
      * for dna.type() and writes the normalized DNA back into the argument.
-     * The Directory selector produced by desktopContainerDNA() is already in
+     * The ImdDirModel selector produced by desktopContainerDNA() is already in
      * the proven canonical file://host/path form, so the first native factory
      * path is identity normalization. Other model classes remain unresolved.
      */
@@ -104,11 +104,15 @@ ImdBroker::createBuiltInModel(const ImdDNA &dna)
 {
     /*
      * Binary-backed architecture: BuiltInFactories registers model factories
-     * by DNA type and getModel() dispatches through that registry. The native
-     * reconstruction starts with the one factory needed by the desktop root:
-     * ImdDirModel::kTypeName == "Directory".
+     * by DNA type and getModel() dispatches through that registry.
+     *
+     * Fresh local static-initialization disassembly proves
+     * ImdDirModel::kTypeName is initialized from
+     * name__9type_info(__T_11ImdDirModel), whose backing name string is
+     * exactly "ImdDirModel". Do not substitute the unrelated user-facing
+     * "Directory" string.
      */
-    if (dna.type() == "Directory")
+    if (dna.type() == "ImdDirModel")
         return new ImdDirModel(dna);
 
     return new ImdModel(dna);
