@@ -1,1 +1,1 @@
-pointer-wait-diag-2026-09-06
+pointer-console-wait-2026-09-06
