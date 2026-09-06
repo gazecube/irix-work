@@ -73,16 +73,54 @@ The constructor at `0x096b111c` writes the following original N32 layout:
 +0x04  byte flag, initialized false
 +0x08  ImdModelBasedIconPanel *
 +0x0c  ImdModelBasedIconView *
-+0x10  ImdModel * (stored from a model virtual call, likely getSelf())
++0x10  ImdModel *
 +0x14  bool constructor parameter
 ```
 
 Object allocation size is exactly 24 bytes.
 
-The constructor registers `receiveNotification` twice through the model's
-callback virtual interface, once with the child-callback selector false and once
-with it true. This matches the recovered `ImdModel::addClientCallback(callback,
-clientData, childCallback)` surface.
+Fresh local disassembly resolves the `+0x10` model assignment. The constructor
+calls the virtual slot corresponding to `ImdModel::getSelf()` through the
+supplied model, then stores that returned pointer at `+0x10`.
+
+The constructor registers `receiveNotification` twice through the stored model's
+`ImdModel::addClientCallback()` virtual slot. The exact calls at the end of the
+constructor are:
+
+```
+model->addClientCallback(receiveNotification, this, false);
+model->addClientCallback(receiveNotification, this, true);
+```
+
+This is not inferred from ordering: the callback address loaded at both call
+sites resolves through the original GOT to `0x0967aaa0`, the exact address of
+`NotifyReceiver::receiveNotification`, and the final boolean argument is first
+zero and then one.
+
+## ImdModel callback registration behavior
+
+Fresh local disassembly of original `libimdModel.so` resolves:
+
+```
+0x09753470  ImdModel::addClientCallback(callback, clientData, childCallback)
+```
+
+The implementation:
+
+1. invokes the model activation virtual before installing the callback;
+2. allocates a 12-byte `CallbackInfo`;
+3. stores callback at `+0x00`, clientData at `+0x04`, and active byte `1` at
+   `+0x08`;
+4. selects `_clientCallbacks` when `childCallback == false` and
+   `_clientChildCallbacks` when `childCallback == true`;
+5. lazily creates the selected callback collection when absent;
+6. inserts the new `CallbackInfo` into that collection;
+7. returns true.
+
+There is no direct invocation of the newly registered callback in
+`addClientCallback()` itself. Any initial model notification therefore comes
+through activation/update/notification behavior, not from an explicit immediate
+callback call at the registration site.
 
 ## View creation site
 
@@ -96,9 +134,71 @@ ImdModelBasedIconView::ImdModelBasedIconView(ImdDNA &, bool)
 ```
 
 The bool is not globally constant. One branch forces it true; another derives it
-from the receiver/model relationship. After construction the view is passed to
-a panel virtual insertion/show path. That virtual target still needs to be
-resolved before assigning an original method name to it.
+from the receiver/model relationship.
+
+### Post-construction insertion virtual - RESOLVED
+
+The previously unresolved panel virtual immediately following view construction
+is now identified exactly from the original `ImdModelBasedIconPanel` vtable.
+
+At the call site in `receiveNotification()`:
+
+```
+panel vptr = *(panel + 0x08)
+this-adjust = *(vptr + 0x9c)
+function    = *(vptr + 0xa4)
+```
+
+The `ImdModelBasedIconPanel` vtable entry at that exact slot contains:
+
+```
+0x09682c90  ImdIconPanel::adoptView(ImdIconView *, ImdIconView *)
+```
+
+The call arguments are:
+
+```
+panel->adoptView(newView, receiverChildView);
+```
+
+where the second argument comes from `NotifyReceiver + 0x0c`. For a root
+receiver that value is null. For a receiver installed by `showChildren(view)`,
+it is the existing parent/anchor view supplied to the receiver constructor.
+
+### ImdIconPanel::adoptView() overload selection - RESOLVED
+
+Fresh local disassembly of `ImdIconPanel::adoptView()` at `0x09682c90` proves
+that the second view argument controls which original ImdViewPanel overload is
+used:
+
+```
+if (secondView != 0)
+    ImdViewPanelAdoptView(baseWidget, newView, secondView);
+else
+    ImdViewPanelAdoptView(baseWidget, newView, this);
+```
+
+The two GOT targets resolve exactly to:
+
+```
+0x096ab1cc  ImdViewPanelAdoptView(Widget, ImdView *, ImdView *)
+0x096ab374  ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
+```
+
+After the ImdViewPanel adoption call, `ImdIconPanel::adoptView()` performs one
+additional panel virtual call on the new view. That follow-up virtual remains to
+be named from the original vtable before reconstruction.
+
+This resolves the critical receive-notification insertion path as:
+
+```
+NotifyReceiver::receiveNotification(...)
+    -> new ImdModelBasedIconView(dna, bool)
+    -> ImdIconPanel::adoptView(newView, receiverChildView)
+       -> ImdViewPanelAdoptView(...)
+```
+
+No parallel desktop-specific insertion path exists in this flow.
 
 ## changeModel lifecycle
 
@@ -114,6 +214,14 @@ Recovered control flow at `0x09685f6c`:
    child view and insert it into the receiver collection.
 8. `baseWidget()`
 9. `ImdViewPanelEndBlockChanges(widget)`
+
+Fresh GOT resolution confirms the iterator calls used here are the original:
+
+```
+ImdViewPanelCreateIterator(...)
+ImdViewPanelGetNext(...)
+ImdViewPanelDestroyIterator(...)
+```
 
 The original implementation does not simply delete every view and enumerate the
 new model's children synchronously.
@@ -140,13 +248,17 @@ and inserts it into the receiver collection, then delegates to
 
 ## Next implementation seam
 
-Reconstruct, in this order:
+The desktop DNA, broker, and live Directory model are now reconstructed enough
+to produce a real root model. The next code must remain gated on the remaining
+binary proof in this order:
 
-1. portable `ImdDNA` value type sufficient for `ImdModelBasedIconView`;
-2. `ImdBroker::contextBroker()`, `getModel()`, and `releaseModel()`;
-3. `NotifyReceiver` registration/removal against `ImdModel` callbacks;
-4. `ImdModelBasedIconView` constructor and DNA ownership;
-5. resolve the panel virtual used after view construction;
-6. restore real ImdViewPanel view adoption/deletion state.
+1. identify the final virtual invoked by `ImdIconPanel::adoptView()` after the
+   ImdViewPanel adoption call;
+2. trace `ImdModel::removeClientCallback()` and the NotifyReceiver destructor
+   so callback lifetime/removal is exact;
+3. trace the root receiver's first activation/notification path far enough to
+   reproduce initial child view creation without synchronous enumeration;
+4. only then implement portable callback collections and NotifyReceiver;
+5. restore real ImdViewPanel view ownership/deletion state.
 
 Do not synthesize a parallel desktop icon type.
