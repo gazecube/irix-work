@@ -1,1 +1,1 @@
-pointer-diag-2026-09-06
+pointer-wait-diag-2026-09-06
