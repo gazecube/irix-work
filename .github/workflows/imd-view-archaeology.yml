@@ -1,0 +1,100 @@
+name: IMD view binary archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/imd-view-archaeology.yml'
+
+jobs:
+  views:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Install MIPS binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu
+
+      - name: Extract original libimdIconPanel
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-view
+          entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdIconPanel.so$' | head -1)"
+          test -n "$entry"
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-view "$entry"
+          panel="/tmp/imd-view/$entry"
+          file "$panel"
+          sha256sum "$panel"
+          echo "IMDICONPANEL=$panel" >> "$GITHUB_ENV"
+
+      - name: Recover symbols
+        run: |
+          set -eu
+          mips-linux-gnu-readelf -Ws "$IMDICONPANEL" > /tmp/view-symbols.raw
+          mips-linux-gnu-readelf -Ws "$IMDICONPANEL" | c++filt > /tmp/view-symbols.txt
+          grep -E 'Imd(ModelBasedIconView|IconView|View|Renderer|IconRenderer|InvertedTeeRenderer|IconPanel|ModelBasedIconPanel)' /tmp/view-symbols.txt > /tmp/view-focused.txt || true
+
+      - name: Disassemble view methods
+        run: |
+          set -eu
+          out=/tmp/view-disassembly.txt
+          : > "$out"
+
+          dump_matching()
+          {
+            regex="$1"
+            grep -E "$regex" /tmp/view-symbols.raw | while read -r num value size type bind vis ndx name; do
+              case "$type" in
+                FUNC) ;;
+                *) continue ;;
+              esac
+              start=$((16#$value))
+              stop=$((start + size))
+              printf '\n===== %s 0x%x size %d =====\n' "$name" "$start" "$size" >> "$out"
+              mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$IMDICONPANEL" >> "$out"
+            done
+          }
+
+          dump_matching '(__ct__|__dt__|set|add|remove|draw|render|select|get|create|move|resize|position|label|contents).*Imd(ModelBasedIconView|IconView|View|InvertedTeeRenderer|IconRenderer)'
+
+      - name: Recover strings and DWARF
+        run: |
+          set -eu
+          strings -a -t x "$IMDICONPANEL" | grep -Ei 'icon(view|renderer)|modelbasediconview|invertedtee|label|selected|position|bounds|contents|pixmap|glyph|draw' > /tmp/view-strings.txt || true
+          mips-linux-gnu-readelf --debug-dump=info "$IMDICONPANEL" | c++filt > /tmp/view-dwarf-full.txt || true
+          grep -E -A22 -B8 'DW_AT_name.*Imd(ModelBasedIconView|IconView|View|InvertedTeeRenderer|IconRenderer)' /tmp/view-dwarf-full.txt > /tmp/view-dwarf.txt || true
+
+      - name: Assemble report
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-view-report
+          report=/tmp/imd-view-report/imd-view-report.txt
+          {
+            echo '===== specimen ====='
+            file "$IMDICONPANEL"
+            sha256sum "$IMDICONPANEL"
+            echo
+            echo '===== symbols ====='
+            cat /tmp/view-focused.txt
+            echo
+            echo '===== strings ====='
+            cat /tmp/view-strings.txt
+            echo
+            echo '===== dwarf ====='
+            cat /tmp/view-dwarf.txt
+            echo
+            echo '===== disassembly ====='
+            cat /tmp/view-disassembly.txt
+          } > "$report"
+
+      - name: Upload IMD view archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: imd-view-archaeology
+          path: /tmp/imd-view-report/
+          if-no-files-found: error
