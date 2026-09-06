@@ -1,6 +1,9 @@
 #ifndef IMD_MODEL_H
 #define IMD_MODEL_H
 
+#include "ImdDNA.h"
+#include "ImdString.h"
+
 /*
  * Reconstructed from IRIX 6.5.0 libimdModel.so symbols, DWARF, vtables,
  * strings, and MIPS disassembly.
@@ -30,8 +33,6 @@
  *   +0x28 SGI C++ vptr for this interface
  */
 
-class ImdDNA;
-class ImdString;
 class ImdAttribute;
 
 template <class T> class ImdCollectionOf;
