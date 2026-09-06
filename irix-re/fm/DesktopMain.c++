@@ -6,6 +6,8 @@
  *   - desktop resources live below FileManager*rootShell*panel
  *   - desktop/background layout is BackLayout : ImdIconLayout
  *   - BackLayout operates on an ImdViewPanel and its adopted renderer
+ *   - fm publishes the desktop child window through
+ *     _SGI_DESKS_DESKTOP_WINDOW on the root window
  *
  * The top-level Xt shell below is only a Linux host seam. It is not claimed
  * as the original ImdBackWindow implementation. Desktop model population is
@@ -18,8 +20,12 @@
 #include <Xm/Xm.h>
 #include <X11/Shell.h>
 #include <X11/StringDefs.h>
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
 
 #include <stdio.h>
+
+#define SGI_DESKTOP_WINDOW_ATOM "_SGI_DESKS_DESKTOP_WINDOW"
 
 struct DesktopState
 {
@@ -42,6 +48,48 @@ sizeToScreen(Widget shell)
                   XtNwidth, width,
                   XtNheight, height,
                   NULL);
+}
+
+static void
+publishDesktopWindow(Widget panel)
+{
+    Display *display = XtDisplay(panel);
+    Window root = RootWindowOfScreen(XtScreen(panel));
+    Window desktop = XtWindow(panel);
+    Atom property = XInternAtom(display, SGI_DESKTOP_WINDOW_ATOM, False);
+
+    if (desktop == None || property == None)
+        return;
+
+    /*
+     * RE: original fm calls setWindowAsProperty(root, desktopChild,
+     * _SGI_DESKS_DESKTOP_WINDOW) during desktop initialization.
+     */
+    XChangeProperty(display,
+                    root,
+                    property,
+                    XA_WINDOW,
+                    32,
+                    PropModeReplace,
+                    (unsigned char *)&desktop,
+                    1);
+}
+
+static void
+placeBehindApplications(Widget shell)
+{
+    Display *display = XtDisplay(shell);
+    Window window = XtWindow(shell);
+
+    if (window == None)
+        return;
+
+    /*
+     * Host seam: the desktop surface occupies screen geometry but belongs at
+     * the bottom of the top-level stack, underneath normal applications.
+     */
+    XLowerWindow(display, window);
+    XFlush(display);
 }
 
 int
@@ -98,8 +146,11 @@ main(int argc, char **argv)
     ImdViewPanelAdoptLayout(state.panel, state.layout);
 
     XtRealizeWidget(state.shell);
+    publishDesktopWindow(state.panel);
+    placeBehindApplications(state.shell);
+
     fprintf(stderr,
-            "iid-desktop: rootShell online; desktop model population pending binary proof\n");
+            "iid-desktop: rootShell online behind applications; desktop model population pending binary proof\n");
     XtAppMainLoop(app);
     return 0;
 }
