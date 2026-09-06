@@ -1,10 +1,12 @@
 #include "DirModel.h"
 
+#include "Attribute.h"
 #include "FileModel.h"
 
 #include <dirent.h>
 #include <string>
 #include <sys/stat.h>
+#include <vector>
 
 namespace {
 
@@ -28,6 +30,73 @@ ImdDirModel::~ImdDirModel()
     for (std::vector<ImdModel *>::iterator it = _children.begin();
          it != _children.end(); ++it)
         delete *it;
+}
+
+bool
+ImdDirModel::addClientCallback(Callback callback,
+                               void *clientData,
+                               bool childCallback)
+{
+    const bool added = ImdModel::addClientCallback(callback,
+                                                   clientData,
+                                                   childCallback);
+    if (!added || !childCallback)
+        return added;
+
+    /*
+     * Binary-backed initial-child notification grammar from
+     * ImdDirModel::addClientCallback() @ 0x09747a84.
+     *
+     * The original temporarily makes the newly registered CallbackInfo the
+     * batch client, emits:
+     *   ImdAttrBool(0xEFFF004B, true)
+     *   ImdAttrDNA (0xEFFF004C, child DNA) for every current child
+     *   ImdAttrBool(0xEFFF004D, true)
+     * then sends that batch only to the registering client.
+     *
+     * The original symbolic names for these three attribute IDs have not yet
+     * been recovered; keep the numeric IDs literal.
+     */
+    ImdAttrBool beginExists(0xEFFF004B, true);
+    ImdAttrBool endExists(0xEFFF004D, true);
+    std::vector<ImdAttrDNA *> childAttributes;
+    std::vector<const ImdAttribute *> batch;
+
+    batch.push_back(&beginExists);
+
+    for (std::vector<ImdModel *>::const_iterator it = _children.begin();
+         it != _children.end(); ++it) {
+        ImdAttrDNA *attribute = new ImdAttrDNA(0xEFFF004C, (*it)->getDNA());
+        childAttributes.push_back(attribute);
+        batch.push_back(attribute);
+    }
+
+    batch.push_back(&endExists);
+
+    callback(getDNA(),
+             batch.empty() ? 0 : &batch[0],
+             static_cast<int>(batch.size()),
+             clientData);
+
+    for (std::vector<ImdAttrDNA *>::iterator it = childAttributes.begin();
+         it != childAttributes.end(); ++it)
+        delete *it;
+
+    /* File-monitor activation on first child client remains to be restored. */
+    return true;
+}
+
+bool
+ImdDirModel::removeClientCallback(Callback callback,
+                                  void *clientData,
+                                  bool childCallback)
+{
+    /*
+     * Original ImdDirModel::removeClientCallback() delegates removal to the
+     * base model and also owns first/last-child-client monitor transitions.
+     * Monitoring is not part of the initial desktop population checkpoint.
+     */
+    return ImdModel::removeClientCallback(callback, clientData, childCallback);
 }
 
 void *
