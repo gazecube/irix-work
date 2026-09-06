@@ -3,6 +3,7 @@
  *
  * Binary-proven pieces used here:
  *   - fm background mode constructs ImdBackWindow("backWindow", ...)
+ *   - desktop resources live below FileManager*rootShell*panel
  *   - desktop/background layout is BackLayout : ImdIconLayout
  *   - BackLayout operates on an ImdViewPanel and its adopted renderer
  *
@@ -61,16 +62,20 @@ main(int argc, char **argv)
     }
 
     /*
-     * RE: "backWindow" is the exact component name passed to the original
-     * ImdBackWindow constructor from FmApp::processArgs() in -b mode.
+     * RE: the original app-defaults address the desktop as
+     * FileManager*rootShell*panel. Use that proven shell name here.
+     *
+     * The override shell class is a host-only compatibility seam so the
+     * runnable background surface is not decorated by the Linux WM while the
+     * exact ImdBackWindow shell construction is still being recovered.
      */
-    state.shell = XtAppCreateShell("backWindow", "FileManager",
-                                   applicationShellWidgetClass,
+    state.shell = XtAppCreateShell("rootShell", "FileManager",
+                                   overrideShellWidgetClass,
                                    display, NULL, 0);
     sizeToScreen(state.shell);
 
     state.panel = ImdCreateViewPanel(state.shell,
-                                     (char *)"backgroundPanel",
+                                     (char *)"panel",
                                      NULL, 0);
     XtVaSetValues(state.panel,
                   XtNx, 0,
@@ -94,7 +99,7 @@ main(int argc, char **argv)
 
     XtRealizeWidget(state.shell);
     fprintf(stderr,
-            "iid-desktop: backWindow online; desktop model population pending binary proof\n");
+            "iid-desktop: rootShell online; desktop model population pending binary proof\n");
     XtAppMainLoop(app);
     return 0;
 }
