@@ -3,8 +3,6 @@
 
 #include "ImdIconPanel.h"
 
-#include <vector>
-
 class ImdModel;
 
 /* ImdModelBasedIconPanel - an icon panel associated with a model.
@@ -42,14 +40,8 @@ public:
     void portableEnumerateModelChildren();
 
 private:
-    class NotifyReceiver;
-
-    void destroyReceivers();
-    void installRootReceiver();
-
     ImdModel *_model;
     unsigned int _portableChildCount;
-    std::vector<NotifyReceiver *> _receivers;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_MODELBASEDICONPANEL_H */
