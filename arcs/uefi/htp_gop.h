@@ -21,9 +21,10 @@ typedef struct {
     UINTN CursorSaveY;
     UINTN CursorSaveW;
     UINTN CursorSaveH;
+    BOOLEAN CursorVisible;
     BOOLEAN CursorDrawn;
-    BOOLEAN CursorPending;
     EFI_GRAPHICS_OUTPUT_BLT_PIXEL CursorSave[16 * 16];
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL CursorComposite[16 * 16];
 } ARCS_GOP_HTP;
 
 extern struct htp_fncs ArcsGopHtpFncs;
