@@ -1,5 +1,6 @@
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/MemoryAllocationLib.h>
 #include <Protocol/SimplePointer.h>
 #include <Protocol/AbsolutePointer.h>
 
@@ -7,6 +8,8 @@
 
 #include "input_bringup.h"
 #include "maintenance_menu_bringup.h"
+
+#define MAX_POINTER_PROTOCOLS 16
 
 static INT32
 ClampCoord(INT32 Value, INT32 Limit)
@@ -66,10 +69,15 @@ AbsolutePointerButtons(const EFI_ABSOLUTE_POINTER_STATE *State)
 EFI_STATUS
 ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 {
-    EFI_SIMPLE_POINTER_PROTOCOL *Simple;
-    EFI_ABSOLUTE_POINTER_PROTOCOL *Absolute;
+    EFI_SIMPLE_POINTER_PROTOCOL *Simple[MAX_POINTER_PROTOCOLS];
+    EFI_ABSOLUTE_POINTER_PROTOCOL *Absolute[MAX_POINTER_PROTOCOLS];
+    EFI_HANDLE *Handles;
     EFI_STATUS Status;
     EFI_INPUT_KEY Key;
+    UINTN SimpleCount;
+    UINTN AbsoluteCount;
+    UINTN HandleCount;
+    UINTN I;
     INT32 CurrentX;
     INT32 CurrentY;
     INT32 Width;
@@ -87,43 +95,77 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     CurrentY = Height / 2;
     _gfxsetms(CurrentX, CurrentY);
 
-    /* Firmware console/pointer drivers can retain state from the boot
-     * manager.  Reset them once before entering the PROM-style polling loop
-     * so the first key/button transition is delivered from a known state. */
     if (SystemTable->ConIn->Reset)
         (VOID)SystemTable->ConIn->Reset(SystemTable->ConIn, FALSE);
 
-    Simple = NULL;
-    Absolute = NULL;
-    (VOID)gBS->LocateProtocol(
+    SimpleCount = 0;
+    AbsoluteCount = 0;
+
+    Handles = NULL;
+    HandleCount = 0;
+    Status = gBS->LocateHandleBuffer(
+        ByProtocol,
         &gEfiAbsolutePointerProtocolGuid,
         NULL,
-        (VOID **)&Absolute
+        &HandleCount,
+        &Handles
         );
-    (VOID)gBS->LocateProtocol(
+    if (!EFI_ERROR(Status)) {
+        for (I = 0; I < HandleCount && AbsoluteCount < MAX_POINTER_PROTOCOLS; ++I) {
+            EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = NULL;
+
+            if (!EFI_ERROR(gBS->HandleProtocol(
+                    Handles[I],
+                    &gEfiAbsolutePointerProtocolGuid,
+                    (VOID **)&Protocol)) && Protocol) {
+                Absolute[AbsoluteCount++] = Protocol;
+                if (Protocol->Reset)
+                    (VOID)Protocol->Reset(Protocol, FALSE);
+            }
+        }
+        FreePool(Handles);
+    }
+
+    Handles = NULL;
+    HandleCount = 0;
+    Status = gBS->LocateHandleBuffer(
+        ByProtocol,
         &gEfiSimplePointerProtocolGuid,
         NULL,
-        (VOID **)&Simple
+        &HandleCount,
+        &Handles
         );
+    if (!EFI_ERROR(Status)) {
+        for (I = 0; I < HandleCount && SimpleCount < MAX_POINTER_PROTOCOLS; ++I) {
+            EFI_SIMPLE_POINTER_PROTOCOL *Protocol = NULL;
 
-    if (Absolute && Absolute->Reset)
-        (VOID)Absolute->Reset(Absolute, FALSE);
-    if (Simple && Simple->Reset)
-        (VOID)Simple->Reset(Simple, FALSE);
+            if (!EFI_ERROR(gBS->HandleProtocol(
+                    Handles[I],
+                    &gEfiSimplePointerProtocolGuid,
+                    (VOID **)&Protocol)) && Protocol) {
+                Simple[SimpleCount++] = Protocol;
+                if (Protocol->Reset)
+                    (VOID)Protocol->Reset(Protocol, FALSE);
+            }
+        }
+        FreePool(Handles);
+    }
 
     for (;;) {
         BOOLEAN DidWork = FALSE;
         BOOLEAN AbsoluteWorked = FALSE;
 
-        /* Some firmware exposes both Absolute Pointer and Simple Pointer,
-         * but only one of them may actually be wired to the active device.
-         * Prefer absolute events when they are arriving, and otherwise poll
-         * Simple Pointer in the same iteration instead of suppressing it just
-         * because an idle Absolute Pointer protocol happens to exist. */
-        if (Absolute && Absolute->GetState && Absolute->Mode) {
+        /* UEFI may publish several instances of a pointer protocol.  Do not
+         * assume LocateProtocol's arbitrary first instance is the active
+         * mouse; poll every discovered Absolute Pointer instance. */
+        for (I = 0; I < AbsoluteCount; ++I) {
+            EFI_ABSOLUTE_POINTER_PROTOCOL *Protocol = Absolute[I];
             EFI_ABSOLUTE_POINTER_STATE State;
 
-            while (!EFI_ERROR(Absolute->GetState(Absolute, &State))) {
+            if (!Protocol || !Protocol->GetState || !Protocol->Mode)
+                continue;
+
+            while (!EFI_ERROR(Protocol->GetState(Protocol, &State))) {
                 INT32 NewX;
                 INT32 NewY;
                 INT32 Dx;
@@ -131,14 +173,14 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
 
                 NewX = (INT32)MapAbsolute(
                     State.CurrentX,
-                    Absolute->Mode->AbsoluteMinX,
-                    Absolute->Mode->AbsoluteMaxX,
+                    Protocol->Mode->AbsoluteMinX,
+                    Protocol->Mode->AbsoluteMaxX,
                     (UINTN)Width
                     );
                 NewY = (INT32)MapAbsolute(
                     State.CurrentY,
-                    Absolute->Mode->AbsoluteMinY,
-                    Absolute->Mode->AbsoluteMaxY,
+                    Protocol->Mode->AbsoluteMinY,
+                    Protocol->Mode->AbsoluteMaxY,
                     (UINTN)Height
                     );
 
@@ -153,17 +195,26 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
             }
         }
 
-        if (!AbsoluteWorked && Simple && Simple->GetState) {
-            EFI_SIMPLE_POINTER_STATE State;
+        /* If no absolute device produced an event, poll every Simple Pointer
+         * instance too.  This covers firmware with multiple mouse/touchpad
+         * handles or a dead first instance. */
+        if (!AbsoluteWorked) {
+            for (I = 0; I < SimpleCount; ++I) {
+                EFI_SIMPLE_POINTER_PROTOCOL *Protocol = Simple[I];
+                EFI_SIMPLE_POINTER_STATE State;
 
-            while (!EFI_ERROR(Simple->GetState(Simple, &State))) {
-                INT32 Dx = State.RelativeMovementX;
-                INT32 Dy = State.RelativeMovementY;
+                if (!Protocol || !Protocol->GetState)
+                    continue;
 
-                guiCheckMouse(Dx, Dy, SimplePointerButtons(&State));
-                CurrentX = ClampCoord(CurrentX + Dx, Width);
-                CurrentY = ClampCoord(CurrentY + Dy, Height);
-                DidWork = TRUE;
+                while (!EFI_ERROR(Protocol->GetState(Protocol, &State))) {
+                    INT32 Dx = State.RelativeMovementX;
+                    INT32 Dy = State.RelativeMovementY;
+
+                    guiCheckMouse(Dx, Dy, SimplePointerButtons(&State));
+                    CurrentX = ClampCoord(CurrentX + Dx, Width);
+                    CurrentY = ClampCoord(CurrentY + Dy, Height);
+                    DidWork = TRUE;
+                }
             }
         }
 
