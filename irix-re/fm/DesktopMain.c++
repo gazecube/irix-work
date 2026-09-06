@@ -16,6 +16,7 @@
 
 #include <Xm/Xm.h>
 #include <X11/Shell.h>
+#include <X11/StringDefs.h>
 
 #include <stdio.h>
 
@@ -35,10 +36,10 @@ sizeToScreen(Widget shell)
     Dimension height = (Dimension)HeightOfScreen(screen);
 
     XtVaSetValues(shell,
-                  XmNx, 0,
-                  XmNy, 0,
-                  XmNwidth, width,
-                  XmNheight, height,
+                  XtNx, 0,
+                  XtNy, 0,
+                  XtNwidth, width,
+                  XtNheight, height,
                   NULL);
 }
 
@@ -46,31 +47,36 @@ int
 main(int argc, char **argv)
 {
     XtAppContext app;
+    Display *display;
     DesktopState state;
 
-    state.shell = XtVaAppInitialize(&app,
-                                    (char *)"FileManager",
-                                    NULL, 0,
-                                    &argc, argv,
-                                    NULL,
-                                    XmNtitle, "Interactive Desktop",
-                                    NULL);
+    XtToolkitInitialize();
+    app = XtCreateApplicationContext();
+    display = XtOpenDisplay(app, NULL,
+                            "backWindow", "FileManager",
+                            NULL, 0, &argc, argv);
+    if (!display) {
+        fprintf(stderr, "iid-desktop: cannot open display\n");
+        return 1;
+    }
 
     /*
      * RE: "backWindow" is the exact component name passed to the original
      * ImdBackWindow constructor from FmApp::processArgs() in -b mode.
      */
-    XtVaSetValues(state.shell, XmNname, "backWindow", NULL);
+    state.shell = XtAppCreateShell("backWindow", "FileManager",
+                                   applicationShellWidgetClass,
+                                   display, NULL, 0);
     sizeToScreen(state.shell);
 
     state.panel = ImdCreateViewPanel(state.shell,
                                      (char *)"backgroundPanel",
                                      NULL, 0);
     XtVaSetValues(state.panel,
-                  XmNx, 0,
-                  XmNy, 0,
-                  XmNwidth, (Dimension)WidthOfScreen(XtScreen(state.shell)),
-                  XmNheight, (Dimension)HeightOfScreen(XtScreen(state.shell)),
+                  XtNx, 0,
+                  XtNy, 0,
+                  XtNwidth, (Dimension)WidthOfScreen(XtScreen(state.shell)),
+                  XtNheight, (Dimension)HeightOfScreen(XtScreen(state.shell)),
                   NULL);
     XtManageChild(state.panel);
 
