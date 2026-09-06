@@ -55,6 +55,7 @@ struct FmState {
     Widget scaleZoom;
     ImdModelBasedIconPanel *dirPanel;
     ImdIconLayout *iconLayout;
+    bool panelResizeActive;
     bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
@@ -603,21 +604,38 @@ panelResizeCB(Widget widget, XtPointer client, XtPointer call)
     Dimension width = 1;
     Dimension height = 1;
 
+    Dimension childWidth = 1;
+    Dimension childHeight = 1;
+
     (void)call;
-    if (!state->list)
+    if (!state->list || state->panelResizeActive)
         return;
 
     XtVaGetValues(widget,
                   XmNwidth, &width,
                   XmNheight, &height,
                   NULL);
+    XtVaGetValues(state->list,
+                  XmNwidth, &childWidth,
+                  XmNheight, &childHeight,
+                  NULL);
+
+    if (childWidth == width && childHeight == height)
+        return;
+
     /*
-     * This callback runs from the parent resize path. XtVaSetValues() on
-     * child geometry re-enters Motif geometry negotiation and recursively
-     * invokes this callback. Configure the child directly as its parent.
+     * bootstrap-only reentrancy guard. The temporary XmList negotiates
+     * geometry through the IMD panel and can synchronously trigger this
+     * callback again while XtVaSetValues() is still on the stack.
      */
-    XtMoveWidget(state->list, 0, 0);
-    XtResizeWidget(state->list, width, height, 0);
+    state->panelResizeActive = true;
+    XtVaSetValues(state->list,
+                  XmNx, 0,
+                  XmNy, 0,
+                  XmNwidth, width,
+                  XmNheight, height,
+                  NULL);
+    state->panelResizeActive = false;
 }
 
 static void
@@ -657,6 +675,7 @@ main(int argc, char **argv)
     state.scaleZoom = 0;
     state.dirPanel = 0;
     state.iconLayout = 0;
+    state.panelResizeActive = false;
     state.showHidden = false;
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
