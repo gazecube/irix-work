@@ -393,9 +393,20 @@ void ImdIconPanel::adoptView(ImdView *view)
     _views.push_back(view);
 }
 
+void ImdIconPanel::portableResetViews(bool destroyViews)
+{
+    if (destroyViews)
+    {
+        for (std::vector<ImdView *>::iterator it = _views.begin();
+             it != _views.end(); ++it)
+            delete *it;
+    }
+    _views.clear();
+}
+
 ImdIconPanel::~ImdIconPanel()
 {
-    _views.clear();
+    portableResetViews(false);
 
     if (_baseWidget)
     {
