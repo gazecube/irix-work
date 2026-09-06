@@ -87,6 +87,12 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     CurrentY = Height / 2;
     _gfxsetms(CurrentX, CurrentY);
 
+    /* Firmware console/pointer drivers can retain state from the boot
+     * manager.  Reset them once before entering the PROM-style polling loop
+     * so the first key/button transition is delivered from a known state. */
+    if (SystemTable->ConIn->Reset)
+        (VOID)SystemTable->ConIn->Reset(SystemTable->ConIn, FALSE);
+
     Simple = NULL;
     Absolute = NULL;
     (VOID)gBS->LocateProtocol(
@@ -99,6 +105,11 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
         NULL,
         (VOID **)&Simple
         );
+
+    if (Absolute && Absolute->Reset)
+        (VOID)Absolute->Reset(Absolute, FALSE);
+    if (Simple && Simple->Reset)
+        (VOID)Simple->Reset(Simple, FALSE);
 
     for (;;) {
         BOOLEAN DidWork = FALSE;
