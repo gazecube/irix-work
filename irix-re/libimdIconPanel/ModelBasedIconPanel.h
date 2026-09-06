@@ -3,7 +3,12 @@
 
 #include "ImdIconPanel.h"
 
+#include <vector>
+
+class ImdAttribute;
+class ImdDNA;
 class ImdModel;
+class ImdModelBasedIconView;
 
 /* ImdModelBasedIconPanel - an icon panel associated with a model.
  *
@@ -27,21 +32,58 @@ public:
     /*
      * Original exported signature:
      *   showChildren__22ImdModelBasedIconPanelGR11ImdIconView
-     *
-     * The argument is an existing icon view. The original implementation uses
-     * that view's DNA to install a NotifyReceiver for the corresponding model;
-     * it is not a zero-argument child-model enumerator.
      */
     void showChildren(ImdIconView &view);
 
-    /* RE: inspection/helpers only; not original public interface. */
+    /* Original exported event-hook methods. */
+    void beginExists();
+    void endExists();
+    void addOrDelete();
+
+    /* RE portable inspection only. */
     ImdModel *portableModel() const { return _model; }
-    unsigned int portableChildCount() const { return _portableChildCount; }
-    void portableEnumerateModelChildren();
+    unsigned int portableReceiverCount() const
+    {
+        return static_cast<unsigned int>(_receivers.size());
+    }
 
 private:
+    class NotifyReceiver
+    {
+    public:
+        NotifyReceiver(ImdModelBasedIconPanel *panel,
+                       ImdModelBasedIconView *view,
+                       ImdModel *model,
+                       bool childCapabilities);
+        ~NotifyReceiver();
+
+        static void receiveNotification(const ImdDNA &dna,
+                                        const ImdAttribute **attributes,
+                                        int attributeCount,
+                                        void *clientData);
+
+    private:
+        /*
+         * Portable source-level storage corresponding to the proven original
+         * fields at N32 +0x08/+0x0c/+0x10/+0x14. The original also has cache
+         * state at +0x00 and a flag byte at +0x04; those are not yet needed by
+         * the initial existence-batch path and are not fabricated here.
+         */
+        ImdModelBasedIconPanel *_panel;
+        ImdModelBasedIconView *_view;
+        ImdModel *_model;
+        bool _childCapabilities;
+    };
+
+    void destroyReceivers();
+
     ImdModel *_model;
-    unsigned int _portableChildCount;
+
+    /*
+     * Portable container only. The original panel owns an
+     * ImdCollectionOf<NotifyReceiver>; this vector does not claim ABI parity.
+     */
+    std::vector<NotifyReceiver *> _receivers;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_MODELBASEDICONPANEL_H */
