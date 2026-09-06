@@ -52,7 +52,7 @@ MapAbsolute(UINT64 Value, UINT64 Min, UINT64 Max, UINTN Pixels)
 static VOID
 ConnectAllControllers(VOID)
 {
-    EFI_HANDLE *AllHandles = NULL;
+    EFI_HANDLE *Handles = NULL;
     UINTN HandleCount = 0;
     UINTN I;
 
@@ -61,13 +61,13 @@ ConnectAllControllers(VOID)
             NULL,
             NULL,
             &HandleCount,
-            &AllHandles)))
+            &Handles)))
         return;
 
     for (I = 0; I < HandleCount; ++I)
-        (VOID)gBS->ConnectController(AllHandles[I], NULL, NULL, TRUE);
+        (VOID)gBS->ConnectController(Handles[I], NULL, NULL, TRUE);
 
-    FreePool(AllHandles);
+    FreePool(Handles);
 }
 
 static UINT8
