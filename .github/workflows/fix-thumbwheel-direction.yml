@@ -1,0 +1,37 @@
+name: Fix ThumbWheel direction
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-thumbwheel-direction.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Match native ThumbWheel drag direction
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('irix-re/libSgm/ThumbWheel.c')
+          s=p.read_text()
+          old='''    coordinate = eventCoordinate(tw, e);\n    delta = coordinate - tw->thumbwheel.press_coordinate;\n    if (tw->thumbwheel.orientation == XmVERTICAL)\n        delta = -delta;\n\n    value = tw->thumbwheel.press_value + delta;\n'''
+          new='''    coordinate = eventCoordinate(tw, e);\n    delta = coordinate - tw->thumbwheel.press_coordinate;\n\n    /*\n     * RE: MaXX x86-64 SgThumbWheel feeds the active-axis coordinate\n     * delta directly into its value mapping.  The earlier vertical sign\n     * inversion made fm's wheel turn opposite to the native control.\n     */\n    value = tw->thumbwheel.press_value + delta;\n'''
+          if s.count(old) != 1:
+              raise SystemExit('direction block not found uniquely')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Commit
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/libSgm/ThumbWheel.c
+          git diff --cached --check
+          git commit -m "libSgm: match ThumbWheel drag direction"
+          git push origin HEAD:irix-re
