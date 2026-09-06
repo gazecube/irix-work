@@ -32,7 +32,13 @@ public:
 class ImdLayout
 {
 public:
+    explicit ImdLayout(Widget widget = 0) : _widget(widget) {}
     virtual ~ImdLayout() {}
+
+    Widget widget() const { return _widget; }
+
+protected:
+    Widget _widget;
 };
 
 class ImdView
