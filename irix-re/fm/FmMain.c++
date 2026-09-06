@@ -2,8 +2,8 @@
  * FmMain.c++ - runnable file manager reconstruction
  *
  * Keep the application useful while the recovered FmApp/FmWindow and IMD
- * panel bodies are brought online.  Widget names and the top-level menu
- * vocabulary in this file follow the recovered FileManager app-defaults.
+ * bodies are brought online. Widget names and control identities are taken
+ * from the preserved fm executable and recovered FileManager app-defaults.
  */
 
 #include "ModelBasedIconPanel.h"
@@ -17,6 +17,7 @@
 #include <Xm/MainW.h>
 #include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
+#include <Xm/Scale.h>
 #include <Xm/ScrolledW.h>
 #include <Xm/Separator.h>
 #include <Xm/TextF.h>
@@ -50,6 +51,7 @@ struct FmState {
     Widget list;
     Widget status;
     Widget panelWidget;
+    Widget scaleZoom;
     ImdModelBasedIconPanel *dirPanel;
     bool showHidden;
     std::string directory;
@@ -57,21 +59,22 @@ struct FmState {
 };
 
 /*
- * These are only fallbacks.  A real FileManager app-default database, when
- * present, remains authoritative because this application now uses the
- * original FileManager application class.
+ * Fallbacks only. A real FileManager app-default database remains
+ * authoritative when installed.
  */
 static String fallbackResources[] = {
     (char *)"FileManager.width: 575",
     (char *)"FileManager.height: 600",
     (char *)"*ApplicationShell.minWidth: 300",
     (char *)"*ApplicationShell.minHeight: 200",
+
     (char *)"*actionsMenu.labelString: Actions",
     (char *)"*fileMenu.labelString: Selected",
     (char *)"*arrangeMenu.labelString: Sort",
     (char *)"*viewMenu.labelString: View",
     (char *)"*optionsMenu.labelString: Options",
     (char *)"*internetMenu.labelString: Internet",
+
     (char *)"*newDirMenuItem.labelString: Add New Directory",
     (char *)"*showFiltersMenuItem.labelString: Search / Filter Files",
     (char *)"*selectAllMenuItem.labelString: Select All",
@@ -100,6 +103,29 @@ static String fallbackResources[] = {
     (char *)"*showContentMenuItem.labelString: Show Content Viewer",
     (char *)"*httpMenuItem.labelString: Icon View of a Web Site",
     (char *)"*ftpMenuItem.labelString: Icon View of an FTP Site",
+
+    /*
+     * Original control names. The real app-defaults replaces these labels
+     * with the recovered pixmaps when those assets are installed.
+     */
+    (char *)"*pathfinder.labelString: Path",
+    (char *)"*iconicLayout.labelString: Icons",
+    (char *)"*listLayout.labelString: List",
+    (char *)"*treeLayout.labelString: Tree",
+    (char *)"*columnLayout.labelString: Columns",
+    (char *)"*galleryMode.labelString: Gallery",
+    (char *)"*shelf.labelString: Shelf",
+
+    (char *)"*rc1.orientation: HORIZONTAL",
+    (char *)"*rc2.orientation: VERTICAL",
+    (char *)"*rc2.packing: PACK_TIGHT",
+    (char *)"*scaleZoom.orientation: VERTICAL",
+    (char *)"*scaleZoom.processingDirection: MAX_ON_TOP",
+    (char *)"*scaleZoom.maximum: 500",
+    (char *)"*scaleZoom.minimum: 60",
+    (char *)"*scaleZoom.value: 100",
+    (char *)"*scaleZoom.showValue: false",
+    (char *)"*scaleZoom.traversalOn: false",
     NULL
 };
 
@@ -127,12 +153,10 @@ canonicalDirectory(const char *path)
 
     if (!path || !*path)
         return std::string();
-
     if (!realpath(path, resolved))
         return std::string();
     if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
         return std::string();
-
     return resolved;
 }
 
@@ -296,10 +320,7 @@ upCB(Widget widget, XtPointer client, XtPointer call)
         return;
 
     slash = state->directory.rfind('/');
-    if (slash == 0)
-        parent = "/";
-    else
-        parent = state->directory.substr(0, slash);
+    parent = (slash == 0) ? "/" : state->directory.substr(0, slash);
     changeDirectory(state, parent.c_str());
 }
 
@@ -307,7 +328,6 @@ static void
 refreshCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-
     (void)widget;
     (void)call;
     populateDirectory(state, state->directory);
@@ -321,7 +341,6 @@ listDefaultActionCB(Widget widget, XtPointer client, XtPointer call)
     int index;
 
     (void)widget;
-
     index = cbs->item_position - 1;
     if (index < 0 || (size_t)index >= state->entries.size())
         return;
@@ -347,9 +366,9 @@ static void
 selectAllCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-
     (void)widget;
     (void)call;
+
     for (size_t i = 0; i < state->entries.size(); ++i)
         XmListSelectPos(state->list, (int)i + 1, False);
 }
@@ -369,7 +388,6 @@ static void
 closeCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-
     (void)widget;
     (void)call;
     XtDestroyWidget(state->shell);
@@ -384,8 +402,48 @@ unimplementedCB(Widget widget, XtPointer client, XtPointer call)
     char text[256];
 
     (void)call;
-    snprintf(text, sizeof(text), "%s is not reconstructed yet", name ? name : "Command");
+    snprintf(text, sizeof(text), "%s is not reconstructed yet",
+             name ? name : "Command");
     setStatus(state, text);
+}
+
+static void
+layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    const char *name = XtName(widget);
+    char text[128];
+
+    (void)call;
+
+    /*
+     * RE: IconicLayout, ListLayout and ColumnLayout are binary-proven
+     * ImdIControlBoard modes. The portable list remains the only populated
+     * view until ImdIconLayout/model view creation is online.
+     */
+    if (name && !strcmp(name, "listLayout")) {
+        populateDirectory(state, state->directory);
+        setStatus(state, "List layout");
+        return;
+    }
+
+    snprintf(text, sizeof(text), "%s layout path is not reconstructed yet",
+             name ? name : "Selected");
+    setStatus(state, text);
+}
+
+static void
+scaleZoomCB(Widget widget, XtPointer client, XtPointer call)
+{
+    FmState *state = (FmState *)client;
+    XmScaleCallbackStruct *cbs = (XmScaleCallbackStruct *)call;
+    float scale = (float)cbs->value / 100.0f;
+    char text[64];
+
+    ImdViewPanelSetScale(state->panelWidget, scale, 0, 0);
+    snprintf(text, sizeof(text), "Icon scale %d%%", cbs->value);
+    setStatus(state, text);
+    (void)widget;
 }
 
 static Widget
@@ -401,9 +459,11 @@ makeMenu(Widget menuBar, const char *name)
 }
 
 static Widget
-makePush(Widget menu, const char *name, XtCallbackProc callback, FmState *state)
+makePush(Widget parent, const char *name,
+         XtCallbackProc callback, FmState *state)
 {
-    Widget item = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass, menu, NULL);
+    Widget item = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass,
+                                          parent, NULL);
     if (callback)
         XtAddCallback(item, XmNactivateCallback, callback, state);
     return item;
@@ -449,10 +509,10 @@ createMenuBar(Widget parent, FmState *state)
     makePush(menu, "sortByTypeMenuItem", unimplementedCB, state);
 
     menu = makeMenu(menuBar, "viewMenu");
-    makePush(menu, "viewAsIconsMenuItem", unimplementedCB, state);
-    makePush(menu, "viewAsListMenuItem", refreshCB, state);
-    makePush(menu, "viewAsColumnsMenuItem", unimplementedCB, state);
-    makePush(menu, "viewAsGalleryMenuItem", unimplementedCB, state);
+    makePush(menu, "viewAsIconsMenuItem", layoutButtonCB, state);
+    makePush(menu, "viewAsListMenuItem", layoutButtonCB, state);
+    makePush(menu, "viewAsColumnsMenuItem", layoutButtonCB, state);
+    makePush(menu, "viewAsGalleryMenuItem", layoutButtonCB, state);
     makeSeparator(menu);
     hidden = XtVaCreateManagedWidget("showHiddenMenuItem",
                                      xmToggleButtonWidgetClass,
@@ -476,6 +536,61 @@ createMenuBar(Widget parent, FmState *state)
 
     XtManageChild(menuBar);
     return menuBar;
+}
+
+static Widget
+createControlBoard(Widget parent, FmState *state)
+{
+    Widget rc1;
+    Widget rc2;
+
+    /*
+     * RE: original fm constructs ImdIControlBoard(Widget, ImdIconPanel &)
+     * and populates it through addButton(). rc1/rc2 orientation and these
+     * child names are recovered from the original FileManager resources.
+     * This Motif shell is temporary until ImdIControlBoard itself is ported.
+     */
+    rc1 = XtVaCreateManagedWidget("rc1",
+                                  xmRowColumnWidgetClass,
+                                  parent,
+                                  XmNorientation, XmHORIZONTAL,
+                                  XmNpacking, XmPACK_TIGHT,
+                                  XmNtopAttachment, XmATTACH_FORM,
+                                  XmNleftAttachment, XmATTACH_FORM,
+                                  XmNbottomAttachment, XmATTACH_FORM,
+                                  NULL);
+
+    rc2 = XtVaCreateManagedWidget("rc2",
+                                  xmRowColumnWidgetClass,
+                                  rc1,
+                                  XmNorientation, XmVERTICAL,
+                                  XmNpacking, XmPACK_TIGHT,
+                                  NULL);
+
+    makePush(rc2, "pathfinder", unimplementedCB, state);
+    makePush(rc2, "iconicLayout", layoutButtonCB, state);
+    makePush(rc2, "listLayout", layoutButtonCB, state);
+    makePush(rc2, "treeLayout", layoutButtonCB, state);
+    makePush(rc2, "columnLayout", layoutButtonCB, state);
+    makePush(rc2, "galleryMode", layoutButtonCB, state);
+    makePush(rc2, "shelf", unimplementedCB, state);
+
+    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
+                                                xmScaleWidgetClass,
+                                                rc1,
+                                                XmNorientation, XmVERTICAL,
+                                                XmNprocessingDirection, XmMAX_ON_TOP,
+                                                XmNminimum, 60,
+                                                XmNmaximum, 500,
+                                                XmNvalue, 100,
+                                                XmNshowValue, False,
+                                                NULL);
+    XtAddCallback(state->scaleZoom, XmNvalueChangedCallback,
+                  scaleZoomCB, state);
+    XtAddCallback(state->scaleZoom, XmNdragCallback,
+                  scaleZoomCB, state);
+
+    return rc1;
 }
 
 static void
@@ -522,7 +637,8 @@ main(int argc, char **argv)
     Widget mainWindow;
     Widget menuBar;
     Widget form;
-    Widget controls;
+    Widget finderForm;
+    Widget controlBoard;
     Widget up;
     Widget refresh;
     Widget scroller;
@@ -534,6 +650,7 @@ main(int argc, char **argv)
     state.list = 0;
     state.status = 0;
     state.panelWidget = 0;
+    state.scaleZoom = 0;
     state.dirPanel = 0;
     state.showHidden = false;
 
@@ -548,78 +665,98 @@ main(int argc, char **argv)
     menuBar = createMenuBar(mainWindow, &state);
 
     form = XtVaCreateManagedWidget("form",
-                                    xmFormWidgetClass,
-                                    mainWindow, NULL);
+                                   xmFormWidgetClass,
+                                   mainWindow, NULL);
 
-    controls = XtVaCreateManagedWidget("rc1",
-                                        xmRowColumnWidgetClass,
-                                        form,
-                                        XmNorientation, XmHORIZONTAL,
-                                        XmNpacking, XmPACK_TIGHT,
-                                        XmNtopAttachment, XmATTACH_FORM,
-                                        XmNleftAttachment, XmATTACH_FORM,
-                                        XmNrightAttachment, XmATTACH_FORM,
-                                        NULL);
+    /*
+     * finderForm/iconFinder are both present in the original binary/resource
+     * hierarchy. The current text field still provides the bootstrap path
+     * navigation function while ImdViewerFinder is reconstructed.
+     */
+    finderForm = XtVaCreateManagedWidget("finderForm",
+                                         xmFormWidgetClass,
+                                         form,
+                                         XmNtopAttachment, XmATTACH_FORM,
+                                         XmNleftAttachment, XmATTACH_FORM,
+                                         XmNrightAttachment, XmATTACH_FORM,
+                                         NULL);
 
-    up = XtVaCreateManagedWidget("Up",
-                                  xmPushButtonWidgetClass,
-                                  controls, NULL);
+    up = XtVaCreateManagedWidget("pathfinder",
+                                 xmPushButtonWidgetClass,
+                                 finderForm,
+                                 XmNtopAttachment, XmATTACH_FORM,
+                                 XmNleftAttachment, XmATTACH_FORM,
+                                 XmNbottomAttachment, XmATTACH_FORM,
+                                 NULL);
+
     refresh = XtVaCreateManagedWidget("Refresh",
-                                       xmPushButtonWidgetClass,
-                                       controls, NULL);
-    state.location = XtVaCreateManagedWidget("location",
+                                      xmPushButtonWidgetClass,
+                                      finderForm,
+                                      XmNtopAttachment, XmATTACH_FORM,
+                                      XmNleftAttachment, XmATTACH_WIDGET,
+                                      XmNleftWidget, up,
+                                      XmNbottomAttachment, XmATTACH_FORM,
+                                      NULL);
+
+    state.location = XtVaCreateManagedWidget("iconFinder",
                                               xmTextFieldWidgetClass,
-                                              controls,
-                                              XmNcolumns, 42,
+                                              finderForm,
+                                              XmNtopAttachment, XmATTACH_FORM,
+                                              XmNleftAttachment, XmATTACH_WIDGET,
+                                              XmNleftWidget, refresh,
+                                              XmNrightAttachment, XmATTACH_FORM,
+                                              XmNbottomAttachment, XmATTACH_FORM,
                                               NULL);
 
     state.status = XtVaCreateManagedWidget("status",
-                                            xmLabelWidgetClass,
-                                            form,
-                                            XmNleftAttachment, XmATTACH_FORM,
-                                            XmNrightAttachment, XmATTACH_FORM,
-                                            XmNbottomAttachment, XmATTACH_FORM,
-                                            XmNalignment, XmALIGNMENT_BEGINNING,
-                                            NULL);
+                                           xmLabelWidgetClass,
+                                           form,
+                                           XmNleftAttachment, XmATTACH_FORM,
+                                           XmNrightAttachment, XmATTACH_FORM,
+                                           XmNbottomAttachment, XmATTACH_FORM,
+                                           XmNalignment, XmALIGNMENT_BEGINNING,
+                                           NULL);
+
+    controlBoard = createControlBoard(form, &state);
+    XtVaSetValues(controlBoard,
+                  XmNtopAttachment, XmATTACH_WIDGET,
+                  XmNtopWidget, finderForm,
+                  XmNbottomAttachment, XmATTACH_WIDGET,
+                  XmNbottomWidget, state.status,
+                  NULL);
 
     scroller = XtVaCreateManagedWidget("scrollW",
-                                        xmScrolledWindowWidgetClass,
-                                        form,
-                                        XmNscrollingPolicy, XmAUTOMATIC,
-                                        XmNtopAttachment, XmATTACH_WIDGET,
-                                        XmNtopWidget, controls,
-                                        XmNleftAttachment, XmATTACH_FORM,
-                                        XmNrightAttachment, XmATTACH_FORM,
-                                        XmNbottomAttachment, XmATTACH_WIDGET,
-                                        XmNbottomWidget, state.status,
-                                        NULL);
+                                       xmScrolledWindowWidgetClass,
+                                       form,
+                                       XmNscrollingPolicy, XmAUTOMATIC,
+                                       XmNtopAttachment, XmATTACH_WIDGET,
+                                       XmNtopWidget, finderForm,
+                                       XmNleftAttachment, XmATTACH_WIDGET,
+                                       XmNleftWidget, controlBoard,
+                                       XmNrightAttachment, XmATTACH_FORM,
+                                       XmNbottomAttachment, XmATTACH_WIDGET,
+                                       XmNbottomWidget, state.status,
+                                       NULL);
 
     /*
      * RE: original fm constructs ImdModelBasedIconPanel in _createPanels(),
-     * stores it at FmWindow +0xa4 and immediately registers it as the
-     * FmMenuActions directory panel.  The portable broker/model path is not
-     * online yet, so the model argument remains null in this bring-up slice.
-     * The working list browser is retained as a child of the real IMD panel
-     * widget instead of occupying the panel slot itself.
+     * stores it at FmWindow +0xa4 and registers it through setDirPanel().
+     * The broker/model path is not online yet, so the temporary list remains
+     * a child of the real reconstructed IMD panel widget.
      */
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
     state.panelWidget = state.dirPanel->baseWidget();
     XtManageChild(state.panelWidget);
 
-    /*
-     * RE: _createPanels() constructs ImdInvertedTeeRenderer and adopts it on
-     * the main panel.  Layout adoption follows when the recovered
-     * ImdIconLayout class is present on the portable side.
-     */
     renderer = new ImdInvertedTeeRenderer;
     ImdViewPanelAdoptRenderer(state.panelWidget, renderer);
 
     state.list = XtVaCreateManagedWidget("directoryList",
-                                          xmListWidgetClass,
-                                          state.panelWidget,
-                                          XmNselectionPolicy, XmEXTENDED_SELECT,
-                                          XmNvisibleItemCount, 18,
-                                          NULL);
+                                         xmListWidgetClass,
+                                         state.panelWidget,
+                                         XmNselectionPolicy, XmEXTENDED_SELECT,
+                                         XmNvisibleItemCount, 18,
+                                         NULL);
     XtAddCallback(state.panelWidget, XmNresizeCallback, panelResizeCB, &state);
 
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
