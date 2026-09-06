@@ -29,7 +29,7 @@ unsigned char sgListClassRec[156];
 unsigned char sgRubberBoardClassRec[224];
 unsigned char sgScrollBarClassRec[156];
 unsigned char sgSpringBoxClassRec[224];
-unsigned char sgThumbWheelClassRec[156];
+/* sgThumbWheelClassRec is now a real native class record. */
 /* sgVisualDrawingAreaClassRec is now a real native class record. */
 unsigned char sgOscClassRec[152];
 unsigned char SgFileSelectionBoxClassRec[236];
