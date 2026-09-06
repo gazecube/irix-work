@@ -14,6 +14,16 @@ typedef struct {
     INTN CposX;
     INTN CposY;
     UINT8 ColorIndex;
+
+    INTN CursorX;
+    INTN CursorY;
+    UINTN CursorSaveX;
+    UINTN CursorSaveY;
+    UINTN CursorSaveW;
+    UINTN CursorSaveH;
+    BOOLEAN CursorDrawn;
+    BOOLEAN CursorPending;
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL CursorSave[16 * 16];
 } ARCS_GOP_HTP;
 
 extern struct htp_fncs ArcsGopHtpFncs;
@@ -23,6 +33,11 @@ ArcsGopHtpAttach(
     ARCS_GOP_HTP *Backend,
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop,
     struct htp_state *Htp
+    );
+
+VOID
+ArcsGopCursorRefresh(
+    ARCS_GOP_HTP *Backend
     );
 
 #endif
