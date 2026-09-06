@@ -71,23 +71,25 @@ typedef struct
 
     /* RE: private host state, names reconstructed from behavior. */
     Boolean button_down;
+    Boolean wheel_hover;
+    Boolean home_hover;
+    Boolean home_pressed;
     int press_coordinate;
     int press_value;
     GC gc;
 
     /*
      * RE: MaXX keeps eight wheel pixmaps at host offsets +0x1b8..+0x1f0,
-     * active forward/reverse frame pointers at +0x1f8/+0x200, two home
-     * pixmaps at +0x210/+0x218, and the copy GC at +0x228.
+     * active bank pointers at +0x1f8/+0x200, hover selector at +0x208,
+     * two home pixmaps at +0x210/+0x218, home hover at +0x220, the copy GC
+     * at +0x228, cached origins at +0x230..+0x23c and home press at +0x240.
      */
     Pixmap wheel_frames[TW_FRAME_COUNT];
     Pixmap home_frames[2];
     GC gray_gc[TW_GRAY_COUNT];
     Pixel gray_pixel[TW_GRAY_COUNT];
     Boolean gray_pixel_owned[TW_GRAY_COUNT];
-    int forward_frame;
-    int reverse_frame;
-    Boolean forward_motion;
+    int active_frame;
     unsigned char render_orientation;
 } SgThumbWheelPartCompat;
 
@@ -142,101 +144,42 @@ static void actionEndLine(Widget, XEvent *, String *, Cardinal *);
 static void setValueInternal(SgThumbWheelRecCompat *, int, int, XEvent *, Boolean);
 static void drawThumbWheel(SgThumbWheelRecCompat *);
 static int eventCoordinate(const SgThumbWheelRecCompat *, const XEvent *);
+static Boolean eventPoint(const XEvent *, int *, int *);
+static Boolean pointInWheel(const SgThumbWheelRecCompat *, int, int);
+static Boolean pointInHome(const SgThumbWheelRecCompat *, int, int);
 static void thumbPointerEH(Widget, XtPointer, XEvent *, Boolean *);
 static void invalidateRenderAssets(SgThumbWheelRecCompat *);
 static void ensureRenderAssets(SgThumbWheelRecCompat *);
 
-/*
- * Original resource table at 0x0b243f20, 11 XtResource entries.
- * The value resource uses an XtRCallProc in IRIX; its callback copies
- * homePosition into value. Initialize performs the same operation portably.
- */
 static XtResource thumbResources[] =
 {
-    {
-        XmNminimum, XmCMinimum, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.minimum),
-        XmRImmediate, (XtPointer)0
-    },
-    {
-        XmNmaximum, XmCMaximum, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.maximum),
-        XmRImmediate, (XtPointer)100
-    },
-    {
-        SgNhomePosition, SgCHomePosition, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.home_position),
-        XmRImmediate, (XtPointer)50
-    },
-    {
-        SgNangleRange, SgCAngleRange, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.angle_range),
-        XmRImmediate, (XtPointer)150
-    },
-    {
-        SgNunitsPerRotation, SgCUnitsPerRotation, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.units_per_rotation),
-        XmRImmediate, (XtPointer)240
-    },
-    {
-        XmNvalue, XmCValue, XmRInt, sizeof(int),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.value),
-        XmRImmediate, (XtPointer)50
-    },
-    {
-        XmNorientation, XmCOrientation, XmROrientation, sizeof(unsigned char),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.orientation),
-        XmRImmediate, (XtPointer)XmVERTICAL
-    },
-    {
-        SgNanimate, SgCAnimate, XmRBoolean, sizeof(Boolean),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.animate),
-        XmRImmediate, (XtPointer)False
-    },
-    {
-        XmNdragCallback, XmCCallback, XmRCallback, sizeof(XtCallbackList),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.drag_callback),
-        XmRCallback, (XtPointer)NULL
-    },
-    {
-        XmNvalueChangedCallback, XmCCallback, XmRCallback, sizeof(XtCallbackList),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.value_changed_callback),
-        XmRCallback, (XtPointer)NULL
-    },
-    {
-        SgNshowHomeButton, SgCShowHomeButton, XmRBoolean, sizeof(Boolean),
-        XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.show_home_button),
-        XmRImmediate, (XtPointer)True
-    }
+    { XmNminimum, XmCMinimum, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.minimum), XmRImmediate, (XtPointer)0 },
+    { XmNmaximum, XmCMaximum, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.maximum), XmRImmediate, (XtPointer)100 },
+    { SgNhomePosition, SgCHomePosition, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.home_position), XmRImmediate, (XtPointer)50 },
+    { SgNangleRange, SgCAngleRange, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.angle_range), XmRImmediate, (XtPointer)150 },
+    { SgNunitsPerRotation, SgCUnitsPerRotation, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.units_per_rotation), XmRImmediate, (XtPointer)240 },
+    { XmNvalue, XmCValue, XmRInt, sizeof(int), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.value), XmRImmediate, (XtPointer)50 },
+    { XmNorientation, XmCOrientation, XmROrientation, sizeof(unsigned char), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.orientation), XmRImmediate, (XtPointer)XmVERTICAL },
+    { SgNanimate, SgCAnimate, XmRBoolean, sizeof(Boolean), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.animate), XmRImmediate, (XtPointer)False },
+    { XmNdragCallback, XmCCallback, XmRCallback, sizeof(XtCallbackList), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.drag_callback), XmRCallback, (XtPointer)NULL },
+    { XmNvalueChangedCallback, XmCCallback, XmRCallback, sizeof(XtCallbackList), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.value_changed_callback), XmRCallback, (XtPointer)NULL },
+    { SgNshowHomeButton, SgCShowHomeButton, XmRBoolean, sizeof(Boolean), XtOffsetOf(SgThumbWheelRecCompat, thumbwheel.show_home_button), XmRImmediate, (XtPointer)True }
 };
 
-/* Exact 21-entry action identity and order recovered from 0x0b244264. */
 static XtActionsRec thumbActions[] =
 {
-    { "Motion", actionMotion },
-    { "Btn1Down", actionBtn1Down },
-    { "Btn2Down", actionBtn2Down },
-    { "Btn3Down", actionBtn3Down },
-    { "Btn1Motion", actionBtn1Motion },
-    { "Btn2Motion", actionBtn2Motion },
-    { "Btn3Motion", actionBtn3Motion },
-    { "Btn1Up", actionBtn1Up },
-    { "Btn2Up", actionBtn2Up },
-    { "Btn3Up", actionBtn3Up },
-    { "Enter", actionEnter },
-    { "Leave", actionLeave },
-    { "PageUp", actionPageUp },
-    { "PageDown", actionPageDown },
-    { "Up", actionUp },
-    { "Down", actionDown },
-    { "Left", actionLeft },
-    { "Right", actionRight },
-    { "Help", actionHelp },
-    { "BeginLine", actionBeginLine },
-    { "EndLine", actionEndLine }
+    { "Motion", actionMotion }, { "Btn1Down", actionBtn1Down },
+    { "Btn2Down", actionBtn2Down }, { "Btn3Down", actionBtn3Down },
+    { "Btn1Motion", actionBtn1Motion }, { "Btn2Motion", actionBtn2Motion },
+    { "Btn3Motion", actionBtn3Motion }, { "Btn1Up", actionBtn1Up },
+    { "Btn2Up", actionBtn2Up }, { "Btn3Up", actionBtn3Up },
+    { "Enter", actionEnter }, { "Leave", actionLeave },
+    { "PageUp", actionPageUp }, { "PageDown", actionPageDown },
+    { "Up", actionUp }, { "Down", actionDown }, { "Left", actionLeft },
+    { "Right", actionRight }, { "Help", actionHelp },
+    { "BeginLine", actionBeginLine }, { "EndLine", actionEndLine }
 };
 
-/* Exact translation string recovered from 0x0b244054. */
 static char thumbTranslations[] =
     "<Motion>:\tMotion() \n"
     " <Btn1Down>:\tBtn1Down() \n"
@@ -263,48 +206,16 @@ static char thumbTranslations[] =
 SgThumbWheelClassRecCompat sgThumbWheelClassRec =
 {
     {
-        (WidgetClass)&xmPrimitiveClassRec,
-        "ThumbWheel",
-        sizeof(SgThumbWheelRecCompat),
-        NULL,
-        NULL,
-        False,
-        thumbInitialize,
-        NULL,
-        XtInheritRealize,
-        thumbActions,
-        XtNumber(thumbActions),
-        thumbResources,
-        XtNumber(thumbResources),
-        NULLQUARK,
-        True,
-        XtExposeCompressMultiple,
-        True,
-        False,
-        thumbDestroy,
-        thumbResize,
-        thumbExpose,
-        thumbSetValues,
-        NULL,
-        XtInheritSetValuesAlmost,
-        NULL,
-        NULL,
-        XtVersion,
-        NULL,
-        thumbTranslations,
-        thumbQueryGeometry,
-        NULL,
-        NULL
+        (WidgetClass)&xmPrimitiveClassRec, "ThumbWheel", sizeof(SgThumbWheelRecCompat),
+        NULL, NULL, False, thumbInitialize, NULL, XtInheritRealize,
+        thumbActions, XtNumber(thumbActions), thumbResources,
+        XtNumber(thumbResources), NULLQUARK, True, XtExposeCompressMultiple,
+        True, False, thumbDestroy, thumbResize, thumbExpose, thumbSetValues,
+        NULL, XtInheritSetValuesAlmost, NULL, NULL, XtVersion, NULL,
+        thumbTranslations, thumbQueryGeometry, NULL, NULL
     },
-    {
-        XmInheritBorderHighlight,
-        XmInheritBorderUnhighlight,
-        XtInheritTranslations,
-        NULL,
-        NULL,
-        0,
-        NULL
-    },
+    { XmInheritBorderHighlight, XmInheritBorderUnhighlight,
+      XtInheritTranslations, NULL, NULL, 0, NULL },
     { NULL }
 };
 
@@ -313,31 +224,76 @@ WidgetClass sgThumbWheelWidgetClass = (WidgetClass)&sgThumbWheelClassRec;
 static int
 clampValue(const SgThumbWheelRecCompat *tw, int value)
 {
-    if (value < tw->thumbwheel.minimum)
-        return tw->thumbwheel.minimum;
-    if (value > tw->thumbwheel.maximum)
-        return tw->thumbwheel.maximum;
+    if (value < tw->thumbwheel.minimum) return tw->thumbwheel.minimum;
+    if (value > tw->thumbwheel.maximum) return tw->thumbwheel.maximum;
     return value;
 }
 
 static void
 preferredSize(const SgThumbWheelRecCompat *tw, Dimension *width, Dimension *height)
 {
-    Dimension longSize = TW_NATIVE_FACE_LONG;
+    Dimension longSize = TW_NATIVE_FACE_LONG +
+        (tw->thumbwheel.show_home_button ? TW_HOME_SIZE : 0);
+    if (tw->thumbwheel.orientation == XmVERTICAL) {
+        *width = TW_NATIVE_FACE_SHORT; *height = longSize;
+    } else {
+        *width = longSize; *height = TW_NATIVE_FACE_SHORT;
+    }
+}
 
-    if (tw->thumbwheel.show_home_button)
-        longSize += TW_HOME_SIZE;
+static void
+controlOrigin(const SgThumbWheelRecCompat *tw, int *x, int *y)
+{
+    Dimension width, height;
+    preferredSize(tw, &width, &height);
+    *x = ((int)tw->core.width - (int)width) / 2;
+    *y = ((int)tw->core.height - (int)height) / 2;
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+}
 
+static Boolean
+eventPoint(const XEvent *event, int *x, int *y)
+{
+    if (!event) return False;
+    switch (event->type) {
+    case ButtonPress:
+    case ButtonRelease:
+        *x = event->xbutton.x; *y = event->xbutton.y; return True;
+    case MotionNotify:
+        *x = event->xmotion.x; *y = event->xmotion.y; return True;
+    case EnterNotify:
+    case LeaveNotify:
+        *x = event->xcrossing.x; *y = event->xcrossing.y; return True;
+    default:
+        return False;
+    }
+}
+
+static Boolean
+pointInWheel(const SgThumbWheelRecCompat *tw, int x, int y)
+{
+    int ox, oy;
+    controlOrigin(tw, &ox, &oy);
     if (tw->thumbwheel.orientation == XmVERTICAL)
-    {
-        *width = TW_NATIVE_FACE_SHORT;
-        *height = longSize;
-    }
+        return x >= ox && x < ox + TW_NATIVE_FACE_SHORT &&
+               y >= oy && y < oy + TW_NATIVE_FACE_LONG;
+    return x >= ox && x < ox + TW_NATIVE_FACE_LONG &&
+           y >= oy && y < oy + TW_NATIVE_FACE_SHORT;
+}
+
+static Boolean
+pointInHome(const SgThumbWheelRecCompat *tw, int x, int y)
+{
+    int ox, oy;
+    if (!tw->thumbwheel.show_home_button) return False;
+    controlOrigin(tw, &ox, &oy);
+    if (tw->thumbwheel.orientation == XmVERTICAL)
+        oy += TW_NATIVE_FACE_LONG;
     else
-    {
-        *width = longSize;
-        *height = TW_NATIVE_FACE_SHORT;
-    }
+        ox += TW_NATIVE_FACE_LONG;
+    return x >= ox && x < ox + TW_HOME_SIZE &&
+           y >= oy && y < oy + TW_HOME_SIZE;
 }
 
 static void
@@ -345,59 +301,44 @@ thumbInitialize(Widget request, Widget newWidget, ArgList args, Cardinal *count)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)newWidget;
     XGCValues values;
-    Dimension preferredWidth;
-    Dimension preferredHeight;
+    Dimension preferredWidth, preferredHeight;
     int i;
-
-    (void)request;
-    (void)args;
-    (void)count;
+    (void)request; (void)args; (void)count;
 
     if (tw->thumbwheel.maximum <= tw->thumbwheel.minimum)
         tw->thumbwheel.maximum = tw->thumbwheel.minimum + 1;
-
     if (tw->thumbwheel.value < tw->thumbwheel.minimum ||
         tw->thumbwheel.value > tw->thumbwheel.maximum)
         tw->thumbwheel.value = clampValue(tw, tw->thumbwheel.home_position);
-
     tw->thumbwheel.home_position = clampValue(tw, tw->thumbwheel.home_position);
     tw->thumbwheel.button_down = False;
+    tw->thumbwheel.wheel_hover = False;
+    tw->thumbwheel.home_hover = False;
+    tw->thumbwheel.home_pressed = False;
     tw->thumbwheel.press_coordinate = 0;
     tw->thumbwheel.press_value = tw->thumbwheel.value;
 
-    XtOverrideTranslations(newWidget,
-                           XtParseTranslationTable(thumbTranslations));
-
-    /* Host glue for OpenMotif legacy Btn1 translation dispatch. */
+    XtOverrideTranslations(newWidget, XtParseTranslationTable(thumbTranslations));
     XtAddEventHandler(newWidget,
                       ButtonPressMask | ButtonReleaseMask | ButtonMotionMask,
                       False, thumbPointerEH, NULL);
 
     preferredSize(tw, &preferredWidth, &preferredHeight);
-    if (tw->core.width == 0)
-        tw->core.width = preferredWidth;
-    if (tw->core.height == 0)
-        tw->core.height = preferredHeight;
+    if (tw->core.width == 0) tw->core.width = preferredWidth;
+    if (tw->core.height == 0) tw->core.height = preferredHeight;
 
     values.foreground = tw->primitive.foreground;
     values.background = tw->core.background_pixel;
-    tw->thumbwheel.gc = XtGetGC(newWidget,
-                                GCForeground | GCBackground,
-                                &values);
-
-    for (i = 0; i < TW_FRAME_COUNT; ++i)
-        tw->thumbwheel.wheel_frames[i] = None;
+    tw->thumbwheel.gc = XtGetGC(newWidget, GCForeground | GCBackground, &values);
+    for (i = 0; i < TW_FRAME_COUNT; ++i) tw->thumbwheel.wheel_frames[i] = None;
     tw->thumbwheel.home_frames[0] = None;
     tw->thumbwheel.home_frames[1] = None;
-    for (i = 0; i < TW_GRAY_COUNT; ++i)
-    {
+    for (i = 0; i < TW_GRAY_COUNT; ++i) {
         tw->thumbwheel.gray_gc[i] = 0;
         tw->thumbwheel.gray_pixel[i] = 0;
         tw->thumbwheel.gray_pixel_owned[i] = False;
     }
-    tw->thumbwheel.forward_frame = 0;
-    tw->thumbwheel.reverse_frame = 4;
-    tw->thumbwheel.forward_motion = True;
+    tw->thumbwheel.active_frame = 0;
     tw->thumbwheel.render_orientation = 0xff;
 }
 
@@ -407,15 +348,10 @@ freeGrayRamp(SgThumbWheelRecCompat *tw)
     Display *dpy = XtDisplay((Widget)tw);
     Colormap cmap = tw->core.colormap;
     int i;
-
-    for (i = 0; i < TW_GRAY_COUNT; ++i)
-    {
-        if (tw->thumbwheel.gray_gc[i])
-            XtReleaseGC((Widget)tw, tw->thumbwheel.gray_gc[i]);
+    for (i = 0; i < TW_GRAY_COUNT; ++i) {
+        if (tw->thumbwheel.gray_gc[i]) XtReleaseGC((Widget)tw, tw->thumbwheel.gray_gc[i]);
         tw->thumbwheel.gray_gc[i] = 0;
-
-        if (tw->thumbwheel.gray_pixel_owned[i])
-        {
+        if (tw->thumbwheel.gray_pixel_owned[i]) {
             unsigned long pixel = tw->thumbwheel.gray_pixel[i];
             XFreeColors(dpy, cmap, &pixel, 1, 0);
         }
@@ -428,21 +364,14 @@ invalidateRenderAssets(SgThumbWheelRecCompat *tw)
 {
     Display *dpy = XtDisplay((Widget)tw);
     int i;
-
-    for (i = 0; i < TW_FRAME_COUNT; ++i)
-    {
-        if (tw->thumbwheel.wheel_frames[i] != None)
-            XFreePixmap(dpy, tw->thumbwheel.wheel_frames[i]);
+    for (i = 0; i < TW_FRAME_COUNT; ++i) {
+        if (tw->thumbwheel.wheel_frames[i] != None) XFreePixmap(dpy, tw->thumbwheel.wheel_frames[i]);
         tw->thumbwheel.wheel_frames[i] = None;
     }
-
-    for (i = 0; i < 2; ++i)
-    {
-        if (tw->thumbwheel.home_frames[i] != None)
-            XFreePixmap(dpy, tw->thumbwheel.home_frames[i]);
+    for (i = 0; i < 2; ++i) {
+        if (tw->thumbwheel.home_frames[i] != None) XFreePixmap(dpy, tw->thumbwheel.home_frames[i]);
         tw->thumbwheel.home_frames[i] = None;
     }
-
     tw->thumbwheel.render_orientation = 0xff;
 }
 
@@ -450,79 +379,48 @@ static void
 thumbDestroy(Widget widget)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
-
-    invalidateRenderAssets(tw);
-    freeGrayRamp(tw);
-    if (tw->thumbwheel.gc)
-        XtReleaseGC(widget, tw->thumbwheel.gc);
+    invalidateRenderAssets(tw); freeGrayRamp(tw);
+    if (tw->thumbwheel.gc) XtReleaseGC(widget, tw->thumbwheel.gc);
     tw->thumbwheel.gc = 0;
 }
 
-static void
-thumbResize(Widget widget)
-{
-    drawThumbWheel((SgThumbWheelRecCompat *)widget);
-}
-
-static void
-thumbExpose(Widget widget, XEvent *event, Region region)
-{
-    (void)event;
-    (void)region;
-    drawThumbWheel((SgThumbWheelRecCompat *)widget);
-}
+static void thumbResize(Widget widget) { drawThumbWheel((SgThumbWheelRecCompat *)widget); }
+static void thumbExpose(Widget widget, XEvent *event, Region region)
+{ (void)event; (void)region; drawThumbWheel((SgThumbWheelRecCompat *)widget); }
 
 static Boolean
-thumbSetValues(Widget oldWidget, Widget requestWidget, Widget newWidget,
-               ArgList args, Cardinal *count)
+thumbSetValues(Widget oldWidget, Widget requestWidget, Widget newWidget, ArgList args, Cardinal *count)
 {
     SgThumbWheelRecCompat *oldTw = (SgThumbWheelRecCompat *)oldWidget;
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)newWidget;
     Boolean redraw = False;
-
-    (void)requestWidget;
-    (void)args;
-    (void)count;
-
+    (void)requestWidget; (void)args; (void)count;
     if (tw->thumbwheel.maximum <= tw->thumbwheel.minimum)
         tw->thumbwheel.maximum = tw->thumbwheel.minimum + 1;
-
     tw->thumbwheel.home_position = clampValue(tw, tw->thumbwheel.home_position);
     tw->thumbwheel.value = clampValue(tw, tw->thumbwheel.value);
-
     if (oldTw->thumbwheel.orientation != tw->thumbwheel.orientation)
         invalidateRenderAssets(tw);
-
     if (oldTw->thumbwheel.value != tw->thumbwheel.value ||
         oldTw->thumbwheel.minimum != tw->thumbwheel.minimum ||
         oldTw->thumbwheel.maximum != tw->thumbwheel.maximum ||
         oldTw->thumbwheel.orientation != tw->thumbwheel.orientation ||
         oldTw->thumbwheel.show_home_button != tw->thumbwheel.show_home_button)
         redraw = True;
-
     return redraw;
 }
 
 static XtGeometryResult
-thumbQueryGeometry(Widget widget, XtWidgetGeometry *intended,
-                   XtWidgetGeometry *preferred)
+thumbQueryGeometry(Widget widget, XtWidgetGeometry *intended, XtWidgetGeometry *preferred)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
-    Dimension pw;
-    Dimension ph;
-
+    Dimension pw, ph;
     preferredSize(tw, &pw, &ph);
-
     preferred->request_mode = CWWidth | CWHeight;
-    preferred->width = pw;
-    preferred->height = ph;
-
-    if (intended &&
-        (intended->request_mode & (CWWidth | CWHeight)) == (CWWidth | CWHeight) &&
-        intended->width == pw && intended->height == ph)
-        return XtGeometryYes;
-    if (widget->core.width == pw && widget->core.height == ph)
-        return XtGeometryNo;
+    preferred->width = pw; preferred->height = ph;
+    if (intended && (intended->request_mode & (CWWidth | CWHeight)) == (CWWidth | CWHeight) &&
+        intended->width == pw && intended->height == ph) return XtGeometryYes;
+    if (widget->core.width == pw && widget->core.height == ph) return XtGeometryNo;
     return XtGeometryAlmost;
 }
 
@@ -533,38 +431,23 @@ ensureGrayRamp(SgThumbWheelRecCompat *tw)
     Colormap cmap = tw->core.colormap;
     XGCValues values;
     int i;
-
-    if (tw->thumbwheel.gray_gc[0])
-        return;
-
-    for (i = 0; i < TW_GRAY_COUNT; ++i)
-    {
+    if (tw->thumbwheel.gray_gc[0]) return;
+    for (i = 0; i < TW_GRAY_COUNT; ++i) {
         XColor color;
         unsigned short level = (unsigned short)(sgThumbWheelGrayRamp[i] * 257u);
-
         memset(&color, 0, sizeof(color));
-        color.red = level;
-        color.green = level;
-        color.blue = level;
+        color.red = color.green = color.blue = level;
         color.flags = DoRed | DoGreen | DoBlue;
-
-        if (XAllocColor(dpy, cmap, &color))
-        {
+        if (XAllocColor(dpy, cmap, &color)) {
             tw->thumbwheel.gray_pixel[i] = color.pixel;
             tw->thumbwheel.gray_pixel_owned[i] = True;
-        }
-        else
-        {
+        } else {
             tw->thumbwheel.gray_pixel[i] = (i < (TW_GRAY_COUNT / 2))
-                ? tw->primitive.bottom_shadow_color
-                : tw->primitive.top_shadow_color;
+                ? tw->primitive.bottom_shadow_color : tw->primitive.top_shadow_color;
         }
-
         values.foreground = tw->thumbwheel.gray_pixel[i];
         values.background = tw->core.background_pixel;
-        tw->thumbwheel.gray_gc[i] = XtGetGC((Widget)tw,
-                                            GCForeground | GCBackground,
-                                            &values);
+        tw->thumbwheel.gray_gc[i] = XtGetGC((Widget)tw, GCForeground | GCBackground, &values);
     }
 }
 
@@ -573,57 +456,40 @@ replayNativeFrame(SgThumbWheelRecCompat *tw, Drawable d, int frameIndex)
 {
     const SgThumbWheelRasterFrame *frame = &sgThumbWheelVerticalFrames[frameIndex];
     Display *dpy = XtDisplay((Widget)tw);
-    GC fill = tw->thumbwheel.gc;
-    unsigned int width = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
-    unsigned int height = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    unsigned int width = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    unsigned int height = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
     unsigned short i;
-
-    XSetForeground(dpy, fill, tw->core.background_pixel);
-    XFillRectangle(dpy, d, fill, 0, 0, width, height);
-
-    for (i = 0; i < frame->count; ++i)
-    {
+    XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
+    XFillRectangle(dpy, d, tw->thumbwheel.gc, 0, 0, width, height);
+    for (i = 0; i < frame->count; ++i) {
         const unsigned char *op = frame->ops + (i * 5u);
         unsigned int gray = op[0];
-        int x1 = op[1];
-        int y1 = op[2];
-        int x2 = op[3];
-        int y2 = op[4];
-
-        if (gray >= TW_GRAY_COUNT)
-            continue;
-
+        int x1 = op[1], y1 = op[2], x2 = op[3], y2 = op[4];
+        if (gray >= TW_GRAY_COUNT) continue;
         if (tw->thumbwheel.orientation == XmVERTICAL)
-            XDrawLine(dpy, d, tw->thumbwheel.gray_gc[gray],
-                      x1, y1, x2, y2);
+            XDrawLine(dpy, d, tw->thumbwheel.gray_gc[gray], x1, y1, x2, y2);
         else
-            XDrawLine(dpy, d, tw->thumbwheel.gray_gc[gray],
-                      y1, x1, y2, x2);
+            XDrawLine(dpy, d, tw->thumbwheel.gray_gc[gray], y1, x1, y2, x2);
     }
 }
 
 static void
-drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean pressed)
+drawHomeFrame(SgThumbWheelRecCompat *tw, Drawable d, Boolean hover)
 {
     Display *dpy = XtDisplay((Widget)tw);
     GC gc = tw->thumbwheel.gc;
-    GC top = pressed ? tw->primitive.bottom_shadow_GC
-                     : tw->primitive.top_shadow_GC;
-    GC bottom = pressed ? tw->primitive.top_shadow_GC
-                        : tw->primitive.bottom_shadow_GC;
-
+    GC top = tw->primitive.top_shadow_GC;
+    GC bottom = tw->primitive.bottom_shadow_GC;
     XSetForeground(dpy, gc, tw->core.background_pixel);
     XFillRectangle(dpy, d, gc, 0, 0, TW_HOME_SIZE, TW_HOME_SIZE);
-
     XDrawLine(dpy, d, top, 0, 0, TW_HOME_SIZE - 1, 0);
     XDrawLine(dpy, d, top, 0, 0, 0, TW_HOME_SIZE - 1);
-    XDrawLine(dpy, d, bottom,
-              0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
-    XDrawLine(dpy, d, bottom,
-              TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
-
+    XDrawLine(dpy, d, bottom, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
+    XDrawLine(dpy, d, bottom, TW_HOME_SIZE - 1, 0, TW_HOME_SIZE - 1, TW_HOME_SIZE - 1);
+    if (hover) {
+        XDrawLine(dpy, d, top, 1, 1, TW_HOME_SIZE - 2, 1);
+        XDrawLine(dpy, d, top, 1, 1, 1, TW_HOME_SIZE - 2);
+    }
     XSetForeground(dpy, gc, tw->primitive.foreground);
     if (tw->thumbwheel.orientation == XmVERTICAL)
         XFillRectangle(dpy, d, gc, 7, 5, 2, 6);
@@ -636,42 +502,23 @@ ensureRenderAssets(SgThumbWheelRecCompat *tw)
 {
     Display *dpy;
     Window win;
-    unsigned int width;
-    unsigned int height;
+    unsigned int width, height;
     int i;
-
-    if (!XtIsRealized((Widget)tw))
-        return;
-
+    if (!XtIsRealized((Widget)tw)) return;
     if (tw->thumbwheel.wheel_frames[0] != None &&
-        tw->thumbwheel.render_orientation == tw->thumbwheel.orientation)
-        return;
-
-    invalidateRenderAssets(tw);
-    ensureGrayRamp(tw);
-
-    dpy = XtDisplay((Widget)tw);
-    win = XtWindow((Widget)tw);
-    width = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
-    height = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
-
-    for (i = 0; i < TW_FRAME_COUNT; ++i)
-    {
-        tw->thumbwheel.wheel_frames[i] = XCreatePixmap(
-            dpy, win, width, height, (unsigned int)tw->core.depth);
+        tw->thumbwheel.render_orientation == tw->thumbwheel.orientation) return;
+    invalidateRenderAssets(tw); ensureGrayRamp(tw);
+    dpy = XtDisplay((Widget)tw); win = XtWindow((Widget)tw);
+    width = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    height = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    for (i = 0; i < TW_FRAME_COUNT; ++i) {
+        tw->thumbwheel.wheel_frames[i] = XCreatePixmap(dpy, win, width, height, (unsigned int)tw->core.depth);
         replayNativeFrame(tw, tw->thumbwheel.wheel_frames[i], i);
     }
-
-    for (i = 0; i < 2; ++i)
-    {
-        tw->thumbwheel.home_frames[i] = XCreatePixmap(
-            dpy, win, TW_HOME_SIZE, TW_HOME_SIZE,
-            (unsigned int)tw->core.depth);
+    for (i = 0; i < 2; ++i) {
+        tw->thumbwheel.home_frames[i] = XCreatePixmap(dpy, win, TW_HOME_SIZE, TW_HOME_SIZE, (unsigned int)tw->core.depth);
         drawHomeFrame(tw, tw->thumbwheel.home_frames[i], i != 0);
     }
-
     tw->thumbwheel.render_orientation = tw->thumbwheel.orientation;
 }
 
@@ -681,92 +528,55 @@ drawThumbWheel(SgThumbWheelRecCompat *tw)
     Display *dpy;
     Window win;
     Pixmap frame;
-    int faceWidth;
-    int faceHeight;
-    int controlWidth;
-    int controlHeight;
-    int controlX;
-    int controlY;
-    int faceX;
-    int faceY;
-
-    if (!XtIsRealized((Widget)tw))
-        return;
-
+    int ox, oy, faceWidth, faceHeight;
+    if (!XtIsRealized((Widget)tw)) return;
     ensureRenderAssets(tw);
-
-    dpy = XtDisplay((Widget)tw);
-    win = XtWindow((Widget)tw);
-    faceWidth = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
-    faceHeight = (tw->thumbwheel.orientation == XmVERTICAL)
-        ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
-
-    controlWidth = faceWidth;
-    controlHeight = faceHeight;
-    if (tw->thumbwheel.show_home_button)
-    {
-        if (tw->thumbwheel.orientation == XmVERTICAL)
-            controlHeight += TW_HOME_SIZE;
-        else
-            controlWidth += TW_HOME_SIZE;
-    }
-
-    controlX = ((int)tw->core.width - controlWidth) / 2;
-    controlY = ((int)tw->core.height - controlHeight) / 2;
-    if (controlX < 0) controlX = 0;
-    if (controlY < 0) controlY = 0;
-
-    faceX = controlX;
-    faceY = controlY;
-
+    dpy = XtDisplay((Widget)tw); win = XtWindow((Widget)tw);
+    faceWidth = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_SHORT : TW_NATIVE_FACE_LONG;
+    faceHeight = (tw->thumbwheel.orientation == XmVERTICAL) ? TW_NATIVE_FACE_LONG : TW_NATIVE_FACE_SHORT;
+    controlOrigin(tw, &ox, &oy);
     XSetForeground(dpy, tw->thumbwheel.gc, tw->core.background_pixel);
     XFillRectangle(dpy, win, tw->thumbwheel.gc, 0, 0,
-                   (unsigned int)tw->core.width,
-                   (unsigned int)tw->core.height);
+                   (unsigned int)tw->core.width, (unsigned int)tw->core.height);
 
-    frame = tw->thumbwheel.forward_motion
-        ? tw->thumbwheel.wheel_frames[tw->thumbwheel.forward_frame]
-        : tw->thumbwheel.wheel_frames[tw->thumbwheel.reverse_frame];
-
+    /* RE: +0x208 selects which four-frame bank is visible; both banks use
+     * the same active frame index and are advanced together by text+0x1940. */
+    frame = tw->thumbwheel.wheel_frames[(tw->thumbwheel.wheel_hover ? 4 : 0) + tw->thumbwheel.active_frame];
     if (frame != None)
-        XCopyArea(dpy, frame, win, tw->thumbwheel.gc,
-                  0, 0, (unsigned int)faceWidth, (unsigned int)faceHeight,
-                  faceX, faceY);
+        XCopyArea(dpy, frame, win, tw->thumbwheel.gc, 0, 0,
+                  (unsigned int)faceWidth, (unsigned int)faceHeight, ox, oy);
 
-    if (tw->thumbwheel.show_home_button &&
-        tw->thumbwheel.home_frames[0] != None)
-    {
-        int x;
-        int y;
+    if (tw->thumbwheel.show_home_button) {
+        int hx = ox, hy = oy;
+        Pixmap home;
+        if (tw->thumbwheel.orientation == XmVERTICAL) hy += faceHeight;
+        else hx += faceWidth;
+        home = tw->thumbwheel.home_frames[tw->thumbwheel.home_hover ? 1 : 0];
+        if (home != None)
+            XCopyArea(dpy, home, win, tw->thumbwheel.gc, 0, 0,
+                      TW_HOME_SIZE, TW_HOME_SIZE, hx, hy);
 
-        if (tw->thumbwheel.orientation == XmVERTICAL)
-        {
-            x = controlX;
-            y = controlY + faceHeight;
+        /* RE: +0x240 is the separate armed state. Native Btn1Down/Up draws
+         * the home control shadow in/out without changing the hover pixmap. */
+        if (tw->thumbwheel.home_pressed) {
+            GC top = tw->primitive.bottom_shadow_GC;
+            GC bottom = tw->primitive.top_shadow_GC;
+            XDrawLine(dpy, win, top, hx, hy, hx + TW_HOME_SIZE - 1, hy);
+            XDrawLine(dpy, win, top, hx, hy, hx, hy + TW_HOME_SIZE - 1);
+            XDrawLine(dpy, win, bottom, hx, hy + TW_HOME_SIZE - 1,
+                      hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
+            XDrawLine(dpy, win, bottom, hx + TW_HOME_SIZE - 1, hy,
+                      hx + TW_HOME_SIZE - 1, hy + TW_HOME_SIZE - 1);
         }
-        else
-        {
-            x = controlX + faceWidth;
-            y = controlY;
-        }
-
-        XCopyArea(dpy, tw->thumbwheel.home_frames[0], win,
-                  tw->thumbwheel.gc,
-                  0, 0, TW_HOME_SIZE, TW_HOME_SIZE, x, y);
     }
 }
 
 static void
-callThumbCallback(SgThumbWheelRecCompat *tw, XtCallbackList list,
-                  int reason, XEvent *event)
+callThumbCallback(SgThumbWheelRecCompat *tw, XtCallbackList list, int reason, XEvent *event)
 {
     SgThumbWheelCallbackStruct cbs;
-    if (!list)
-        return;
-    cbs.reason = reason;
-    cbs.event = event;
-    cbs.value = tw->thumbwheel.value;
+    if (!list) return;
+    cbs.reason = reason; cbs.event = event; cbs.value = tw->thumbwheel.value;
     XtCallCallbackList((Widget)tw, list, &cbs);
 }
 
@@ -774,66 +584,40 @@ static void
 advanceRenderFrame(SgThumbWheelRecCompat *tw, int oldValue, int newValue)
 {
     int steps;
-
-    if (newValue == oldValue)
-        return;
-
-    steps = abs(newValue - oldValue);
-    if (steps < 1)
-        steps = 1;
-    steps %= TW_BANK_COUNT;
-    if (steps == 0)
-        steps = 1;
-
+    if (newValue == oldValue) return;
+    steps = abs(newValue - oldValue) % TW_BANK_COUNT;
+    if (steps == 0) steps = 1;
     if (newValue > oldValue)
-    {
-        tw->thumbwheel.forward_frame =
-            (tw->thumbwheel.forward_frame + steps) % TW_BANK_COUNT;
-        tw->thumbwheel.forward_motion = True;
-    }
+        tw->thumbwheel.active_frame = (tw->thumbwheel.active_frame + steps) % TW_BANK_COUNT;
     else
-    {
-        tw->thumbwheel.reverse_frame = 4 +
-            ((tw->thumbwheel.reverse_frame - 4 + steps) % TW_BANK_COUNT);
-        tw->thumbwheel.forward_motion = False;
-    }
+        tw->thumbwheel.active_frame = (tw->thumbwheel.active_frame - steps + TW_BANK_COUNT * 2) % TW_BANK_COUNT;
 }
 
 static void
-setValueInternal(SgThumbWheelRecCompat *tw, int value, int reason,
-                 XEvent *event, Boolean callback)
+setValueInternal(SgThumbWheelRecCompat *tw, int value, int reason, XEvent *event, Boolean callback)
 {
     int old = tw->thumbwheel.value;
     value = clampValue(tw, value);
-    if (old == value)
-        return;
-
+    if (old == value) return;
     advanceRenderFrame(tw, old, value);
     tw->thumbwheel.value = value;
     drawThumbWheel(tw);
-
-    if (callback)
-    {
+    if (callback) {
         if (reason == XmCR_DRAG)
-            callThumbCallback(tw, tw->thumbwheel.drag_callback,
-                              XmCR_DRAG, event);
+            callThumbCallback(tw, tw->thumbwheel.drag_callback, XmCR_DRAG, event);
         else
-            callThumbCallback(tw, tw->thumbwheel.value_changed_callback,
-                              XmCR_VALUE_CHANGED, event);
+            callThumbCallback(tw, tw->thumbwheel.value_changed_callback, XmCR_VALUE_CHANGED, event);
     }
 }
 
 static int
 eventCoordinate(const SgThumbWheelRecCompat *tw, const XEvent *event)
 {
-    if (!event)
-        return 0;
+    if (!event) return 0;
     if (event->type == ButtonPress || event->type == ButtonRelease)
-        return tw->thumbwheel.orientation == XmVERTICAL
-            ? event->xbutton.y : event->xbutton.x;
+        return tw->thumbwheel.orientation == XmVERTICAL ? event->xbutton.y : event->xbutton.x;
     if (event->type == MotionNotify)
-        return tw->thumbwheel.orientation == XmVERTICAL
-            ? event->xmotion.y : event->xmotion.x;
+        return tw->thumbwheel.orientation == XmVERTICAL ? event->xmotion.y : event->xmotion.x;
     return 0;
 }
 
@@ -841,48 +625,60 @@ static void
 thumbPointerEH(Widget w, XtPointer closure, XEvent *event, Boolean *cont)
 {
     Cardinal n = 0;
-
-    (void)closure;
-    (void)cont;
-
-    switch (event->type)
-    {
+    (void)closure; (void)cont;
+    switch (event->type) {
     case ButtonPress:
-        if (event->xbutton.button == Button1)
-            actionBtn1Down(w, event, NULL, &n);
+        if (event->xbutton.button == Button1) actionBtn1Down(w, event, NULL, &n);
         break;
     case MotionNotify:
-        if (event->xmotion.state & Button1Mask)
-            actionBtn1Motion(w, event, NULL, &n);
-        else
-            actionMotion(w, event, NULL, &n);
+        if (event->xmotion.state & Button1Mask) actionBtn1Motion(w, event, NULL, &n);
+        else actionMotion(w, event, NULL, &n);
         break;
     case ButtonRelease:
-        if (event->xbutton.button == Button1)
-            actionBtn1Up(w, event, NULL, &n);
+        if (event->xbutton.button == Button1) actionBtn1Up(w, event, NULL, &n);
         break;
-    default:
-        break;
+    default: break;
     }
 }
 
 static void
 actionMotion(Widget w, XEvent *e, String *p, Cardinal *n)
 {
-    (void)w; (void)e; (void)p; (void)n;
+    SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
+    int x, y;
+    Boolean wheel, home;
+    (void)p; (void)n;
+    if (!eventPoint(e, &x, &y)) return;
+    wheel = pointInWheel(tw, x, y);
+    home = pointInHome(tw, x, y);
+    if (wheel != tw->thumbwheel.wheel_hover || home != tw->thumbwheel.home_hover) {
+        tw->thumbwheel.wheel_hover = wheel;
+        tw->thumbwheel.home_hover = home;
+        drawThumbWheel(tw);
+    }
 }
 
 static void
 actionBtn1Down(Widget w, XEvent *e, String *p, Cardinal *n)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
+    int x, y;
     (void)p; (void)n;
+    if (eventPoint(e, &x, &y) && pointInHome(tw, x, y)) {
+        tw->thumbwheel.home_pressed = True;
+        tw->thumbwheel.button_down = False;
+        tw->thumbwheel.home_hover = True;
+        tw->thumbwheel.wheel_hover = False;
+        drawThumbWheel(tw);
+        return;
+    }
+    if (eventPoint(e, &x, &y) && !pointInWheel(tw, x, y)) return;
     tw->thumbwheel.button_down = True;
+    tw->thumbwheel.home_pressed = False;
     tw->thumbwheel.press_coordinate = eventCoordinate(tw, e);
     tw->thumbwheel.press_value = tw->thumbwheel.value;
 }
 
-/* Binary proves button 2/3 down, motion and up action bodies are no-ops. */
 static void actionBtn2Down(Widget w, XEvent *e, String *p, Cardinal *n)
 { (void)w; (void)e; (void)p; (void)n; }
 static void actionBtn3Down(Widget w, XEvent *e, String *p, Cardinal *n)
@@ -892,18 +688,21 @@ static void
 actionBtn1Motion(Widget w, XEvent *e, String *p, Cardinal *n)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
-    int coordinate;
-    int delta;
-    int value;
-
+    int x, y, coordinate, delta, value;
     (void)p; (void)n;
-    if (!tw->thumbwheel.button_down)
+    if (tw->thumbwheel.home_pressed) {
+        if (eventPoint(e, &x, &y)) {
+            Boolean home = pointInHome(tw, x, y);
+            if (home != tw->thumbwheel.home_hover) {
+                tw->thumbwheel.home_hover = home;
+                drawThumbWheel(tw);
+            }
+        }
         return;
-
+    }
+    if (!tw->thumbwheel.button_down) return;
     coordinate = eventCoordinate(tw, e);
     delta = coordinate - tw->thumbwheel.press_coordinate;
-
-    /* MaXX feeds the active-axis coordinate delta into its value mapping. */
     value = tw->thumbwheel.press_value + delta;
     setValueInternal(tw, value, XmCR_DRAG, e, True);
 }
@@ -918,9 +717,19 @@ actionBtn1Up(Widget w, XEvent *e, String *p, Cardinal *n)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
     int before = tw->thumbwheel.press_value;
+    int x, y;
     (void)p; (void)n;
-    if (!tw->thumbwheel.button_down)
+    if (tw->thumbwheel.home_pressed) {
+        Boolean activate = eventPoint(e, &x, &y) && pointInHome(tw, x, y);
+        tw->thumbwheel.home_pressed = False;
+        tw->thumbwheel.home_hover = activate;
+        drawThumbWheel(tw);
+        if (activate)
+            setValueInternal(tw, tw->thumbwheel.home_position,
+                             XmCR_VALUE_CHANGED, e, True);
         return;
+    }
+    if (!tw->thumbwheel.button_down) return;
     tw->thumbwheel.button_down = False;
     if (tw->thumbwheel.value != before)
         callThumbCallback(tw, tw->thumbwheel.value_changed_callback,
@@ -932,16 +741,23 @@ static void actionBtn2Up(Widget w, XEvent *e, String *p, Cardinal *n)
 static void actionBtn3Up(Widget w, XEvent *e, String *p, Cardinal *n)
 { (void)w; (void)e; (void)p; (void)n; }
 static void actionEnter(Widget w, XEvent *e, String *p, Cardinal *n)
-{ (void)w; (void)e; (void)p; (void)n; }
+{ actionMotion(w, e, p, n); }
 static void actionLeave(Widget w, XEvent *e, String *p, Cardinal *n)
-{ (void)w; (void)e; (void)p; (void)n; }
+{
+    SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
+    (void)e; (void)p; (void)n;
+    if (tw->thumbwheel.wheel_hover || tw->thumbwheel.home_hover) {
+        tw->thumbwheel.wheel_hover = False;
+        tw->thumbwheel.home_hover = False;
+        drawThumbWheel(tw);
+    }
+}
 
 static void
 keyDelta(Widget w, XEvent *e, int delta)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
-    setValueInternal(tw, tw->thumbwheel.value + delta,
-                     XmCR_VALUE_CHANGED, e, True);
+    setValueInternal(tw, tw->thumbwheel.value + delta, XmCR_VALUE_CHANGED, e, True);
 }
 static void actionPageUp(Widget w, XEvent *e, String *p, Cardinal *n)
 { (void)p; (void)n; keyDelta(w, e, TW_PAGE_STEP); }
@@ -961,30 +777,26 @@ static void actionBeginLine(Widget w, XEvent *e, String *p, Cardinal *n)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
     (void)p; (void)n;
-    setValueInternal(tw, tw->thumbwheel.minimum,
-                     XmCR_VALUE_CHANGED, e, True);
+    setValueInternal(tw, tw->thumbwheel.minimum, XmCR_VALUE_CHANGED, e, True);
 }
 static void actionEndLine(Widget w, XEvent *e, String *p, Cardinal *n)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)w;
     (void)p; (void)n;
-    setValueInternal(tw, tw->thumbwheel.maximum,
-                     XmCR_VALUE_CHANGED, e, True);
+    setValueInternal(tw, tw->thumbwheel.maximum, XmCR_VALUE_CHANGED, e, True);
 }
 
 Widget
 SgCreateThumbWheel(Widget parent, char *name, ArgList arglist, Cardinal argcount)
 {
-    return XtCreateWidget(name, sgThumbWheelWidgetClass,
-                          parent, arglist, argcount);
+    return XtCreateWidget(name, sgThumbWheelWidgetClass, parent, arglist, argcount);
 }
 
 void
 SgThumbWheelGetValue(Widget widget, int *value)
 {
     SgThumbWheelRecCompat *tw = (SgThumbWheelRecCompat *)widget;
-    if (value)
-        *value = tw->thumbwheel.value;
+    if (value) *value = tw->thumbwheel.value;
 }
 
 void
