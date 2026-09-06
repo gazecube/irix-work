@@ -25,6 +25,7 @@ public:
     void setEntries(const std::vector<FmIconSurfaceEntry> &entries);
     bool selectedIndex(size_t *index) const;
     void selectAll();
+    void redraw();
 
     void setActivateProc(FmIconSurfaceActivateProc proc, void *closure);
 
@@ -32,6 +33,7 @@ private:
     class View;
 
     static void eventHandler(Widget, XtPointer, XEvent *, Boolean *);
+    static void exposeCB(Widget, XtPointer, XtPointer);
 
     void handleEvent(XEvent *event);
     void draw();
