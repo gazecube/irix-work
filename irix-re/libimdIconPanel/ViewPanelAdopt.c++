@@ -8,10 +8,13 @@ namespace
 struct AdoptedViewRecord
 {
     ImdView *view;
+    ImdView *parentView;
     ImdIconPanel *panel;
 
-    AdoptedViewRecord(ImdView *v = 0, ImdIconPanel *p = 0)
-        : view(v), panel(p)
+    AdoptedViewRecord(ImdView *v = 0,
+                      ImdView *parent = 0,
+                      ImdIconPanel *p = 0)
+        : view(v), parentView(parent), panel(p)
     {
     }
 };
@@ -24,22 +27,34 @@ void
 ImdViewPanelAdoptView(
     Widget widget,
     ImdView *view,
-    ImdIconPanel *panel)
+    ImdView *parentView)
 {
-    if (!widget || !view)
+    if (!widget || !view || !parentView)
         return;
 
     /*
-     * Original libimdIconPanel.so exports two overloads:
-     *
+     * Original overload used for child-view ownership:
      *   ImdViewPanelAdoptView(Widget, ImdView *, ImdView *)
-     *   ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
      *
-     * The second overload is the panel ownership path recovered for the
-     * model-backed view flow. The original widget maintains internal view
-     * collections and invalidates layout/redisplay state. Until the complete
-     * ImdViewPanel class record/private instance data is reconstructed, retain
-     * the exact ownership association in a native side table.
+     * The private ImdViewPanel instance collections/layout invalidation remain
+     * unrecovered. Preserve the exact parent relationship in the host side
+     * table without attributing this storage mechanism to IRIX.
      */
-    gAdoptedViews[widget].push_back(AdoptedViewRecord(view, panel));
+    gAdoptedViews[widget].push_back(AdoptedViewRecord(view, parentView, 0));
+}
+
+void
+ImdViewPanelAdoptView(
+    Widget widget,
+    ImdView *view,
+    ImdIconPanel *panel)
+{
+    if (!widget || !view || !panel)
+        return;
+
+    /*
+     * Original overload used for root/panel ownership:
+     *   ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
+     */
+    gAdoptedViews[widget].push_back(AdoptedViewRecord(view, 0, panel));
 }
