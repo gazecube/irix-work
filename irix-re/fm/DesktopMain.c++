@@ -18,8 +18,11 @@
  */
 
 #include "BackLayout.h"
+#include "Broker.h"
 #include "ImdIconPanel.h"
+#include "Model.h"
 #include "ModelBasedIconPanel.h"
+#include "RefModel.h"
 
 #include <Xm/Xm.h>
 #include <X11/Shell.h>
@@ -40,6 +43,8 @@
 struct DesktopState
 {
     Widget shell;
+    ImdBroker *broker;
+    ImdModel *desktopModel;
     ImdModelBasedIconPanel *panel;
     Widget panelWidget;
     ImdRenderer *renderer;
@@ -271,13 +276,32 @@ main(int argc, char **argv)
     sizeToScreen(state.shell);
 
     /*
-     * RE: ImdBackWindow imports and constructs ImdModelBasedIconPanel. Keep
-     * the model null only until the desktopContainerDNA -> broker -> getModel
-     * path is brought online; do not fall back to a plain ImdViewPanel here.
+     * Binary-backed desktop model path:
+     *   ImdRefModel::desktopContainerDNA()
+     *   -> ImdBroker::contextBroker()
+     *   -> getModel(Directory DNA)
+     *   -> ImdModelBasedIconPanel
+     *
+     * The current native broker has only the built-in Directory factory seam;
+     * callback/NotifyReceiver adoption is the next layer.
      */
+    const ImdDNA desktopDNA = ImdRefModel::desktopContainerDNA();
+    state.broker = ImdBroker::contextBroker();
+    state.desktopModel = state.broker->getModel(desktopDNA);
+    if (!state.desktopModel) {
+        fprintf(stderr,
+                "iid-desktop: broker could not create desktop container model: %s\n",
+                desktopDNA.serialize().c_str());
+        return 1;
+    }
+
+    fprintf(stderr,
+            "iid-desktop: desktop container DNA: %s\n",
+            desktopDNA.serialize().c_str());
+
     state.panel = new ImdModelBasedIconPanel("panel",
                                              state.shell,
-                                             0,
+                                             state.desktopModel,
                                              0,
                                              0);
     state.panelWidget = state.panel->baseWidget();
@@ -307,7 +331,7 @@ main(int argc, char **argv)
     placeBehindApplications(state.shell);
 
     fprintf(stderr,
-            "iid-desktop: model-backed rootShell online behind applications; desktop container model pending\n");
+            "iid-desktop: model-backed rootShell online behind applications; desktop container model active\n");
     XtAppMainLoop(app);
     return 0;
 }
