@@ -65,6 +65,40 @@ AppendHexU64(CHAR16 **P, UINT64 Value)
 }
 
 static VOID
+AppendHexByte(CHAR16 **P, UINT8 Value)
+{
+    UINTN Hi = (Value >> 4) & 0xf;
+    UINTN Lo = Value & 0xf;
+
+    AppendChar(P, (CHAR16)(Hi < 10 ? L'0' + Hi : L'a' + Hi - 10));
+    AppendChar(P, (CHAR16)(Lo < 10 ? L'0' + Lo : L'a' + Lo - 10));
+}
+
+static VOID
+AppendPathSignature(
+    CHAR16 **P,
+    const UINT8 *Types,
+    const UINT8 *SubTypes,
+    UINTN Count
+    )
+{
+    UINTN I;
+
+    if (Count == 0) {
+        AppendText(P, L"none");
+        return;
+    }
+
+    for (I = 0; I < Count; ++I) {
+        if (I != 0)
+            AppendChar(P, L'-');
+        AppendHexByte(P, Types[I]);
+        AppendChar(P, L'/');
+        AppendHexByte(P, SubTypes[I]);
+    }
+}
+
+static VOID
 EmitLine(EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out, UINTN Row, CHAR16 *Line)
 {
     if (!Out || !Out->OutputString)
@@ -82,7 +116,7 @@ ArcsInputDiagDraw(
     )
 {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out;
-    CHAR16 Line[112];
+    CHAR16 Line[128];
     CHAR16 *P;
 
     if (!SystemTable || !Diag || !SystemTable->ConOut)
@@ -117,11 +151,16 @@ ArcsInputDiagDraw(
     EmitLine(Out, 1, Line);
 
     P = Line;
-    AppendText(&P, L"ABS raw=");
+    AppendText(&P, L"ABS path=");
+    AppendPathSignature(&P,
+                        Diag->AbsolutePathType,
+                        Diag->AbsolutePathSubType,
+                        Diag->AbsolutePathCount);
+    AppendText(&P, L" raw=");
     AppendDecU64(&P, Diag->RawAbsoluteX);
     AppendChar(&P, L',');
     AppendDecU64(&P, Diag->RawAbsoluteY);
-    AppendText(&P, L"                                      ");
+    AppendText(&P, L"                    ");
     *P = 0;
     EmitLine(Out, 2, Line);
 
@@ -139,7 +178,12 @@ ArcsInputDiagDraw(
     EmitLine(Out, 3, Line);
 
     P = Line;
-    AppendText(&P, L"SIMPLE delta=");
+    AppendText(&P, L"SIMPLE path=");
+    AppendPathSignature(&P,
+                        Diag->SimplePathType,
+                        Diag->SimplePathSubType,
+                        Diag->SimplePathCount);
+    AppendText(&P, L" delta=");
     AppendDecI32(&P, Diag->LastSimpleDx);
     AppendChar(&P, L',');
     AppendDecI32(&P, Diag->LastSimpleDy);
@@ -147,7 +191,7 @@ ArcsInputDiagDraw(
     AppendDecI32(&P, Diag->CurrentX);
     AppendChar(&P, L',');
     AppendDecI32(&P, Diag->CurrentY);
-    AppendText(&P, L"   ESC exits                    ");
+    AppendText(&P, L"   ESC exits              ");
     *P = 0;
     EmitLine(Out, 4, Line);
 }
