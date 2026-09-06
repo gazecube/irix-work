@@ -161,18 +161,17 @@ static const unsigned char sgThumbWheelFrame_m4[] =
 #define SG_THUMBWHEEL_FRAME_M4_COUNT 65
 
 /*
- * RE: MaXX text+0x1940 advances each four-frame pixmap bank when the
- * mapped value rises and walks the same bank backward when it falls.
- * ThumbWheel.c currently models the two directions as separate banks, so
- * keep the falling-value bank in reverse frame order.
+ * RE: MaXX text+0x1940 advances both four-frame pixmap banks together.
+ * +0x208 selects which bank is visible, so corresponding normal/hover
+ * entries must keep the same logical frame index.
  */
 static const SgThumbWheelRasterFrame sgThumbWheelVerticalFrames[8] = {
     { sgThumbWheelFrame_p1, SG_THUMBWHEEL_FRAME_P1_COUNT },
     { sgThumbWheelFrame_p2, SG_THUMBWHEEL_FRAME_P2_COUNT },
     { sgThumbWheelFrame_p3, SG_THUMBWHEEL_FRAME_P3_COUNT },
     { sgThumbWheelFrame_p4, SG_THUMBWHEEL_FRAME_P4_COUNT },
-    { sgThumbWheelFrame_m4, SG_THUMBWHEEL_FRAME_M4_COUNT },
-    { sgThumbWheelFrame_m3, SG_THUMBWHEEL_FRAME_M3_COUNT },
-    { sgThumbWheelFrame_m2, SG_THUMBWHEEL_FRAME_M2_COUNT },
     { sgThumbWheelFrame_m1, SG_THUMBWHEEL_FRAME_M1_COUNT },
+    { sgThumbWheelFrame_m2, SG_THUMBWHEEL_FRAME_M2_COUNT },
+    { sgThumbWheelFrame_m3, SG_THUMBWHEEL_FRAME_M3_COUNT },
+    { sgThumbWheelFrame_m4, SG_THUMBWHEEL_FRAME_M4_COUNT },
 };
