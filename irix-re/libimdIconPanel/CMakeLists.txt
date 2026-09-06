@@ -41,7 +41,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
     target_include_directories(imdIconPanel
         PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}"
-            "${CMAKE_SOURCE_DIR}/irix-re/libimdModel/Base"
+            "${CMAKE_SOURCE_DIR}/libimdModel/Base"
             "${IMDICONPANEL_MOTIF_INCLUDE_DIR}"
     )
 
