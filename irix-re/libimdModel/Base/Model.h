@@ -4,6 +4,8 @@
 #include "ImdDNA.h"
 #include "ImdString.h"
 
+#include <vector>
+
 /*
  * Reconstructed from IRIX 6.5.0 libimdModel.so symbols, DWARF, vtables,
  * strings, and MIPS disassembly.
@@ -51,7 +53,7 @@ public:
     {
         Callback callback;
         void *clientData;
-        unsigned char active;       /* best-guess member name */
+        unsigned char active;       /* binary-proven layout byte */
     };
 
     ImdModel(const ImdDNA &dna);
@@ -83,7 +85,6 @@ public:
     virtual void update(bool force);
     virtual bool isValid() const;
 
-    /* Exact overload parameter types are still being recovered. */
     virtual void notifyClients(const ImdAttribute **attributes,
                                int attributeCount);
     virtual void notifyClients(const ImdAttribute &attribute);
@@ -135,6 +136,14 @@ protected:
     int _refCount;
     CallbackInfo *_batchClient;
     int _deactivationDelay;             /* best-guess name */
+
+    /*
+     * RE portable storage only. The original uses the collection pointers at
+     * +0x00/+0x04. Keeping host vectors separate avoids pretending to match
+     * SGI collection ABI while preserving the binary-proven callback behavior.
+     */
+    std::vector<CallbackInfo> _portableClientCallbacks;
+    std::vector<CallbackInfo> _portableClientChildCallbacks;
 
 public:
     enum ReconstructedFlags
