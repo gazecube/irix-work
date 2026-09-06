@@ -57,7 +57,7 @@ AbsolutePointerButtons(const EFI_ABSOLUTE_POINTER_STATE *State)
 
     if (State->ActiveButtons & EFI_ABSP_TouchActive)
         Buttons &= (UINT8)~0x04;
-    if (State->ActiveButtons & EFI_ABSP_AltActive)
+    if (State->ActiveButtons & EFI_ABS_AltActive)
         Buttons &= (UINT8)~0x01;
 
     return Buttons;
