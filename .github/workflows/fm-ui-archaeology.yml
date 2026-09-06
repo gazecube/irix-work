@@ -1,0 +1,92 @@
+name: FM UI archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fm-ui-archaeology.yml'
+      - 'irix-re/evidence/fm'
+      - 'irix-re/evidence/FileManager'
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install MIPS binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu
+
+      - name: Verify specimen
+        run: |
+          set -eu
+          FM=irix-re/evidence/fm
+          test -f "$FM"
+          file "$FM"
+          sha256sum "$FM"
+          echo "FM=$FM" >> "$GITHUB_ENV"
+
+      - name: Recover UI construction symbols
+        run: |
+          mips-linux-gnu-readelf -Ws "$FM" | c++filt > /tmp/fm-ui-symbols.txt
+          grep -E 'FmWindow|ImdIControlBoard|addButton|ImdViewerFinder|ImdModelBasedIconPanel|ImdIconLayout|ImdInvertedTeeRenderer|XmCreate|XtVaCreateManagedWidget|XmScale|VkPopupMenu|FmMenuHandler|quickHelp' /tmp/fm-ui-symbols.txt | tee /tmp/fm-ui-focused-symbols.txt || true
+
+      - name: Recover UI strings
+        run: |
+          strings -a -t x "$FM" > /tmp/fm-ui-strings.txt
+          grep -Ei 'pathfinder|iconicLayout|listLayout|treeLayout|columnLayout|galleryMode|shelf|contentMode|scaleZoom|zoomBar|rc1|rc2|finderForm|iconFinder|scrollW|panel|quickHelp|control' /tmp/fm-ui-strings.txt | tee /tmp/fm-ui-focused-strings.txt || true
+
+      - name: Recover full GOT map
+        run: |
+          mips-linux-gnu-readelf -A "$FM" | c++filt > /tmp/fm-ui-got.txt
+          grep -n -E -B2 -A2 'ImdIControlBoard|addButton|ImdViewerFinder|ImdModelBasedIconPanel|ImdIconLayout|ImdInvertedTeeRenderer|XmCreate|XtVaCreateManagedWidget|XmScale|VkPopupMenu|FmMenuHandler|VkGetResource|XtGetApplicationResources' /tmp/fm-ui-got.txt | tee /tmp/fm-ui-focused-got.txt || true
+
+      - name: Disassemble exact createPanels body
+        run: |
+          mips-linux-gnu-objdump -drC \
+            --start-address=0x100187e0 \
+            --stop-address=0x100195ec \
+            "$FM" > /tmp/fm-createpanels-exact.txt
+          cat /tmp/fm-createpanels-exact.txt
+
+      - name: Capture recovered app-defaults controls
+        run: |
+          if test -f irix-re/evidence/FileManager; then
+            grep -n -E 'rc1|rc2|pathfinder|iconicLayout|listLayout|treeLayout|columnLayout|galleryMode|shelf|contentMode|scaleZoom|zoomBar|finderForm|iconFinder|scrollW|panel' irix-re/evidence/FileManager > /tmp/FileManager-ui.txt || true
+          fi
+
+      - name: Assemble report
+        run: |
+          mkdir -p /tmp/fm-ui-evidence
+          report=/tmp/fm-ui-evidence/fm-ui-report.txt
+          {
+            echo '===== specimen ====='
+            file "$FM"
+            sha256sum "$FM"
+            echo
+            echo '===== focused symbols ====='
+            cat /tmp/fm-ui-focused-symbols.txt
+            echo
+            echo '===== focused strings ====='
+            cat /tmp/fm-ui-focused-strings.txt
+            echo
+            echo '===== focused GOT ====='
+            cat /tmp/fm-ui-focused-got.txt
+            echo
+            echo '===== recovered FileManager UI resources ====='
+            cat /tmp/FileManager-ui.txt 2>/dev/null || true
+            echo
+            echo '===== FmWindow::_createPanels exact body ====='
+            cat /tmp/fm-createpanels-exact.txt
+          } > "$report"
+
+      - name: Upload focused UI archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-ui-archaeology
+          path: /tmp/fm-ui-evidence/
+          if-no-files-found: error
