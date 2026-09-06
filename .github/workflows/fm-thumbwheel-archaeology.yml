@@ -1,0 +1,41 @@
+name: FM thumbwheel archaeology
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fm-thumbwheel-archaeology.yml'
+
+jobs:
+  archaeology:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Inspect preserved binaries
+        run: |
+          set -eux
+          mkdir -p /tmp/reports /tmp/shared
+          cp irix-re/evidence/fm /tmp/fm
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/shared || true
+          find /tmp/shared -type f -name 'libSgm.so*' -print
+          LIBSGM=$(find /tmp/shared -type f -name 'libSgm.so*' | head -n1)
+          {
+            echo '=== fm thumb symbols ==='
+            readelf -Ws /tmp/fm | grep -i -E 'thumb|scaleZoom|Sg' || true
+            echo '=== fm thumb strings ==='
+            strings -a /tmp/fm | grep -i -E 'thumb|scaleZoom|homePosition|processingDirection' || true
+            echo '=== libSgm thumb symbols ==='
+            if [ -n "$LIBSGM" ]; then readelf -Ws "$LIBSGM" | grep -i thumb || true; fi
+            echo '=== libSgm thumb strings ==='
+            if [ -n "$LIBSGM" ]; then strings -a "$LIBSGM" | grep -i thumb || true; fi
+            echo '=== fm createPanels disassembly ==='
+            objdump -dr --start-address=0x100187e0 --stop-address=0x100195ec /tmp/fm || true
+          } > /tmp/reports/thumbwheel.txt 2>&1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fm-thumbwheel-archaeology
+          path: /tmp/reports/thumbwheel.txt
