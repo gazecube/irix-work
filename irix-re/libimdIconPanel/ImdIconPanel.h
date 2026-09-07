@@ -49,17 +49,42 @@ protected:
 class ImdView
 {
 public:
-    ImdView() : _portableX(0), _portableY(0) {}
+    ImdView()
+        : _portableX(0), _portableY(0),
+          _portableWidth(0), _portableHeight(0),
+          _portableVisible(true) {}
     virtual ~ImdView() {}
 
-    /* RE host state only. Original ImdView N32 +0x04/+0x08 are x/y. */
+    /*
+     * Portable source-level storage for original ImdView geometry.
+     * Local disassembly proves the N32 fields used by
+     * ImdViewPanelFindViewByLocation():
+     *   +0x04 x
+     *   +0x08 y
+     *   +0x0c width
+     *   +0x10 height
+     *   +0x14 bit 31 visible/participating
+     *
+     * These host members intentionally do not claim N32 ABI layout.
+     */
     void portableSetPosition(long x, long y) { _portableX = x; _portableY = y; }
     long portableX() const { return _portableX; }
     long portableY() const { return _portableY; }
+    void portableSetSize(long width, long height) {
+        _portableWidth = width;
+        _portableHeight = height;
+    }
+    long portableWidth() const { return _portableWidth; }
+    long portableHeight() const { return _portableHeight; }
+    void portableSetVisible(bool visible) { _portableVisible = visible; }
+    bool portableVisible() const { return _portableVisible; }
 
 private:
     long _portableX;
     long _portableY;
+    long _portableWidth;
+    long _portableHeight;
+    bool _portableVisible;
 };
 
 class ImdIconView : public ImdView
@@ -102,6 +127,10 @@ extern "C" void ImdViewPanelEndBlockChanges(Widget);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdView *);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *);
 void ImdViewPanelRedraw(Widget);
+
+/* Original exported ViewPanel geometry operations. */
+ImdView *ImdViewPanelFindViewByLocation(Widget, long, long);
+bool ImdViewPanelMoveView(Widget, ImdView &, long, long);
 
 class ImdIconPanel
 {
