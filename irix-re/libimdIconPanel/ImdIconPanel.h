@@ -152,7 +152,13 @@ public:
     virtual ~ImdIconPanel();
     Widget baseWidget() const { return _baseWidget; }
 
-    virtual void adoptView(ImdIconView *view, ImdIconView *parentView);
+    /*
+     * Original binary signature has the parentView argument. A null parent is
+     * the root-adoption case. Keep a source-level default so older reconstructed
+     * callers that used adoptView(view) continue to mean adoptView(view, 0)
+     * without changing the recovered ABI/signature.
+     */
+    virtual void adoptView(ImdIconView *view, ImdIconView *parentView = 0);
     virtual void applySelectStrings(ImdIconView &view);
 
     /*
