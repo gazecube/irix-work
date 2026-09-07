@@ -10,12 +10,18 @@ portableGenericFtrResource(const ImdDNA &dna)
 {
     /*
      * Binary/resource-backed host seam.
+     *
      * The original sgidefault.ftr maps generic directories to
      * ../iconlib/generic.folder.closed.fti and generic documents to
-     * ../iconlib/generic.doc.fti. Full ImdFtrDB type matching will replace
-     * this fallback once the native FTR database layer is reconstructed.
+     * ../iconlib/generic.doc.fti. The model-type strings entering this class
+     * are the recovered ImdDirModel::kTypeName / ImdFileModel::kTypeName
+     * values, not the higher-level "Directory" label. Local type_info-backed
+     * initialization proves the directory spelling is exactly "ImdDirModel".
+     *
+     * Full ImdFtrDB type matching will replace this fallback once the native
+     * FTR database layer is reconstructed.
      */
-    if (dna.type() == "Directory")
+    if (dna.type() == "ImdDirModel")
         return ImdString("iconlib/generic.folder.closed.fti");
     return ImdString("iconlib/generic.doc.fti");
 }
