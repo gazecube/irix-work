@@ -31,22 +31,11 @@ assignPortablePosition(ImdView *view, std::size_t index)
     if (!view)
         return;
 
-    /*
-     * RE host seam only. The original desktop position database and
-     * PositionOrder/BackLayout placement are separate binary-backed layers.
-     * This deterministic grid exists only so renderer/FTR reconstruction can
-     * be exercised visibly before that database is restored.
-     */
     const long column = static_cast<long>(index % 8);
     const long row = static_cast<long>(index / 8);
     view->portableSetPosition(28 + column * 92, 28 + row * 104);
 
-    /*
-     * Temporary renderer-facing extent for the host seam. The original
-     * ImdView width/height fields are binary-proven at +0x0c/+0x10, but the
-     * exact InvertedTee computed size will be restored from its renderer
-     * geometry methods. Keep this value explicitly non-ABI/non-original.
-     */
+    /* Temporary renderer-facing extent until InvertedTee geometry is restored. */
     view->portableSetSize(84, 84);
     view->portableSetVisible(true);
 }
@@ -104,16 +93,11 @@ ImdViewPanelFindViewByLocation(Widget widget, long x, long y)
         return 0;
 
     /*
-     * Original ImdViewPanelFindViewByLocation() @ 0x09680470 tests the
-     * ImdView geometry fields directly:
+     * Original ImdViewPanelFindViewByLocation() @ 0x09680470 tests:
      *   visible bit 31 at +0x14
      *   x/y at +0x04/+0x08
      *   width/height at +0x0c/+0x10
      * and returns the matching view.
-     *
-     * The original collection is y-ordered and uses a binary-search shortcut.
-     * The portable side table is small, so preserve the exact rectangle test
-     * without claiming the original collection implementation.
      */
     AdoptedViewList &views = gAdoptedViews[widget];
     for (AdoptedViewList::reverse_iterator it = views.rbegin();
@@ -140,21 +124,27 @@ ImdViewPanelMoveView(Widget widget, ImdView &view, long x, long y)
         return false;
 
     /*
-     * Original exported ImdViewPanelMoveView() @ 0x096a2f3c delegates to the
-     * adopted layout's moveView(view,x,y) virtual and, on success, invalidates
-     * the ViewPanel/layout state before returning true.
-     *
-     * The portable layout move virtual is not restored yet. Preserve the
-     * externally visible geometry result here and redraw through the same
-     * ViewPanel, rather than creating a desktop-specific position path.
+     * Original ImdViewPanelMoveView() @ 0x096a2f3c delegates to the adopted
+     * layout's moveView(view,x,y) virtual. Preserve that recovered boundary.
      */
-    view.portableSetPosition(x, y);
+    ImdLayout *layout = ImdViewPanelGetLayout(widget);
+    bool moved = false;
 
-    if (XtIsRealized(widget)) {
-        XClearWindow(XtDisplay(widget), XtWindow(widget));
+    if (layout)
+        moved = layout->moveView(view, x, y);
+    else {
+        /* Host fallback only for a ViewPanel without an adopted layout. */
+        view.portableSetPosition(x, y);
+        moved = true;
+    }
+
+    if (moved && XtIsRealized(widget)) {
+        /* Clear to the ViewPanel background without generating a new Expose. */
+        XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         ImdViewPanelRedraw(widget);
     }
-    return true;
+
+    return moved;
 }
 
 void
