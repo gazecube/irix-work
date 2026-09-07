@@ -22,13 +22,15 @@ struct Rule
     bool specialFile;
 };
 
-enum ValueKind { ValueInteger, ValueString };
+enum ValueKind { ValueInteger, ValueString, ValueInvalid };
 
 struct Value
 {
     ValueKind kind;
     int64_t integer;
     std::string string;
+
+    Value() : kind(ValueInvalid), integer(0) {}
 
     static Value fromInteger(int64_t v)
     {
@@ -42,14 +44,17 @@ struct Value
     {
         Value out;
         out.kind = ValueString;
-        out.integer = 0;
         out.string = v;
         return out;
     }
 
     bool truth() const
     {
-        return kind == ValueString ? !string.empty() : integer != 0;
+        if (kind == ValueString)
+            return !string.empty();
+        if (kind == ValueInteger)
+            return integer != 0;
+        return false;
     }
 };
 
@@ -60,16 +65,6 @@ static std::string trim(const std::string &s)
         return std::string();
     const std::string::size_type b = s.find_last_not_of(" \t\r\n");
     return s.substr(a, b - a + 1);
-}
-
-static std::string dirnameOf(const std::string &path)
-{
-    const std::string::size_type slash = path.find_last_of('/');
-    if (slash == std::string::npos)
-        return ".";
-    if (slash == 0)
-        return "/";
-    return path.substr(0, slash);
 }
 
 static std::string basenameOf(const std::string &path)
@@ -95,9 +90,10 @@ static bool readFile(const std::string &path, std::vector<unsigned char> &data)
     return in.good() || in.eof();
 }
 
-static bool looksAscii(const std::vector<unsigned char> &data)
+static bool looksAscii512(const std::vector<unsigned char> &data)
 {
-    for (std::size_t i = 0; i < data.size(); ++i) {
+    const std::size_t limit = std::min<std::size_t>(512, data.size());
+    for (std::size_t i = 0; i < limit; ++i) {
         const unsigned char c = data[i];
         if (c == 0)
             return false;
@@ -136,27 +132,90 @@ static int64_t signExtend(uint64_t value, unsigned bits)
     return static_cast<int64_t>(value);
 }
 
+static void expandBraces(const std::string &pattern, std::vector<std::string> &out)
+{
+    std::string::size_type left = std::string::npos;
+    bool escaped = false;
+    for (std::size_t i = 0; i < pattern.size(); ++i) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (pattern[i] == '\\') {
+            escaped = true;
+            continue;
+        }
+        if (pattern[i] == '{') {
+            left = i;
+            break;
+        }
+    }
+    if (left == std::string::npos) {
+        out.push_back(pattern);
+        return;
+    }
+
+    int depth = 0;
+    std::string::size_type right = std::string::npos;
+    for (std::size_t i = left; i < pattern.size(); ++i) {
+        if (pattern[i] == '{')
+            ++depth;
+        else if (pattern[i] == '}' && --depth == 0) {
+            right = i;
+            break;
+        }
+    }
+    if (right == std::string::npos) {
+        out.push_back(pattern);
+        return;
+    }
+
+    const std::string prefix = pattern.substr(0, left);
+    const std::string suffix = pattern.substr(right + 1);
+    const std::string body = pattern.substr(left + 1, right - left - 1);
+    std::size_t start = 0;
+    depth = 0;
+    for (std::size_t i = 0; i <= body.size(); ++i) {
+        if (i < body.size() && body[i] == '{')
+            ++depth;
+        else if (i < body.size() && body[i] == '}')
+            --depth;
+        if (i == body.size() || (body[i] == ',' && depth == 0)) {
+            expandBraces(prefix + body.substr(start, i - start) + suffix, out);
+            start = i + 1;
+        }
+    }
+}
+
+static bool shellPatternMatch(const std::string &pattern, const std::string &subject)
+{
+    std::vector<std::string> expanded;
+    expandBraces(pattern, expanded);
+    for (std::size_t i = 0; i < expanded.size(); ++i)
+        if (fnmatch(expanded[i].c_str(), subject.c_str(), 0) == 0)
+            return true;
+    return false;
+}
+
 static bool wildcardMatch(const std::string &pattern, const std::string &path)
 {
-    /* Reconstructed from shipped usage: slash patterns are path rules. */
-    const std::string &subject = pattern.find('/') == std::string::npos
-        ? basenameOf(path) : path;
-    return fnmatch(pattern.c_str(), subject.c_str(), 0) == 0;
+    return shellPatternMatch(pattern, basenameOf(path));
 }
 
 static bool dirContains(const std::string &path, const std::string &pattern)
 {
     struct stat st;
-    const bool pathIsDirectory = stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-    const std::string dirPath = pathIsDirectory ? path : dirnameOf(path);
-    DIR *dir = opendir(dirPath.c_str());
+    if (stat(path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+        return false;
+
+    DIR *dir = opendir(path.c_str());
     if (!dir)
         return false;
     bool found = false;
     for (struct dirent *entry = readdir(dir); entry; entry = readdir(dir)) {
         if (!std::strcmp(entry->d_name, ".") || !std::strcmp(entry->d_name, ".."))
             continue;
-        if (fnmatch(pattern.c_str(), entry->d_name, 0) == 0) {
+        if (shellPatternMatch(pattern, entry->d_name)) {
             found = true;
             break;
         }
@@ -189,8 +248,8 @@ static uint32_t read32At(const std::vector<unsigned char> &data,
            (uint32_t(data[off + 2]) << 16) | (uint32_t(data[off + 3]) << 24);
 }
 
-/* tag(1) documents the ELF32/N32 encoding in SHT_MIPS_REGINFO. */
-static uint32_t executableTag(const std::vector<unsigned char> &data)
+/* IRIX 6.5.7m FTR documentation specifies -1 for an untagged file. */
+static int64_t executableTag(const std::vector<unsigned char> &data)
 {
     if (data.size() >= 52 && data[0] == 0x7f && data[1] == 'E' &&
         data[2] == 'L' && data[3] == 'F' && data[4] == 1 &&
@@ -210,13 +269,12 @@ static uint32_t executableTag(const std::vector<unsigned char> &data)
                 const uint32_t size = read32At(data, sh + 20, be);
                 if (off <= data.size() && size >= 12 && size <= data.size() - off &&
                     read32At(data, off + 4, be) != 0)
-                    return read32At(data, off + 8, be);
-                return 0;
+                    return static_cast<int64_t>(read32At(data, off + 8, be));
+                return -1;
             }
         }
     }
 
-    /* tag(1) stores script tags on the second line as "#Tag number". */
     if (data.size() >= 3 && data[0] == '#' && data[1] == '!') {
         std::size_t p = 0;
         while (p < data.size() && data[p] != '\n')
@@ -233,10 +291,10 @@ static uint32_t executableTag(const std::vector<unsigned char> &data)
             char *end = 0;
             const unsigned long value = std::strtoul(number.c_str(), &end, 0);
             if (end && end != number.c_str())
-                return static_cast<uint32_t>(value);
+                return static_cast<int64_t>(static_cast<uint32_t>(value));
         }
     }
-    return 0;
+    return -1;
 }
 
 enum TokenKind
@@ -374,7 +432,7 @@ public:
     bool evaluate(bool &result)
     {
         Value v = parseLogicalOr();
-        if (!_ok || _tok.kind != TokEnd)
+        if (!_ok || v.kind == ValueInvalid || _tok.kind != TokEnd)
             return false;
         result = v.truth();
         return true;
@@ -421,8 +479,7 @@ private:
         Value left = parseBitXor();
         while (isOp("|")) {
             consume();
-            Value right = parseBitXor();
-            left = integerBinary(left, right, '|');
+            left = integerBinary(left, parseBitXor(), '|');
         }
         return left;
     }
@@ -432,8 +489,7 @@ private:
         Value left = parseBitAnd();
         while (isOp("^")) {
             consume();
-            Value right = parseBitAnd();
-            left = integerBinary(left, right, '^');
+            left = integerBinary(left, parseBitAnd(), '^');
         }
         return left;
     }
@@ -443,8 +499,7 @@ private:
         Value left = parseEquality();
         while (isOp("&")) {
             consume();
-            Value right = parseEquality();
-            left = integerBinary(left, right, '&');
+            left = integerBinary(left, parseEquality(), '&');
         }
         return left;
     }
@@ -456,11 +511,15 @@ private:
             const bool neq = isOp("!=");
             consume();
             Value right = parseRelational();
-            bool equal;
-            if (left.kind == ValueString || right.kind == ValueString)
-                equal = asString(left) == asString(right);
-            else
+            bool equal = false;
+            if (left.kind == ValueString && right.kind == ValueString)
+                equal = left.string == right.string;
+            else if (left.kind == ValueInteger && right.kind == ValueInteger)
                 equal = left.integer == right.integer;
+            else {
+                _ok = false;
+                return Value();
+            }
             left = Value::fromInteger(neq ? !equal : equal);
         }
         return left;
@@ -473,19 +532,21 @@ private:
             const std::string op = _tok.text;
             consume();
             Value right = parseShift();
-            if (left.kind == ValueString || right.kind == ValueString) {
-                const std::string a = asString(left);
-                const std::string b = asString(right);
-                left = Value::fromInteger(op == "<" ? a < b :
-                                          op == "<=" ? a <= b :
-                                          op == ">" ? a > b : a >= b);
-            } else {
-                const int64_t a = left.integer;
-                const int64_t b = right.integer;
-                left = Value::fromInteger(op == "<" ? a < b :
-                                          op == "<=" ? a <= b :
-                                          op == ">" ? a > b : a >= b);
+            if (left.kind != right.kind || left.kind == ValueInvalid) {
+                _ok = false;
+                return Value();
             }
+            bool matched;
+            if (left.kind == ValueString) {
+                matched = op == "<" ? left.string < right.string :
+                          op == "<=" ? left.string <= right.string :
+                          op == ">" ? left.string > right.string : left.string >= right.string;
+            } else {
+                matched = op == "<" ? left.integer < right.integer :
+                          op == "<=" ? left.integer <= right.integer :
+                          op == ">" ? left.integer > right.integer : left.integer >= right.integer;
+            }
+            left = Value::fromInteger(matched);
         }
         return left;
     }
@@ -498,10 +559,14 @@ private:
             consume();
             Value right = parseAdditive();
             if (!requireIntegers(left, right))
-                return Value::fromInteger(0);
-            const unsigned shift = static_cast<unsigned>(right.integer) & 63u;
-            left = Value::fromInteger(rightShift ? left.integer >> shift
-                                                 : left.integer << shift);
+                return Value();
+            if (right.integer < 0 || right.integer >= 64) {
+                if (!_skipEvaluation)
+                    _ok = false;
+                return Value();
+            }
+            left = Value::fromInteger(rightShift ? left.integer >> right.integer
+                                                 : left.integer << right.integer);
         }
         return left;
     }
@@ -514,7 +579,7 @@ private:
             consume();
             Value right = parseMultiplicative();
             if (!requireIntegers(left, right))
-                return Value::fromInteger(0);
+                return Value();
             left = Value::fromInteger(subtract ? left.integer - right.integer
                                                : left.integer + right.integer);
         }
@@ -529,12 +594,11 @@ private:
             consume();
             Value right = parseUnary();
             if (!requireIntegers(left, right))
-                return Value::fromInteger(0);
+                return Value();
             if ((op == '/' || op == '%') && right.integer == 0) {
                 if (!_skipEvaluation)
                     _ok = false;
-                left = Value::fromInteger(0);
-                continue;
+                return Value::fromInteger(0);
             }
             if (op == '*') left.integer *= right.integer;
             else if (op == '/') left.integer /= right.integer;
@@ -547,18 +611,19 @@ private:
     {
         if (isOp("!")) {
             consume();
-            return Value::fromInteger(!parseUnary().truth());
+            Value v = parseUnary();
+            return v.kind == ValueInvalid ? Value() : Value::fromInteger(!v.truth());
         }
         if (isOp("~")) {
             consume();
             Value v = parseUnary();
-            if (v.kind != ValueInteger) _ok = false;
+            if (v.kind != ValueInteger) { _ok = false; return Value(); }
             return Value::fromInteger(~v.integer);
         }
         if (isOp("-")) {
             consume();
             Value v = parseUnary();
-            if (v.kind != ValueInteger) _ok = false;
+            if (v.kind != ValueInteger) { _ok = false; return Value(); }
             return Value::fromInteger(-v.integer);
         }
         if (isOp("+")) {
@@ -583,15 +648,16 @@ private:
         if (_tok.kind == TokLParen) {
             consume();
             Value v = parseLogicalOr();
-            if (_tok.kind != TokRParen)
+            if (_tok.kind != TokRParen) {
                 _ok = false;
-            else
-                consume();
+                return Value();
+            }
+            consume();
             return v;
         }
         if (_tok.kind != TokIdent) {
             _ok = false;
-            return Value::fromInteger(0);
+            return Value();
         }
 
         const std::string name = _tok.text;
@@ -604,13 +670,14 @@ private:
         if (_skipEvaluation) return Value::fromInteger(0);
         if (name == "size") return Value::fromInteger(static_cast<int64_t>(_st.st_size));
         if (name == "mode") return Value::fromInteger(static_cast<int64_t>(_st.st_mode));
-        if (name == "ascii") return Value::fromInteger(looksAscii(_data));
-        if (name == "tag") return Value::fromInteger(static_cast<int64_t>(executableTag(_data)));
+        if (name == "linkcount") return Value::fromInteger(static_cast<int64_t>(_st.st_nlink));
+        if (name == "ascii") return Value::fromInteger(looksAscii512(_data));
+        if (name == "tag") return Value::fromInteger(executableTag(_data));
         if (name == "mactype" || name == "maccreator")
             return Value::fromString("????");
 
         _ok = false;
-        return Value::fromInteger(0);
+        return Value();
     }
 
     Value parseFunction(const std::string &name)
@@ -629,7 +696,7 @@ private:
         }
         if (_tok.kind != TokRParen) {
             _ok = false;
-            return Value::fromInteger(0);
+            return Value();
         }
         consume();
 
@@ -671,7 +738,7 @@ private:
         }
 
         _ok = false;
-        return Value::fromInteger(0);
+        return Value();
     }
 
     bool requireIntegers(const Value &a, const Value &b)
@@ -686,17 +753,10 @@ private:
     Value integerBinary(const Value &a, const Value &b, char op)
     {
         if (!requireIntegers(a, b))
-            return Value::fromInteger(0);
+            return Value();
         if (op == '|') return Value::fromInteger(a.integer | b.integer);
         if (op == '^') return Value::fromInteger(a.integer ^ b.integer);
         return Value::fromInteger(a.integer & b.integer);
-    }
-
-    std::string asString(const Value &v) const
-    {
-        if (v.kind == ValueString)
-            return v.string;
-        return std::to_string(v.integer);
     }
 
     Lexer _lex;
@@ -827,24 +887,17 @@ static void collectFtrFiles(const std::string &root,
     std::vector<std::string> names;
     for (struct dirent *entry = readdir(dir); entry; entry = readdir(dir)) {
         const std::string name(entry->d_name);
-        if (name != "." && name != "..")
+        if (name.size() > 4 && name.compare(name.size() - 4, 4, ".ftr") == 0)
             names.push_back(name);
     }
     closedir(dir);
     std::sort(names.begin(), names.end());
 
     for (std::size_t i = 0; i < names.size(); ++i) {
-        const std::string rel = relative + "/" + names[i];
-        const std::string path = root + "/" + rel;
+        const std::string path = full + "/" + names[i];
         struct stat st;
-        if (stat(path.c_str(), &st) != 0)
-            continue;
-        if (S_ISDIR(st.st_mode)) {
-            collectFtrFiles(root, rel, files);
-        } else if (S_ISREG(st.st_mode) && names[i].size() > 4 &&
-                   names[i].compare(names[i].size() - 4, 4, ".ftr") == 0) {
+        if (stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode))
             files.push_back(path);
-        }
     }
 }
 
@@ -886,6 +939,7 @@ ImdEvaluateFtrType(const std::string &filetypeRoot,
             return false;
         std::memset(&st, 0, sizeof(st));
         st.st_mode = S_IFDIR | 0755;
+        st.st_nlink = 1;
     }
 
     std::vector<unsigned char> data;
