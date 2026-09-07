@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - '.github/workflows/ftr-match-archaeology.yml'
+      - 'irix-re-verification/**'
 
 jobs:
   match-archaeology:
@@ -24,7 +25,7 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/ftr-evidence
-          archive=irix-re/evidence/shared_objects.tar
+          archive=irix-re-verification/evidence/shared_objects.tar
           ftrdb_entry="$(tar -tf "$archive" | grep '/usr/lib32/internal/libimdFtrDB.so$' | head -1)"
           old_entry="$(tar -tf "$archive" | grep -E '/usr/lib32/internal/libdesktopFileicon\.so(\.[0-9]+)*$' | head -1)"
           test -n "$ftrdb_entry"
