@@ -3,6 +3,9 @@
 
 #include "ImdIconPanel.h"
 
+#include <map>
+#include <string>
+
 /*
  * ImdIconLayout
  *
@@ -27,7 +30,42 @@ public:
     int portableGridWidth() const { return _gridWidth; }
     int portableStaggerOffset() const { return _staggerOffset; }
 
+    /*
+     * Host-side persistence seam.
+     *
+     * Original libimdIconPanel.so has the binary-proven mapping API:
+     *   addMapping(const ImdString &, long, long, ImdAlign)
+     *   getMapping(ImdView &, long &, long &, ImdAlign &)
+     *   applyMappings(ImdView &)
+     *   loadMappings(ImdInitFile &)
+     *   saveMappings(ImdInitFile &)
+     *
+     * Original fm's ImdBackWindow::restorePresentationState() and
+     * savePresentationState() call ImdViewPanelLoadMappings()/SaveMappings(),
+     * and the shipped state keys include "FmState" and "IconMappings".
+     *
+     * Until ImdInitFile itself is reconstructed, these helpers preserve the
+     * same source-level mapping concept in a separate RE cache file. They do
+     * not claim the original ImdInitFile on-disk encoding.
+     */
+    bool portableLoadMappings(const char *path);
+    bool portableSaveMappings() const;
+    bool portableApplyMapping(ImdView &view) const;
+
 private:
+    struct PortableMapping
+    {
+        long x;
+        long y;
+        int align;
+
+        PortableMapping(long px = 0, long py = 0, int pa = 0)
+            : x(px), y(py), align(pa) {}
+    };
+
+    std::string portableMappingName(const ImdView &view) const;
+    void portableRememberView(const ImdView &view);
+
     bool _snapToGrid;
     bool _truncateRequested;
 
@@ -42,6 +80,9 @@ private:
     int _overlapLimit;
     int _minimumIconWidth;
     int _maximumIconWidth;
+
+    std::string _portableMappingPath;
+    std::map<std::string, PortableMapping> _portableMappings;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_ICONLAYOUT_H */
