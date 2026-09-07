@@ -6,6 +6,8 @@
 #include "Model.h"
 #include "ModelBasedIconView.h"
 
+#include <X11/Xlib.h>
+
 ImdModelBasedIconPanel::NotifyReceiver::NotifyReceiver(
     ImdModelBasedIconPanel *panel,
     ImdModelBasedIconView *view,
@@ -164,6 +166,24 @@ ImdModelBasedIconPanel::endExists()
 void
 ImdModelBasedIconPanel::addOrDelete()
 {
+    /*
+     * Binary-backed lifecycle boundary: addOrDelete() is an original
+     * ImdModelBasedIconPanel method and NotifyReceiver reaches it once after
+     * an existence batch has actually adopted/deleted views. The exact MIPS
+     * body is still pending recovery, so do not attribute this Xlib repaint
+     * transport to IRIX itself.
+     *
+     * Keep the portable invalidation here, below fm/iid-desktop, so both
+     * applications share the original model/panel layering. Clearing first is
+     * required when the replacement directory has fewer views than the old
+     * one; ImdViewPanelRedraw() then renders the current adopted set.
+     */
+    Widget widget = baseWidget();
+    if (!widget || !XtIsRealized(widget))
+        return;
+
+    XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
+    ImdViewPanelRedraw(widget);
 }
 
 void
