@@ -89,6 +89,22 @@ ImdViewPanelPortableRendererChanged(Widget widget, ImdRenderer *renderer)
     }
 }
 
+extern "C" void
+ImdViewPanelPortableResetViews(Widget widget)
+{
+    if (!widget)
+        return;
+
+    /*
+     * Host-side ownership bookkeeping for the reconstructed ViewPanel.
+     * Original ImdViewPanelDeleteAllViews() removes the panel's adopted view
+     * set before the owning ImdIconPanel releases the view objects. Keeping a
+     * parallel stale list here made fm continue rendering the first directory
+     * population after ImdModelBasedIconPanel::changeModel().
+     */
+    gAdoptedViews.erase(widget);
+}
+
 void
 ImdViewPanelRedraw(Widget widget)
 {
