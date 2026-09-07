@@ -1,0 +1,135 @@
+name: FM selection binary archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fm-selection-archaeology.yml'
+
+jobs:
+  selection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Install MIPS and DWARF tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu python3-pyelftools
+
+      - name: Extract original FM selection specimens
+        run: |
+          set -eu
+          FM="$GITHUB_WORKSPACE/irix-re-verification/evidence/fm"
+          test -f "$FM"
+          archive="$GITHUB_WORKSPACE/irix-re-verification/evidence/shared_objects.tar"
+          entry="$(tar -tf "$archive" | grep '/usr/lib32/internal/libimdIconPanel.so$' | head -1)"
+          test -n "$entry"
+          mkdir -p /tmp/fm-selection
+          tar -xf "$archive" -C /tmp/fm-selection "$entry"
+          PANEL="/tmp/fm-selection/$entry"
+          echo "FM=$FM" >> "$GITHUB_ENV"
+          echo "PANEL=$PANEL" >> "$GITHUB_ENV"
+          file "$FM" "$PANEL"
+          sha256sum "$FM" "$PANEL"
+
+      - name: Recover selection symbols
+        run: |
+          set -eu
+          mips-linux-gnu-readelf -Ws "$FM" > /tmp/fm-symbols.raw
+          mips-linux-gnu-readelf -Ws "$FM" | c++filt > /tmp/fm-symbols.txt
+          mips-linux-gnu-readelf -Ws "$PANEL" > /tmp/panel-symbols.raw
+          mips-linux-gnu-readelf -Ws "$PANEL" | c++filt > /tmp/panel-symbols.txt
+          grep -Ei 'FmMenuActions.*select|selectAll|select|deselect|selection|selected|ImdIconPanel|ImdIconView|ImdViewPanel' /tmp/fm-symbols.txt /tmp/panel-symbols.txt | tee /tmp/selection-symbols.txt || true
+
+      - name: Enumerate relevant DWARF functions
+        run: |
+          set -eu
+          cat > /tmp/dump.py <<'PY'
+          import os
+          from elftools.elf.elffile import ELFFile
+          from elftools.dwarf.descriptions import describe_form_class
+
+          needles=('select','iconpanel','iconview','menuactions','viewpanel')
+          for image in (os.environ['FM'], os.environ['PANEL']):
+              with open(image,'rb') as fp:
+                  elf=ELFFile(fp)
+                  if not elf.has_dwarf_info():
+                      continue
+                  for cu in elf.get_dwarf_info().iter_CUs():
+                      top=cu.get_top_DIE()
+                      a=top.attributes.get('DW_AT_name')
+                      cu_name=(a.value.decode('utf-8','replace') if a and isinstance(a.value,bytes) else str(a.value) if a else '')
+                      for die in cu.iter_DIEs():
+                          if die.tag!='DW_TAG_subprogram':
+                              continue
+                          attrs=die.attributes
+                          n=attrs.get('DW_AT_name') or attrs.get('DW_AT_linkage_name')
+                          if not n: continue
+                          name=n.value.decode('utf-8','replace') if isinstance(n.value,bytes) else str(n.value)
+                          hay=(cu_name+' '+name).lower()
+                          if not any(k in hay for k in needles):
+                              continue
+                          lo=attrs.get('DW_AT_low_pc'); hi=attrs.get('DW_AT_high_pc')
+                          if not lo or not hi: continue
+                          start=int(lo.value)
+                          stop=int(hi.value) if describe_form_class(hi.form)=='address' else start+int(hi.value)
+                          if stop>start:
+                              print('FUNC\t%s\t%s\t%s\t0x%x\t0x%x\t%d'%(image,cu_name,name,start,stop,stop-start))
+          PY
+          python3 /tmp/dump.py | tee /tmp/selection-functions.tsv
+
+      - name: Disassemble exact selection function ranges
+        run: |
+          set -eu
+          : > /tmp/selection-disassembly.txt
+          while IFS=$'\t' read -r kind image cu name start stop size; do
+            [ "$kind" = FUNC ] || continue
+            printf '\n===== %s :: %s :: %s %s..%s size %s =====\n' "$image" "$cu" "$name" "$start" "$stop" "$size" >> /tmp/selection-disassembly.txt
+            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$image" >> /tmp/selection-disassembly.txt
+          done < /tmp/selection-functions.tsv
+          cat /tmp/selection-disassembly.txt
+
+      - name: Recover selection literals and imports
+        run: |
+          set -eu
+          {
+            echo '===== FM imports/literals ====='
+            mips-linux-gnu-objdump -TC "$FM" | grep -Ei 'select|deselect|selection|iconpanel|viewpanel' || true
+            strings -a -t x "$FM" | grep -Ei 'select all|select|deselect|selection|selected' || true
+            echo '===== libimdIconPanel imports/literals ====='
+            mips-linux-gnu-objdump -TC "$PANEL" | grep -Ei 'select|deselect|selection' || true
+            strings -a -t x "$PANEL" | grep -Ei 'select|deselect|selection|selected' || true
+          } | tee /tmp/selection-literals.txt
+
+      - name: Assemble evidence report
+        run: |
+          set -eu
+          mkdir -p /tmp/fm-selection-report
+          {
+            echo '===== specimens ====='
+            file "$FM" "$PANEL"
+            sha256sum "$FM" "$PANEL"
+            echo
+            echo '===== symbols ====='
+            cat /tmp/selection-symbols.txt
+            echo
+            echo '===== functions ====='
+            cat /tmp/selection-functions.tsv
+            echo
+            echo '===== literals/imports ====='
+            cat /tmp/selection-literals.txt
+            echo
+            echo '===== disassembly ====='
+            cat /tmp/selection-disassembly.txt
+          } > /tmp/fm-selection-report/fm-selection-archaeology.txt
+
+      - name: Upload FM selection archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-selection-archaeology
+          path: /tmp/fm-selection-report/
+          if-no-files-found: error
