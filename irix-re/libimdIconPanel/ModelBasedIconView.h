@@ -28,6 +28,7 @@ public:
     void specifyDNA();
     void createContents(bool force);
     void setChildCapabilities();
+    ImdDNA getType();
 
     /*
      * RE portable inspection only. The stored DNA is the source-level value
