@@ -1,4 +1,5 @@
 #include "ImdIconPanel.h"
+#include "DragManager.h"
 
 #include <Xm/DrawingA.h>
 #include <X11/StringDefs.h>
@@ -105,7 +106,7 @@ void reportSgVisualState(Widget widget)
         std::fprintf(stderr, "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n", static_cast<unsigned long>(XVisualIDFromVisual(visual)), visual->c_class, depth, static_cast<unsigned long>(colormap));
     else
         std::fprintf(stderr, "ImdViewPanel visual: id=NULL class=-1 depth=%d colormap=0x%lx\n", depth, static_cast<unsigned long>(colormap));
-    std::fprintf(stderr, "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n", installColormap ? "True" : "False", ditherBackground ? "False" : "False");
+    std::fprintf(stderr, "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n", installColormap ? "True" : "False", ditherBackground ? "True" : "False");
     std::fprintf(stderr, "SgVisualDrawingArea background: pixel=0x%lx pixmap=0x%lx\n", static_cast<unsigned long>(backgroundPixel), static_cast<unsigned long>(backgroundPixmap));
     if (colormap != None) {
         XColor color;
@@ -152,7 +153,20 @@ extern "C" void ImdViewPanelAdoptRenderer(Widget widget, ImdRenderer *renderer)
     if (renderer) renderer->realize(widget);
     ImdViewPanelPortableRendererChanged(widget, renderer);
 }
-extern "C" void ImdViewPanelAdoptLayout(Widget widget, ImdLayout *layout) { gViewPanelState[widget].layout = layout; }
+
+extern "C" void ImdViewPanelAdoptLayout(Widget widget, ImdLayout *layout)
+{
+    gViewPanelState[widget].layout = layout;
+}
+
+extern "C" ImdLayout *ImdViewPanelGetLayout(Widget widget)
+{
+    std::map<Widget, ViewPanelState>::iterator it = gViewPanelState.find(widget);
+    if (it == gViewPanelState.end())
+        return 0;
+    return it->second.layout;
+}
+
 extern "C" void ImdViewPanelSetScale(Widget widget, float scale, long arg0, long arg1)
 {
     ViewPanelState &state = gViewPanelState[widget];
@@ -173,9 +187,19 @@ ImdString ImdIconView::getLabel() const { return _portableLabel; }
 void ImdIconView::setLabel(const ImdString &label) { _portableLabel = label; }
 
 ImdIconPanel::ImdIconPanel(const char *name, Widget parent, Arg *args, int count)
-    : _baseWidget(0)
+    : _baseWidget(0),
+      _dragManager(0)
 {
     _baseWidget = ImdCreateViewPanel(parent, const_cast<char *>(name), args, static_cast<Cardinal>(count));
+
+    /*
+     * Original ImdIconPanel constructor stores a newly allocated
+     * ImdDragManager at original N32 +0x44. The manager itself stores the
+     * owning panel at +0x40 and initializes its widget/DnD machinery.
+     */
+    _dragManager = new ImdDragManager(this);
+    if (_baseWidget)
+        _dragManager->init(_baseWidget);
 }
 
 void ImdIconPanel::adoptView(ImdIconView *view, ImdIconView *parentView)
@@ -189,6 +213,31 @@ void ImdIconPanel::adoptView(ImdIconView *view, ImdIconView *parentView)
 
 void ImdIconPanel::applySelectStrings(ImdIconView &view) { (void)view; }
 
+void
+ImdIconPanel::dragStart(int item, long x, long y, XEvent *event)
+{
+    /* Original base method @ 0x0969eca0 delegates to ImdDragManager. */
+    if (_dragManager)
+        _dragManager->dragStart(item, x, y, event);
+}
+
+bool
+ImdIconPanel::dragMotion(ImdView *view)
+{
+    /*
+     * Original base method @ 0x0969eb18 performs DnD target validation. For
+     * local same-panel movement, a non-null view is an acceptable target; the
+     * full target collection logic remains in the Motif DnD reconstruction.
+     */
+    return view != 0;
+}
+
+void
+ImdIconPanel::dragEnd()
+{
+    /* Original base dragEnd() @ 0x0969eaa0 is an eight-byte no-op. */
+}
+
 void ImdIconPanel::portableResetViews(bool destroyViews)
 {
     if (destroyViews) {
@@ -200,6 +249,10 @@ void ImdIconPanel::portableResetViews(bool destroyViews)
 ImdIconPanel::~ImdIconPanel()
 {
     portableResetViews(false);
+
+    delete _dragManager;
+    _dragManager = 0;
+
     if (_baseWidget) {
         gViewPanelState.erase(_baseWidget);
         if (XtIsWidget(_baseWidget)) XtDestroyWidget(_baseWidget);
