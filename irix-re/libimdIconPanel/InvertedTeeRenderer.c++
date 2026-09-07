@@ -360,9 +360,19 @@ void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
         (kDefaultScale * viewWidth - metrics.width) * 0.5);
     const long textBaselineY = y + iconExtent + metrics.ascent;
 
-    const std::string resource = iconView->portableIconResource().stdString();
-    if (!resource.empty())
-        drawFti(_portableWidget, resource, iconX, y);
+    /*
+     * FTR ICON definitions are ordered compositions, not necessarily a single
+     * FTI. For example the shipped AsciiTextFile type draws generic.doc.fti
+     * followed by its text overlay, while Script layers a script glyph over
+     * generic.exec.closed.fti. The original ImdFtrGalleryX performs this
+     * composition internally; the portable renderer mirrors that order here.
+     */
+    const std::vector<ImdString> &resources = iconView->portableIconResources();
+    for (std::size_t i = 0; i < resources.size(); ++i) {
+        const std::string resource = resources[i].stdString();
+        if (!resource.empty())
+            drawFti(_portableWidget, resource, iconX, y);
+    }
 
     if (!label.empty()) {
         XSetForeground(dpy, gc, BlackPixelOfScreen(XtScreen(_portableWidget)));
