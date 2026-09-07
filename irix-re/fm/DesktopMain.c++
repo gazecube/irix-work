@@ -44,6 +44,29 @@
 
 #define SGI_DESKTOP_WINDOW_ATOM "_SGI_DESKS_DESKTOP_WINDOW"
 
+/*
+ * Exact background-layout resources from the shipped FileManager app-defaults.
+ * These are fallbacks only: a real user/resource database remains free to
+ * override them exactly as on IRIX.
+ *
+ * Do not substitute the dirview values here. The original file has a separate
+ * FileManager*rootShell*panel block specifically for the desktop background.
+ */
+static const char *desktopFallbackResources[] =
+{
+    "*rootShell*panel.gridWidth: 50",
+    "*rootShell*panel.minimumRightIconPadding: 25",
+    "*rootShell*panel.baseOfIconPadding: 10",
+    "*rootShell*panel.topMargin: 5",
+    "*rootShell*panel.bottomMargin: 0",
+    "*rootShell*panel.leftMargin: 20",
+    "*rootShell*panel.rightMargin: 6",
+    "*rootShell*panel.overlapLimit: 20",
+    "*rootShell*panel.minimumIconWidth: 50",
+    "*rootShell*panel.maxViewsNoUnmapWidget: 5",
+    NULL
+};
+
 struct DesktopState
 {
     Widget shell;
@@ -249,6 +272,16 @@ main(int argc, char **argv)
 
     XtToolkitInitialize();
     app = XtCreateApplicationContext();
+
+    /*
+     * The original FileManager app-defaults supplies a desktop-specific
+     * rootShell*panel resource block. Install those shipped values as Xt
+     * fallbacks before opening the display so ImdIconLayout's existing
+     * XtGetApplicationResources() path sees the real IRIX defaults.
+     */
+    XtAppSetFallbackResources(app,
+                              const_cast<String *>(desktopFallbackResources));
+
     display = XtOpenDisplay(app, NULL,
                             "backWindow", "FileManager",
                             NULL, 0, &argc, argv);
