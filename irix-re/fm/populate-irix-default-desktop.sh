@@ -42,20 +42,18 @@ mkdir -p "$HOME/dumpster"
 # Keep this list byte-for-byte equivalent to the shipped DefaultIconList.
 # Do not add Linux conveniences here.
 cat <<'EOF' | while IFS= read -r source_entry
-a:$HOME
-b:$HOME/dumpster
-c:/var/www/htdocs/WhatsNew/Welcome_to_SGI
-d:/var/www/htdocs/Register/Register_To_Win
-e:/usr/people/OutOfBox/StartSysTour
+$HOME
+$HOME/dumpster
+/var/www/htdocs/WhatsNew/Welcome_to_SGI
+/var/www/htdocs/Register/Register_To_Win
+/usr/people/OutOfBox/StartSysTour
 EOF
 do
-    source_entry=${source_entry#?:}
-
     case "$source_entry" in
-        '\$HOME')
+        '$HOME')
             target=$HOME
             ;;
-        '\$HOME/'*)
+        '$HOME/'*)
             target=$HOME/${source_entry#\$HOME/}
             ;;
         *)
