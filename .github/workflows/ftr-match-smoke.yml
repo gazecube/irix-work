@@ -1,0 +1,82 @@
+name: FTR MATCH smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'irix-re/libimdIconPanel/FtrMatchEvaluator.c++'
+      - 'irix-re/libimdIconPanel/FtrMatchEvaluator.h'
+      - 'irix-re/libimdIconPanel/FtrResolver.c++'
+      - 'irix-re/libimdIconPanel/CMakeLists.txt'
+      - '.github/workflows/ftr-match-smoke.yml'
+
+jobs:
+  ftr-match:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+
+      - name: Compile evaluator
+        run: |
+          g++ -std=c++11 -Wall -Wextra -pedantic \
+            -Iirix-re/libimdIconPanel \
+            -c irix-re/libimdIconPanel/FtrMatchEvaluator.c++ \
+            -o /tmp/FtrMatchEvaluator.o
+
+      - name: Exercise MATCH language
+        run: |
+          set -eu
+          mkdir -p /tmp/ftr/{local,install,system,default}
+          mkdir -p /tmp/ftr-samples/specialdir
+          cat > /tmp/ftr/local/00-smoke.ftr <<'EOF'
+          TYPE HashLiteral
+              MATCH string(0,4) == "A#B!";
+          TYPE Magic
+              MATCH string(0,4) == "ABCD" && ushort(4) == 0x1234;
+          TYPE CSource
+              MATCH glob("*.c") && ascii;
+          TYPE ShortCircuit
+              MATCH true || (1 / 0);
+          TYPE SpecialDir
+              MATCH true;
+              SPECIALFILE
+          EOF
+          printf 'A#B!' > /tmp/ftr-samples/hash
+          printf '\x41\x42\x43\x44\x12\x34' > /tmp/ftr-samples/magic
+          printf 'int main(void) { return 0; }\n' > /tmp/ftr-samples/test.c
+          printf 'plain\n' > /tmp/ftr-samples/plain
+          cat > /tmp/ftr-smoke.cpp <<'EOF'
+          #include "FtrMatchEvaluator.h"
+          #include <iostream>
+          #include <string>
+          static int check(const char *path, const char *expected)
+          {
+              std::string type;
+              if (!ImdEvaluateFtrType("/tmp/ftr", path, false, type)) {
+                  std::cerr << "no type for " << path << "\n";
+                  return 1;
+              }
+              if (type != expected) {
+                  std::cerr << path << ": got " << type << ", expected " << expected << "\n";
+                  return 1;
+              }
+              return 0;
+          }
+          int main()
+          {
+              int rc = 0;
+              rc |= check("/tmp/ftr-samples/hash", "HashLiteral");
+              rc |= check("/tmp/ftr-samples/magic", "Magic");
+              rc |= check("/tmp/ftr-samples/test.c", "CSource");
+              rc |= check("/tmp/ftr-samples/plain", "ShortCircuit");
+              rc |= check("/tmp/ftr-samples/specialdir", "SpecialDir");
+              return rc;
+          }
+          EOF
+          g++ -std=c++11 -Wall -Wextra -pedantic \
+            -Iirix-re/libimdIconPanel \
+            /tmp/ftr-smoke.cpp irix-re/libimdIconPanel/FtrMatchEvaluator.c++ \
+            -o /tmp/ftr-smoke
+          /tmp/ftr-smoke
