@@ -35,6 +35,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
         ArgList.c++
         DragManager.c++
         FtrResolver.c++
+        FtrMatchEvaluator.c++
         ImdIconPanel.c++
         IconLayout.c++
         InvertedTeeRenderer.c++
