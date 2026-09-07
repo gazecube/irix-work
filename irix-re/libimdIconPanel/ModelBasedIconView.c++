@@ -1,5 +1,26 @@
 #include "ModelBasedIconView.h"
 
+#include "Broker.h"
+#include "Model.h"
+
+namespace
+{
+static ImdString
+portableGenericFtrResource(const ImdDNA &dna)
+{
+    /*
+     * Binary/resource-backed host seam.
+     * The original sgidefault.ftr maps generic directories to
+     * ../iconlib/generic.folder.closed.fti and generic documents to
+     * ../iconlib/generic.doc.fti. Full ImdFtrDB type matching will replace
+     * this fallback once the native FTR database layer is reconstructed.
+     */
+    if (dna.type() == "Directory")
+        return ImdString("iconlib/generic.folder.closed.fti");
+    return ImdString("iconlib/generic.doc.fti");
+}
+}
+
 ImdModelBasedIconView::ImdModelBasedIconView(
     ImdDNA &dna,
     bool childCapabilities)
@@ -8,15 +29,19 @@ ImdModelBasedIconView::ImdModelBasedIconView(
       _childCapabilities(childCapabilities)
 {
     /*
-     * Original constructor @ 0x0968729c first constructs ImdIconView, installs
-     * the ImdModelBasedIconView vtable, clears its model/content state, then
-     * classifies the supplied DNA as file/dir/ref/unknown before deriving
-     * additional content DNA/string state.
-     *
-     * The classification helpers and native broker surface are not yet
-     * reconstructed. Preserve the supplied DNA and the proven boolean input
-     * without fabricating those branches.
+     * Original constructor label path for normal file/dir/ref modes is
+     * broker->altNameFromDNA(dna). The portable broker does not expose that
+     * helper yet, but its model getAltName() path is the same recovered model
+     * surface and keeps the label model-backed.
      */
+    ImdBroker *broker = ImdBroker::contextBroker();
+    ImdModel *model = broker ? broker->getModel(_dna) : 0;
+    if (model) {
+        setLabel(model->getAltName());
+        broker->releaseModel(model);
+    }
+
+    portableSetIconResource(portableGenericFtrResource(_dna));
 }
 
 ImdModelBasedIconView::~ImdModelBasedIconView()
@@ -26,11 +51,6 @@ ImdModelBasedIconView::~ImdModelBasedIconView()
 ImdDNA
 ImdModelBasedIconView::getDNA() const
 {
-    /*
-     * Original getDNA() @ 0x0967a0e8 has mode-specific broker/model branches.
-     * Returning the constructor DNA is the explicit portable seam until those
-     * branches are restored natively.
-     */
     return _dna;
 }
 
@@ -38,7 +58,7 @@ void
 ImdModelBasedIconView::update(Widget widget)
 {
     (void)widget;
-    /* Original symbol recovered; body pending model/content reconstruction. */
+    createContents(true);
 }
 
 void
@@ -51,11 +71,19 @@ void
 ImdModelBasedIconView::createContents(bool force)
 {
     (void)force;
-    /* Original symbol recovered; FTR/renderer content creation is pending. */
+
+    /*
+     * The original createContents() constructs ImdFtrGalleryX from the type
+     * DNA and calls setGallery(force) plus setGalleryFileName(path). Until the
+     * host FTR classes are source-reconstructed, preserve that renderer-facing
+     * boundary by selecting the exact generic SGI FTI resources from the
+     * original filetype database.
+     */
+    portableSetIconResource(portableGenericFtrResource(getDNA()));
 }
 
 void
 ImdModelBasedIconView::setChildCapabilities()
 {
-    /* Original symbol recovered; exact capability-bit semantics are pending. */
+    /* Exact model capability flag propagation remains pending. */
 }
