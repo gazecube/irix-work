@@ -7,14 +7,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace
 {
 struct FtiPoint { double x; double y; };
-
 enum DrawMode { kNone, kPolygon, kLine, kOutlinePolygon };
 
 static std::string trim(const std::string &s)
@@ -30,10 +28,22 @@ static bool starts(const std::string &s, const char *p)
     return s.compare(0, std::strlen(p), p) == 0;
 }
 
+static bool hasGenericFolder(const std::string &root)
+{
+    std::ifstream in((root + "/iconlib/generic.folder.closed.fti").c_str());
+    return in.good();
+}
+
 static std::string resolveFiletypeRoot()
 {
     const char *env = std::getenv("SGI_FILETYPE_DIR");
-    if (env && *env) return env;
+    if (env && *env && hasGenericFolder(env)) return env;
+
+    const char *irixRoot = std::getenv("IRIX_ROOT");
+    if (irixRoot && *irixRoot) {
+        const std::string root = std::string(irixRoot) + "/usr/lib/filetype";
+        if (hasGenericFolder(root)) return root;
+    }
 
     static const char *const roots[] = {
         "/usr/lib/filetype",
@@ -42,11 +52,9 @@ static std::string resolveFiletypeRoot()
         "/opt/MaXX/share/filetype",
         0
     };
-    for (int i = 0; roots[i]; ++i) {
-        std::string probe = std::string(roots[i]) + "/iconlib/generic.folder.closed.fti";
-        std::ifstream in(probe.c_str());
-        if (in.good()) return roots[i];
-    }
+    for (int i = 0; roots[i]; ++i)
+        if (hasGenericFolder(roots[i])) return roots[i];
+
     return std::string();
 }
 
@@ -55,8 +63,7 @@ static unsigned long allocNamed(Widget w, const char *name, unsigned long fallba
     XColor exact, screen;
     Display *dpy = XtDisplay(w);
     Colormap cmap = DefaultColormapOfScreen(XtScreen(w));
-    if (XAllocNamedColor(dpy, cmap, name, &screen, &exact))
-        return screen.pixel;
+    if (XAllocNamedColor(dpy, cmap, name, &screen, &exact)) return screen.pixel;
     return fallback;
 }
 
@@ -70,18 +77,13 @@ static unsigned long colorFor(Widget w, const std::string &name)
     return bg;
 }
 
-static void drawPrimitive(Widget w,
-                          GC gc,
-                          Window win,
-                          DrawMode mode,
+static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
                           const std::vector<FtiPoint> &points,
-                          long x,
-                          long y,
-                          unsigned long pixel)
+                          long x, long y, unsigned long pixel)
 {
     if (points.empty()) return;
     std::vector<XPoint> xp(points.size());
-    const double scale = 0.54; /* original FTI coordinates are nominally 0..100 */
+    const double scale = 0.54;
     for (std::size_t i = 0; i < points.size(); ++i) {
         xp[i].x = static_cast<short>(x + points[i].x * scale);
         xp[i].y = static_cast<short>(y + (100.0 - points[i].y) * scale);
@@ -95,8 +97,22 @@ static void drawPrimitive(Widget w,
 
 static bool drawFti(Widget w, const std::string &relative, long x, long y)
 {
+    static bool reportedMissingRoot = false;
+    static bool reportedRoot = false;
     const std::string root = resolveFiletypeRoot();
-    if (root.empty()) return false;
+    if (root.empty()) {
+        if (!reportedMissingRoot) {
+            std::fprintf(stderr,
+                         "ImdInvertedTeeRenderer: no SGI filetype tree found; set SGI_FILETYPE_DIR or IRIX_ROOT for original .fti icons\n");
+            reportedMissingRoot = true;
+        }
+        return false;
+    }
+    if (!reportedRoot) {
+        std::fprintf(stderr, "ImdInvertedTeeRenderer: using SGI filetype resources from %s\n", root.c_str());
+        reportedRoot = true;
+    }
+
     const std::string path = root + "/" + relative;
     std::ifstream in(path.c_str());
     if (!in.good()) return false;
@@ -114,7 +130,6 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
     while (std::getline(in, line)) {
         line = trim(line);
         if (line.empty() || line[0] == '#') continue;
-
         if (starts(line, "color(")) {
             const std::string::size_type a = line.find('(');
             const std::string::size_type b = line.find(')', a + 1);
@@ -149,16 +164,14 @@ ImdInvertedTeeRenderer::ImdInvertedTeeRenderer() : ImdIconRenderer() {}
 ImdInvertedTeeRenderer::~ImdInvertedTeeRenderer() {}
 void ImdInvertedTeeRenderer::realize(Widget widget) { ImdIconRenderer::realize(widget); }
 
-void
-ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
+void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
 {
     if (!_portableWidget || !XtIsRealized(_portableWidget)) return;
     ImdIconView *iconView = dynamic_cast<ImdIconView *>(&view);
     if (!iconView) return;
 
     const std::string resource = iconView->portableIconResource().stdString();
-    if (resource.empty() || !drawFti(_portableWidget, resource, x, y))
-        return;
+    if (resource.empty() || !drawFti(_portableWidget, resource, x, y)) return;
 
     const ImdString label = iconView->getLabel();
     if (!label.empty()) {
@@ -166,7 +179,8 @@ ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
         Window win = XtWindow(_portableWidget);
         GC gc = XCreateGC(dpy, win, 0, 0);
         XSetForeground(dpy, gc, BlackPixelOfScreen(XtScreen(_portableWidget)));
-        XDrawString(dpy, win, gc, static_cast<int>(x), static_cast<int>(y + 70),
+        XDrawString(dpy, win, gc,
+                    static_cast<int>(x), static_cast<int>(y + 70),
                     label.c_str(), static_cast<int>(label.stdString().size()));
         XFreeGC(dpy, gc);
     }
