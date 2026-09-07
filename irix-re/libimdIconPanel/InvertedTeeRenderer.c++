@@ -3,6 +3,7 @@
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +15,26 @@ namespace
 {
 struct FtiPoint { double x; double y; };
 enum DrawMode { kNone, kPolygon, kLine, kOutlinePolygon };
+
+/*
+ * Original ImdInvertedTeeRenderer binary anchors:
+ *   ctor         0x09684198
+ *   setSize      0x096842f0
+ *   getIconX     0x096b5b70
+ *   getTextX     0x096b5bbc
+ *   getTextY     0x096b5c08
+ *
+ * The ctor stores iconScale = scale * 0.5. The coordinate helpers prove
+ * that both icon and text are horizontally centered in the ImdView width:
+ *
+ *   iconX = x + (scale * view.width - iconScale * 100) / 2
+ *   textX = x + (scale * view.width - textWidth) / 2
+ *
+ * At the default scale this makes the nominal 100x100 FTI geometry 50x50.
+ */
+static const double kDefaultScale = 1.0;
+static const double kDefaultIconScale = 0.5;
+static const double kFtiNominalExtent = 100.0;
 
 static std::string trim(const std::string &s)
 {
@@ -82,17 +103,21 @@ static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
                           long x, long y, unsigned long pixel)
 {
     if (points.empty()) return;
+
     std::vector<XPoint> xp(points.size());
-    const double scale = 0.54;
     for (std::size_t i = 0; i < points.size(); ++i) {
-        xp[i].x = static_cast<short>(x + points[i].x * scale);
-        xp[i].y = static_cast<short>(y + (100.0 - points[i].y) * scale);
+        xp[i].x = static_cast<short>(x + points[i].x * kDefaultIconScale);
+        xp[i].y = static_cast<short>(y +
+            (kFtiNominalExtent - points[i].y) * kDefaultIconScale);
     }
+
     XSetForeground(XtDisplay(w), gc, pixel);
     if (mode == kPolygon || mode == kOutlinePolygon)
-        XFillPolygon(XtDisplay(w), win, gc, &xp[0], static_cast<int>(xp.size()), Complex, CoordModeOrigin);
+        XFillPolygon(XtDisplay(w), win, gc, &xp[0],
+                     static_cast<int>(xp.size()), Complex, CoordModeOrigin);
     if (mode == kLine || mode == kOutlinePolygon)
-        XDrawLines(XtDisplay(w), win, gc, &xp[0], static_cast<int>(xp.size()), CoordModeOrigin);
+        XDrawLines(XtDisplay(w), win, gc, &xp[0],
+                   static_cast<int>(xp.size()), CoordModeOrigin);
 }
 
 static bool drawFti(Widget w, const std::string &relative, long x, long y)
@@ -109,7 +134,9 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
         return false;
     }
     if (!reportedRoot) {
-        std::fprintf(stderr, "ImdInvertedTeeRenderer: using SGI filetype resources from %s\n", root.c_str());
+        std::fprintf(stderr,
+                     "ImdInvertedTeeRenderer: using SGI filetype resources from %s\n",
+                     root.c_str());
         reportedRoot = true;
     }
 
@@ -145,14 +172,42 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
             double px = 0.0, py = 0.0;
             if (std::sscanf(line.c_str(), "vertex(%lf, %lf)", &px, &py) == 2)
                 points.push_back(FtiPoint{px, py});
-        } else if (starts(line, "endpolygon(") || starts(line, "endoutlinepolygon(") || starts(line, "endline(")) {
+        } else if (starts(line, "endpolygon(") ||
+                   starts(line, "endoutlinepolygon(") ||
+                   starts(line, "endline(")) {
             drawPrimitive(w, gc, win, mode, points, x, y, pixel);
-            mode = kNone; points.clear();
+            mode = kNone;
+            points.clear();
         }
     }
 
     XFreeGC(dpy, gc);
     return true;
+}
+
+struct LabelMetrics
+{
+    int width;
+    int ascent;
+    int descent;
+
+    LabelMetrics() : width(0), ascent(0), descent(0) {}
+};
+
+static LabelMetrics measureLabel(Display *dpy, GC gc, const ImdString &label)
+{
+    LabelMetrics result;
+    if (!dpy || !gc || label.empty()) return result;
+
+    XFontStruct *font = XQueryFont(dpy, XGContextFromGC(gc));
+    if (!font) return result;
+
+    result.width = XTextWidth(font, label.c_str(),
+                              static_cast<int>(label.stdString().size()));
+    result.ascent = font->ascent;
+    result.descent = font->descent;
+    XFreeFontInfo(0, font, 1);
+    return result;
 }
 }
 
@@ -162,26 +217,59 @@ void ImdIconRenderer::realize(Widget widget) { _portableWidget = widget; }
 
 ImdInvertedTeeRenderer::ImdInvertedTeeRenderer() : ImdIconRenderer() {}
 ImdInvertedTeeRenderer::~ImdInvertedTeeRenderer() {}
-void ImdInvertedTeeRenderer::realize(Widget widget) { ImdIconRenderer::realize(widget); }
+void ImdInvertedTeeRenderer::realize(Widget widget)
+{
+    ImdIconRenderer::realize(widget);
+}
 
 void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
 {
     if (!_portableWidget || !XtIsRealized(_portableWidget)) return;
+
     ImdIconView *iconView = dynamic_cast<ImdIconView *>(&view);
     if (!iconView) return;
 
-    const std::string resource = iconView->portableIconResource().stdString();
-    if (resource.empty() || !drawFti(_portableWidget, resource, x, y)) return;
+    Display *dpy = XtDisplay(_portableWidget);
+    Window win = XtWindow(_portableWidget);
+    if (!dpy || win == None) return;
 
+    GC gc = XCreateGC(dpy, win, 0, 0);
     const ImdString label = iconView->getLabel();
+    const LabelMetrics metrics = measureLabel(dpy, gc, label);
+
+    const long iconExtent = static_cast<long>(
+        kFtiNominalExtent * kDefaultIconScale);
+    const long viewWidth = std::max(iconExtent,
+                                    static_cast<long>(metrics.width));
+    const long viewHeight = iconExtent +
+        static_cast<long>(metrics.ascent + metrics.descent);
+
+    /*
+     * Original setSize() writes the computed dimensions back to ImdView
+     * +0x0c/+0x10. Use the same source-level geometry fields in the portable
+     * view so hit-testing and dragging follow the renderer instead of the old
+     * fixed 84x84 host box.
+     */
+    view.portableSetSize(viewWidth, viewHeight);
+
+    const long iconX = x + static_cast<long>(
+        (kDefaultScale * viewWidth - iconExtent) * 0.5);
+    const long textX = x + static_cast<long>(
+        (kDefaultScale * viewWidth - metrics.width) * 0.5);
+    const long textBaselineY = y + iconExtent + metrics.ascent;
+
+    const std::string resource = iconView->portableIconResource().stdString();
+    if (!resource.empty())
+        drawFti(_portableWidget, resource, iconX, y);
+
     if (!label.empty()) {
-        Display *dpy = XtDisplay(_portableWidget);
-        Window win = XtWindow(_portableWidget);
-        GC gc = XCreateGC(dpy, win, 0, 0);
         XSetForeground(dpy, gc, BlackPixelOfScreen(XtScreen(_portableWidget)));
         XDrawString(dpy, win, gc,
-                    static_cast<int>(x), static_cast<int>(y + 70),
-                    label.c_str(), static_cast<int>(label.stdString().size()));
-        XFreeGC(dpy, gc);
+                    static_cast<int>(textX),
+                    static_cast<int>(textBaselineY),
+                    label.c_str(),
+                    static_cast<int>(label.stdString().size()));
     }
+
+    XFreeGC(dpy, gc);
 }
