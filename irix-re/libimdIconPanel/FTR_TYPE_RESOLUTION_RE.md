@@ -161,4 +161,50 @@ Dumpster:
   iconlib/Dumpster.closed.fti
 ```
 
-The current host compatibility resolver evaluates only these directly recovered core predicates and reads the actual `.ftr` ICON include lists. It intentionally does not invent MIME or extension mappings. Full execution of every compiled `.otr` MATCH operation remains a separate reconstruction task.
+## Portable MATCH execution
+
+`FtrMatchEvaluator.c++` now executes source MATCH rules from the same four source classes used to build `desktop.otr`, in original class order:
+
+```text
+local
+install
+system
+default
+```
+
+Files are visited lexically inside each source class and the first matching TYPE wins. The evaluator is source-level compatibility code; it is not presented as an ABI reimplementation of `libimdFtrDB.so`.
+
+The implemented expression vocabulary is the one recovered from the binary interpreter and checked against shipped IRIX FTR examples:
+
+```text
+char uchar short ushort long ulong string
+glob dircontains
+size mode ascii tag mactype maccreator true false
+! ~
+|| &&
+== != < <= > >=
+& | ^
+<< >>
++ - * / %
+```
+
+Additional behavior recovered from shipped documentation and rules:
+
+- MATCH may span lines and terminates at an unquoted semicolon.
+- `#` begins a comment only outside a quoted string.
+- `SPECIALFILE` is a marker rule for non-plain files and may appear before or after MATCH within a TYPE.
+- `&&` and `||` short-circuit.
+- `string(offset,length)` reads exactly the requested bytes.
+- integer reads use byte order as written in the file. Shipped TIFF rules, for example, compare `long(0)` against both `0x49492a00` and `0x4d4d002a`.
+- N32/ELF32 `tag` follows `tag(1)`: the matcher reads `SHT_MIPS_REGINFO` (`0x70000006`), requires the second word tag-present flag, and takes the third word as the tag value. Script tags are read from the documented second-line `#Tag number` form.
+
+`FtrResolver.c++` now tries this source evaluator first. The previous `classifyCore()` path remains only as a compatibility fallback when the source tree is unavailable or no rule can currently be evaluated. No MIME or extension mapping is introduced.
+
+Known unproven or incomplete pieces remain explicit:
+
+- `mactype` and `maccreator` return the original failure value `????` until AppleSingle/AppleDouble versus `.HSAncillary` backend precedence is recovered from the original binary.
+- ELF64 `ODK_TAGS` tag extraction is not yet implemented; the current desktop target and preserved application specimens are N32/ELF32.
+- Exact original pathname-versus-leaf dispatch for `glob()` is reconstructed from shipped rule usage and still needs binary confirmation.
+- SGI `dircontains` documents shell filename expansion including braces; the current host matcher uses `fnmatch()` and therefore still needs brace-expansion parity.
+
+A standalone smoke test covers typed reads, strings containing `#`, glob/ascii matching, source first-match behavior, SPECIALFILE parsing, and logical short-circuiting. A GitHub Actions smoke workflow is also present so the checked-in evaluator can be compiled and exercised independently of Motif.
