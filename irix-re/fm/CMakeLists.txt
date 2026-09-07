@@ -119,3 +119,12 @@ if(TARGET imdIconPanel)
     set_property(TARGET iid-desktop PROPERTY CXX_STANDARD_REQUIRED ON)
     install(TARGETS iid-desktop RUNTIME DESTINATION bin)
 endif()
+
+# Exact original DefaultIconList captured from desktop_eoe plus a clearly
+# marked Linux host transport helper.  The helper is temporary until the
+# ImdRefModel::createReference() persistent reference format is reconstructed.
+install(FILES DefaultIconList.irix-6.5
+        DESTINATION share/irix-re/fm)
+install(PROGRAMS populate-irix-default-desktop.sh
+        DESTINATION bin
+        RENAME iid-populate-default-desktop)
