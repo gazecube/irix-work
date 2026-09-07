@@ -14,7 +14,17 @@ static bool
 isDirectoryPath(const std::string &path)
 {
     struct stat st;
-    return lstat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+
+    /*
+     * The runnable Linux default-desktop population seam currently represents
+     * original ImdRefModel references with POSIX symlinks. Follow those links
+     * here so references to existing directory targets ($HOME and dumpster)
+     * are presented with the same directory-facing model type instead of
+     * being misclassified as generic files. This is explicitly a host seam,
+     * not a claim about original IRIX symlink handling; it disappears when
+     * ImdRefModel::createReference() is reconstructed.
+     */
+    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 } /* namespace */
