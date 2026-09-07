@@ -7,12 +7,16 @@
 #include <X11/Xutil.h>
 #include <vector>
 
+class ImdView;
+class ImdIconPanel;
+class ImdDragManager;
+
 class ImdRenderer
 {
 public:
     virtual ~ImdRenderer() {}
     virtual void realize(Widget) {}
-    virtual void draw(class ImdView &, long, long) {}
+    virtual void draw(ImdView &, long, long) {}
 };
 
 class ImdIconRenderer : public ImdRenderer
@@ -21,7 +25,7 @@ public:
     ImdIconRenderer();
     virtual ~ImdIconRenderer();
     virtual void realize(Widget widget);
-    virtual void draw(class ImdView &, long, long) {}
+    virtual void draw(ImdView &, long, long) {}
 
 protected:
     Widget _portableWidget;
@@ -33,7 +37,7 @@ public:
     ImdInvertedTeeRenderer();
     virtual ~ImdInvertedTeeRenderer();
     virtual void realize(Widget widget);
-    virtual void draw(class ImdView &view, long x, long y);
+    virtual void draw(ImdView &view, long x, long y);
 };
 
 class ImdLayout
@@ -41,6 +45,16 @@ class ImdLayout
 public:
     explicit ImdLayout(Widget widget = 0) : _widget(widget) {}
     virtual ~ImdLayout() {}
+
+    /*
+     * Original exported symbol:
+     *   moveView__9ImdLayoutGR7ImdViewlT2
+     *
+     * The original base implementation is an eight-byte stub. Derived icon
+     * layouts own the actual move operation.
+     */
+    virtual bool moveView(ImdView &, long, long) { return false; }
+
     Widget widget() const { return _widget; }
 protected:
     Widget _widget;
@@ -114,8 +128,6 @@ private:
     ImdString _portableIconResource;
 };
 
-class ImdIconPanel;
-
 extern WidgetClass imdViewPanelWidgetClass;
 
 extern "C" Widget ImdCreateViewPanel(Widget, char *, Arg *, Cardinal);
@@ -124,6 +136,7 @@ extern "C" void ImdViewPanelAdoptLayout(Widget, ImdLayout *);
 extern "C" void ImdViewPanelSetScale(Widget, float, long, long);
 extern "C" void ImdViewPanelBeginBlockChanges(Widget);
 extern "C" void ImdViewPanelEndBlockChanges(Widget);
+extern "C" ImdLayout *ImdViewPanelGetLayout(Widget);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdView *);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *);
 void ImdViewPanelRedraw(Widget);
@@ -138,13 +151,25 @@ public:
     ImdIconPanel(const char *name, Widget parent, Arg *args, int count);
     virtual ~ImdIconPanel();
     Widget baseWidget() const { return _baseWidget; }
+
     virtual void adoptView(ImdIconView *view, ImdIconView *parentView);
     virtual void applySelectStrings(ImdIconView &view);
+
+    /*
+     * Original exported drag surface. The base dragStart() delegates to the
+     * ImdDragManager stored by ImdIconPanel. The derived model-based panel
+     * overrides dragStart()/dragEnd() in the original library.
+     */
+    virtual void dragStart(int, long, long, XEvent *);
+    virtual bool dragMotion(ImdView *);
+    virtual void dragEnd();
+
     const std::vector<ImdView *> &portableViews() const { return _views; }
     void portableResetViews(bool destroyViews);
 
 private:
     Widget _baseWidget;
+    ImdDragManager *_dragManager;
     std::vector<ImdView *> _views;
 };
 
