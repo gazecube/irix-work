@@ -136,73 +136,50 @@ static String fallbackResources[] = {
     NULL
 };
 
-static std::string
-joinPath(const std::string &left, const std::string &right)
+static std::string joinPath(const std::string &left, const std::string &right)
 {
-    if (left == "/")
-        return left + right;
+    if (left == "/") return left + right;
     return left + "/" + right;
 }
 
-static bool
-entryLess(const FmEntry &left, const FmEntry &right)
+static bool entryLess(const FmEntry &left, const FmEntry &right)
 {
-    if (left.directory != right.directory)
-        return left.directory;
+    if (left.directory != right.directory) return left.directory;
     return left.name < right.name;
 }
 
-static std::string
-canonicalDirectory(const char *path)
+static std::string canonicalDirectory(const char *path)
 {
     char resolved[PATH_MAX];
     struct stat st;
-
-    if (!path || !*path)
-        return std::string();
-    if (!realpath(path, resolved))
-        return std::string();
-    if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
-        return std::string();
+    if (!path || !*path) return std::string();
+    if (!realpath(path, resolved)) return std::string();
+    if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode)) return std::string();
     return resolved;
 }
 
-static void
-setStatus(FmState *state, const char *text)
+static void setStatus(FmState *state, const char *text)
 {
     XmString label = XmStringCreateLocalized((char *)(text ? text : ""));
     XtVaSetValues(state->status, XmNlabelString, label, NULL);
     XmStringFree(label);
 }
 
-static void
-setStatusErrno(FmState *state, const char *operation)
+static void setStatusErrno(FmState *state, const char *operation)
 {
     char buffer[512];
     snprintf(buffer, sizeof(buffer), "%s: %s", operation, strerror(errno));
     setStatus(state, buffer);
 }
 
-static ImdModel *
-modelForDirectory(FmState *state, const std::string &directory)
+static ImdModel *modelForDirectory(FmState *state, const std::string &directory)
 {
-    /*
-     * Binary-backed path construction:
-     *   ImdFileModel::dnaSelectorFromPath(path, kNull)
-     *   ImdDNA(ImdDirModel::kTypeName, selector)
-     *   ImdBroker::getModel(dna)
-     *
-     * The exact ImdDirModel::kTypeName string was recovered as
-     * "ImdDirModel" by the model-library static initialization work.
-     */
-    ImdString selector = ImdFileModel::dnaSelectorFromPath(
-        ImdString(directory), ImdString());
+    ImdString selector = ImdFileModel::dnaSelectorFromPath(ImdString(directory), ImdString());
     ImdDNA dna(ImdString("ImdDirModel"), selector);
     return state->broker ? state->broker->getModel(dna) : 0;
 }
 
-static void
-populateDirectory(FmState *state, const std::string &directory)
+static void populateDirectory(FmState *state, const std::string &directory)
 {
     DIR *dir;
     struct dirent *de;
@@ -218,19 +195,14 @@ populateDirectory(FmState *state, const std::string &directory)
         FmEntry entry;
         struct stat st;
         std::string path;
-
-        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
-            continue;
-        if (!state->showHidden && de->d_name[0] == '.')
-            continue;
-
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        if (!state->showHidden && de->d_name[0] == '.') continue;
         entry.name = de->d_name;
         path = joinPath(directory, entry.name);
         entry.directory = (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
         next.push_back(entry);
     }
     closedir(dir);
-
     std::sort(next.begin(), next.end(), entryLess);
 
     ImdModel *nextModel = modelForDirectory(state, directory);
@@ -239,17 +211,8 @@ populateDirectory(FmState *state, const std::string &directory)
         return;
     }
 
-    /*
-     * This is the pipeline merge. The old FmIconSurface hand-built child
-     * views and painted its own list. The real content population now enters
-     * through ImdModelBasedIconPanel::changeModel(), whose NotifyReceiver
-     * consumes the directory model's existence batch and creates
-     * ImdModelBasedIconView children exactly like iid-desktop.
-     */
     state->dirPanel->changeModel(nextModel);
-
-    if (state->directoryModel)
-        state->broker->releaseModel(state->directoryModel);
+    if (state->directoryModel) state->broker->releaseModel(state->directoryModel);
     state->directoryModel = nextModel;
 
     state->entries.swap(next);
@@ -261,23 +224,17 @@ populateDirectory(FmState *state, const std::string &directory)
 
     {
         char title[PATH_MAX + 64];
-        char status[160];
+        char status[128];
         snprintf(title, sizeof(title), "File Manager - %s", state->directory.c_str());
         XtVaSetValues(state->shell, XmNtitle, title, NULL);
-        snprintf(status, sizeof(status), "%lu items, %lu model-backed views",
-                 (unsigned long)state->entries.size(),
-                 (unsigned long)state->dirPanel->portableViews().size());
+        snprintf(status, sizeof(status), "%lu items", (unsigned long)state->entries.size());
         setStatus(state, status);
     }
-
-    ImdViewPanelRedraw(state->panelWidget);
 }
 
-static void
-changeDirectory(FmState *state, const char *path)
+static void changeDirectory(FmState *state, const char *path)
 {
     std::string directory = canonicalDirectory(path);
-
     if (directory.empty()) {
         setStatus(state, "Not a directory");
         return;
@@ -285,81 +242,78 @@ changeDirectory(FmState *state, const char *path)
     populateDirectory(state, directory);
 }
 
-static void
-openFile(FmState *state, const std::string &path)
+static void openFile(FmState *state, const std::string &path)
 {
     pid_t pid = fork();
-
     if (pid < 0) {
         setStatusErrno(state, "Cannot launch file");
         return;
     }
-
     if (pid == 0) {
         execlp("xdg-open", "xdg-open", path.c_str(), (char *)0);
         execlp("gio", "gio", "open", path.c_str(), (char *)0);
         _exit(127);
     }
-
     setStatus(state, "Opening file");
 }
 
-static void
-openDNA(FmState *state, const ImdDNA &dna)
+static bool selectedEntry(FmState *state, FmEntry *entry)
 {
-    ImdString fileName = ImdFileModel::fileNameFromDNA(dna);
-    if (fileName.empty())
-        return;
-
-    struct stat st;
-    const std::string path = fileName.stdString();
-    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
-        changeDirectory(state, path.c_str());
-    else
-        openFile(state, path);
+    if (!state->haveSelectedDNA) return false;
+    const std::string path = ImdFileModel::fileNameFromDNA(state->selectedDNA).stdString();
+    if (path.empty()) return false;
+    const std::string::size_type slash = path.find_last_of('/');
+    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    for (std::vector<FmEntry>::const_iterator it = state->entries.begin(); it != state->entries.end(); ++it) {
+        if (it->name == name) {
+            *entry = *it;
+            return true;
+        }
+    }
+    return false;
 }
 
-static void
-panelEventHandler(Widget widget, XtPointer client, XEvent *event, Boolean *dispatch)
+static void openEntry(FmState *state, const FmEntry &entry)
+{
+    std::string path = joinPath(state->directory, entry.name);
+    if (entry.directory) changeDirectory(state, path.c_str());
+    else openFile(state, path);
+}
+
+static void panelEventHandler(Widget widget, XtPointer client, XEvent *event, Boolean *)
 {
     FmState *state = (FmState *)client;
-    (void)dispatch;
+    if (!event || event->type != ButtonPress || event->xbutton.button != Button1) return;
 
-    if (!state || !event || event->type != ButtonPress ||
-        event->xbutton.button != Button1)
-        return;
+    ImdView *hit = ImdViewPanelFindViewByLocation(widget, event->xbutton.x, event->xbutton.y);
+    ImdModelBasedIconView *modelView = dynamic_cast<ImdModelBasedIconView *>(hit);
+    if (!modelView) return;
 
-    ImdView *view = ImdViewPanelFindViewByLocation(
-        widget, event->xbutton.x, event->xbutton.y);
-    ImdModelBasedIconView *modelView =
-        dynamic_cast<ImdModelBasedIconView *>(view);
-    if (!modelView)
-        return;
+    const bool doubleClick = state->lastClickView == hit &&
+        event->xbutton.time >= state->lastClickTime &&
+        event->xbutton.time - state->lastClickTime <= 400;
 
     state->selectedDNA = modelView->getDNA();
     state->haveSelectedDNA = true;
-
-    const bool doubleClick =
-        (state->lastClickView == view &&
-         event->xbutton.time >= state->lastClickTime &&
-         event->xbutton.time - state->lastClickTime <= 400);
-
-    state->lastClickView = view;
     state->lastClickTime = event->xbutton.time;
+    state->lastClickView = hit;
 
     if (doubleClick) {
+        const std::string path = ImdFileModel::fileNameFromDNA(state->selectedDNA).stdString();
+        if (!path.empty()) {
+            struct stat st;
+            if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) changeDirectory(state, path.c_str());
+            else openFile(state, path);
+        }
         state->lastClickTime = 0;
         state->lastClickView = 0;
-        openDNA(state, state->selectedDNA);
     }
 }
 
-static void
-locationActivateCB(Widget widget, XtPointer client, XtPointer call)
+static void locationActivateCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
     char *text = XmTextFieldGetString(widget);
-
     (void)call;
     if (text) {
         changeDirectory(state, text);
@@ -367,81 +321,52 @@ locationActivateCB(Widget widget, XtPointer client, XtPointer call)
     }
 }
 
-static void
-upCB(Widget widget, XtPointer client, XtPointer call)
+static void upCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
     std::string parent;
     std::string::size_type slash;
-
-    (void)widget;
-    (void)call;
-
-    if (state->directory == "/")
-        return;
-
+    if (state->directory == "/") return;
     slash = state->directory.rfind('/');
     parent = (slash == 0) ? "/" : state->directory.substr(0, slash);
     changeDirectory(state, parent.c_str());
 }
 
-static void
-refreshCB(Widget widget, XtPointer client, XtPointer call)
+static void refreshCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    (void)widget;
-    (void)call;
     populateDirectory(state, state->directory);
 }
 
-static void
-openSelectedCB(Widget widget, XtPointer client, XtPointer call)
+static void openSelectedCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    (void)widget;
-    (void)call;
-
-    if (!state->haveSelectedDNA) {
+    FmEntry entry;
+    if (!selectedEntry(state, &entry)) {
         setStatus(state, "No item selected");
         return;
     }
-    openDNA(state, state->selectedDNA);
+    openEntry(state, entry);
 }
 
-static void
-selectAllCB(Widget widget, XtPointer client, XtPointer call)
+static void selectAllCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    (void)widget;
-    (void)call;
-
-    /*
-     * The original panel selection machinery is not reconstructed far enough
-     * to drive Select All without inventing a second selection store. Keep the
-     * command explicit rather than reintroducing the removed FmIconSurface
-     * selection path.
-     */
     setStatus(state, "Select All awaits ImdIconPanel selection reconstruction");
 }
 
-static void
-showHiddenCB(Widget widget, XtPointer client, XtPointer call)
+static void showHiddenCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
     XmToggleButtonCallbackStruct *cbs = (XmToggleButtonCallbackStruct *)call;
-
     state->showHidden = cbs->set ? true : false;
     populateDirectory(state, state->directory);
     (void)widget;
 }
 
-static void
-closeCB(Widget widget, XtPointer client, XtPointer call)
+static void closeCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    (void)widget;
-    (void)call;
-
     if (state->directoryModel && state->broker) {
         state->broker->releaseModel(state->directoryModel);
         state->directoryModel = 0;
@@ -450,92 +375,68 @@ closeCB(Widget widget, XtPointer client, XtPointer call)
     exit(0);
 }
 
-static void
-unimplementedCB(Widget widget, XtPointer client, XtPointer call)
+static void unimplementedCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
     const char *name = XtName(widget);
     char text[256];
-
     (void)call;
-    snprintf(text, sizeof(text), "%s is not reconstructed yet",
-             name ? name : "Command");
+    snprintf(text, sizeof(text), "%s is not reconstructed yet", name ? name : "Command");
     setStatus(state, text);
 }
 
-static void
-layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
+static void layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
     const char *name = XtName(widget);
     char text[128];
-
     (void)call;
-
-    if (name && (!strcmp(name, "iconicLayout") ||
-                 !strcmp(name, "viewAsIconsMenuItem"))) {
+    if (name && (!strcmp(name, "iconicLayout") || !strcmp(name, "viewAsIconsMenuItem"))) {
         populateDirectory(state, state->directory);
         setStatus(state, "Icon layout");
         return;
     }
-
-    snprintf(text, sizeof(text), "%s layout path is not reconstructed yet",
-             name ? name : "Selected");
+    snprintf(text, sizeof(text), "%s layout path is not reconstructed yet", name ? name : "Selected");
     setStatus(state, text);
 }
 
-static void
-scaleZoomCB(Widget widget, XtPointer client, XtPointer call)
+static void scaleZoomCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-    SgThumbWheelCallbackStruct *cbs =
-        (SgThumbWheelCallbackStruct *)call;
+    SgThumbWheelCallbackStruct *cbs = (SgThumbWheelCallbackStruct *)call;
     int value = cbs ? cbs->value : 100;
     float scale = (float)value / 100.0f;
     char text[64];
-
     ImdViewPanelSetScale(state->panelWidget, scale, 0, 0);
     snprintf(text, sizeof(text), "Icon scale %d%%", value);
     setStatus(state, text);
     (void)widget;
 }
 
-static Widget
-makeMenu(Widget menuBar, const char *name)
+static Widget makeMenu(Widget menuBar, const char *name)
 {
     Widget menu = XmCreatePulldownMenu(menuBar, (char *)name, NULL, 0);
-    XtVaCreateManagedWidget(name,
-                            xmCascadeButtonWidgetClass,
-                            menuBar,
-                            XmNsubMenuId, menu,
-                            NULL);
+    XtVaCreateManagedWidget(name, xmCascadeButtonWidgetClass, menuBar, XmNsubMenuId, menu, NULL);
     return menu;
 }
 
-static Widget
-makePush(Widget parent, const char *name,
-         XtCallbackProc callback, FmState *state)
+static Widget makePush(Widget parent, const char *name, XtCallbackProc callback, FmState *state)
 {
-    Widget item = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass,
-                                          parent, NULL);
-    if (callback)
-        XtAddCallback(item, XmNactivateCallback, callback, state);
+    Widget item = XtVaCreateManagedWidget(name, xmPushButtonWidgetClass, parent, NULL);
+    if (callback) XtAddCallback(item, XmNactivateCallback, callback, state);
     return item;
 }
 
-static void
-makeSeparator(Widget menu)
+static void makeSeparator(Widget menu)
 {
     XtVaCreateManagedWidget("separator", xmSeparatorWidgetClass, menu, NULL);
 }
 
-static Widget
-createMenuBar(Widget parent, FmState *state)
+static Widget createMenuBar(Widget parent, FmState *state)
 {
     Widget menuBar;
     Widget menu;
     Widget hidden;
-
     menuBar = XmCreateMenuBar(parent, (char *)"menuBar", NULL, 0);
 
     menu = makeMenu(menuBar, "actionsMenu");
@@ -568,11 +469,7 @@ createMenuBar(Widget parent, FmState *state)
     makePush(menu, "viewAsColumnsMenuItem", layoutButtonCB, state);
     makePush(menu, "viewAsGalleryMenuItem", layoutButtonCB, state);
     makeSeparator(menu);
-    hidden = XtVaCreateManagedWidget("showHiddenMenuItem",
-                                     xmToggleButtonWidgetClass,
-                                     menu,
-                                     XmNset, False,
-                                     NULL);
+    hidden = XtVaCreateManagedWidget("showHiddenMenuItem", xmToggleButtonWidgetClass, menu, XmNset, False, NULL);
     XtAddCallback(hidden, XmNvalueChangedCallback, showHiddenCB, state);
     makePush(menu, "truncateLabelsMenuItem", unimplementedCB, state);
 
@@ -592,29 +489,21 @@ createMenuBar(Widget parent, FmState *state)
     return menuBar;
 }
 
-static Widget
-createControlBoard(Widget parent, FmState *state)
+static Widget createControlBoard(Widget parent, FmState *state)
 {
     Widget rc1;
     Widget rc2;
-
-    rc1 = XtVaCreateManagedWidget("rc1",
-                                  xmRowColumnWidgetClass,
-                                  parent,
+    rc1 = XtVaCreateManagedWidget("rc1", xmRowColumnWidgetClass, parent,
                                   XmNorientation, XmHORIZONTAL,
                                   XmNpacking, XmPACK_TIGHT,
                                   XmNtopAttachment, XmATTACH_FORM,
                                   XmNleftAttachment, XmATTACH_FORM,
                                   XmNbottomAttachment, XmATTACH_FORM,
                                   NULL);
-
-    rc2 = XtVaCreateManagedWidget("rc2",
-                                  xmRowColumnWidgetClass,
-                                  rc1,
+    rc2 = XtVaCreateManagedWidget("rc2", xmRowColumnWidgetClass, rc1,
                                   XmNorientation, XmVERTICAL,
                                   XmNpacking, XmPACK_TIGHT,
                                   NULL);
-
     makePush(rc2, "pathfinder", unimplementedCB, state);
     makePush(rc2, "iconicLayout", layoutButtonCB, state);
     makePush(rc2, "listLayout", layoutButtonCB, state);
@@ -623,9 +512,7 @@ createControlBoard(Widget parent, FmState *state)
     makePush(rc2, "galleryMode", layoutButtonCB, state);
     makePush(rc2, "shelf", unimplementedCB, state);
 
-    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
-                                                sgThumbWheelWidgetClass,
-                                                rc1,
+    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
                                                 XmNorientation, XmVERTICAL,
                                                 XmNminimum, 60,
                                                 XmNmaximum, 500,
@@ -633,29 +520,20 @@ createControlBoard(Widget parent, FmState *state)
                                                 SgNhomePosition, 100,
                                                 XmNtraversalOn, False,
                                                 NULL);
-    XtAddCallback(state->scaleZoom, XmNvalueChangedCallback,
-                  scaleZoomCB, state);
-    XtAddCallback(state->scaleZoom, XmNdragCallback,
-                  scaleZoomCB, state);
-
+    XtAddCallback(state->scaleZoom, XmNvalueChangedCallback, scaleZoomCB, state);
+    XtAddCallback(state->scaleZoom, XmNdragCallback, scaleZoomCB, state);
     return rc1;
 }
 
-static void
-reapChildren(XtPointer client, XtIntervalId *id)
+static void reapChildren(XtPointer client, XtIntervalId *id)
 {
     FmState *state = (FmState *)client;
-
-    while (waitpid(-1, 0, WNOHANG) > 0)
-        ;
-
-    XtAppAddTimeOut(XtWidgetToApplicationContext(state->shell),
-                    1000, reapChildren, client);
+    while (waitpid(-1, 0, WNOHANG) > 0) ;
+    XtAppAddTimeOut(XtWidgetToApplicationContext(state->shell), 1000, reapChildren, client);
     (void)id;
 }
 
-int
-main(int argc, char **argv)
+int main(int argc, char **argv)
 {
     XtAppContext app;
     FmState state;
@@ -686,46 +564,29 @@ main(int argc, char **argv)
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
                                     NULL, 0, &argc, argv,
-                                    fallbackResources,
-                                    NULL);
+                                    fallbackResources, NULL);
 
-    mainWindow = XtVaCreateManagedWidget("mainWindow",
-                                         xmMainWindowWidgetClass,
-                                         state.shell, NULL);
+    mainWindow = XtVaCreateManagedWidget("mainWindow", xmMainWindowWidgetClass, state.shell, NULL);
     menuBar = createMenuBar(mainWindow, &state);
+    form = XtVaCreateManagedWidget("form", xmFormWidgetClass, mainWindow, NULL);
 
-    form = XtVaCreateManagedWidget("form",
-                                   xmFormWidgetClass,
-                                   mainWindow, NULL);
-
-    finderForm = XtVaCreateManagedWidget("finderForm",
-                                         xmFormWidgetClass,
-                                         form,
+    finderForm = XtVaCreateManagedWidget("finderForm", xmFormWidgetClass, form,
                                          XmNtopAttachment, XmATTACH_FORM,
                                          XmNleftAttachment, XmATTACH_FORM,
                                          XmNrightAttachment, XmATTACH_FORM,
                                          NULL);
-
-    up = XtVaCreateManagedWidget("Up",
-                                 xmPushButtonWidgetClass,
-                                 finderForm,
+    up = XtVaCreateManagedWidget("Up", xmPushButtonWidgetClass, finderForm,
                                  XmNtopAttachment, XmATTACH_FORM,
                                  XmNleftAttachment, XmATTACH_FORM,
                                  XmNbottomAttachment, XmATTACH_FORM,
                                  NULL);
-
-    refresh = XtVaCreateManagedWidget("Refresh",
-                                      xmPushButtonWidgetClass,
-                                      finderForm,
+    refresh = XtVaCreateManagedWidget("Refresh", xmPushButtonWidgetClass, finderForm,
                                       XmNtopAttachment, XmATTACH_FORM,
                                       XmNleftAttachment, XmATTACH_WIDGET,
                                       XmNleftWidget, up,
                                       XmNbottomAttachment, XmATTACH_FORM,
                                       NULL);
-
-    state.location = XtVaCreateManagedWidget("iconFinder",
-                                              xmTextFieldWidgetClass,
-                                              finderForm,
+    state.location = XtVaCreateManagedWidget("iconFinder", xmTextFieldWidgetClass, finderForm,
                                               XmNtopAttachment, XmATTACH_FORM,
                                               XmNleftAttachment, XmATTACH_WIDGET,
                                               XmNleftWidget, refresh,
@@ -733,9 +594,7 @@ main(int argc, char **argv)
                                               XmNbottomAttachment, XmATTACH_FORM,
                                               NULL);
 
-    state.status = XtVaCreateManagedWidget("status",
-                                           xmLabelWidgetClass,
-                                           form,
+    state.status = XtVaCreateManagedWidget("status", xmLabelWidgetClass, form,
                                            XmNleftAttachment, XmATTACH_FORM,
                                            XmNrightAttachment, XmATTACH_FORM,
                                            XmNbottomAttachment, XmATTACH_FORM,
@@ -750,9 +609,7 @@ main(int argc, char **argv)
                   XmNbottomWidget, state.status,
                   NULL);
 
-    scroller = XtVaCreateManagedWidget("scrollW",
-                                       xmScrolledWindowWidgetClass,
-                                       form,
+    scroller = XtVaCreateManagedWidget("scrollW", xmScrolledWindowWidgetClass, form,
                                        XmNscrollingPolicy, XmAUTOMATIC,
                                        XmNtopAttachment, XmATTACH_WIDGET,
                                        XmNtopWidget, finderForm,
@@ -763,14 +620,31 @@ main(int argc, char **argv)
                                        XmNbottomWidget, state.status,
                                        NULL);
 
-    /*
-     * Original fm constructs ImdModelBasedIconPanel in _createPanels(), stores
-     * it at FmWindow +0xa4 and registers it through setDirPanel(). The same
-     * reconstructed class now backs both fm directory views and iid-desktop.
-     */
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
     state.panelWidget = state.dirPanel->baseWidget();
+
+    /*
+     * The original FileManager app-default hierarchy is
+     *   FileManager*scrollW.panel
+     * and _createPanels() creates the live ImdModelBasedIconPanel as the
+     * scrolled directory-view child. On Motif, merely managing a generic
+     * DrawingArea-family child does not reliably make it the XmScrolledWindow
+     * work window. Bind that relationship explicitly so the IMD panel owns the
+     * visible viewport instead of remaining at its tiny requested geometry.
+     *
+     * The 575x400 request is only the portable pre-realize geometry seam; the
+     * shipped FileManager resources already establish width=575 and content
+     * pane height=400. XmScrolledWindow remains responsible for viewport and
+     * scrollbar geometry after realization.
+     */
+    XtVaSetValues(state.panelWidget,
+                  XmNwidth, 575,
+                  XmNheight, 400,
+                  NULL);
     XtManageChild(state.panelWidget);
+    XtVaSetValues(scroller,
+                  XmNworkWindow, state.panelWidget,
+                  NULL);
 
     renderer = new ImdInvertedTeeRenderer;
     ImdViewPanelAdoptRenderer(state.panelWidget, renderer);
@@ -778,12 +652,6 @@ main(int argc, char **argv)
     state.iconLayout = new ImdIconLayout(state.panelWidget);
     ImdViewPanelAdoptLayout(state.panelWidget, state.iconLayout);
 
-    /*
-     * Temporary application transport only: activation is recovered from the
-     * model-backed view under the pointer. Drawing, geometry, type identity and
-     * content population are no longer duplicated here. Replace this when the
-     * original ImdIconPanel selection/Command action path is reconstructed.
-     */
     XtAddEventHandler(state.panelWidget,
                       ButtonPressMask,
                       False,
@@ -792,13 +660,25 @@ main(int argc, char **argv)
 
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
     XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
-    XtAddCallback(state.location, XmNactivateCallback,
-                  locationActivateCB, &state);
+    XtAddCallback(state.location, XmNactivateCallback, locationActivateCB, &state);
 
     XmMainWindowSetAreas(mainWindow, menuBar, NULL, NULL, NULL, form);
 
     changeDirectory(&state, initial);
     XtRealizeWidget(state.shell);
+
+    {
+        Dimension pw = 0, ph = 0, sw = 0, sh = 0;
+        XtVaGetValues(state.panelWidget, XmNwidth, &pw, XmNheight, &ph, NULL);
+        XtVaGetValues(scroller, XmNwidth, &sw, XmNheight, &sh, NULL);
+        fprintf(stderr,
+                "fm: icon panel geometry %ux%u in scrollW %ux%u; %lu model-backed views\n",
+                (unsigned)pw, (unsigned)ph,
+                (unsigned)sw, (unsigned)sh,
+                (unsigned long)state.dirPanel->portableViews().size());
+        ImdViewPanelRedraw(state.panelWidget);
+    }
+
     XtAppAddTimeOut(app, 1000, reapChildren, &state);
     XtAppMainLoop(app);
     return 0;
