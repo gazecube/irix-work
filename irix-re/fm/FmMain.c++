@@ -1,15 +1,19 @@
 /*
  * FmMain.c++ - runnable file manager reconstruction
  *
- * Keep the application useful while the recovered FmApp/FmWindow and IMD
- * bodies are brought online. Widget names and control identities are taken
- * from the preserved fm executable and recovered FileManager app-defaults.
+ * Widget names and control identities are taken from the preserved fm
+ * executable and recovered FileManager app-defaults. The directory content
+ * path now shares the same model-backed ImdModelBasedIconPanel ->
+ * ImdModelBasedIconView -> ImdInvertedTeeRenderer pipeline as iid-desktop.
  */
 
 #include "ModelBasedIconPanel.h"
+#include "ModelBasedIconView.h"
 #include "ImdIconPanel.h"
 #include "IconLayout.h"
-#include "FmIconSurface.h"
+#include "Broker.h"
+#include "FileModel.h"
+#include "Model.h"
 #include <Sgm/ThumbWheel.h>
 
 #include <Xm/Xm.h>
@@ -19,7 +23,6 @@
 #include <Xm/MainW.h>
 #include <Xm/PushB.h>
 #include <Xm/RowColumn.h>
-#include <Xm/Scale.h>
 #include <Xm/ScrolledW.h>
 #include <Xm/Separator.h>
 #include <Xm/TextF.h>
@@ -50,15 +53,20 @@ struct FmEntry {
 struct FmState {
     Widget shell;
     Widget location;
-    FmIconSurface *surface;
     Widget status;
     Widget panelWidget;
     Widget scaleZoom;
+    ImdBroker *broker;
+    ImdModel *directoryModel;
     ImdModelBasedIconPanel *dirPanel;
     ImdIconLayout *iconLayout;
     bool showHidden;
     std::string directory;
     std::vector<FmEntry> entries;
+    ImdDNA selectedDNA;
+    bool haveSelectedDNA;
+    Time lastClickTime;
+    ImdView *lastClickView;
 };
 
 /*
@@ -107,10 +115,6 @@ static String fallbackResources[] = {
     (char *)"*httpMenuItem.labelString: Icon View of a Web Site",
     (char *)"*ftpMenuItem.labelString: Icon View of an FTP Site",
 
-    /*
-     * Original control names. The real app-defaults replaces these labels
-     * with the recovered pixmaps when those assets are installed.
-     */
     (char *)"*pathfinder.labelString: Path",
     (char *)"*iconicLayout.labelString: Icons",
     (char *)"*listLayout.labelString: List",
@@ -179,6 +183,24 @@ setStatusErrno(FmState *state, const char *operation)
     setStatus(state, buffer);
 }
 
+static ImdModel *
+modelForDirectory(FmState *state, const std::string &directory)
+{
+    /*
+     * Binary-backed path construction:
+     *   ImdFileModel::dnaSelectorFromPath(path, kNull)
+     *   ImdDNA(ImdDirModel::kTypeName, selector)
+     *   ImdBroker::getModel(dna)
+     *
+     * The exact ImdDirModel::kTypeName string was recovered as
+     * "ImdDirModel" by the model-library static initialization work.
+     */
+    ImdString selector = ImdFileModel::dnaSelectorFromPath(
+        ImdString(directory), ImdString());
+    ImdDNA dna(ImdString("ImdDirModel"), selector);
+    return state->broker ? state->broker->getModel(dna) : 0;
+}
+
 static void
 populateDirectory(FmState *state, const std::string &directory)
 {
@@ -211,30 +233,44 @@ populateDirectory(FmState *state, const std::string &directory)
 
     std::sort(next.begin(), next.end(), entryLess);
 
-    std::vector<FmIconSurfaceEntry> surfaceEntries;
-    surfaceEntries.reserve(next.size());
-    for (std::vector<FmEntry>::const_iterator it = next.begin();
-         it != next.end(); ++it) {
-        FmIconSurfaceEntry surfaceEntry;
-        surfaceEntry.name = it->name;
-        surfaceEntry.directory = it->directory;
-        surfaceEntries.push_back(surfaceEntry);
+    ImdModel *nextModel = modelForDirectory(state, directory);
+    if (!nextModel) {
+        setStatus(state, "Cannot create directory model");
+        return;
     }
-    state->surface->setEntries(surfaceEntries);
+
+    /*
+     * This is the pipeline merge. The old FmIconSurface hand-built child
+     * views and painted its own list. The real content population now enters
+     * through ImdModelBasedIconPanel::changeModel(), whose NotifyReceiver
+     * consumes the directory model's existence batch and creates
+     * ImdModelBasedIconView children exactly like iid-desktop.
+     */
+    state->dirPanel->changeModel(nextModel);
+
+    if (state->directoryModel)
+        state->broker->releaseModel(state->directoryModel);
+    state->directoryModel = nextModel;
 
     state->entries.swap(next);
     state->directory = directory;
+    state->haveSelectedDNA = false;
+    state->lastClickTime = 0;
+    state->lastClickView = 0;
     XmTextFieldSetString(state->location, (char *)state->directory.c_str());
 
     {
         char title[PATH_MAX + 64];
-        char status[128];
+        char status[160];
         snprintf(title, sizeof(title), "File Manager - %s", state->directory.c_str());
         XtVaSetValues(state->shell, XmNtitle, title, NULL);
-        snprintf(status, sizeof(status), "%lu items",
-                 (unsigned long)state->entries.size());
+        snprintf(status, sizeof(status), "%lu items, %lu model-backed views",
+                 (unsigned long)state->entries.size(),
+                 (unsigned long)state->dirPanel->portableViews().size());
         setStatus(state, status);
     }
+
+    ImdViewPanelRedraw(state->panelWidget);
 }
 
 static void
@@ -268,26 +304,54 @@ openFile(FmState *state, const std::string &path)
     setStatus(state, "Opening file");
 }
 
-static bool
-selectedEntry(FmState *state, FmEntry *entry)
-{
-    size_t index = 0;
-
-    if (!state->surface->selectedIndex(&index) || index >= state->entries.size())
-        return false;
-
-    *entry = state->entries[index];
-    return true;
-}
-
 static void
-openEntry(FmState *state, const FmEntry &entry)
+openDNA(FmState *state, const ImdDNA &dna)
 {
-    std::string path = joinPath(state->directory, entry.name);
-    if (entry.directory)
+    ImdString fileName = ImdFileModel::fileNameFromDNA(dna);
+    if (fileName.empty())
+        return;
+
+    struct stat st;
+    const std::string path = fileName.stdString();
+    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
         changeDirectory(state, path.c_str());
     else
         openFile(state, path);
+}
+
+static void
+panelEventHandler(Widget widget, XtPointer client, XEvent *event, Boolean *dispatch)
+{
+    FmState *state = (FmState *)client;
+    (void)dispatch;
+
+    if (!state || !event || event->type != ButtonPress ||
+        event->xbutton.button != Button1)
+        return;
+
+    ImdView *view = ImdViewPanelFindViewByLocation(
+        widget, event->xbutton.x, event->xbutton.y);
+    ImdModelBasedIconView *modelView =
+        dynamic_cast<ImdModelBasedIconView *>(view);
+    if (!modelView)
+        return;
+
+    state->selectedDNA = modelView->getDNA();
+    state->haveSelectedDNA = true;
+
+    const bool doubleClick =
+        (state->lastClickView == view &&
+         event->xbutton.time >= state->lastClickTime &&
+         event->xbutton.time - state->lastClickTime <= 400);
+
+    state->lastClickView = view;
+    state->lastClickTime = event->xbutton.time;
+
+    if (doubleClick) {
+        state->lastClickTime = 0;
+        state->lastClickView = 0;
+        openDNA(state, state->selectedDNA);
+    }
 }
 
 static void
@@ -331,28 +395,17 @@ refreshCB(Widget widget, XtPointer client, XtPointer call)
 }
 
 static void
-surfaceActivateCB(size_t index, void *closure)
-{
-    FmState *state = (FmState *)closure;
-
-    if (index >= state->entries.size())
-        return;
-    openEntry(state, state->entries[index]);
-}
-
-static void
 openSelectedCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-    FmEntry entry;
-
     (void)widget;
     (void)call;
-    if (!selectedEntry(state, &entry)) {
+
+    if (!state->haveSelectedDNA) {
         setStatus(state, "No item selected");
         return;
     }
-    openEntry(state, entry);
+    openDNA(state, state->selectedDNA);
 }
 
 static void
@@ -362,7 +415,13 @@ selectAllCB(Widget widget, XtPointer client, XtPointer call)
     (void)widget;
     (void)call;
 
-    state->surface->selectAll();
+    /*
+     * The original panel selection machinery is not reconstructed far enough
+     * to drive Select All without inventing a second selection store. Keep the
+     * command explicit rather than reintroducing the removed FmIconSurface
+     * selection path.
+     */
+    setStatus(state, "Select All awaits ImdIconPanel selection reconstruction");
 }
 
 static void
@@ -382,6 +441,11 @@ closeCB(Widget widget, XtPointer client, XtPointer call)
     FmState *state = (FmState *)client;
     (void)widget;
     (void)call;
+
+    if (state->directoryModel && state->broker) {
+        state->broker->releaseModel(state->directoryModel);
+        state->directoryModel = 0;
+    }
     XtDestroyWidget(state->shell);
     exit(0);
 }
@@ -408,15 +472,10 @@ layoutButtonCB(Widget widget, XtPointer client, XtPointer call)
 
     (void)call;
 
-    /*
-     * RE: IconicLayout, ListLayout and ColumnLayout are binary-proven
-     * ImdIControlBoard modes. The portable list remains the only populated
-     * view population now runs through adopted ImdIconView objects.
-     */
-    if (name && (!strcmp(name, "listLayout") ||
-                 !strcmp(name, "viewAsListMenuItem"))) {
+    if (name && (!strcmp(name, "iconicLayout") ||
+                 !strcmp(name, "viewAsIconsMenuItem"))) {
         populateDirectory(state, state->directory);
-        setStatus(state, "List layout");
+        setStatus(state, "Icon layout");
         return;
     }
 
@@ -539,12 +598,6 @@ createControlBoard(Widget parent, FmState *state)
     Widget rc1;
     Widget rc2;
 
-    /*
-     * RE: original fm constructs ImdIControlBoard(Widget, ImdIconPanel &)
-     * and populates it through addButton(). rc1/rc2 orientation and these
-     * child names are recovered from the original FileManager resources.
-     * This Motif shell is temporary until ImdIControlBoard itself is ported.
-     */
     rc1 = XtVaCreateManagedWidget("rc1",
                                   xmRowColumnWidgetClass,
                                   parent,
@@ -570,10 +623,6 @@ createControlBoard(Widget parent, FmState *state)
     makePush(rc2, "galleryMode", layoutButtonCB, state);
     makePush(rc2, "shelf", unimplementedCB, state);
 
-    /*
-     * RE: scaleZoom is now the native reconstructed SGI SgThumbWheel class.
-     * These values are recovered from the original FileManager resources.
-     */
     state->scaleZoom = XtVaCreateManagedWidget("scaleZoom",
                                                 sgThumbWheelWidgetClass,
                                                 rc1,
@@ -623,13 +672,17 @@ main(int argc, char **argv)
 
     state.shell = 0;
     state.location = 0;
-    state.surface = 0;
     state.status = 0;
     state.panelWidget = 0;
     state.scaleZoom = 0;
+    state.broker = ImdBroker::contextBroker();
+    state.directoryModel = 0;
     state.dirPanel = 0;
     state.iconLayout = 0;
     state.showHidden = false;
+    state.haveSelectedDNA = false;
+    state.lastClickTime = 0;
+    state.lastClickView = 0;
 
     state.shell = XtVaAppInitialize(&app, (char *)"FileManager",
                                     NULL, 0, &argc, argv,
@@ -645,11 +698,6 @@ main(int argc, char **argv)
                                    xmFormWidgetClass,
                                    mainWindow, NULL);
 
-    /*
-     * finderForm/iconFinder are both present in the original binary/resource
-     * hierarchy. The current text field still provides the bootstrap path
-     * navigation function while ImdViewerFinder is reconstructed.
-     */
     finderForm = XtVaCreateManagedWidget("finderForm",
                                          xmFormWidgetClass,
                                          form,
@@ -716,10 +764,9 @@ main(int argc, char **argv)
                                        NULL);
 
     /*
-     * RE: original fm constructs ImdModelBasedIconPanel in _createPanels(),
-     * stores it at FmWindow +0xa4 and registers it through setDirPanel().
-     * The broker/model path is not online yet. Directory entries are now
-     * adopted as ImdIconView objects directly by the reconstructed panel.
+     * Original fm constructs ImdModelBasedIconPanel in _createPanels(), stores
+     * it at FmWindow +0xa4 and registers it through setDirPanel(). The same
+     * reconstructed class now backs both fm directory views and iid-desktop.
      */
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
     state.panelWidget = state.dirPanel->baseWidget();
@@ -728,21 +775,20 @@ main(int argc, char **argv)
     renderer = new ImdInvertedTeeRenderer;
     ImdViewPanelAdoptRenderer(state.panelWidget, renderer);
 
-    /*
-     * RE: original FmWindow::_createPanels constructs ImdIconLayout with
-     * the live panel widget and adopts it before normal directory viewing.
-     */
     state.iconLayout = new ImdIconLayout(state.panelWidget);
     ImdViewPanelAdoptLayout(state.panelWidget, state.iconLayout);
 
     /*
-     * RE: libimdIconPanel proves ImdIconPanel::adoptView(ImdIconView *, ...)
-     * and ImdViewPanelDeleteAllViews(). FmIconSurface uses that recovered
-     * ownership direction while renderer/view drawing is brought online.
-     * There is intentionally no Motif child widget inside the IMD panel.
+     * Temporary application transport only: activation is recovered from the
+     * model-backed view under the pointer. Drawing, geometry, type identity and
+     * content population are no longer duplicated here. Replace this when the
+     * original ImdIconPanel selection/Command action path is reconstructed.
      */
-    state.surface = new FmIconSurface(state.dirPanel, state.panelWidget);
-    state.surface->setActivateProc(surfaceActivateCB, &state);
+    XtAddEventHandler(state.panelWidget,
+                      ButtonPressMask,
+                      False,
+                      panelEventHandler,
+                      &state);
 
     XtAddCallback(up, XmNactivateCallback, upCB, &state);
     XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
