@@ -1,6 +1,7 @@
 #include "FtrResolver.h"
 
 #include "FileModel.h"
+#include "FtrMatchEvaluator.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -134,9 +135,9 @@ static bool elfHasProgramHeaders(const std::vector<unsigned char> &d)
 static std::string classifyCore(const ImdDNA &dna, const std::string &path)
 {
     /*
-     * Directory model identity is already binary-backed higher in the model
-     * stack. Trust it even when the current Linux reference seam points at a
-     * path that cannot be stat()ed locally.
+     * Compatibility fallback only. The primary path executes the shipped FTR
+     * source rules. Directory model identity remains useful when a reference
+     * path cannot be stat()ed locally.
      */
     if (dna.type() == "ImdDirModel") {
         if (containsEntry(path, ".dumpster"))
@@ -162,7 +163,6 @@ static std::string classifyCore(const ImdDNA &dna, const std::string &path)
     if (!S_ISREG(st.st_mode))
         return "UnknownSpecial";
 
-    /* sgidefault.ftr places EmptyFile before the generic text/binary rules. */
     if (st.st_size == 0)
         return "EmptyFile";
 
@@ -170,12 +170,6 @@ static std::string classifyCore(const ImdDNA &dna, const std::string &path)
     readPrefix(path, data);
     const bool ascii = looksAscii(data);
 
-    /*
-     * The shipped GenericExecutable MATCH has an ELF branch independent of
-     * the execute bits and requires e_phnum > 0. Preserve that ordering before
-     * Script/AsciiTextFile. The older MIPS a.out branches are intentionally
-     * left for the full MATCH evaluator rather than guessed here.
-     */
     if (elfHasProgramHeaders(data) ||
         (((st.st_mode & 0400) == 0) && (st.st_mode & 0111) != 0))
         return "GenericExecutable";
@@ -304,7 +298,6 @@ static void parseFtrFile(const std::string &root,
                 const std::string base = dirnameOf(relative);
                 std::set<std::string> seen;
                 for (std::size_t i = 0; i < includes.size(); ++i) {
-                    /* Normal-state gallery: choose closed branch, never open. */
                     if (includes[i].find(".open.fti") != std::string::npos)
                         continue;
                     const std::string normalized = normalizeRelative(base, includes[i]);
@@ -371,13 +364,6 @@ static const TypeIconMap &typeIcons()
         map.clear();
 
         if (!root.empty()) {
-            /*
-             * The shipped desktop.otr Makefile constructs this database from
-             * these four source classes, in this order, with lexical *.ftr
-             * ordering inside each directory. devices.otr, vadmin.otr, and the
-             * other generated databases are separate products and must not be
-             * folded into desktop.otr.
-             */
             static const char *const dirs[] = {
                 "local", "install", "system", "default", 0
             };
@@ -393,9 +379,16 @@ ImdDNA
 ImdPortableFtrTypeDNAForFile(const ImdDNA &fileDNA)
 {
     const ImdString pathString = ImdFileModel::fileNameFromDNA(fileDNA);
-    const std::string type = classifyCore(fileDNA, pathString.stdString());
+    const std::string path = pathString.stdString();
+    std::string type;
 
-    /* Exact constructor orientation proven by the original getType() path. */
+    const std::string root = filetypeRoot();
+    if (!root.empty() &&
+        ImdEvaluateFtrType(root, path, fileDNA.type() == "ImdDirModel", type)) {
+        return ImdDNA(ImdString(type), ImdString(kDefaultDB));
+    }
+
+    type = classifyCore(fileDNA, path);
     return ImdDNA(ImdString(type), ImdString(kDefaultDB));
 }
 
@@ -412,10 +405,6 @@ ImdPortableFtrIconResources(const ImdDNA &typeDNA,
         return true;
     }
 
-    /*
-     * If the source .ftr tree is unavailable, retain only the two shipped core
-     * fallbacks already used by the reconstruction. No extension/MIME guesses.
-     */
     if (typeDNA.type() == "Directory" || typeDNA.type() == "Dumpster") {
         resources.push_back(ImdString("iconlib/generic.folder.closed.fti"));
         return true;
