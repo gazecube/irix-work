@@ -28,14 +28,10 @@ jobs:
           old_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep -E '/usr/lib32/internal/libdesktopFileicon\.so(\.[0-9]+)*$' | head -1 || true)"
           test -n "$ftrdb_entry"
           tar -xf irix-re/evidence/shared_objects.tar -C /tmp/ftr-evidence "$ftrdb_entry"
-          if [ -n "$old_entry" ]; then
-            tar -xf irix-re/evidence/shared_objects.tar -C /tmp/ftr-evidence "$old_entry"
-          fi
+          if [ -n "$old_entry" ]; then tar -xf irix-re/evidence/shared_objects.tar -C /tmp/ftr-evidence "$old_entry"; fi
           ftrdb="/tmp/ftr-evidence/$ftrdb_entry"
           echo "FTRDB=$ftrdb" >> "$GITHUB_ENV"
           echo "OLDLIB=${old_entry:+/tmp/ftr-evidence/$old_entry}" >> "$GITHUB_ENV"
-          echo "FTR DB entry: $ftrdb_entry"
-          echo "older desktop fileicon entry: ${old_entry:-<none>}"
           file "$ftrdb"
           sha256sum "$ftrdb"
           if [ -n "$old_entry" ]; then file "/tmp/ftr-evidence/$old_entry"; sha256sum "/tmp/ftr-evidence/$old_entry"; fi
@@ -46,41 +42,56 @@ jobs:
           mips-linux-gnu-readelf -Ws "$FTRDB" > /tmp/ftrdb-symbols.raw
           mips-linux-gnu-readelf -Ws "$FTRDB" | c++filt > /tmp/ftrdb-symbols.txt
           strings -a "$FTRDB" > /tmp/ftrdb-strings.txt
-          grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|appleFileHandler|mactype|maccreator|AppleDouble|AppleSingle|MacBinary|HSAncillary|HSResource|EtherShare|FinderInfo|resource fork|resourcefork|AFP' /tmp/ftrdb-symbols.txt /tmp/ftrdb-strings.txt || true
+          grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|appleFileHandler|mactype|maccreator|AppleDouble|AppleSingle|MacBinary|HSAncillary|HSResource|EtherShare|FinderInfo|resource fork|resourcefork|AFP|afh' /tmp/ftrdb-symbols.txt /tmp/ftrdb-strings.txt || true
+
+      - name: Resolve Apple handler APIs and GOT
+        run: |
+          set -eu
+          {
+            echo '===== dynamic symbols ====='
+            mips-linux-gnu-objdump -TC "$FTRDB" | grep -Ei 'afh|apple|resource|finder|entry|open|close' || true
+            echo
+            echo '===== all named Apple handler functions ====='
+            mips-linux-gnu-readelf -Ws "$FTRDB" | c++filt | grep -Ei 'afh|apple|resource|finder|entry|open|close' || true
+            echo
+            echo '===== relocations ====='
+            mips-linux-gnu-readelf -r "$FTRDB" | c++filt
+            echo
+            echo '===== MIPS GOT / ABI data ====='
+            mips-linux-gnu-readelf -A "$FTRDB" | c++filt || true
+            echo
+            echo '===== dynamic section ====='
+            mips-linux-gnu-readelf -d "$FTRDB" | c++filt
+          } > /tmp/ftrdb-got.txt
+          cat /tmp/ftrdb-got.txt
 
       - name: Recover Mac DWARF
         run: |
           set -eu
           mips-linux-gnu-readelf --debug-dump=info "$FTRDB" | c++filt > /tmp/ftrdb-dwarf.txt || true
-          grep -n -E -A100 -B25 'FtrMacInfo|appleFileHandler\.c|mactype\.c|mactype|maccreator|getMac(FileInfo|Type|Creator)|_imdFtrMac(Type|Creator)' /tmp/ftrdb-dwarf.txt > /tmp/ftrdb-dwarf-focused.txt || true
+          grep -n -E -A100 -B25 'FtrMacInfo|appleFileHandler\.c|mactype\.c|mactype|maccreator|getMac(FileInfo|Type|Creator)|_imdFtrMac(Type|Creator)|afh(Open|Close|Get)' /tmp/ftrdb-dwarf.txt > /tmp/ftrdb-dwarf-focused.txt || true
           cat /tmp/ftrdb-dwarf-focused.txt
 
-      - name: Disassemble Mac entry points
+      - name: Disassemble Mac and Apple handler entry points
         run: |
           set -eu
           out=/tmp/ftrdb-mac-disassembly.txt
           : > "$out"
-          grep -E 'FtrMacInfo|_imdFtrMac(Type|Creator)' /tmp/ftrdb-symbols.raw | while read -r num value size type bind vis ndx name; do
+          grep -E 'FtrMacInfo|_imdFtrMac(Type|Creator)|afh[A-Za-z0-9_]*|apple[A-Za-z0-9_]*' /tmp/ftrdb-symbols.raw | while read -r num value size type bind vis ndx name; do
             case "$type" in FUNC) ;; *) continue ;; esac
-            start=$((16#$value))
-            stop=$((start + size))
+            start=$((16#$value)); stop=$((start + size))
             printf '\n===== %s 0x%x size %d =====\n' "$name" "$start" "$size" >> "$out"
             mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$FTRDB" >> "$out"
           done
           cat "$out"
 
-      - name: Inspect Mac-related call graph and literals
+      - name: Inspect Mac-related literals
         run: |
           set -eu
-          mips-linux-gnu-objdump -drC "$FTRDB" > /tmp/ftrdb-full-dis.txt
-          grep -n -E -A55 -B30 'FtrMacInfo::|_imdFtrMac(Type|Creator)|getMac(FileInfo|Type|Creator)|mactype|maccreator' /tmp/ftrdb-full-dis.txt > /tmp/ftrdb-callgraph.txt || true
           strings -a -t x "$FTRDB" | grep -Ei 'Apple|Mac|HSAncillary|HSResource|resource|Finder|AFP|Ether|Double|Single|\.resource|\.finder|\.AppleDouble|%[A-Za-z]' > /tmp/ftrdb-mac-strings.txt || true
-          echo '===== call graph ====='
-          cat /tmp/ftrdb-callgraph.txt
-          echo '===== Mac-related strings ====='
           cat /tmp/ftrdb-mac-strings.txt
 
-      - name: Inspect older N32 desktop fileicon implementation when present
+      - name: Inspect older N32 desktop fileicon implementation
         run: |
           set -eu
           : > /tmp/old-mactype.txt
@@ -88,10 +99,8 @@ jobs:
             mips-linux-gnu-readelf -Ws "$OLDLIB" > /tmp/old-symbols.raw
             echo '===== symbols =====' >> /tmp/old-mactype.txt
             mips-linux-gnu-readelf -Ws "$OLDLIB" | c++filt | grep -Ei 'mactype|maccreator|mac|apple|finder|resource|ancillary' >> /tmp/old-mactype.txt || true
-            echo '===== source units / strings =====' >> /tmp/old-mactype.txt
+            echo '===== strings =====' >> /tmp/old-mactype.txt
             strings -a -t x "$OLDLIB" | grep -Ei 'mactype\.c|mactype|maccreator|HSAncillary|HSResource|Apple|Finder|Ether|Double|Single|resource' >> /tmp/old-mactype.txt || true
-            echo '===== DWARF =====' >> /tmp/old-mactype.txt
-            mips-linux-gnu-readelf --debug-dump=info "$OLDLIB" | c++filt | grep -n -E -A100 -B25 'mactype\.c|mactype|maccreator|MacType|MacCreator' >> /tmp/old-mactype.txt || true
             echo '===== disassembly =====' >> /tmp/old-mactype.txt
             grep -E 'MacType|MacCreator' /tmp/old-symbols.raw | while read -r num value size type bind vis ndx name; do
               case "$type" in FUNC) ;; *) continue ;; esac
@@ -108,29 +117,14 @@ jobs:
           mkdir -p /tmp/ftr-mactype-report
           report=/tmp/ftr-mactype-report/ftr-mactype-report.txt
           {
-            echo '===== specimen ====='
-            file "$FTRDB"
-            sha256sum "$FTRDB"
-            echo
-            echo '===== focused symbols ====='
-            grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|mactype|maccreator|appleFileHandler' /tmp/ftrdb-symbols.txt || true
-            echo
-            echo '===== focused DWARF ====='
-            cat /tmp/ftrdb-dwarf-focused.txt
-            echo
-            echo '===== method disassembly ====='
-            cat /tmp/ftrdb-mac-disassembly.txt
-            echo
-            echo '===== call graph ====='
-            cat /tmp/ftrdb-callgraph.txt
-            echo
-            echo '===== strings ====='
-            cat /tmp/ftrdb-mac-strings.txt
-            echo
-            echo '===== older implementation ====='
-            cat /tmp/old-mactype.txt
+            echo '===== specimen ====='; file "$FTRDB"; sha256sum "$FTRDB"
+            echo; echo '===== symbols ====='; grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|mactype|maccreator|appleFileHandler|afh' /tmp/ftrdb-symbols.txt || true
+            echo; echo '===== GOT / APIs ====='; cat /tmp/ftrdb-got.txt
+            echo; echo '===== DWARF ====='; cat /tmp/ftrdb-dwarf-focused.txt
+            echo; echo '===== disassembly ====='; cat /tmp/ftrdb-mac-disassembly.txt
+            echo; echo '===== strings ====='; cat /tmp/ftrdb-mac-strings.txt
+            echo; echo '===== older implementation ====='; cat /tmp/old-mactype.txt
           } > "$report"
-          cat "$report"
 
       - name: Upload FTR mactype archaeology
         uses: actions/upload-artifact@v4
