@@ -1,0 +1,24 @@
+# shared_objects.tar split verification
+
+Original archive:
+filename: shared_objects.tar
+size: 157065061 bytes
+sha256: 7e1ef829d11bb06b5ae504f80517721ef1885990a25800312a901b9b3141a98c
+tar entries: 1280
+
+Split chunks:
+shared_objects.tar.part.0
+size: 78532531 bytes
+sha256: c9f6cd994bfea04c8257d4f9ab31b8c3f8f1e8197fc51d155fcddc81d2af0dbb
+
+shared_objects.tar.part.1
+size: 78532530 bytes
+sha256: ed79f0c1ff398865edc1f65e63b004011703c23d53d38d3757a17785482dc20f
+
+Recombine exactly with:
+cat shared_objects.tar.part.0 shared_objects.tar.part.1 > shared_objects.tar
+
+Verified recombined SHA-256:
+7e1ef829d11bb06b5ae504f80517721ef1885990a25800312a901b9b3141a98c
+
+The recombined file was verified byte-for-byte equivalent by SHA-256 to the originally supplied archive before these hashes were recorded.

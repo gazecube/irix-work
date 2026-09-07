@@ -1,0 +1,239 @@
+!
+! Resource defaults for the Indigo Magic Desktop application 
+! /usr/sbin/fmprefs, the Default Layout for Icon Views panel
+!
+
+!
+! Activate schemes and SGI mode by default
+!
+Fmprefs*useSchemes: all
+Fmprefs*sgiMode: True
+Fmprefs*schemeFileList: SgiSpec, ImdSpec
+
+! for the QuickHelp line at the bottom of the panel
+Fmprefs*showHelp:              True
+Fmprefs*showPopupHelp:         False
+Fmprefs*showMsgLineHelp:       True
+! this needs to be blank (empty string) for default messages
+Fmprefs*msgLineHelpText:
+! 500382
+Fmprefs*VkQuickHelpMsgLine.height: 
+
+!
+! SGI Style guide specifies explicit focus within applications
+!
+Fmprefs*keyboardFocusPolicy: explicit
+
+! name of iconified window
+Fmprefs*iconName: IconViews 
+
+Fmprefs*leftRC.leftOffset: 10 
+Fmprefs*leftRC.topOffset: 12
+Fmprefs*leftRC.spacing: 	0
+Fmprefs*leftRC.marginLeft:  0
+Fmprefs*leftRC.entryAlignment:  ALIGNMENT_BEGINNING
+Fmprefs*leftRC.isAligned:  True
+Fmprefs*leftRC.adjustMargin:  False
+
+Fmprefs*rightRC.leftOffset: 10 
+Fmprefs*rightRC.topOffset: 12
+Fmprefs*rightRC.spacing: 	0
+Fmprefs*rightRC.marginLeft:  0
+Fmprefs*rightRC.entryAlignment:  ALIGNMENT_BEGINNING
+Fmprefs*rightRC.isAligned:  True
+Fmprefs*rightRC.adjustMargin:  False
+
+! use fairly tight packing for toggles
+Fmprefs*marginHeight: 2 
+
+! window border title
+Fmprefs.Fmprefs.title:  Default Layout for Icon Views 
+Fmprefs.Fmprefs.Fmprefs.width:  325
+Fmprefs.Fmprefs.Fmprefs.height: 540
+
+Fmprefs*panelPict.width:  	50
+Fmprefs*panelPict.height:  	50
+Fmprefs*panelPict.borderWidth: 	1
+
+! title that appears next to logo pixmap
+Fmprefs*panelLabel.labelString: Default Layout for Icon Views
+Fmprefs*logoTitleRC.spacing:      8
+Fmprefs*logoTitleRC.topOffset:    5
+Fmprefs*logoTitleRC.leftOffset:   3
+
+Fmprefs*pushButtonsRC.spacing:     8
+Fmprefs*pushButtonsRC.rightOffset: 6
+Fmprefs*pushButtonsRC.packing: 	PACK_COLUMN
+Fmprefs*pushButtonsRC.entryAlignment: ALIGNMENT_CENTER
+
+Fmprefs*iconFrame.shadowType: 	SHADOW_ETCHED_OUT
+Fmprefs*iconFrame.leftOffset: 	36
+Fmprefs*iconFrame.topOffset: 	16
+Fmprefs*iconFrame.bottomOffset: 2
+
+Fmprefs*iconDrawA.width:  80
+Fmprefs*iconDrawA.height: 80
+
+Fmprefs*iconScaleLabel.topOffset:  12
+Fmprefs*iconScaleLabel.leftOffset: 7
+
+Fmprefs*thumbwheel.resizable:    True
+Fmprefs*thumbwheel.orientation:  HORIZONTAL
+Fmprefs*thumbwheel.height:       25
+Fmprefs*thumbwheel.minimum:      30
+Fmprefs*thumbwheel.maximum:      100
+Fmprefs*thumbwheel.homePosition: 50
+Fmprefs*thumbwheel.showValue:    False
+Fmprefs*thumbwheel.drawFrame:    False
+Fmprefs*thumbwheel.topOffset:    15
+Fmprefs*thumbwheel.leftOffset: 	 14
+
+! bottom pushbuttons
+Fmprefs*close.width:  72
+Fmprefs*cancel.labelString:  Close
+Fmprefs*reset.labelString:  Reset...
+Fmprefs*help.labelString:  Help
+Fmprefs*reset.width:  72
+Fmprefs*help.width:  72
+Fmprefs*close.height:  20
+Fmprefs*reset.height:  20
+Fmprefs*help.height:  20
+
+Fmprefs*resetDialog.noResize:  True
+
+Fmprefs*arrangeByLabel.labelString:  Sort by:
+Fmprefs*arrangeByLabel*fontList:  -*-helvetica-medium-r-normal-*-14-*-*-*-*-*-iso8859-1
+Fmprefs*arrangeByMenu.labelString:  
+Fmprefs*arrangeByLabel.marginWidth:  0
+Fmprefs*arrangeByLabel.marginHeight:  0
+Fmprefs*arrangeByMenu.marginWidth: 14
+Fmprefs*arrangeByMenu.marginHeight: 1
+Fmprefs*byName.labelString:  Name
+Fmprefs*byDate.labelString:  Date
+Fmprefs*bySize.labelString:  Size
+Fmprefs*byType.labelString:  Type
+
+Fmprefs*viewAsLabel.labelString:  View as:
+Fmprefs*viewAsLabel*fontList:  -*-helvetica-medium-r-normal-*-14-*-*-*-*-*-iso8859-1
+Fmprefs*viewAsMenu.labelString:  
+Fmprefs*asIcons.labelString:  Icons
+Fmprefs*asList.labelString:  List
+Fmprefs*asColumns.labelString:  Columns
+Fmprefs*viewAsLabel.marginWidth: 6
+Fmprefs*viewAsLabel.marginHeight: 0
+Fmprefs*viewAsMenu.marginWidth:  12 
+Fmprefs*viewAsMenu.marginHeight:  1
+
+Fmprefs*optionMenusRC.topOffset: 	4
+Fmprefs*optionMenusRC.leftOffset: 	16
+Fmprefs*optionMenusRC.spacing: 		0
+Fmprefs*optionMenusRC.marginHeight:	0
+Fmprefs*optionMenusRC.bottomOffset: 	10
+
+Fmprefs*togglesRC.topOffset: 	8
+Fmprefs*togglesRC.leftOffset: 	19
+Fmprefs*togglesRC.spacing: 	0
+Fmprefs*togglesRC.marginHeight: 0
+Fmprefs*togglesRC.marginWidth:  0
+
+Fmprefs*shelf.labelString:  Shelf
+Fmprefs*contentViewer.labelString:  Content Viewer
+Fmprefs*filters.labelString:  Search/Filter Files
+Fmprefs*quickhelp.labelString:  Dynamic Help
+Fmprefs*pathfinder.labelString:  Pathfinder
+Fmprefs*tunneling.labelString:  Open in Place
+Fmprefs*preserveLayout.labelString:  Preserve Layout When Opening in Place
+Fmprefs*truncatedNames.labelString:  Truncated Names
+Fmprefs*showDetails.labelString:  Permissions Details
+Fmprefs*galleryMode.labelString:  Thumbnail Images
+Fmprefs*snapToGrid.labelString:  Align to Grid
+Fmprefs*hiddenFiles.labelString:  Hidden Files
+
+Fmprefs*componentsLabel.labelString: Default Panes:
+Fmprefs*componentsLabel.leftOffset: 0
+Fmprefs*componentsLabel.marginLeft: 0
+Fmprefs*componentsLabel.marginWidth: 0
+Fmprefs*globalOptionsLabel.labelString:  Global Settings:
+Fmprefs*globalOptionsLabel.marginWidth:  0
+Fmprefs*globalOptionsLabel.marginLeft:  3
+Fmprefs*quickhelp.marginWidth:  13
+Fmprefs*pathfinder.marginWidth: 13
+Fmprefs*tunneling.marginWidth:  13
+
+! make the global options look different
+Fmprefs*rightRC.borderWidth:  1
+
+Fmprefs*shelf.marginWidth:  8
+Fmprefs*contentViewer.marginWidth:  8
+Fmprefs*filters.marginWidth:  8
+
+Fmprefs*behaviorLabel.topOffset: 	12
+Fmprefs*behaviorLabel.leftOffset: 	10
+Fmprefs*behaviorLabel.labelString:  Default Behavior:
+Fmprefs*preserveLayout.leftOffset: 	19 
+Fmprefs*preserveLayout.topOffset: 	2
+
+Fmprefs*iconsNlabelsLabel.labelString:  Defaults for Icons and Their Labels:
+Fmprefs*iconsNlabelsLabel.topOffset: 	12
+Fmprefs*iconsNlabelsLabel.leftOffset: 	10
+
+Fmprefs*dirviewIconScaleLabel.labelString:  Default Icon Size:
+Fmprefs*dirviewIconScaleLabel.topOffset: 	12
+Fmprefs*dirviewIconScaleLabel.leftOffset: 	10
+
+Fmprefs*resetDialogTitle: Reset Control Panel
+Fmprefs*radioButtonsLabel.labelString: Reset Control Panel To:
+Fmprefs*originalBase.labelString: Previous Settings
+Fmprefs*factoryBase.labelString:  Factory Settings
+
+!
+! messages that might need internationalization
+!
+Fmprefs*noCommWithFmErrorTitle:  Cannot Communicate with File Manager
+Fmprefs*noCommWithFmErrorMsg:  Sorry, this panel requires write access to your home directory.
+Fmprefs*noOtrErrorMessage:  File not found: /usr/lib/filetype/desktop.otr
+Fmprefs*unableToSaveSettingsTitle: Error: Cannot save settings
+Fmprefs*unableToSaveSettingsMsg: Unable to save settings in the Default file.
+Fmprefs*createLayoutDirTitle: Layouts Directory Needed
+Fmprefs*createLayoutDirMsg: Create layouts directory to save your settings?
+Fmprefs*no: No
+Fmprefs*yes: Yes
+Fmprefs*defDirCreateErrorTitle: Error: No layouts directory
+Fmprefs*defDirCreateErrorMsg: Unable to create layouts directory to save settings.
+
+! the QuickHelp messages 
+Fmprefs*panelLabel.msgLineHelpText: This panel lets you define how new iconviews will look.
+Fmprefs*hiddenFiles.msgLineHelpText: Check to see icons for hidden files.
+Fmprefs*tunneling.msgLineHelpText: Check to make a folder open into its parent's iconview.
+Fmprefs*galleryMode.msgLineHelpText: Check to view image files as thumbnail icons.
+Fmprefs*shelf.msgLineHelpText: Check to have the shelf in the iconview.
+Fmprefs*preserveLayout.msgLineHelpText: Check so iconview opened in place uses parent's layout.
+Fmprefs*showDetails.msgLineHelpText: Check to see permissions in UNIX form (ex., rwxr-xr-x).
+Fmprefs*contentViewer.msgLineHelpText: Check to have the content viewer in the iconview.
+Fmprefs*snapToGrid.msgLineHelpText: Check to make moved icons align to invisible grid.
+Fmprefs*filters.msgLineHelpText: Check to have the file filters in the iconview.
+Fmprefs*arrangeByMenu*msgLineHelpText: Select the sorting order for iconview icons.
+Fmprefs*viewAsMenu*msgLineHelpText: Choose the way you want iconview icons to appear.
+Fmprefs*thumbwheel.msgLineHelpText: Scale the iconview icons. Click square for normal size.
+Fmprefs*quickhelp.msgLineHelpText: Check to see helpful hints at the bottom of iconviews.
+Fmprefs*truncatedNames.msgLineHelpText: Check to see long filenames in abbreviated form.
+Fmprefs*pathfinder.msgLineHelpText: Check to see the drop pocket and fully specified path.
+
+Fmprefs*componentsLabel.msgLineHelpText: Pick window components to show in new iconviews.
+Fmprefs*globalOptionsLabel.msgLineHelpText: Global options affect all iconviews (existing and new).
+Fmprefs*behaviorLabel.msgLineHelpText: Behavior options affect the way new iconviews behave.
+Fmprefs*iconsNlabelsLabel.msgLineHelpText: These options affect icons and labels in new iconviews.
+Fmprefs*arrangeByLabel.msgLineHelpText: How a new iconview should sort its icons
+Fmprefs*viewAsLabel.msgLineHelpText: How a new iconview should display its icons
+
+Fmprefs*dirviewIconScaleLabel.msgLineHelpText: Use thumbwheel to scale icons in a new iconview.
+Fmprefs*iconFrame.msgLineHelpText: Use thumbwheel to scale icons in a new iconview.
+Fmprefs*iconDrawA.msgLineHelpText: Use thumbwheel to scale icons in a new iconview.
+
+Fmprefs*cancel.msgLineHelpText: Close this window.
+Fmprefs*reset.msgLineHelpText: Revert the above to previous or factory settings.
+Fmprefs*help.msgLineHelpText: Show more information about this window.
+
+!! For message if book not installed
+Fmprefs*helpSubSys: desktop_eoe.books.Desktop_UG
+Fmprefs*helpTitle:  Icon View Preferences

@@ -1,0 +1,92 @@
+! Probe-safe subset of the preserved IRIX Clogin app-defaults.
+! Derived from irix-re/clogin/evidence/Clogin.app-defaults.
+! The original file begins with an IRIX-specific absolute #include of
+! /usr/lib/X11/app-defaults/SetPassComp; that include is intentionally omitted
+! here so Linux Xt can consume this file directly through XFILESEARCHPATH.
+!
+! The preserved IRIX file also uses SGI scheme tokens such as
+! "SGI_DYNAMIC ExtraLargeBoldLabelFont" for several fontList resources.
+! Linux Motif does not understand those SGI scheme expansions and attempts to
+! parse them as literal font names, so the probe-safe file intentionally omits
+! those dynamic fontList entries and lets the runtime default apply.
+
+Clogin*useSchemes: all
+Clogin*schemeFileList: SgiSpec, ImdSpec
+Clogin*paletteFileList: ImdPalette
+Clogin*sgiMode: True
+Clogin*arrowsType: XmNO_THUMB_WHEN_EMPTY
+Clogin*frame.shadowThickness: 0
+Clogin*panelWindow.shadowThickness: 0
+Clogin*form.XmText.blinkRate: 0
+
+*useNoHang: True
+*ImdViewPanel.invertedTeeMargin: 3
+*ImdViewPanel.noDragNDrop: True
+*panel.traversalOn: False
+*helpButton.traversalOn: False
+*loginButton.traversalOn: False
+*scrolledWindow*traversalOn: False
+*Xdraw.traversalOn: False
+
+Clogin*intl.err_pwdIncorrect: Cannot log in to this account.
+Clogin*intl.err_badUser: Cannot log in to this account.
+Clogin*intl.msg_howToLogin: To log in, type your login name and click Log in,\nor double-click the icon that's labeled with your login name.
+Clogin*intl.err_noHomeDir: The home directory for this account does not exist.
+Clogin*intl.err_loginRestricted: Login is restricted for this account.
+Clogin*intl.err_loginInactive: This account's inactive period expired. Cannot login.
+Clogin*intl.err_pwdChangeFailed: The password change failed.
+Clogin*intl.msg_newPwd: Your workstation requires every account to have a password.
+Clogin*intl.msg_agedPwd: Your password has expired(aged). You need a new password.
+Clogin*intl.logoPath: /usr/Cadmin/images/cloginlogo.rgb
+
+Clogin*userFullNameLabel.fontList: -adobe-helvetica-medium-o-normal--*-240-75-75-p-*-iso8859-1
+Clogin*hostLabel.fontList: -adobe-helvetica-bold-o-normal--*-240-100-100-p-*-iso8859-1
+Clogin*userText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*passwordText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*helpButton.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*loginButton.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+
+Clogin*iconLabelYOff: 4
+
+Clogin*loginButton.labelString: Log In
+Clogin*helpButton.labelString: Help
+Clogin*userLabel.labelString: Login name:
+Clogin*passwordLabel.labelString: Password:
+
+Clogin*passwordLabel.bottomOffset: 95
+Clogin*passwordLabel.leftOffset: 45
+Clogin*passwordLabel.width: 120
+Clogin*passwordText.bottomOffset: -6
+Clogin*passwordText.leftOffset: 0
+Clogin*passwordText.width: 225
+
+Clogin*userLabel.bottomOffset: 18
+Clogin*userLabel.leftOffset: 45
+Clogin*userLabel.width: 120
+Clogin*userText.bottomOffset: -5
+Clogin*userText.leftOffset: 6
+Clogin*userText.width: 225
+
+Clogin*warningLabel.topOffset: 0
+Clogin*warningLabel.leftOffset: 35
+Clogin*warningLabel.width: 700
+Clogin*warningLabel.height: 30
+Clogin*userFullNameLabel.bottomOffset: 0
+Clogin*userFullNameLabel.leftOffset: 10
+Clogin*panelWindow.topOffset: 35
+Clogin*panelWindow.bottomOffset: 25
+Clogin*panelWindow.leftOffset: 35
+Clogin*panelWindow.rightOffset: 30
+Clogin*helpButton.bottomOffset: 25
+Clogin*helpButton.rightOffset: 30
+Clogin*helpButton.width: 72
+Clogin*helpButton.marginHeight: 3
+Clogin*loginButton.bottomOffset: 25
+Clogin*loginButton.rightOffset: 8
+Clogin*loginButton.width: 72
+Clogin*loginButton.marginHeight: 3
+Clogin*hostLabel.bottomOffset: 22
+Clogin*hostLabel.leftOffset: 33
+
+*dragInitiatorProtocolStyle: DRAG_NONE
+*dragReceiverProtocolStyle: DRAG_NONE

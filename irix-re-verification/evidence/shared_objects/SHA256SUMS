@@ -1,0 +1,14 @@
+# High-value reversing subset from shared_objects.tar
+# Paths are relative to Downloads/f1/shared_objects/ inside the archive.
+
+4aed0012d4482cffef21e00bde67fcaf336da38ef5037bbada8bfc41ee87129b  usr/lib32/internal/libimdApp.so
+7f66b265f4c6e0ecf8514527676afa83a4fd04b27e9e0c32b44582ebcc80c8ee  usr/lib32/internal/libimdFtrDB.so
+6d161e69de5500c515c91e574f34bd02f9cc0096383731dd9db960c3b07ba9ae  usr/lib32/internal/libimdFtrGallery.so
+fb06c29fc3279cc27b4a2ac0daed0fb1d1bbcbbe84a2cbc63940ffe337ffd41f  usr/lib32/internal/libimdFtrIcon.so
+e23ceeede4bb684f6a397a503c148038c8329507396f6defaadf41ffc89b6309  usr/lib32/internal/libimdIconPanel.so
+5d979debc682033951be2ab3f1d6fb3f243c2796f4c3375116be8c5753003e62  usr/lib32/internal/libimdModel.so
+d170951e98b868cefda1906329e210db04f43672522cab686c13f2cbd80c949f  usr/lib32/internal/libimdUtil.so
+513bbb19d97796116544a20538d41a5108be29ec7ef3934e63e67b163243fafd  usr/lib32/internal/libimdXutil.so
+e1172e543a3d53292ef5877ff6facbca202c7ebb532874cf2f155b1966ffe861  usr/lib32/libSgm.so.1
+95ee2b7a64852f6df56c303f256edfc6bbfc71aa6057aaf86dd4d2cb89a3422c  usr/lib32/libXm.so.1
+9cf7663c2a9665f3d504ae2be464f5b8ee58a6799b099ab6faf1eb0c59f61889  usr/lib32/libvk.so.1

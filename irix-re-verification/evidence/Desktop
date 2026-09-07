@@ -1,0 +1,265 @@
+!!
+!!  Application Shell Resources
+!!
+Desktop*useSchemes:     all
+Desktop*sgiMode:        True
+Desktop*schemeFileList: SgiSpec, ImdSpec
+
+! 500339
+Desktop*VkQuickHelpMsgLine.height:
+
+Desktop*dragReceiverProtocolStyle: DRAG_NONE
+
+! for the QuickHelp line at the bottom of the panel
+Desktop*showHelp:              True
+Desktop*showPopupHelp:         False
+Desktop*showMsgLineHelp:       True
+! this needs to be blank (empty string) for default messages
+Desktop*msgLineHelpText:
+
+!
+! SGI Style guide specifies explicit focus within applications
+!
+Desktop*keyboardFocusPolicy: explicit
+
+!!
+!! Strings
+!!
+Desktop*title:          Desktop Settings
+Desktop*iconName:       Desktop
+Desktop*panelLabel.labelString: Desktop Settings
+
+Desktop*iconScaleLabel.labelString: Background Icon Size:
+Desktop*snapLabel.labelString:  Align to Grid:
+Desktop*snapToggle.labelString: \ 
+
+Desktop*optionMenu.labelString: Default Editor:
+Desktop*editor0.labelString: jot
+Desktop*editor1.labelString: vi
+Desktop*other.labelString:   Other ...
+
+! 387481, 387475
+Desktop*resetDialog.cancelLabelString: 	Cancel
+Desktop*resetDialog.okLabelString:		OK
+Desktop*resetDialog.noResize: 	True
+
+Desktop*galleryLabel.labelString:  Show Icons as Thumbnail Images:
+Desktop*galleryToggle.labelString : \ 
+Desktop*launchEffectLabel.labelString:  Show Launch Effect:
+Desktop*launchEffectToggle.labelString : \ 
+Desktop*dumpsterLabel.labelString:  Make "Remove" Delete Instantly:
+Desktop*dumpsterToggle.labelString: \ 
+Desktop*overwriteFileLabel.labelString: Warn on File Overwrite:
+Desktop*overwriteToggle.labelString:    \ 
+Desktop*outputdLabel.labelString:  Display Application Errors:
+Desktop*outputdToggle.labelString: \ 
+! 393306
+!*sysmonLabel.labelString:  Monitor the System:
+!*sysmonToggle.labelString: \ 
+Desktop*xhostLabel.labelString:  Enable Remote Display:
+Desktop*xhostToggle.labelString : \ 
+
+Desktop*iconScaleLabel.msgLineHelpText: Change the default size of icons on the desktop.
+Desktop*iconScale.msgLineHelpText: Drag to scale icons; click square for default. 
+Desktop*galleryLabel.msgLineHelpText: Check to see desktop image icons as thumbnails.
+Desktop*galleryToggle.msgLineHelpText: Check to see desktop image icons as thumbnails.
+Desktop*launchEffectLabel.msgLineHelpText: Check to get a sparkly visual before a window opens.
+Desktop*launchEffectToggle.msgLineHelpText: Check to get a sparkly visual before a window opens.
+Desktop*dumpsterLabel.msgLineHelpText: Check to have Remove delete items immediately.
+Desktop*dumpsterToggle.msgLineHelpText: Check to have Remove delete items immediately.
+Desktop*snapLabel.msgLineHelpText: Aligns icons to invisible grid when placed
+Desktop*snapToggle.msgLineHelpText: Aligns icons to invisible grid when placed
+Desktop*overwriteFileLabel.msgLineHelpText: Check to be notified before you overwrite a file.
+Desktop*overwriteToggle.msgLineHelpText: Check to be notified before you overwrite a file.
+Desktop*outputdLabel.msgLineHelpText: Check to have a status window show program errors.
+Desktop*outputdToggle.msgLineHelpText: Check to have a status window show program errors.
+Desktop*xhostLabel.msgLineHelpText: Check to let other hosts put windows on your screen.
+Desktop*xhostToggle.msgLineHelpText: Check to let other hosts put windows on your screen.
+
+Desktop*cancel.msgLineHelpText: Close this window.
+
+Desktop*cancel.msgLineHelpText: Close this window.
+Desktop*reset.msgLineHelpText: Revert the above to previous or factory settings.
+Desktop*help.msgLineHelpText: Show more information about this window.
+
+Desktop*umask.labelString: Permissions ...
+Desktop*umask.msgLineHelpText: Press to change default access to files you create.
+
+Desktop*sounds.labelString: Sounds ...
+Desktop*sounds.msgLineHelpText: Press to control desktop and system sounds.
+
+Desktop*utilities.labelString: Utilities ...
+Desktop*utilities.msgLineHelpText: Press to select your favorite editors and viewers.
+
+Desktop*apply.labelString:  Apply
+Desktop*cancel.labelString: Close
+Desktop*reset.labelString:  Reset ...
+Desktop*help.labelString:   Help
+
+!*dumpsterLocation.labelString: Dumpster Location ...
+
+Desktop*writeToggle.labelString: \ 
+
+Desktop*warningTitle:                Desktop Warning
+Desktop*ownerwarning: Removing owner permissions can cause file access problems.
+Desktop*umask*iconLabel.labelString: Default File Permissions
+Desktop*umask*ownerLabel.labelString: Owner:
+Desktop*umask*groupLabel.labelString: Group:
+Desktop*umask*otherLabel.labelString: Others:
+Desktop*umask*fileLabel.labelString:  Read
+Desktop*umask*fileLabel1.labelString: Write
+Desktop*umask*fileLabel2.labelString: Exec
+
+Desktop*umask*bitToggle.labelString:  \ 
+Desktop*umask*bitToggle1.labelString: \ 
+Desktop*umask*bitToggle2.labelString: \ 
+Desktop*umask*bitToggle3.labelString: \ 
+Desktop*umask*bitToggle4.labelString: \ 
+Desktop*umask*bitToggle5.labelString: \ 
+Desktop*umask*bitToggle6.labelString: \ 
+Desktop*umask*bitToggle7.labelString: \ 
+Desktop*umask*bitToggle8.labelString: \ 
+
+Desktop*noCommWithFmErrorTitle:  Cannot Communicate with File Manager
+Desktop*noCommWithFmErrorMsg:  Sorry, this panel requires write access to your home directory.
+Desktop*noOtrErrorMessage:  File Not Found: /usr/lib/filetype/desktop.otr
+Desktop*bgOutOfSyncTitle:  Desktop Mismatch
+Desktop*bgOutOfSyncMsg:  Background Icon Size, Snap to Grid, and Show Icons as Gallery\n\
+settings have become unsynchronized from the desktop.\n\
+\n\
+Please set them again if you want the desktop to match.
+
+!*dirSelection*Selection.labelString: Dumpster Location
+!*dirSelection*dialogTitle: Dumpster Location
+!*dirSelection.applyLabelString:  Apply
+!*dirSelection.okLabelString:     OK
+!*dirSelection.cancelLabelString: Cancel
+
+Desktop*commandDialog.dialogTitle: Editor Command
+Desktop*commandDialog.label.labelString: Enter editor command line: 
+
+Desktop*umask*dialogTitle: Default File Permissions
+Desktop*umask*okLabelString:     OK
+Desktop*umask*cancelLabelString: Cancel
+Desktop*umask*applyLabelString:  Apply
+
+Desktop*resetDialogTitle: Reset Control Panel
+Desktop*radioButtonsLabel.labelString: Reset Control Panel To:
+Desktop*originalBase.labelString: Previous Settings
+Desktop*factoryBase.labelString:  Factory Settings
+
+Desktop*outputdCmdON:  echo 'This is an example of how the application errors\nwill be displayed.\n\nClick on "Close" to dismiss this window.' >&2
+Desktop*outputdMsgOFF: This feature will not be disabled until your next login.
+
+Desktop*mustBeLocal: To change Remote Display, open the local Desktop panel.
+Desktop*cantReadXhost: Can't get access list.  The system may need restarting.
+
+
+!!Alignment
+Desktop*rc.entryAlignment: ALIGNMENT_CENTER
+
+!!
+!! Geometry
+!!
+
+Desktop*ApplicationShell.minWidth:	250
+
+Desktop*panelPict.width:        50
+Desktop*panelPict.height:       50
+Desktop*panelPict.borderWidth:  1
+Desktop*rowColumn.marginHeight: 0
+Desktop*rowColumn.marginWidth:  0
+Desktop*rowColumn.spacing:      8
+Desktop*rowColumn.topOffset:    8
+Desktop*rowColumn.leftOffset:   8
+
+Desktop*rowColumn1.marginHeight: 0
+Desktop*rowColumn1.marginWidth:  0
+Desktop*rowColumn1.spacing:      8
+Desktop*rowColumn1.rightOffset:  7
+Desktop*rowColumn1.bottomOffset: 7
+Desktop*rowColumn1.packing: PACK_COLUMN
+Desktop*rowColumn1.entryAlignment: ALIGNMENT_CENTER
+
+Desktop*iconArea.shadowType: SHADOW_ETCHED_OUT
+Desktop*iconArea.leftOffset: 20
+Desktop*iconArea.topOffset: 5
+
+Desktop*iconDrawA.width:  80
+Desktop*iconDrawA.height: 80
+
+Desktop*iconScaleLabel.topOffset:  8 
+Desktop*iconScaleLabel.leftOffset: 12
+
+Desktop*iconScale.resizable:    True
+Desktop*iconScale.orientation:  HORIZONTAL
+Desktop*iconScale.height:       25
+Desktop*iconScale.minimum:      30
+Desktop*iconScale.maximum:      100
+Desktop*iconScale.homePosition: 50
+Desktop*iconScale.showValue:    False
+Desktop*iconScale.drawFrame:    False
+Desktop*iconScale.topOffset:    8
+Desktop*iconScale.leftOffset:   24
+
+Desktop*snapLabel.leftOffset:  12
+Desktop*snapLabel.topOffset:   12
+Desktop*snapToggle.topOffset:  10
+
+Desktop*optionMenu.topOffset:   14
+Desktop*optionMenu.leftOffset:  30
+Desktop*optionMenu*resizeWidth: True
+Desktop*optionMenu.resizable:   True
+
+Desktop*grid.topOffset:        12 
+Desktop*grid.defaultSpacing:   0
+Desktop*grid.leftOffset:  	10
+Desktop*grid.marginWidth:  	0
+
+Desktop*middleRC.topOffset: 12 
+
+Desktop*panel.topOffset:    8
+Desktop*panel.leftOffset:   8
+Desktop*panel.bottomOffset: 16
+Desktop*panel.rightOffset:  16
+
+Desktop*menusBase*verticalSpacing: 0
+Desktop*menusBase*horizontalSpacing: 0
+Desktop*menusBase*topOffset: 8
+
+Desktop*umask*SameSize: permToggle permToggle1 permToggle2 permToggle3 permToggle4 \
+           permToggle5 permToggle6 permToggle7 permToggle8 fileLabel \
+           fileLabel1 fileLabel2
+
+Desktop*umask*dialogTable.marginWidth:     5
+Desktop*umask*dialogTable.marginHeight:    5
+Desktop*umask*dialogTable.shadowThickness: 2
+Desktop*umask*dialogTable.columnSpacing:   4
+Desktop*umask*dialogTable.rowSpacing:      2
+Desktop*umask*dialogTable.shadowType:      SHADOW_ETCHED_OUT
+
+Desktop*umask*iconDrawingArea.width:       50
+Desktop*umask*iconDrawingArea.height:      50
+Desktop*umask*iconDrawingArea.borderWidth: 1
+
+Desktop*dirSelection.fileTypeMask: FILE_DIRECTORY
+!*dirSelection*Apply.sensitive: False
+
+!!
+!! Tab Groups
+!!
+Desktop*rowColumn.traversalOn: False
+Desktop*panel.navigationType: NONE
+Desktop*panel.iconArea.traversalOn: False
+Desktop*panel.iconScale.navigationType:     TAB_GROUP
+Desktop*panel.optionMenu.navigationType:    TAB_GROUP
+Desktop*panel.grid.navigationType: NONE
+Desktop*panel.grid.XmToggleButton.navigationType: TAB_GROUP
+Desktop*panel.umask.navigationType:         TAB_GROUP
+
+!! Disable Motif Warnings
+Desktop*silenceWarnings:True
+
+!! For message if book not installed
+Desktop*helpSubSys:         desktop_eoe.books.Desktop_UG
+Desktop*helpTitle:          Desktop Settings

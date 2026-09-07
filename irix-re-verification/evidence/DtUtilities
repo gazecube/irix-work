@@ -1,0 +1,262 @@
+!!
+!!  Application Shell Resources
+!!
+*DtUtilities*useSchemes:     all
+*DtUtilities*sgiMode:        True
+*DtUtilities*schemeFileList: SgiSpec, ImdSpec
+
+*dragReceiverProtocolStyle: DRAG_NONE
+
+! for the QuickHelp line at the bottom of the panel
+*showHelp:              True
+*showPopupHelp:         False
+*showMsgLineHelp:       True
+! this needs to be blank (empty string) for default messages
+*msgLineHelpText:
+
+!
+! SGI Style guide specifies explicit focus within applications
+!
+DtUtilities*keyboardFocusPolicy: explicit
+
+!!
+!! Strings
+!!
+*DtUtilities*title:          Default Viewer & Editor Utilities
+*DtUtilities*iconName:       Utilities
+*panelLabel.labelString:     Default Viewer & Editor Utilities
+
+*topLabel.labelString:     Select your favorites from the menus:
+
+*editorMenu.labelString: \ 
+*editorLabel.labelString: Text Editor:
+*jot.labelString: Jot
+*vi.labelString: Vi
+*emacs.labelString: Emacs
+*nedit.labelString: NEdit
+*hidden.labelString: \ 
+*other.labelString:   Other ...
+
+*htmleditorMenu.labelString: \ 
+*htmleditorLabel.labelString: HTML Editor:
+*cosmocreate.labelString: CosmoCreate
+*webmagic.labelString: WebMagic
+*netscapeHT.labelString: NS Composer
+*texteditor.labelString: Text Editor
+
+*browserMenu.labelString: \ 
+*browserLabel.labelString: Web Browser:
+*netscapeWE.labelString: NS Navigator
+*mosaic.labelString: Mosaic
+*lynx.labelString: Lynx
+*iconview.labelString: IconView
+
+*imgMenu.labelString: \ 
+*imgLabel.labelString: Image Viewer:
+*imgview.labelString: Imgview
+*xv.labelString: Xv
+
+*mailerMenu.labelString: \ 
+*mailerLabel.labelString: Mailer:
+*zmail.labelString: MediaMail
+*netscapeMA.labelString: NS Messenger
+*elm.labelString: Elm
+*bsdmail.labelString: BSD Mail
+
+*bookMenu.labelString: \ 
+*bookLabel.labelString: Book Viewer:
+*insight.labelString: Insight
+*infosearch.labelString: InfoSearch
+
+*psMenu.labelString: \ 
+*psLabel.labelString: PostScript Viewer:
+*ghostview.labelString: Ghostview
+*showps.labelString: ShowPS
+
+! 387481, 387475
+*resetDialog.cancelLabelString: 	Cancel
+*resetDialog.okLabelString:		OK
+DtUtilities*resetDialog.noResize: 	True
+
+*editorMenu.msgLineHelpText: Choose a default text editor.
+*editorLabel.msgLineHelpText: Choose a default text editor.
+*jot.msgLineHelpText: Older SGI graphical point-and-click editor. 
+*nedit.msgLineHelpText: SGI graphical point-and-click editor.
+*vi.msgLineHelpText: Non-intuitive standard UNIX editor.
+*emacs.msgLineHelpText: Another non-intuitive standard UNIX editor.
+*other.msgLineHelpText: Any installed editor you want (ex., cosmocreate).
+
+*htmleditorMenu.msgLineHelpText: Choose a default HTML editor.
+*htmleditorLabel.msgLineHelpText: Choose a default HTML editor.
+*cosmocreate.msgLineHelpText: SGI graphical HTML editor.
+*webmagic.msgLineHelpText: Older SGI graphical HTML editor.
+*texteditor.msgLineHelpText: Your current Text Editor choice.
+*netscapeHT.msgLineHelpText: Netscape's Web navigator, news reader, mailer, and editor.
+
+*browserMenu.msgLineHelpText: Choose a default Web browser.
+*browserLabel.msgLineHelpText: Choose a default Web browser.
+*netscapeWE.msgLineHelpText: Netscape's Web navigator, news reader, mailer, and editor.
+*mosaic.msgLineHelpText: Another graphical UNIX Web browser.
+*lynx.msgLineHelpText: Another UNIX Web browser (freeware).
+*iconview.msgLineHelpText: SGI desktop-integrated Web browser. 
+
+*imgMenu.msgLineHelpText: Choose a default image viewer.
+*imgLabel.msgLineHelpText: Choose a default image viewer.
+*imgview.msgLineHelpText: SGI graphical image editor and viewer.
+*xv.msgLineHelpText: Graphical image editor and viewer.
+
+*mailerMenu.msgLineHelpText: Choose a default program for reading and sending email.
+*mailerLabel.msgLineHelpText: Choose a default program for reading and sending email.
+*zmail.msgLineHelpText: Graphical mailer with drag-and-drop attachments.
+*elm.msgLineHelpText: Another UNIX mailer (freeware). 
+*bsdmail.msgLineHelpText: UNIX mailer.
+*netscapeMA.msgLineHelpText: Netscape's Web navigator, news reader, mailer, and editor.
+
+*bookMenu.msgLineHelpText: Choose a default book viewer.
+*bookLabel.msgLineHelpText: Choose a default book viewer.
+*insight.msgLineHelpText: SGI graphical book viewer.
+*infosearch.msgLineHelpText: SGI Web-based graphical information viewer.
+
+*psMenu.msgLineHelpText: Choose a default PostScript viewer.
+*psLabel.msgLineHelpText: Choose a default PostScript viewer.
+*showps.msgLineHelpText: Adobe ShowPS, a graphical PostScript viewer.
+*ghostview.msgLineHelpText: UNIX graphical PostScript viewer (freeware).
+
+DtUtilities*cancel.msgLineHelpText: Close this window.
+DtUtilities*reset.msgLineHelpText: Revert the above to previous or factory settings.
+DtUtilities*help.msgLineHelpText: Show more information about this window.
+
+*grayLabel.labelString: (Dimmed utilities are not installed.)
+
+*apply.labelString:  Apply
+*cancel.labelString: Close
+*reset.labelString:  Reset ...
+*help.labelString:   Help
+
+*commandDialog.dialogTitle: Editor Command
+*commandDialog.label.labelString: Enter editor command line: 
+
+*editorNotFound: Editor Not Found
+*tryAnotherEditor: That is not in your path or not installed.\n\nTry another editor.
+
+*resetDialogTitle: Reset Control Panel
+*radioButtonsLabel.labelString: Reset Control Panel To:
+*originalBase.labelString: Previous Settings
+*factoryBase.labelString:  Factory Settings
+
+!!
+!! Geometry values for fm as browser
+!!
+*heightRatioContentbyWindow: 0.71
+
+!!
+!! Default Values
+!! 
+*editorCommandJot:    /usr/sbin/jot -f
+*editorCommandNedit:  /usr/sbin/nedit
+*editorCommandVi:     /usr/sbin/xwsh -name Vi -e /usr/bin/vi
+! 513147
+*editorCommandEmacs:  /usr/gnu/bin/emacs
+! 488017
+*factoryEditor:       /usr/sbin/nedit
+
+*htmleditorCommandCosmoCreate: /usr/sbin/CosmoCreate
+*htmleditorCommandWebMagic:    /usr/sbin/webmagic
+*htmleditorCommandNetscape:    /usr/bin/X11/netscape
+! 488017
+*htmleditorCommandTextEditor:  /usr/sbin/nedit
+*factoryHtmlEditor:            /usr/bin/X11/netscape
+
+! Careful: Make sure there are no extra spaces or tabs at the
+! end of these strings.  If so, WebJumper can have problems.
+*browserCommandNetscape:  /usr/bin/X11/netscape
+*browserCommandMosaic:    /usr/bin/X11/Mosaic
+*browserCommandLynx:      /usr/sbin/xwsh -name Lynx -e /usr/freeware/bin/lynx
+*browserCommandIconView:  /usr/sbin/fm -D
+*factoryBrowser:          /usr/bin/X11/netscape
+
+*imgCommandImgview:  /usr/sbin/imgview
+*imgCommandXv:       /usr/freeware/bin/xv
+*factoryImg:         /usr/sbin/imgview
+
+*mailerCommandMediamail:  /usr/bin/X11/MediaMail -gui
+*mailerCommandNetscape:   /usr/bin/X11/netscape mailbox:
+*mailerCommandElm:        /usr/sbin/xwsh -e /usr/freeware/bin/elm
+*mailerCommandBSDMail:	  /usr/sbin/xwsh -e /usr/sbin/Mail
+*factoryMailer:           /usr/bin/X11/netscape mailbox:
+
+*bookCommandInsight:	  /usr/sbin/insight
+*bookCommandInfoSearch:	  /usr/sbin/infosearch -books
+*factoryBook:             /usr/sbin/infosearch -books
+
+*psCommandShowps:    /usr/bin/X11/showps
+*psCommandGhostview: /usr/bin/X11/ghostview
+*factoryPs:          /usr/bin/X11/showps
+
+!!
+!! Geometry
+!!
+
+*ApplicationShell.minWidth:	320
+
+*panelPict.width:        50
+*panelPict.height:       50
+*panelPict.borderWidth:  1
+*rowColumn.marginHeight: 0
+*rowColumn.marginWidth:  0
+*rowColumn.spacing:      8
+*rowColumn.topOffset:    8
+*rowColumn.leftOffset:   8
+
+*rowColumn1.marginHeight: 0
+*rowColumn1.marginWidth:  0
+*rowColumn1.spacing:      8
+*rowColumn1.rightOffset:  7
+*rowColumn1.bottomOffset: 7
+*rowColumn1.packing: PACK_COLUMN
+*rowColumn1.entryAlignment: ALIGNMENT_CENTER
+
+*menusRC.leftOffset:     25
+*menusRC.entryAlignment: XmALIGNMENT_END
+*menusRC.spacing:     	1
+
+*grid.topOffset:	7
+*grid.leftOffset:	9
+*grid.height:     	180
+*grid.marginWidth:	0
+*grid.marginHeight:	0
+*grid.marginHeight:	0
+*grid.borderWidth:	0
+*grid.defaultSpacing:	0
+
+*utilspanel.topOffset:    8
+*utilspanel.leftOffset:   8
+*utilspanel.bottomOffset: 16
+*utilspanel.rightOffset:  16
+
+*topLabel.marginHeight:     6
+*grayLabel.topOffset:     12
+*grayLabel.marginHeight:    4
+
+
+!!
+!! Tab Groups
+!!
+*rowColumn.traversalOn: False
+*panel.navigationType: NONE
+*panel.editorMenu.navigationType:    TAB_GROUP
+*panel.htmleditorMenu.navigationType:    TAB_GROUP
+*panel.browserMenu.navigationType:    TAB_GROUP
+*panel.imgMenu.navigationType:    TAB_GROUP
+*panel.mailerMenu.navigationType:    TAB_GROUP
+*panel.bookMenu.navigationType:    TAB_GROUP
+*panel.psMenu.navigationType:    TAB_GROUP
+*panel.grid.navigationType: NONE
+*panel.grid.XmToggleButton.navigationType: TAB_GROUP
+
+!! Disable Motif Warnings
+*silenceWarnings:True
+
+!! For message if book not installed
+*helpSubSys:         desktop_eoe.books.Desktop_UG
+*helpTitle:          Default Viewer & Editor Utilities
