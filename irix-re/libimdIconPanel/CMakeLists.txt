@@ -33,6 +33,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
    IMDICONPANEL_XT_LIBRARY)
     add_library(imdIconPanel SHARED
         ArgList.c++
+        DragManager.c++
         ImdIconPanel.c++
         IconLayout.c++
         InvertedTeeRenderer.c++
