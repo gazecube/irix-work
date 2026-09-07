@@ -35,6 +35,7 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
         ArgList.c++
         ImdIconPanel.c++
         IconLayout.c++
+        InvertedTeeRenderer.c++
         ModelBasedIconPanel.c++
         ModelBasedIconView.c++
         ViewPanelAdopt.c++
