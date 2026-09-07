@@ -372,11 +372,14 @@ static const TypeIconMap &typeIcons()
 
         if (!root.empty()) {
             /*
-             * Preserve IID override precedence where practical: local and
-             * install definitions are encountered before system/default.
+             * The shipped desktop.otr Makefile constructs this database from
+             * these four source classes, in this order, with lexical *.ftr
+             * ordering inside each directory. devices.otr, vadmin.otr, and the
+             * other generated databases are separate products and must not be
+             * folded into desktop.otr.
              */
             static const char *const dirs[] = {
-                "local", "install", "system", "default", "devices", "vadmin", 0
+                "local", "install", "system", "default", 0
             };
             for (int i = 0; dirs[i]; ++i)
                 scanFtrDir(root, dirs[i], map);
