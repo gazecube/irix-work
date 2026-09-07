@@ -1,31 +1,10 @@
 #include "ModelBasedIconView.h"
 
 #include "Broker.h"
+#include "FtrResolver.h"
 #include "Model.h"
 
-namespace
-{
-static ImdString
-portableGenericFtrResource(const ImdDNA &dna)
-{
-    /*
-     * Binary/resource-backed host seam.
-     *
-     * The original sgidefault.ftr maps generic directories to
-     * ../iconlib/generic.folder.closed.fti and generic documents to
-     * ../iconlib/generic.doc.fti. The model-type strings entering this class
-     * are the recovered ImdDirModel::kTypeName / ImdFileModel::kTypeName
-     * values, not the higher-level "Directory" label. Local type_info-backed
-     * initialization proves the directory spelling is exactly "ImdDirModel".
-     *
-     * Full ImdFtrDB type matching will replace this fallback once the native
-     * FTR database layer is reconstructed.
-     */
-    if (dna.type() == "ImdDirModel")
-        return ImdString("iconlib/generic.folder.closed.fti");
-    return ImdString("iconlib/generic.doc.fti");
-}
-}
+#include <vector>
 
 ImdModelBasedIconView::ImdModelBasedIconView(
     ImdDNA &dna,
@@ -47,7 +26,7 @@ ImdModelBasedIconView::ImdModelBasedIconView(
         broker->releaseModel(model);
     }
 
-    portableSetIconResource(portableGenericFtrResource(_dna));
+    createContents(false);
 }
 
 ImdModelBasedIconView::~ImdModelBasedIconView()
@@ -58,6 +37,32 @@ ImdDNA
 ImdModelBasedIconView::getDNA() const
 {
     return _dna;
+}
+
+ImdDNA
+ImdModelBasedIconView::getType()
+{
+    /*
+     * Binary-proven original path:
+     *
+     *   getDNA()
+     *    -> broker->getModel()
+     *    -> dynamic_cast<ImdTypedModel *>()
+     *    -> model attribute 0xEFFF0080 (ImdAttrTypeDNA)
+     *
+     * ImdTypedModel::getAttr(0xEFFF0080) lazily computes that attribute via
+     * typeFromName("imdFTR_Type", getName()), and typeFromName() calls
+     * imdFtrIconTypeFromFileName() against
+     * "/usr/lib/filetype/desktop.otr".
+     *
+     * ImdTypedModel and the MIPS FTR DB evaluator are not executable host-side
+     * yet. ImdPortableFtrTypeDNAForFile() is the explicitly isolated source
+     * compatibility seam that evaluates only rules recovered from the shipped
+     * SGI .ftr tree. It returns the same type-DNA orientation as the original:
+     *
+     *   ImdDNA(typeName, "/usr/lib/filetype/desktop.otr")
+     */
+    return ImdPortableFtrTypeDNAForFile(getDNA());
 }
 
 void
@@ -76,16 +81,37 @@ ImdModelBasedIconView::specifyDNA()
 void
 ImdModelBasedIconView::createContents(bool force)
 {
-    (void)force;
-
     /*
-     * The original createContents() constructs ImdFtrGalleryX from the type
-     * DNA and calls setGallery(force) plus setGalleryFileName(path). Until the
-     * host FTR classes are source-reconstructed, preserve that renderer-facing
-     * boundary by selecting the exact generic SGI FTI resources from the
-     * original filetype database.
+     * Original createContents(bool), @ 0x0967f478, performs:
+     *
+     *   specifyDNA();
+     *   ImdDNA dna = getDNA();
+     *   ImdModel *model = ImdBroker::contextBroker()->getModel(dna);
+     *   ImdDNA typeDNA = getType();
+     *   imdFtrLoadDB(typeDNA.selector());
+     *   imdFtrIconTypeFromTypeName(db, typeDNA.type());
+     *   new ImdFtrGalleryX(type);
+     *   gallery->setGallery(force);
+     *   gallery->setGalleryFileName(ImdFileModel::fileNameFromDNA(dna));
+     *
+     * It can also construct an optional ImdFtrIconX from the binary-proven
+     * ImdTypedModel secondary DB/type DNA attributes.
+     *
+     * The host does not yet have ABI-compatible ImdFtrGalleryX/ImdFtrIconX,
+     * so preserve the recovered boundary by asking the FTR resolver for the
+     * ordered FTI include stack belonging to the resolved type. The renderer
+     * composites that stack in order, which is required for SGI base+overlay
+     * icons such as Script and AsciiTextFile.
      */
-    portableSetIconResource(portableGenericFtrResource(getDNA()));
+    (void)force;
+    specifyDNA();
+
+    const ImdDNA typeDNA = getType();
+    std::vector<ImdString> resources;
+    if (ImdPortableFtrIconResources(typeDNA, resources))
+        portableSetIconResources(resources);
+    else
+        portableSetIconResources(std::vector<ImdString>());
 }
 
 void
