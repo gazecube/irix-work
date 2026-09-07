@@ -1,0 +1,183 @@
+name: FTR MATCH binary archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/ftr-match-archaeology.yml'
+
+jobs:
+  match-archaeology:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Install MIPS and DWARF tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu python3-pyelftools
+
+      - name: Extract original FTR implementations
+        run: |
+          set -eu
+          mkdir -p /tmp/ftr-evidence
+          archive=irix-re/evidence/shared_objects.tar
+          ftrdb_entry="$(tar -tf "$archive" | grep '/usr/lib32/internal/libimdFtrDB.so$' | head -1)"
+          old_entry="$(tar -tf "$archive" | grep -E '/usr/lib32/internal/libdesktopFileicon\.so(\.[0-9]+)*$' | head -1)"
+          test -n "$ftrdb_entry"
+          test -n "$old_entry"
+          tar -xf "$archive" -C /tmp/ftr-evidence "$ftrdb_entry" "$old_entry"
+          echo "FTRDB=/tmp/ftr-evidence/$ftrdb_entry" >> "$GITHUB_ENV"
+          echo "OLDLIB=/tmp/ftr-evidence/$old_entry" >> "$GITHUB_ENV"
+          file "/tmp/ftr-evidence/$ftrdb_entry" "/tmp/ftr-evidence/$old_entry"
+          sha256sum "/tmp/ftr-evidence/$ftrdb_entry" "/tmp/ftr-evidence/$old_entry"
+
+      - name: Enumerate DWARF compile units and functions
+        run: |
+          set -eu
+          cat > /tmp/dump-dwarf-functions.py <<'PY'
+          import os
+          from elftools.elf.elffile import ELFFile
+          from elftools.dwarf.descriptions import describe_form_class
+
+          def text(attr):
+              if not attr:
+                  return ''
+              v = attr.value
+              return v.decode('utf-8', 'replace') if isinstance(v, bytes) else str(v)
+
+          def walk(path):
+              with open(path, 'rb') as fp:
+                  elf = ELFFile(fp)
+                  if not elf.has_dwarf_info():
+                      return
+                  dwarf = elf.get_dwarf_info()
+                  for cu in dwarf.iter_CUs():
+                      top = cu.get_top_DIE()
+                      cu_name = text(top.attributes.get('DW_AT_name'))
+                      comp_dir = text(top.attributes.get('DW_AT_comp_dir'))
+                      print('CU\t%s\t%s\t%s' % (path, cu_name, comp_dir))
+                      for die in cu.iter_DIEs():
+                          if die.tag != 'DW_TAG_subprogram':
+                              continue
+                          attrs = die.attributes
+                          name = text(attrs.get('DW_AT_name')) or text(attrs.get('DW_AT_linkage_name'))
+                          low = attrs.get('DW_AT_low_pc')
+                          high = attrs.get('DW_AT_high_pc')
+                          if not name or not low or not high:
+                              continue
+                          start = int(low.value)
+                          hclass = describe_form_class(high.form)
+                          stop = int(high.value) if hclass == 'address' else start + int(high.value)
+                          if stop > start:
+                              print('FUNC\t%s\t%s\t%s\t0x%x\t0x%x\t%d' %
+                                    (path, cu_name, name, start, stop, stop-start))
+
+          walk(os.environ['FTRDB'])
+          walk(os.environ['OLDLIB'])
+          PY
+          python3 /tmp/dump-dwarf-functions.py | tee /tmp/all-cu-functions.tsv
+
+      - name: Select matcher and interpreter source units
+        run: |
+          set -eu
+          grep '^CU' /tmp/all-cu-functions.tsv | tee /tmp/all-compile-units.tsv
+          grep -Ei 'ftr|type|match|interp|parse|lex|magic|fileicon|filetype|rule|tag' /tmp/all-compile-units.tsv \
+            | tee /tmp/candidate-compile-units.tsv || true
+
+          python3 - <<'PY'
+          from pathlib import Path
+          rows = Path('/tmp/all-cu-functions.tsv').read_text(errors='replace').splitlines()
+          candidates = []
+          for line in rows:
+              if not line.startswith('CU\t'):
+                  continue
+              parts = line.split('\t')
+              if len(parts) < 3:
+                  continue
+              name = parts[2].lower()
+              if any(k in name for k in ('ftr','type','match','interp','parse','lex','magic','fileicon','filetype','rule','tag')):
+                  candidates.append(parts[2])
+          keep = set(candidates)
+          out=[]
+          for line in rows:
+              parts=line.split('\t')
+              if len(parts) >= 3 and parts[0] == 'FUNC' and parts[2] in keep:
+                  out.append(line)
+          Path('/tmp/candidate-functions.tsv').write_text('\n'.join(out) + ('\n' if out else ''))
+          PY
+          cat /tmp/candidate-functions.tsv
+
+      - name: Disassemble candidate function ranges exactly
+        run: |
+          set -eu
+          : > /tmp/candidate-disassembly.txt
+          while IFS=$'\t' read -r kind image cu name start stop size; do
+            [ "$kind" = FUNC ] || continue
+            printf '\n===== %s :: %s :: %s %s..%s size %s =====\n' \
+              "$image" "$cu" "$name" "$start" "$stop" "$size" >> /tmp/candidate-disassembly.txt
+            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$image" \
+              >> /tmp/candidate-disassembly.txt
+          done < /tmp/candidate-functions.tsv
+          cat /tmp/candidate-disassembly.txt
+
+      - name: Recover symbols imports and literals for MATCH semantics
+        run: |
+          set -eu
+          : > /tmp/match-symbols.txt
+          : > /tmp/match-literals.txt
+          for image in "$FTRDB" "$OLDLIB"; do
+            echo "===== $image : symbols =====" >> /tmp/match-symbols.txt
+            mips-linux-gnu-readelf -Ws "$image" | c++filt \
+              | grep -Ei 'match|ascii|glob|dir|contains|tag|elf|interpreter|parser|lexer|type|rule|string|short|long|link|mode|size' \
+              >> /tmp/match-symbols.txt || true
+            echo "===== $image : dynamic/imports =====" >> /tmp/match-symbols.txt
+            mips-linux-gnu-objdump -TC "$image" \
+              | grep -Ei 'fnmatch|glob|regexec|stat|lstat|opendir|readdir|closedir|read|open|strncmp|strcmp|strstr|ctype|ascii|elf|tag' \
+              >> /tmp/match-symbols.txt || true
+            echo "===== $image : literals =====" >> /tmp/match-literals.txt
+            strings -a -t x "$image" \
+              | grep -Ei 'MATCH|ascii|glob|dircontains|contains|tag|linkcount|string\(|short\(|ushort\(|long\(|ulong\(|true|false|SPECIALFILE|TYPE|error|syntax' \
+              >> /tmp/match-literals.txt || true
+          done
+          cat /tmp/match-symbols.txt
+          cat /tmp/match-literals.txt
+
+      - name: Assemble evidence package
+        run: |
+          set -eu
+          mkdir -p /tmp/ftr-match-archaeology
+          {
+            echo '===== specimens ====='
+            file "$FTRDB" "$OLDLIB"
+            sha256sum "$FTRDB" "$OLDLIB"
+            echo
+            echo '===== all compile units ====='
+            cat /tmp/all-compile-units.tsv
+            echo
+            echo '===== candidate compile units ====='
+            cat /tmp/candidate-compile-units.tsv
+            echo
+            echo '===== candidate functions ====='
+            cat /tmp/candidate-functions.tsv
+            echo
+            echo '===== symbols/imports ====='
+            cat /tmp/match-symbols.txt
+            echo
+            echo '===== literals ====='
+            cat /tmp/match-literals.txt
+            echo
+            echo '===== exact-range disassembly ====='
+            cat /tmp/candidate-disassembly.txt
+          } > /tmp/ftr-match-archaeology/ftr-match-archaeology.txt
+          cp /tmp/all-cu-functions.tsv /tmp/ftr-match-archaeology/
+
+      - name: Upload FTR MATCH archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: ftr-match-archaeology
+          path: /tmp/ftr-match-archaeology/
+          if-no-files-found: error
