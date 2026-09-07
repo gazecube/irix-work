@@ -14,7 +14,14 @@
 namespace
 {
 struct FtiPoint { double x; double y; };
-enum DrawMode { kNone, kPolygon, kLine, kOutlinePolygon };
+enum DrawMode {
+    kNone,
+    kPolygon,
+    kLine,
+    kClosedLine,
+    kOutlinePolygon,
+    kPoint
+};
 
 /*
  * Original ImdInvertedTeeRenderer binary anchors:
@@ -92,32 +99,76 @@ static unsigned long colorFor(Widget w, const std::string &name)
 {
     Pixel bg = 0;
     XtVaGetValues(w, XtNbackground, &bg, NULL);
-    if (name == "outlinecolor") return allocNamed(w, "black", BlackPixelOfScreen(XtScreen(w)));
-    if (name == "shadowcolor") return allocNamed(w, "gray45", BlackPixelOfScreen(XtScreen(w)));
-    if (name == "iconcolor") return allocNamed(w, "gray80", WhitePixelOfScreen(XtScreen(w)));
+
+    /*
+     * IRIX fftr(1) documents these as the desktop's standard dynamic icon
+     * colors. In the normal state iconcolor is white, outlinecolor is black,
+     * and shadowcolor is dark gray. Selection/located/opened state remapping
+     * stays pending until the corresponding ImdIconView state bits are wired.
+     */
+    if (name == "outlinecolor")
+        return allocNamed(w, "black", BlackPixelOfScreen(XtScreen(w)));
+    if (name == "shadowcolor")
+        return allocNamed(w, "gray45", BlackPixelOfScreen(XtScreen(w)));
+    if (name == "iconcolor")
+        return allocNamed(w, "white", WhitePixelOfScreen(XtScreen(w)));
     return bg;
+}
+
+static XPoint toXPoint(long x, long y, const FtiPoint &p)
+{
+    XPoint out;
+    out.x = static_cast<short>(x + p.x * kDefaultIconScale);
+    out.y = static_cast<short>(y +
+        (kFtiNominalExtent - p.y) * kDefaultIconScale);
+    return out;
+}
+
+static std::string argument(const std::string &line)
+{
+    const std::string::size_type a = line.find('(');
+    const std::string::size_type b = line.find(')', a == std::string::npos ? 0 : a + 1);
+    if (a == std::string::npos || b == std::string::npos)
+        return std::string();
+    return trim(line.substr(a + 1, b - a - 1));
 }
 
 static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
                           const std::vector<FtiPoint> &points,
-                          long x, long y, unsigned long pixel)
+                          long x, long y,
+                          unsigned long fillPixel,
+                          unsigned long outlinePixel)
 {
     if (points.empty()) return;
 
     std::vector<XPoint> xp(points.size());
-    for (std::size_t i = 0; i < points.size(); ++i) {
-        xp[i].x = static_cast<short>(x + points[i].x * kDefaultIconScale);
-        xp[i].y = static_cast<short>(y +
-            (kFtiNominalExtent - points[i].y) * kDefaultIconScale);
+    for (std::size_t i = 0; i < points.size(); ++i)
+        xp[i] = toXPoint(x, y, points[i]);
+
+    Display *dpy = XtDisplay(w);
+
+    if (mode == kPolygon || mode == kOutlinePolygon) {
+        XSetForeground(dpy, gc, fillPixel);
+        XFillPolygon(dpy, win, gc, &xp[0],
+                     static_cast<int>(xp.size()), Complex, CoordModeOrigin);
     }
 
-    XSetForeground(XtDisplay(w), gc, pixel);
-    if (mode == kPolygon || mode == kOutlinePolygon)
-        XFillPolygon(XtDisplay(w), win, gc, &xp[0],
-                     static_cast<int>(xp.size()), Complex, CoordModeOrigin);
-    if (mode == kLine || mode == kOutlinePolygon)
-        XDrawLines(XtDisplay(w), win, gc, &xp[0],
+    if (mode == kLine) {
+        XSetForeground(dpy, gc, fillPixel);
+        XDrawLines(dpy, win, gc, &xp[0],
                    static_cast<int>(xp.size()), CoordModeOrigin);
+    } else if (mode == kClosedLine || mode == kOutlinePolygon) {
+        std::vector<XPoint> closed(xp);
+        closed.push_back(xp.front());
+        XSetForeground(dpy, gc,
+                       mode == kOutlinePolygon ? outlinePixel : fillPixel);
+        XDrawLines(dpy, win, gc, &closed[0],
+                   static_cast<int>(closed.size()), CoordModeOrigin);
+    } else if (mode == kPoint) {
+        XSetForeground(dpy, gc, fillPixel);
+        XDrawPoints(dpy, win, gc, &xp[0],
+                    static_cast<int>(xp.size()), CoordModeOrigin);
+    }
 }
 
 static bool drawFti(Widget w, const std::string &relative, long x, long y)
@@ -152,30 +203,81 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
     DrawMode mode = kNone;
     std::vector<FtiPoint> points;
     unsigned long pixel = BlackPixelOfScreen(XtScreen(w));
+    unsigned long outlinePixel = colorFor(w, "outlinecolor");
+    bool havePen = false;
+    FtiPoint pen = { 0.0, 0.0 };
     std::string line;
 
     while (std::getline(in, line)) {
         line = trim(line);
         if (line.empty() || line[0] == '#') continue;
+
         if (starts(line, "color(")) {
-            const std::string::size_type a = line.find('(');
-            const std::string::size_type b = line.find(')', a + 1);
-            if (a != std::string::npos && b != std::string::npos)
-                pixel = colorFor(w, trim(line.substr(a + 1, b - a - 1)));
+            pixel = colorFor(w, argument(line));
         } else if (starts(line, "bgnpolygon(")) {
             mode = kPolygon; points.clear();
         } else if (starts(line, "bgnoutlinepolygon(")) {
             mode = kOutlinePolygon; points.clear();
+        } else if (starts(line, "bgnclosedline(")) {
+            mode = kClosedLine; points.clear();
         } else if (starts(line, "bgnline(")) {
             mode = kLine; points.clear();
+        } else if (starts(line, "bgnpoint(")) {
+            mode = kPoint; points.clear();
         } else if (starts(line, "vertex(")) {
             double px = 0.0, py = 0.0;
             if (std::sscanf(line.c_str(), "vertex(%lf, %lf)", &px, &py) == 2)
                 points.push_back(FtiPoint{px, py});
+        } else if (starts(line, "endoutlinepolygon(")) {
+            const std::string border = argument(line);
+            outlinePixel = border.empty() ? colorFor(w, "outlinecolor")
+                                          : colorFor(w, border);
+            drawPrimitive(w, gc, win, mode, points, x, y, pixel, outlinePixel);
+            mode = kNone;
+            points.clear();
         } else if (starts(line, "endpolygon(") ||
-                   starts(line, "endoutlinepolygon(") ||
-                   starts(line, "endline(")) {
-            drawPrimitive(w, gc, win, mode, points, x, y, pixel);
+                   starts(line, "endclosedline(") ||
+                   starts(line, "endline(") ||
+                   starts(line, "endpoint(")) {
+            drawPrimitive(w, gc, win, mode, points, x, y, pixel, outlinePixel);
+            mode = kNone;
+            points.clear();
+        } else if (starts(line, "move(")) {
+            double px = 0.0, py = 0.0;
+            if (std::sscanf(line.c_str(), "move(%lf, %lf)", &px, &py) == 2) {
+                pen.x = px; pen.y = py; havePen = true;
+            }
+        } else if (starts(line, "draw(")) {
+            double px = 0.0, py = 0.0;
+            if (havePen && std::sscanf(line.c_str(), "draw(%lf, %lf)", &px, &py) == 2) {
+                const FtiPoint next = { px, py };
+                XPoint seg[2] = { toXPoint(x, y, pen), toXPoint(x, y, next) };
+                XSetForeground(dpy, gc, pixel);
+                XDrawLines(dpy, win, gc, seg, 2, CoordModeOrigin);
+                pen = next;
+            }
+        } else if (starts(line, "pmv(")) {
+            double px = 0.0, py = 0.0;
+            if (std::sscanf(line.c_str(), "pmv(%lf, %lf)", &px, &py) == 2) {
+                mode = kPolygon;
+                points.clear();
+                points.push_back(FtiPoint{px, py});
+            }
+        } else if (starts(line, "pdr(")) {
+            double px = 0.0, py = 0.0;
+            if (std::sscanf(line.c_str(), "pdr(%lf, %lf)", &px, &py) == 2)
+                points.push_back(FtiPoint{px, py});
+        } else if (starts(line, "pclos(")) {
+            drawPrimitive(w, gc, win, kPolygon, points, x, y,
+                          pixel, outlinePixel);
+            mode = kNone;
+            points.clear();
+        } else if (starts(line, "bclos(")) {
+            const std::string border = argument(line);
+            const unsigned long borderPixel = border.empty()
+                ? colorFor(w, "outlinecolor") : colorFor(w, border);
+            drawPrimitive(w, gc, win, kOutlinePolygon, points, x, y,
+                          pixel, borderPixel);
             mode = kNone;
             points.clear();
         }
