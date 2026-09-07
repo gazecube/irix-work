@@ -25,36 +25,72 @@ jobs:
             -c irix-re/libimdIconPanel/FtrMatchEvaluator.c++ \
             -o /tmp/FtrMatchEvaluator.o
 
-      - name: Exercise MATCH language
+      - name: Exercise MATCH language and edge semantics
         run: |
           set -eu
+          rm -rf /tmp/ftr /tmp/ftr-samples
           mkdir -p /tmp/ftr/{local,install,system,default}
+          mkdir -p /tmp/ftr/local/nested
           mkdir -p /tmp/ftr-samples/specialdir
+          mkdir -p /tmp/ftr-samples/contains
+
           cat > /tmp/ftr/local/00-smoke.ftr <<'EOF'
           TYPE HashLiteral
               MATCH string(0,4) == "A#B!";
           TYPE Magic
               MATCH string(0,4) == "ABCD" && ushort(4) == 0x1234;
-          TYPE CSource
-              MATCH glob("*.c") && ascii;
+          TYPE Ascii512
+              MATCH glob("ascii512") && ascii;
+          TYPE BraceGlob
+              MATCH glob("*.{c,h}") && ascii;
+          TYPE Untagged
+              MATCH glob("untagged") && tag == -1;
+          TYPE LinkCount
+              MATCH glob("links") && linkcount >= 1;
+          TYPE ParentTrap
+              MATCH glob("parenttrap") && dircontains("marker");
+          TYPE DirContains
+              MATCH dircontains("{marker,other}");
+              SPECIALFILE
           TYPE ShortCircuit
-              MATCH true || (1 / 0);
+              MATCH glob("plain") && (true || (1 / 0));
           TYPE SpecialDir
               MATCH true;
               SPECIALFILE
+          TYPE NestedFallback
+              MATCH glob("nested");
           EOF
+
+          cat > /tmp/ftr/local/nested/00-must-not-load.ftr <<'EOF'
+          TYPE WrongNested
+              MATCH glob("nested");
+          EOF
+
           printf 'A#B!' > /tmp/ftr-samples/hash
           printf '\x41\x42\x43\x44\x12\x34' > /tmp/ftr-samples/magic
           printf 'int main(void) { return 0; }\n' > /tmp/ftr-samples/test.c
+          printf '#define X 1\n' > /tmp/ftr-samples/test.h
           printf 'plain\n' > /tmp/ftr-samples/plain
+          printf 'plain\n' > /tmp/ftr-samples/untagged
+          printf 'x' > /tmp/ftr-samples/links
+          printf 'x' > /tmp/ftr-samples/parenttrap
+          printf 'x' > /tmp/ftr-samples/nested
+          printf 'x' > /tmp/ftr-samples/marker
+          printf 'x' > /tmp/ftr-samples/contains/marker
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('/tmp/ftr-samples/ascii512').write_bytes(b'A' * 512 + b'\xff')
+          PY
+
           cat > /tmp/ftr-smoke.cpp <<'EOF'
           #include "FtrMatchEvaluator.h"
           #include <iostream>
           #include <string>
-          static int check(const char *path, const char *expected)
+
+          static int check(const char *path, bool knownDirectory, const char *expected)
           {
               std::string type;
-              if (!ImdEvaluateFtrType("/tmp/ftr", path, false, type)) {
+              if (!ImdEvaluateFtrType("/tmp/ftr", path, knownDirectory, type)) {
                   std::cerr << "no type for " << path << "\n";
                   return 1;
               }
@@ -64,17 +100,31 @@ jobs:
               }
               return 0;
           }
+
           int main()
           {
               int rc = 0;
-              rc |= check("/tmp/ftr-samples/hash", "HashLiteral");
-              rc |= check("/tmp/ftr-samples/magic", "Magic");
-              rc |= check("/tmp/ftr-samples/test.c", "CSource");
-              rc |= check("/tmp/ftr-samples/plain", "ShortCircuit");
-              rc |= check("/tmp/ftr-samples/specialdir", "SpecialDir");
+              rc |= check("/tmp/ftr-samples/hash", false, "HashLiteral");
+              rc |= check("/tmp/ftr-samples/magic", false, "Magic");
+              rc |= check("/tmp/ftr-samples/ascii512", false, "Ascii512");
+              rc |= check("/tmp/ftr-samples/test.c", false, "BraceGlob");
+              rc |= check("/tmp/ftr-samples/test.h", false, "BraceGlob");
+              rc |= check("/tmp/ftr-samples/untagged", false, "Untagged");
+              rc |= check("/tmp/ftr-samples/links", false, "LinkCount");
+              rc |= check("/tmp/ftr-samples/plain", false, "ShortCircuit");
+              rc |= check("/tmp/ftr-samples/specialdir", true, "SpecialDir");
+              rc |= check("/tmp/ftr-samples/contains", true, "DirContains");
+              rc |= check("/tmp/ftr-samples/nested", false, "NestedFallback");
+
+              std::string type;
+              if (ImdEvaluateFtrType("/tmp/ftr", "/tmp/ftr-samples/parenttrap", false, type)) {
+                  std::cerr << "regular file incorrectly satisfied dircontains: " << type << "\n";
+                  rc = 1;
+              }
               return rc;
           }
           EOF
+
           g++ -std=c++11 -Wall -Wextra -pedantic \
             -Iirix-re/libimdIconPanel \
             /tmp/ftr-smoke.cpp irix-re/libimdIconPanel/FtrMatchEvaluator.c++ \
