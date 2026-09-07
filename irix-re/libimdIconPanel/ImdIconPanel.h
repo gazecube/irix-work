@@ -115,17 +115,34 @@ public:
     unsigned int portableFlags() const { return _portableFlags; }
 
     /*
-     * RE host seam for the renderer-facing FTR resource while the native
-     * ImdFtrGalleryX/ImdFtrIconX classes are being reconstructed. The selected
-     * resource names are taken from the original SGI filetype database.
+     * RE host seam for the renderer-facing FTR content while the native
+     * ImdFtrGalleryX/ImdFtrIconX classes are being reconstructed.
+     *
+     * FTR ICON rules are composited from multiple FTI includes, so retain the
+     * ordered resource list. The singular accessors remain for source
+     * compatibility with earlier reconstruction code.
      */
-    void portableSetIconResource(const ImdString &name) { _portableIconResource = name; }
+    void portableSetIconResource(const ImdString &name) {
+        _portableIconResource = name;
+        _portableIconResources.clear();
+        if (!name.empty())
+            _portableIconResources.push_back(name);
+    }
     const ImdString &portableIconResource() const { return _portableIconResource; }
+
+    void portableSetIconResources(const std::vector<ImdString> &names) {
+        _portableIconResources = names;
+        _portableIconResource = names.empty() ? ImdString() : names.front();
+    }
+    const std::vector<ImdString> &portableIconResources() const {
+        return _portableIconResources;
+    }
 
 private:
     unsigned int _portableFlags;
     ImdString _portableLabel;
     ImdString _portableIconResource;
+    std::vector<ImdString> _portableIconResources;
 };
 
 extern WidgetClass imdViewPanelWidgetClass;
