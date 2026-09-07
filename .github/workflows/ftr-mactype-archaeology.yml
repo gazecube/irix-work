@@ -15,10 +15,10 @@ jobs:
           ref: irix-re
           lfs: true
 
-      - name: Install MIPS binutils
+      - name: Install MIPS binutils and DWARF tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils-mips-linux-gnu
+          sudo apt-get install -y binutils-mips-linux-gnu python3-pyelftools
 
       - name: Extract original N32 FTR binaries
         run: |
@@ -72,6 +72,69 @@ jobs:
           grep -n -E -A100 -B25 'FtrMacInfo|appleFileHandler\.c|mactype\.c|mactype|maccreator|getMac(FileInfo|Type|Creator)|_imdFtrMac(Type|Creator)|afh(Open|Close|Get)' /tmp/ftrdb-dwarf.txt > /tmp/ftrdb-dwarf-focused.txt || true
           cat /tmp/ftrdb-dwarf-focused.txt
 
+      - name: Enumerate Apple handler compile units structurally
+        run: |
+          set -eu
+          cat > /tmp/dump-cu-functions.py <<'PY'
+          import os
+          import sys
+          from elftools.elf.elffile import ELFFile
+          from elftools.dwarf.descriptions import describe_form_class
+
+          def text(attr):
+              if not attr:
+                  return ''
+              value = attr.value
+              if isinstance(value, bytes):
+                  return value.decode('utf-8', 'replace')
+              return str(value)
+
+          def dump(path, needles):
+              if not path or not os.path.isfile(path):
+                  return
+              with open(path, 'rb') as fp:
+                  elf = ELFFile(fp)
+                  if not elf.has_dwarf_info():
+                      return
+                  dwarf = elf.get_dwarf_info()
+                  for cu in dwarf.iter_CUs():
+                      top = cu.get_top_DIE()
+                      cu_name = text(top.attributes.get('DW_AT_name'))
+                      if not any(n.lower() in cu_name.lower() for n in needles):
+                          continue
+                      print('CU\t%s\t%s' % (path, cu_name))
+                      for die in cu.iter_DIEs():
+                          if die.tag != 'DW_TAG_subprogram':
+                              continue
+                          attrs = die.attributes
+                          name = text(attrs.get('DW_AT_name'))
+                          if not name:
+                              name = text(attrs.get('DW_AT_linkage_name'))
+                          low = attrs.get('DW_AT_low_pc')
+                          high = attrs.get('DW_AT_high_pc')
+                          if not name or not low or not high:
+                              continue
+                          start = int(low.value)
+                          high_class = describe_form_class(high.form)
+                          stop = int(high.value) if high_class == 'address' else start + int(high.value)
+                          if stop <= start:
+                              continue
+                          print('FUNC\t%s\t%s\t0x%x\t0x%x\t%d' %
+                                (path, name, start, stop, stop - start))
+
+          dump(os.environ.get('FTRDB', ''), ['appleFileHandler.c', 'ftrType.c++'])
+          dump(os.environ.get('OLDLIB', ''), ['mactype.c', 'appleFileHandler.c'])
+          PY
+          python3 /tmp/dump-cu-functions.py | tee /tmp/apple-cu-functions.tsv
+
+          : > /tmp/apple-cu-disassembly.txt
+          while IFS=$'\t' read -r kind image name start stop size; do
+            [ "$kind" = FUNC ] || continue
+            printf '\n===== %s :: %s %s..%s size %s =====\n' "$image" "$name" "$start" "$stop" "$size" >> /tmp/apple-cu-disassembly.txt
+            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$image" >> /tmp/apple-cu-disassembly.txt
+          done < /tmp/apple-cu-functions.tsv
+          cat /tmp/apple-cu-disassembly.txt
+
       - name: Disassemble Mac and Apple handler entry points
         run: |
           set -eu
@@ -121,6 +184,8 @@ jobs:
             echo; echo '===== symbols ====='; grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|mactype|maccreator|appleFileHandler|afh' /tmp/ftrdb-symbols.txt || true
             echo; echo '===== GOT / APIs ====='; cat /tmp/ftrdb-got.txt
             echo; echo '===== DWARF ====='; cat /tmp/ftrdb-dwarf-focused.txt
+            echo; echo '===== compile-unit functions ====='; cat /tmp/apple-cu-functions.tsv
+            echo; echo '===== compile-unit disassembly ====='; cat /tmp/apple-cu-disassembly.txt
             echo; echo '===== disassembly ====='; cat /tmp/ftrdb-mac-disassembly.txt
             echo; echo '===== strings ====='; cat /tmp/ftrdb-mac-strings.txt
             echo; echo '===== older implementation ====='; cat /tmp/old-mactype.txt
