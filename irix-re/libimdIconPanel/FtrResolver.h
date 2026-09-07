@@ -25,13 +25,17 @@
  * ImdModelBasedIconView::getType() then consumes that type DNA and
  * createContents() resolves it through imdFtrIconTypeFromTypeName().
  *
- * We cannot execute the preserved N32/MIPS FTR engine on the host, so this
- * source-level compatibility layer evaluates only the core, directly shipped
- * sgidefault.ftr predicates needed by ordinary files/directories, then reads
- * the matching TYPE's ICON include list from the installed original .ftr
- * sources. It is deliberately not a replacement definition of the FTR
- * language or ABI. Unimplemented MATCH forms fall back to Unknown instead of
- * inventing host MIME/extension mappings.
+ * The preserved N32/MIPS FTR engine cannot execute directly on the host. The
+ * portable path therefore evaluates MATCH rules from the shipped source tree
+ * in desktop.otr source order (local, install, system, default), and reads the
+ * matching TYPE's original ICON include list from those same files. The old
+ * core classifier remains only as a compatibility fallback when the source
+ * tree is unavailable or a rule cannot yet be evaluated. No host MIME or
+ * extension table is introduced.
+ *
+ * mactype/maccreator currently retain the original failure value, "????",
+ * until the binary-proven AppleSingle/AppleDouble/.HSAncillary precedence is
+ * fully recovered.
  */
 
 ImdDNA ImdPortableFtrTypeDNAForFile(const ImdDNA &fileDNA);
