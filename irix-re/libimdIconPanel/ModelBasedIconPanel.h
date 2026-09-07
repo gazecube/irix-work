@@ -29,18 +29,15 @@ public:
     void changeModel(ImdModel *model);
     void setModel(ImdModel *model);
 
-    /*
-     * Original exported signature:
-     *   showChildren__22ImdModelBasedIconPanelGR11ImdIconView
-     */
     void showChildren(ImdIconView &view);
 
-    /* Original exported event-hook methods. */
     void beginExists();
     void endExists();
     void addOrDelete();
 
-    /* RE portable inspection only. */
+    /* Original exported override @ 0x096a0a30. */
+    virtual void dragEnd();
+
     ImdModel *portableModel() const { return _model; }
     unsigned int portableReceiverCount() const
     {
@@ -63,12 +60,6 @@ private:
                                         void *clientData);
 
     private:
-        /*
-         * Portable source-level storage corresponding to the proven original
-         * fields at N32 +0x08/+0x0c/+0x10/+0x14. The original also has cache
-         * state at +0x00 and a flag byte at +0x04; those are not yet needed by
-         * the initial existence-batch path and are not fabricated here.
-         */
         ImdModelBasedIconPanel *_panel;
         ImdModelBasedIconView *_view;
         ImdModel *_model;
@@ -78,11 +69,6 @@ private:
     void destroyReceivers();
 
     ImdModel *_model;
-
-    /*
-     * Portable container only. The original panel owns an
-     * ImdCollectionOf<NotifyReceiver>; this vector does not claim ABI parity.
-     */
     std::vector<NotifyReceiver *> _receivers;
 };
 
