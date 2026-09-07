@@ -15,6 +15,8 @@ extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
 #include <dlfcn.h>
 #endif
 
+extern "C" void ImdViewPanelPortableRendererChanged(Widget, ImdRenderer *);
+
 namespace
 {
 WidgetClass resolveViewPanelWidgetClass()
@@ -103,7 +105,7 @@ void reportSgVisualState(Widget widget)
         std::fprintf(stderr, "ImdViewPanel visual: id=0x%lx class=%d depth=%d colormap=0x%lx\n", static_cast<unsigned long>(XVisualIDFromVisual(visual)), visual->c_class, depth, static_cast<unsigned long>(colormap));
     else
         std::fprintf(stderr, "ImdViewPanel visual: id=NULL class=-1 depth=%d colormap=0x%lx\n", depth, static_cast<unsigned long>(colormap));
-    std::fprintf(stderr, "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n", installColormap ? "True" : "False", ditherBackground ? "True" : "False");
+    std::fprintf(stderr, "SgVisualDrawingArea resources: installColormap=%s ditherBackground=%s\n", installColormap ? "True" : "False", ditherBackground ? "False" : "False");
     std::fprintf(stderr, "SgVisualDrawingArea background: pixel=0x%lx pixmap=0x%lx\n", static_cast<unsigned long>(backgroundPixel), static_cast<unsigned long>(backgroundPixmap));
     if (colormap != None) {
         XColor color;
@@ -148,6 +150,7 @@ extern "C" void ImdViewPanelAdoptRenderer(Widget widget, ImdRenderer *renderer)
 {
     gViewPanelState[widget].renderer = renderer;
     if (renderer) renderer->realize(widget);
+    ImdViewPanelPortableRendererChanged(widget, renderer);
 }
 extern "C" void ImdViewPanelAdoptLayout(Widget widget, ImdLayout *layout) { gViewPanelState[widget].layout = layout; }
 extern "C" void ImdViewPanelSetScale(Widget widget, float scale, long arg0, long arg1)
@@ -162,10 +165,7 @@ extern "C" void ImdViewPanelEndBlockChanges(Widget widget)
     if (state.blockDepth != 0) --state.blockDepth;
 }
 
-ImdIconView::ImdIconView()
-    : _portableFlags(0), _portableLabel(), _portableIconResource()
-{
-}
+ImdIconView::ImdIconView() : _portableFlags(0), _portableLabel(), _portableIconResource() {}
 ImdIconView::~ImdIconView() {}
 void ImdIconView::setFlag(unsigned int flag, bool value) { if (value) _portableFlags |= flag; else _portableFlags &= ~flag; }
 bool ImdIconView::getFlag(unsigned int flag) const { return (_portableFlags & flag) == flag; }
