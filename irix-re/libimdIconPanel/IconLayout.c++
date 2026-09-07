@@ -7,6 +7,7 @@
  *
  * Original symbols:
  *   ImdIconLayout(Widget)      0x0968190c, 932 bytes
+ *   moveView(ImdView&,long,long) 0x0969d1fc, 116 bytes
  *   setSnapToGrid(bool)        0x0968241c, 64 bytes
  *   truncate(bool)             0x0968b7f0, 8 bytes
  *   setScrollIncrement()       0x096ad058, 360 bytes
@@ -34,13 +35,6 @@ struct LayoutResources
     int maximumIconWidth;
 };
 
-/*
- * Resource names/classes are present verbatim in the original library.
- * The original constructor also clamps one recovered integer field to at
- * least 25; the field is consistent with gridWidth and the FileManager
- * app-default sets gridWidth to 30. Defaults other than that clamp remain
- * deliberately neutral until the original resource table is decoded.
- */
 static XtResource layoutResources[] =
 {
     { (char *)"gridWidth", (char *)"GridWidth", XtRInt, sizeof(int),
@@ -130,21 +124,34 @@ ImdIconLayout::~ImdIconLayout()
 {
 }
 
+bool
+ImdIconLayout::moveView(ImdView &view, long x, long y)
+{
+    /*
+     * Original ImdIconLayout::moveView() @ 0x0969d1fc is the derived layout
+     * entry reached by ImdViewPanelMoveView(). It forwards through another
+     * layout virtual that owns the real positioning policy, then caches the
+     * result in original layout state.
+     *
+     * That lower positioning virtual is still under reconstruction. Preserve
+     * the externally visible source-level contract here: a successful icon
+     * layout move updates the view's coordinates. This keeps all callers on
+     * the recovered ViewPanel -> ImdLayout -> ImdIconLayout path rather than
+     * inventing a desktop-only mover.
+     */
+    view.portableSetPosition(x, y);
+    return true;
+}
+
 void
 ImdIconLayout::setSnapToGrid(bool value)
 {
-    /* Original stores the Boolean at n32 object offset +0x44. */
     _snapToGrid = value;
 }
 
 void
 ImdIconLayout::truncate(bool value)
 {
-    /*
-     * The original eight-byte body ignores its Boolean argument and stores
-     * zero at object offset +0x10. Do not invent label mutation here before
-     * that field's ownership is recovered.
-     */
     (void)value;
     _truncateRequested = false;
 }
@@ -152,9 +159,4 @@ ImdIconLayout::truncate(bool value)
 void
 ImdIconLayout::setScrollIncrement()
 {
-    /*
-     * The original body is known (0x096ad058, 360 bytes), but its scroller
-     * member/call targets are not yet named. Keep this seam live and inert
-     * rather than guessing the scrollbar contract.
-     */
 }
