@@ -7,28 +7,33 @@
 #include <X11/Xutil.h>
 #include <vector>
 
-/*
- * Original libimdIconPanel class names recovered from DWARF/symbols.
- * These are intentionally minimal portable base types. No unproven virtual
- * API is assigned here; they only let reconstructed subclasses use the
- * recovered ownership/adoption interfaces without reinterpret_cast bridges.
- */
 class ImdRenderer
 {
 public:
     virtual ~ImdRenderer() {}
+    virtual void realize(Widget) {}
+    virtual void draw(class ImdView &, long, long) {}
 };
 
 class ImdIconRenderer : public ImdRenderer
 {
 public:
-    virtual ~ImdIconRenderer() {}
+    ImdIconRenderer();
+    virtual ~ImdIconRenderer();
+    virtual void realize(Widget widget);
+    virtual void draw(class ImdView &, long, long) {}
+
+protected:
+    Widget _portableWidget;
 };
 
 class ImdInvertedTeeRenderer : public ImdIconRenderer
 {
 public:
-    virtual ~ImdInvertedTeeRenderer() {}
+    ImdInvertedTeeRenderer();
+    virtual ~ImdInvertedTeeRenderer();
+    virtual void realize(Widget widget);
+    virtual void draw(class ImdView &view, long x, long y);
 };
 
 class ImdLayout
@@ -36,9 +41,7 @@ class ImdLayout
 public:
     explicit ImdLayout(Widget widget = 0) : _widget(widget) {}
     virtual ~ImdLayout() {}
-
     Widget widget() const { return _widget; }
-
 protected:
     Widget _widget;
 };
@@ -46,7 +49,17 @@ protected:
 class ImdView
 {
 public:
+    ImdView() : _portableX(0), _portableY(0) {}
     virtual ~ImdView() {}
+
+    /* RE host state only. Original ImdView N32 +0x04/+0x08 are x/y. */
+    void portableSetPosition(long x, long y) { _portableX = x; _portableY = y; }
+    long portableX() const { return _portableX; }
+    long portableY() const { return _portableY; }
+
+private:
+    long _portableX;
+    long _portableY;
 };
 
 class ImdIconView : public ImdView
@@ -55,92 +68,50 @@ public:
     ImdIconView();
     virtual ~ImdIconView();
 
-    /*
-     * Original exported symbols:
-     *   setFlag__11ImdIconViewGQ2_10ImdFtrIcon10EIconStateb
-     *   getFlag__11ImdIconViewGQ2_10ImdFtrIcon10EIconState
-     *
-     * The original parameter type is ImdFtrIcon::EIconState. The portable
-     * reconstruction carries the recovered bitmask value as unsigned int until
-     * the FTR enum declaration itself is reconstructed.
-     */
     virtual void setFlag(unsigned int flag, bool value);
     virtual bool getFlag(unsigned int flag) const;
-
-    /* Original exported label accessors. */
     virtual ImdString getLabel() const;
     virtual void setLabel(const ImdString &label);
 
-    /* RE portable inspection only. */
     unsigned int portableFlags() const { return _portableFlags; }
 
-private:
     /*
-     * Source-level storage only; do not infer SGI offsets from these members.
-     * Original N32 disassembly proves:
-     *   +0x28 : icon-state bitmask
-     *   +0x2c : ImdString label
+     * RE host seam for the renderer-facing FTR resource while the native
+     * ImdFtrGalleryX/ImdFtrIconX classes are being reconstructed. The selected
+     * resource names are taken from the original SGI filetype database.
      */
+    void portableSetIconResource(const ImdString &name) { _portableIconResource = name; }
+    const ImdString &portableIconResource() const { return _portableIconResource; }
+
+private:
     unsigned int _portableFlags;
     ImdString _portableLabel;
+    ImdString _portableIconResource;
 };
 
 class ImdIconPanel;
 
 extern WidgetClass imdViewPanelWidgetClass;
 
-extern "C" Widget ImdCreateViewPanel(
-    Widget parent,
-    char *name,
-    Arg *args,
-    Cardinal count);
-
+extern "C" Widget ImdCreateViewPanel(Widget, char *, Arg *, Cardinal);
 extern "C" void ImdViewPanelAdoptRenderer(Widget, ImdRenderer *);
 extern "C" void ImdViewPanelAdoptLayout(Widget, ImdLayout *);
 extern "C" void ImdViewPanelSetScale(Widget, float, long, long);
 extern "C" void ImdViewPanelBeginBlockChanges(Widget);
 extern "C" void ImdViewPanelEndBlockChanges(Widget);
-
-/*
- * Original overloads recovered from libimdIconPanel.so:
- *   ImdViewPanelAdoptView(Widget, ImdView *, ImdView *)
- *   ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *)
- */
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdView *);
 void ImdViewPanelAdoptView(Widget, ImdView *, ImdIconPanel *);
+void ImdViewPanelRedraw(Widget);
 
 class ImdIconPanel
 {
 public:
     ImdIconPanel(const char *name, Widget parent, Arg *args, int count);
     virtual ~ImdIconPanel();
-
     Widget baseWidget() const { return _baseWidget; }
-
-    /*
-     * Exact original symbol:
-     *   adoptView__12ImdIconPanelGP11ImdIconViewT1
-     *
-     * Local vtable/disassembly proof resolves the second argument as the
-     * parent view. A null parent selects the ImdIconPanel ownership overload
-     * of ImdViewPanelAdoptView().
-     */
     virtual void adoptView(ImdIconView *view, ImdIconView *parentView);
-
-    /*
-     * Vtable slot +656 reached by adoptView() resolves exactly to the original
-     * applySelectStrings(ImdIconView &) method.
-     */
     virtual void applySelectStrings(ImdIconView &view);
-
-    /* Portable inspection only; not claimed as original public interface. */
     const std::vector<ImdView *> &portableViews() const { return _views; }
-
-    /*
-     * Portable ownership seam used while ImdViewPanelDeleteAllViews() and the
-     * original ImdIconPanel::deleteView() contract are still being restored.
-     * Callers must opt in to destroying adopted views.
-     */
     void portableResetViews(bool destroyViews);
 
 private:
