@@ -90,9 +90,9 @@ static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
     }
     XSetForeground(XtDisplay(w), gc, pixel);
     if (mode == kPolygon || mode == kOutlinePolygon)
-        XFillPolygon(XtDisplay(w), win, &xp[0], static_cast<int>(xp.size()), Complex, CoordModeOrigin);
+        XFillPolygon(XtDisplay(w), win, gc, &xp[0], static_cast<int>(xp.size()), Complex, CoordModeOrigin);
     if (mode == kLine || mode == kOutlinePolygon)
-        XDrawLines(XtDisplay(w), win, &xp[0], static_cast<int>(xp.size()), CoordModeOrigin);
+        XDrawLines(XtDisplay(w), win, gc, &xp[0], static_cast<int>(xp.size()), CoordModeOrigin);
 }
 
 static bool drawFti(Widget w, const std::string &relative, long x, long y)
