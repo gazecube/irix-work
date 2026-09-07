@@ -1,5 +1,6 @@
 #include "ImdIconPanel.h"
 
+#include <Xm/DrawingA.h>
 #include <X11/Xlib.h>
 #include <map>
 #include <vector>
@@ -49,6 +50,19 @@ exposeHandler(Widget widget, XtPointer, XEvent *event, Boolean *)
         return;
     ImdViewPanelRedraw(widget);
 }
+
+static void
+drawingAreaExposeCB(Widget widget, XtPointer, XtPointer)
+{
+    /*
+     * The portable ViewPanel is backed by SgVisualDrawingArea, which is an
+     * XmDrawingArea-family widget. Render from its expose callback so drawing
+     * occurs after the widget has repaired its own background. This is a host
+     * event-lifecycle seam only; the original ImdViewPanel owns its renderer
+     * invalidation internally.
+     */
+    ImdViewPanelRedraw(widget);
+}
 }
 
 extern "C" void
@@ -59,11 +73,18 @@ ImdViewPanelPortableRendererChanged(Widget widget, ImdRenderer *renderer)
 
     gRenderers[widget] = renderer;
     if (!gExposeInstalled[widget]) {
-        XtAddEventHandler(widget,
-                          ExposureMask,
-                          False,
-                          exposeHandler,
+        if (XtIsSubclass(widget, xmDrawingAreaWidgetClass)) {
+            XtAddCallback(widget,
+                          XmNexposeCallback,
+                          drawingAreaExposeCB,
                           0);
+        } else {
+            XtAddEventHandler(widget,
+                              ExposureMask,
+                              False,
+                              exposeHandler,
+                              0);
+        }
         gExposeInstalled[widget] = true;
     }
 }
