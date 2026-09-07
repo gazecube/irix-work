@@ -20,12 +20,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils-mips-linux-gnu
 
-      - name: Extract original FTR binaries
+      - name: Extract original N32 FTR binaries
         run: |
           set -eu
           mkdir -p /tmp/ftr-evidence
-          ftrdb_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/libimdFtrDB.so$' | head -1)"
-          old_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep -E '/libdesktopFileicon\.so(\.[0-9]+)*$' | head -1 || true)"
+          ftrdb_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep '/usr/lib32/internal/libimdFtrDB.so$' | head -1)"
+          old_entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep -E '/usr/lib32/internal/libdesktopFileicon\.so(\.[0-9]+)*$' | head -1 || true)"
           test -n "$ftrdb_entry"
           tar -xf irix-re/evidence/shared_objects.tar -C /tmp/ftr-evidence "$ftrdb_entry"
           if [ -n "$old_entry" ]; then
@@ -40,27 +40,27 @@ jobs:
           sha256sum "$ftrdb"
           if [ -n "$old_entry" ]; then file "/tmp/ftr-evidence/$old_entry"; sha256sum "/tmp/ftr-evidence/$old_entry"; fi
 
-      - name: Recover FtrMacInfo symbols and source units
+      - name: Recover Mac symbols and source units
         run: |
           set -eu
           mips-linux-gnu-readelf -Ws "$FTRDB" > /tmp/ftrdb-symbols.raw
           mips-linux-gnu-readelf -Ws "$FTRDB" | c++filt > /tmp/ftrdb-symbols.txt
           strings -a "$FTRDB" > /tmp/ftrdb-strings.txt
-          grep -Ei 'FtrMacInfo|Mac(Type|Creator)|appleFileHandler|mactype|maccreator|AppleDouble|AppleSingle|MacBinary|HSAncillary|HSResource|EtherShare|FinderInfo|resource fork|resourcefork|AFP' /tmp/ftrdb-symbols.txt /tmp/ftrdb-strings.txt || true
+          grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|appleFileHandler|mactype|maccreator|AppleDouble|AppleSingle|MacBinary|HSAncillary|HSResource|EtherShare|FinderInfo|resource fork|resourcefork|AFP' /tmp/ftrdb-symbols.txt /tmp/ftrdb-strings.txt || true
 
-      - name: Recover FtrMacInfo DWARF
+      - name: Recover Mac DWARF
         run: |
           set -eu
           mips-linux-gnu-readelf --debug-dump=info "$FTRDB" | c++filt > /tmp/ftrdb-dwarf.txt || true
-          grep -n -E -A80 -B20 'FtrMacInfo|appleFileHandler\.c|mactype|maccreator|getMac(FileInfo|Type|Creator)' /tmp/ftrdb-dwarf.txt > /tmp/ftrdb-dwarf-focused.txt || true
+          grep -n -E -A100 -B25 'FtrMacInfo|appleFileHandler\.c|mactype\.c|mactype|maccreator|getMac(FileInfo|Type|Creator)|_imdFtrMac(Type|Creator)' /tmp/ftrdb-dwarf.txt > /tmp/ftrdb-dwarf-focused.txt || true
           cat /tmp/ftrdb-dwarf-focused.txt
 
-      - name: Disassemble FtrMacInfo methods
+      - name: Disassemble Mac entry points
         run: |
           set -eu
           out=/tmp/ftrdb-mac-disassembly.txt
           : > "$out"
-          grep -E 'FtrMacInfo' /tmp/ftrdb-symbols.raw | while read -r num value size type bind vis ndx name; do
+          grep -E 'FtrMacInfo|_imdFtrMac(Type|Creator)' /tmp/ftrdb-symbols.raw | while read -r num value size type bind vis ndx name; do
             case "$type" in FUNC) ;; *) continue ;; esac
             start=$((16#$value))
             stop=$((start + size))
@@ -73,24 +73,32 @@ jobs:
         run: |
           set -eu
           mips-linux-gnu-objdump -drC "$FTRDB" > /tmp/ftrdb-full-dis.txt
-          grep -n -E -A35 -B20 'FtrMacInfo::|getMac(FileInfo|Type|Creator)|mactype|maccreator' /tmp/ftrdb-full-dis.txt > /tmp/ftrdb-callgraph.txt || true
-          strings -a -t x "$FTRDB" | grep -Ei 'Apple|Mac|HSAncillary|HSResource|resource|Finder|AFP|Ether|Double|Single|%|\.resource|\.finder' > /tmp/ftrdb-mac-strings.txt || true
+          grep -n -E -A55 -B30 'FtrMacInfo::|_imdFtrMac(Type|Creator)|getMac(FileInfo|Type|Creator)|mactype|maccreator' /tmp/ftrdb-full-dis.txt > /tmp/ftrdb-callgraph.txt || true
+          strings -a -t x "$FTRDB" | grep -Ei 'Apple|Mac|HSAncillary|HSResource|resource|Finder|AFP|Ether|Double|Single|\.resource|\.finder|\.AppleDouble|%[A-Za-z]' > /tmp/ftrdb-mac-strings.txt || true
           echo '===== call graph ====='
           cat /tmp/ftrdb-callgraph.txt
           echo '===== Mac-related strings ====='
           cat /tmp/ftrdb-mac-strings.txt
 
-      - name: Inspect older mactype.c implementation when present
+      - name: Inspect older N32 desktop fileicon implementation when present
         run: |
           set -eu
           : > /tmp/old-mactype.txt
           if [ -n "${OLDLIB:-}" ] && [ -f "$OLDLIB" ]; then
+            mips-linux-gnu-readelf -Ws "$OLDLIB" > /tmp/old-symbols.raw
             echo '===== symbols =====' >> /tmp/old-mactype.txt
             mips-linux-gnu-readelf -Ws "$OLDLIB" | c++filt | grep -Ei 'mactype|maccreator|mac|apple|finder|resource|ancillary' >> /tmp/old-mactype.txt || true
             echo '===== source units / strings =====' >> /tmp/old-mactype.txt
-            strings -a -t x "$OLDLIB" | grep -Ei 'mactype\.c|mactype|maccreator|HSAncillary|HSResource|Apple|Finder|Ether|resource' >> /tmp/old-mactype.txt || true
+            strings -a -t x "$OLDLIB" | grep -Ei 'mactype\.c|mactype|maccreator|HSAncillary|HSResource|Apple|Finder|Ether|Double|Single|resource' >> /tmp/old-mactype.txt || true
             echo '===== DWARF =====' >> /tmp/old-mactype.txt
-            mips-linux-gnu-readelf --debug-dump=info "$OLDLIB" | c++filt | grep -n -E -A70 -B20 'mactype\.c|mactype|maccreator' >> /tmp/old-mactype.txt || true
+            mips-linux-gnu-readelf --debug-dump=info "$OLDLIB" | c++filt | grep -n -E -A100 -B25 'mactype\.c|mactype|maccreator|MacType|MacCreator' >> /tmp/old-mactype.txt || true
+            echo '===== disassembly =====' >> /tmp/old-mactype.txt
+            grep -E 'MacType|MacCreator' /tmp/old-symbols.raw | while read -r num value size type bind vis ndx name; do
+              case "$type" in FUNC) ;; *) continue ;; esac
+              start=$((16#$value)); stop=$((start + size))
+              printf '\n===== %s 0x%x size %d =====\n' "$name" "$start" "$size" >> /tmp/old-mactype.txt
+              mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$OLDLIB" >> /tmp/old-mactype.txt
+            done
           fi
           cat /tmp/old-mactype.txt
 
@@ -105,7 +113,7 @@ jobs:
             sha256sum "$FTRDB"
             echo
             echo '===== focused symbols ====='
-            grep -Ei 'FtrMacInfo|Mac(Type|Creator)|mactype|maccreator|appleFileHandler' /tmp/ftrdb-symbols.txt || true
+            grep -Ei 'FtrMacInfo|_imdFtrMac(Type|Creator)|Mac(Type|Creator)|mactype|maccreator|appleFileHandler' /tmp/ftrdb-symbols.txt || true
             echo
             echo '===== focused DWARF ====='
             cat /tmp/ftrdb-dwarf-focused.txt
