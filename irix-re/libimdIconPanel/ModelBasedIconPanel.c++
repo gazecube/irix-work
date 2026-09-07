@@ -2,6 +2,7 @@
 
 #include "Attribute.h"
 #include "Broker.h"
+#include "IconLayout.h"
 #include "Model.h"
 #include "ModelBasedIconView.h"
 
@@ -15,11 +16,6 @@ ImdModelBasedIconPanel::NotifyReceiver::NotifyReceiver(
       _model(0),
       _childCapabilities(childCapabilities)
 {
-    /*
-     * Original constructor @ 0x096b111c stores model->getSelf() and then
-     * registers receiveNotification twice, normal first and child second.
-     * getSelf() owns one model ref and each callback registration owns one.
-     */
     if (model)
         _model = model->getSelf();
 
@@ -34,11 +30,6 @@ ImdModelBasedIconPanel::NotifyReceiver::~NotifyReceiver()
     if (!_model)
         return;
 
-    /*
-     * Exact destructor tail @ 0x0968cd74: child callback is removed first,
-     * then normal callback, then the getSelf() reference is returned through
-     * ImdBroker::releaseModel().
-     */
     _model->removeClientCallback(receiveNotification, this, true);
     _model->removeClientCallback(receiveNotification, this, false);
     ImdBroker::contextBroker()->releaseModel(_model);
@@ -67,10 +58,6 @@ ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
 
         switch (attribute->getName()) {
         case 0xEFFF004B:
-            /*
-             * Exact receiveNotification existence-batch branch:
-             * beginExists(), then ImdViewPanelBeginBlockChanges().
-             */
             receiver->_panel->beginExists();
             ImdViewPanelBeginBlockChanges(receiver->_panel->baseWidget());
             break;
@@ -81,16 +68,6 @@ ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
             if (!imdGetAttrValue(*attribute, childDNA))
                 break;
 
-            /*
-             * Original allocates 88 bytes and constructs
-             * ImdModelBasedIconView(childDNA, childCapabilities), then calls
-             * ImdIconPanel::adoptView(newView, receiver->_view).
-             *
-             * For the root desktop receiver the constructor flag is false and
-             * the original relationship-derived branch also resolves false.
-             * A true receiver flag is proven to force true. The remaining
-             * nested false-case derivation is intentionally not guessed.
-             */
             bool childCapabilities = receiver->_childCapabilities;
             if (!receiver->_view && !receiver->_childCapabilities)
                 childCapabilities = false;
@@ -103,18 +80,11 @@ ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
         }
 
         case 0xEFFF004D:
-            /* Exact end ordering from the original callback. */
             ImdViewPanelEndBlockChanges(receiver->_panel->baseWidget());
             receiver->_panel->endExists();
             break;
 
         default:
-            /*
-             * Other recovered 0xEFFF.... notification branches cover
-             * rename/delete/change/invalidation and remain under archaeology.
-             * Do not synthesize their behavior into the initial-population
-             * checkpoint.
-             */
             break;
         }
     }
@@ -154,14 +124,6 @@ ImdModelBasedIconPanel::destroyReceivers()
 void
 ImdModelBasedIconPanel::changeModel(ImdModel *model)
 {
-    /*
-     * Binary-backed lifecycle from original changeModel() @ 0x09685f6c:
-     * block changes, tear down receiver/model relationships, transition views,
-     * setModel(), install a root NotifyReceiver when a model exists, unblock.
-     *
-     * The exact existing-view transition virtual is not yet fully restored;
-     * portableResetViews() remains explicitly host-only at that seam.
-     */
     ImdViewPanelBeginBlockChanges(baseWidget());
 
     destroyReceivers();
@@ -180,11 +142,6 @@ ImdModelBasedIconPanel::changeModel(ImdModel *model)
 void
 ImdModelBasedIconPanel::setModel(ImdModel *model)
 {
-    /*
-     * Original setModel() stores the model at N32 object offset +0x64 and also
-     * maintains an embedded ImdString beginning at +0x68. The latter remains
-     * unresolved and is not invented in the portable object.
-     */
     _model = model;
 }
 
@@ -192,31 +149,46 @@ void
 ImdModelBasedIconPanel::showChildren(ImdIconView &view)
 {
     (void)view;
-
-    /*
-     * Original @ 0x096a0fa4 is completely receiver-based:
-     * obtain view DNA, reject duplicate receiver DNA, broker->getModel(dna),
-     * construct NotifyReceiver(this, &view, model, false), insert receiver,
-     * release broker model. The root population checkpoint does not need this
-     * path. Its base ImdIconView DNA virtual seam remains to be restored before
-     * implementing it rather than using a cast-based substitute.
-     */
 }
 
 void
 ImdModelBasedIconPanel::beginExists()
 {
-    /* Original body dispatches the panel's begin-exists callback hook. */
 }
 
 void
 ImdModelBasedIconPanel::endExists()
 {
-    /* Original body dispatches the panel's end-exists callback hook. */
 }
 
 void
 ImdModelBasedIconPanel::addOrDelete()
 {
-    /* Original body dispatches the panel's add/delete callback hook. */
+}
+
+void
+ImdModelBasedIconPanel::dragEnd()
+{
+    /*
+     * Binary correction: original ImdModelBasedIconPanel::dragEnd()
+     * @ 0x096a0a30 first calls ImdIconPanel::dragEnd(), then walks a
+     * model collection owned by the drag operation and releases each model
+     * through ImdBroker::releaseModel(). It does NOT itself write positions.
+     *
+     * Original desktop position persistence lives in the presentation-state
+     * path instead: ImdBackWindow::savePresentationState() calls
+     * ImdViewPanelSaveMappings(), and restorePresentationState() calls
+     * ImdViewPanelLoadMappings().
+     *
+     * The reconstructed host does not yet have ImdInitFile/session callbacks,
+     * so flush the already-captured ImdIconLayout mappings here as a temporary
+     * lifecycle seam. This gives restart persistence without attributing the
+     * write to the original dragEnd implementation.
+     */
+    ImdIconPanel::dragEnd();
+
+    ImdLayout *layout = ImdViewPanelGetLayout(baseWidget());
+    ImdIconLayout *iconLayout = dynamic_cast<ImdIconLayout *>(layout);
+    if (iconLayout)
+        iconLayout->portableSaveMappings();
 }
