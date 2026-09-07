@@ -11,6 +11,10 @@
  *     _SGI_DESKS_DESKTOP_WINDOW on the root window
  *   - Xsession.dt uses $HOME/.desktop-$host for the user desktop database
  *     directory and $HOME/.desktophost/$host for system/overlay desktop state
+ *   - original ImdBackWindow save/restore presentation state calls
+ *     ImdViewPanelSaveMappings()/ImdViewPanelLoadMappings()
+ *   - shipped fm strings name the presentation file/key "FmState" and
+ *     "IconMappings"
  *
  * The top-level Xt shell below is only a Linux host seam. It is not claimed
  * as the original ImdBackWindow implementation. The panel class itself now
@@ -52,6 +56,7 @@ struct DesktopState
     char userDesktopDir[PATH_MAX];
     char systemDesktopDir[PATH_MAX];
     char systemDesktopIconDir[PATH_MAX];
+    char layoutStateFile[PATH_MAX];
 };
 
 static void
@@ -119,6 +124,18 @@ resolveDesktopDirectories(DesktopState *state)
         (int)sizeof(state->systemDesktopIconDir))
         return 0;
 
+    /*
+     * Original desktop presentation state is named FmState and carries the
+     * IconMappings block through ImdInitFile. Do not overwrite a real SGI or
+     * MaXX FmState until that exact encoding is reconstructed; keep the same
+     * binary-proven location/stem in an explicitly separate RE cache.
+     */
+    if (snprintf(state->layoutStateFile,
+                 sizeof(state->layoutStateFile),
+                 "%s/FmState.iid-re", state->userDesktopDir) >=
+        (int)sizeof(state->layoutStateFile))
+        return 0;
+
     return 1;
 }
 
@@ -167,6 +184,9 @@ reportDesktopDirectories(const DesktopState *state)
             "iid-desktop: system icon directory: %s [%s]\n",
             state->systemDesktopIconDir,
             directoryExists(state->systemDesktopIconDir) ? "present" : "missing");
+    fprintf(stderr,
+            "iid-desktop: layout mapping cache: %s\n",
+            state->layoutStateFile);
 }
 
 static void
@@ -256,12 +276,6 @@ main(int argc, char **argv)
             "iid-desktop: desktop container DNA: %s\n",
             desktopDNA.serialize().c_str());
 
-    /*
-     * Original model-backed construction now reaches the recovered root
-     * NotifyReceiver. ImdDirModel's child callback registration sends the
-     * original 0xEFFF004B/4C/4D existence batch synchronously, creating and
-     * adopting one ImdModelBasedIconView per current desktop child.
-     */
     state.panel = new ImdModelBasedIconPanel("panel",
                                              state.shell,
                                              state.desktopModel,
@@ -285,7 +299,27 @@ main(int argc, char **argv)
     ImdViewPanelAdoptRenderer(state.panelWidget, state.renderer);
 
     state.layout = new BackLayout(state.panelWidget);
+    state.layout->portableLoadMappings(state.layoutStateFile);
+
+    /*
+     * Original ImdIconPanel::applyLayoutMappings() applies the adopted
+     * layout's mapping to each icon view. The current model existence batch
+     * creates views before the BackLayout host object is installed, so apply
+     * the already-loaded mapping set once here before adopting the layout.
+     */
+    const std::vector<ImdView *> &views = state.panel->portableViews();
+    unsigned int restoredMappings = 0;
+    for (std::vector<ImdView *>::const_iterator it = views.begin();
+         it != views.end(); ++it) {
+        if (*it && state.layout->portableApplyMapping(**it))
+            ++restoredMappings;
+    }
+
     ImdViewPanelAdoptLayout(state.panelWidget, state.layout);
+
+    fprintf(stderr,
+            "iid-desktop: restored %u desktop icon position mapping(s)\n",
+            restoredMappings);
 
     XtRealizeWidget(state.shell);
     publishDesktopWindow(state.panelWidget);
