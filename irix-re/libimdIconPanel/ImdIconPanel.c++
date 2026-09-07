@@ -17,6 +17,7 @@ extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
 #endif
 
 extern "C" void ImdViewPanelPortableRendererChanged(Widget, ImdRenderer *);
+extern "C" void ImdViewPanelPortableResetViews(Widget);
 
 namespace
 {
@@ -240,6 +241,14 @@ ImdIconPanel::dragEnd()
 
 void ImdIconPanel::portableResetViews(bool destroyViews)
 {
+    /*
+     * Keep the temporary ViewPanel adoption table in the same lifecycle as
+     * the panel-owned views. Original ImdViewPanelDeleteAllViews() removes the
+     * adopted set before ImdIconPanel releases the view objects.
+     */
+    if (_baseWidget)
+        ImdViewPanelPortableResetViews(_baseWidget);
+
     if (destroyViews) {
         for (std::vector<ImdView *>::iterator it = _views.begin(); it != _views.end(); ++it) delete *it;
     }
