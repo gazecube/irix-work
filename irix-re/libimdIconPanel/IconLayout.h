@@ -16,6 +16,9 @@ public:
     explicit ImdIconLayout(Widget widget);
     virtual ~ImdIconLayout();
 
+    /* Original exported symbol @ 0x0969d1fc. */
+    virtual bool moveView(ImdView &view, long x, long y);
+
     void setSnapToGrid(bool value);
     void truncate(bool value);
     void setScrollIncrement();
