@@ -19,6 +19,7 @@
   UefiBootServicesTableLib|MdePkg/Library/UefiBootServicesTableLib/UefiBootServicesTableLib.inf
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
+  PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
 
 [Components]
   ArcsPkg/uefi/ArcsGfxBringup.inf
