@@ -4,6 +4,7 @@
 
 #include "drawbackground_bringup.h"
 #include "input_bringup.h"
+#include "uefi_boot.h"
 
 EFI_STATUS
 EFIAPI
@@ -15,7 +16,7 @@ UefiMain(
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop;
 
-    (VOID)ImageHandle;
+    ArcsUefiBootInit(ImageHandle);
 
     Gop = NULL;
     Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
