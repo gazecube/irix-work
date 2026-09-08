@@ -6,5 +6,6 @@
 
 [Includes]
   sgisrc/include
+  sgisrc/stand/arcs/include
   uefi/include
   vendor/sgibootscreen-src/include
