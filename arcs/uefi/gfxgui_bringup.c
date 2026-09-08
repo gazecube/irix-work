@@ -4,7 +4,6 @@
 #include <stand_htport.h>
 
 #include "gfxgui_bringup.h"
-#include "profile_reality.h"
 
 /* Pristine stand/arcs/lib/libsk/graphics/htport.c owns these interfaces.
  * Keep the UEFI bringup dependent only on the textport contract instead of
@@ -38,14 +37,14 @@ ArcsGfxGuiBringupInit(
 
     /* htp_init() performs the original SGI txConfig/initFonts/txReset flow,
      * initializes gfxgui against the canonical htp, and leaves video in the
-     * original VOFF state until the first textport write. */
+     * original VOFF state until the first textport write.  The X64 product
+     * splash is supplied directly through the original clogo_* contract. */
     htp_init();
 
     /* The bring-up font argument predates pristine htport ownership.  Keep
      * the ABI temporarily while callers are collapsed onto htp_init(). */
     (void)Fonts;
 
-    ArcsUseRealityLogo(State->Htp);
     return EFI_SUCCESS;
 }
 
