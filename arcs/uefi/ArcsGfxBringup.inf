@@ -29,6 +29,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stdio.c
   ../sgisrc/stand/arcs/lib/libsc/lib/panel.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/privstub3.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
