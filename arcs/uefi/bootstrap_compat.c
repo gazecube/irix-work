@@ -14,12 +14,20 @@ int _prom = 1;
  * Keep those names and semantics at the compatibility boundary so original
  * bootname.c/startup/autoboot policy can run above it.  A persistent ARCS
  * environment backend will replace this fixed bootstrap store.
+ *
+ * MacBook hardware bring-up target:
+ *   disk0s2 -> /System/Library/CoreServices/boot.efi
+ *
+ * The ARCS SystemPartition string remains the policy-side representation;
+ * the UEFI Execute() boundary enumerates EFI SimpleFileSystem handles and
+ * locates the OSLoader suffix.  This deliberately does not use EFI NVRAM.
  */
 static char ArcsEnvSgilogo[8] = "y";
 static char ArcsEnvAutoLoad[8] = "Y";
 static char ArcsEnvSystemPartition[128] =
-    "scsi(0)disk(1)rdisk(0)partition(1)";
-static char ArcsEnvOSLoader[128] = "EFI/FreeBSD/loader.efi";
+    "scsi(0)disk(0)rdisk(0)partition(2)";
+static char ArcsEnvOSLoader[128] =
+    "System/Library/CoreServices/boot.efi";
 static char ArcsEnvOSLoadOptions[128] = "auto";
 static char ArcsEnvKernname[256] = "";
 
