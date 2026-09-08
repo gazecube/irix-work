@@ -21,6 +21,7 @@
   uefi_boot.c
   prom_autoboot.c
   prom_startup.c
+  dialog_autoboot.c
   ../sgisrc/libsc/lib/bootname.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
