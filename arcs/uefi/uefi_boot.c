@@ -43,15 +43,17 @@ ArcsUefiBootDefault(void)
     if (EFI_ERROR(Status))
         return Status;
 
-    /* First boot milestone: use the standard x86-64 removable-media path on
-     * the same device that loaded ARCS.  A Linux EFI stub, UKI, or another
-     * UEFI bootloader can be placed here.  Later, the preserved SGI
-     * SystemPartition/OSLoader policy will translate to this backend instead
-     * of hard-coding this pathname.
+    /* First boot milestone: ARCS itself occupies the standard removable-media
+     * fallback path (\\EFI\\BOOT\\BOOTX64.EFI) in the QEMU test ESP, so use a
+     * distinct payload path to avoid recursively launching ARCS again.
+     *
+     * The QEMU wrapper stages a detected test application here.  Later, the
+     * preserved SGI SystemPartition/OSLoader policy will translate to this
+     * backend instead of hard-coding this pathname.
      */
     DevicePath = FileDevicePath(
         LoadedImage->DeviceHandle,
-        L"\\EFI\\BOOT\\BOOTX64.EFI"
+        L"\\EFI\\ARCS\\BOOT.EFI"
         );
     if (DevicePath == NULL)
         return EFI_OUT_OF_RESOURCES;
