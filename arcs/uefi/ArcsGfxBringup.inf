@@ -27,6 +27,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/parser.c
   ../sgisrc/stand/arcs/lib/libsc/lib/expand.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/strstuff.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stdio.c
   ../sgisrc/stand/arcs/lib/libsc/lib/panel.c
   ../sgisrc/stand/arcs/lib/libsc/lib/privstub3.c
