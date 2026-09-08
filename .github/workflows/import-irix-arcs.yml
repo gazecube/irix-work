@@ -1,0 +1,36 @@
+name: Import pristine IRIX ARCS source
+
+on:
+  push:
+    branches: [ arcs-uefi ]
+    paths:
+      - '.github/workflows/import-irix-arcs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: arcs-uefi
+          fetch-depth: 0
+      - name: Fetch IRIX 6.5.7m source
+        run: git clone --depth=1 https://github.com/calmsacibis995/irix-657m-src.git /tmp/irix-657m-src
+      - name: Import pristine stand/arcs tree
+        run: |
+          rm -rf arcs/sgisrc/stand/arcs
+          mkdir -p arcs/sgisrc/stand
+          cp -a /tmp/irix-657m-src/stand/arcs arcs/sgisrc/stand/arcs
+          rm -rf arcs/sgisrc/stand/arcs/.git
+      - name: Commit imported tree
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add arcs/sgisrc/stand/arcs
+          git diff --cached --quiet && exit 0
+          git commit -m 'Import pristine IRIX 6.5.7m ARCS source tree'
+          git push origin HEAD:arcs-uefi
