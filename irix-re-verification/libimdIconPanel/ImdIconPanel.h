@@ -178,6 +178,23 @@ public:
     virtual void adoptView(ImdIconView *view, ImdIconView *parentView = 0);
     virtual void applySelectStrings(ImdIconView &view);
 
+    /* Binary-proven ImdIconPanel selection surface. */
+    virtual void select(ImdIconView *view);
+    virtual void extendSelect(ImdIconView *view);
+    virtual void deselect();
+    virtual void toggleSelection(ImdIconView *view);
+    virtual void selectNotify();
+    void enableMultipleSelect(bool enabled);
+    void beginSelectBlock();
+    void endSelectBlock();
+
+    /*
+     * Host-only inspection seam. The original N32 getSelected()/
+     * getSelectedViewList() return the SGI collection at panel +0x20; this
+     * vector does not claim ABI equivalence.
+     */
+    const std::vector<ImdIconView *> &portableSelectedViews() const { return _portableSelectedViews; }
+
     /*
      * Original exported drag surface. The base dragStart() delegates to the
      * ImdDragManager stored by ImdIconPanel. The derived model-based panel
@@ -194,6 +211,12 @@ private:
     Widget _baseWidget;
     ImdDragManager *_dragManager;
     std::vector<ImdView *> _views;
+
+    /* Host storage for the binary-proven selection collection/state. */
+    std::vector<ImdIconView *> _portableSelectedViews;
+    bool _portableMultipleSelect;
+    unsigned int _portableSelectBlockDepth;
+    bool _portableSelectionDirty;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H */

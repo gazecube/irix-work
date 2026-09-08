@@ -293,6 +293,11 @@ static void panelEventHandler(Widget widget, XtPointer client, XEvent *event, Bo
         event->xbutton.time >= state->lastClickTime &&
         event->xbutton.time - state->lastClickTime <= 400;
 
+    if (event->xbutton.state & ShiftMask)
+        state->dirPanel->extendSelect(modelView);
+    else
+        state->dirPanel->select(modelView);
+
     state->selectedDNA = modelView->getDNA();
     state->haveSelectedDNA = true;
     state->lastClickTime = event->xbutton.time;
@@ -352,7 +357,19 @@ static void openSelectedCB(Widget, XtPointer client, XtPointer)
 static void selectAllCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    setStatus(state, "Select All awaits ImdIconPanel selection reconstruction");
+    const std::vector<ImdView *> &views = state->dirPanel->portableViews();
+    state->dirPanel->beginSelectBlock();
+    for (std::vector<ImdView *>::const_iterator it = views.begin(); it != views.end(); ++it) {
+        ImdIconView *view = dynamic_cast<ImdIconView *>(*it);
+        if (!view || !view->portableVisible() || view->getFlag(8u)) continue;
+        state->dirPanel->extendSelect(view);
+    }
+    state->dirPanel->endSelectBlock();
+
+    char text[96];
+    snprintf(text, sizeof(text), "%lu items selected",
+             (unsigned long)state->dirPanel->portableSelectedViews().size());
+    setStatus(state, text);
 }
 
 static void showHiddenCB(Widget widget, XtPointer client, XtPointer call)
@@ -621,6 +638,7 @@ int main(int argc, char **argv)
                                        NULL);
 
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
+    state.dirPanel->enableMultipleSelect(true);
     state.panelWidget = state.dirPanel->baseWidget();
 
     /*
