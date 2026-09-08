@@ -1,10 +1,16 @@
 #include <Library/BaseMemoryLib.h>
 
 #include <style.h>
-#include <libsk.h>
+#include <stand_htport.h>
 
 #include "gfxgui_bringup.h"
 #include "profile_reality.h"
+
+/* Pristine stand/arcs/lib/libsk/graphics/htport.c owns these interfaces.
+ * Keep the UEFI bringup dependent only on the textport contract instead of
+ * dragging the full libsk.h machine-dependent header graph into X64. */
+extern struct htp_state *gethtp(void);
+extern void htp_init(void);
 
 EFI_STATUS
 ArcsGfxGuiBringupInit(
