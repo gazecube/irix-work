@@ -2,6 +2,7 @@
 #include <Library/MemoryAllocationLib.h>
 
 #include <arcs/pvector.h>
+#include <arcs/spb.h>
 #include <libsc.h>
 
 int _prom = 1;
@@ -22,6 +23,14 @@ static char ArcsEnvSystemPartition[128] =
 static char ArcsEnvOSLoader[128] = "EFI/FreeBSD/loader.efi";
 static char ArcsEnvOSLoadOptions[128] = "auto";
 static char ArcsEnvKernname[256] = "";
+
+static spb_t ArcsCompatSpb;
+
+spb_t *
+get_spb(void)
+{
+    return &ArcsCompatSpb;
+}
 
 static struct htp_state *
 ArcsCompatGetHtp(void)
