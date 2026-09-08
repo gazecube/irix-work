@@ -15,8 +15,23 @@
 #define PathNameMax             (255)
 #define FileNameLengthMax       (32)
 
+/* Original IRIX 6.5.7m ARCS open-mode ABI from kern/sys/arcs/io.h. */
+typedef enum openmode {
+    OpenReadOnly,
+    OpenWriteOnly,
+    OpenReadWrite,
+    CreateWriteOnly,
+    CreateReadWrite,
+    SupersedeWriteOnly,
+    SupersedeReadWrite,
+    OpenDirectory,
+    CreateDirectory
+} OPENMODE;
+
 /* Keep the original ARCS standalone call signatures visible to pristine
  * libsc sources.  The UEFI implementations live at the platform boundary. */
+extern LONG Open(CHAR *, OPENMODE, ULONG *);
+extern LONG Close(ULONG);
 extern LONG Read(ULONG, void *, ULONG, ULONG *);
 extern LONG Write(ULONG, void *, ULONG, ULONG *);
 extern LONG Execute(CHAR *, LONG, CHAR *[], CHAR *[]);
