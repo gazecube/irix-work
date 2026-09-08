@@ -15,6 +15,7 @@
   bootstrap_compat.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
+  manualmode_bringup.c
   input_bringup.c
   input_diag.c
   usb_hid_pointer.c
@@ -27,6 +28,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/expand.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stdio.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/panel.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
