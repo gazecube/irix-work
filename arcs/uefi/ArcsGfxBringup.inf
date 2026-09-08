@@ -9,7 +9,6 @@
 [Sources]
   entry.c
   htp_gop.c
-  profile_reality.c
   gfxgui_bringup.c
   bootstrap_compat.c
   saio_compat.c
@@ -46,7 +45,6 @@
   ../sgisrc/libsc/gui/text.c
   ../sgisrc/libsc/gui/tport.c
   ../sgisrc/libsk/graphics/CURSOR/vc1cursor.c
-  ../vendor/sgibootscreen-src/src/ip19.c
 
 [Packages]
   MdePkg/MdePkg.dec
