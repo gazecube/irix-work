@@ -14,13 +14,24 @@
 #include <parser.h>
 #include <setjmp.h>
 
-/* The complete IP22 command table is being brought across command by command
- * from the original PROM sources.  Keep the first live table deliberately
- * source-backed: help is implemented by pristine parser.c itself. */
+extern void exit_cmd(int, char **);
+extern int printenv_cmd(int, char **, char **, struct cmd_table *);
+extern int setenv_cmd(int, char **, char **, struct cmd_table *);
+extern int unsetenv_cmd(int, char **, char **, struct cmd_table *);
+
+/*
+ * Entries and help strings below are copied from the IP22 PROM cmd_table in
+ * stand/arcs/IP22prom/main.c.  Expand this table only as each original command
+ * implementation and its platform dependencies are linked.
+ */
 static struct cmd_table ArcsPromCmdTable[] = {
-    { "help", help, "help:\t\thelp or ? [COMMAND]" },
-    { ".?",   help, "help:\t\t? [COMMAND]" },
-    { 0,       0,    "" }
+    { "exit",     (CT_ROUTINE exit_cmd), "exit:\t\texit" },
+    { "help",     help,                  "help:\t\thelp or ? [COMMAND]" },
+    { ".?",       help,                  "help:\t\t? [COMMAND]" },
+    { "printenv", printenv_cmd,          "printenv:\tprintenv [ENV_VAR_LIST]" },
+    { "setenv",   setenv_cmd,            "setenv:\t\tsetenv ENV_VAR STRING" },
+    { "unsetenv", unsetenv_cmd,          "unsetenv:\tunsetenv ENV_VAR" },
+    { 0,           0,                     "" }
 };
 
 static jmp_buf ArcsMonitorReturn;
