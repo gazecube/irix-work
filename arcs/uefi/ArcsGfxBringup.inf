@@ -46,6 +46,7 @@
   gEfiAbsolutePointerProtocolGuid
   gEfiDevicePathProtocolGuid
   gEfiLoadedImageProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
   gEfiUsbIoProtocolGuid
 
 [BuildOptions]
