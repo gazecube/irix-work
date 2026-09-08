@@ -23,9 +23,9 @@
   prom_startup.c
   dialog_autoboot.c
   ../sgisrc/libsc/lib/bootname.c
-  ../sgisrc/libsc/lib/parser.c
-  ../sgisrc/libsc/lib/expand.c
-  ../sgisrc/libsc/lib/stringlist.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/parser.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/expand.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
   ../sgisrc/libsc/lib/edit_gets.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
