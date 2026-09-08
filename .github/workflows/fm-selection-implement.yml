@@ -1,0 +1,111 @@
+name: Implement verified FM selection slice
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fm-selection-implement.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: false
+          fetch-depth: 1
+
+      - name: Apply binary-proven selection reconstruction
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f"{path}: expected exactly one patch point, found {text.count(old)}")
+              p.write_text(text.replace(old, new, 1))
+
+          h='irix-re-verification/libimdIconPanel/ImdIconPanel.h'
+          replace_exact(h,
+          '''    virtual void adoptView(ImdIconView *view, ImdIconView *parentView = 0);\n    virtual void applySelectStrings(ImdIconView &view);\n\n    /*\n     * Original exported drag surface.''',
+          '''    virtual void adoptView(ImdIconView *view, ImdIconView *parentView = 0);\n    virtual void applySelectStrings(ImdIconView &view);\n\n    /* Binary-proven ImdIconPanel selection surface. */\n    virtual void select(ImdIconView *view);\n    virtual void extendSelect(ImdIconView *view);\n    virtual void deselect();\n    virtual void toggleSelection(ImdIconView *view);\n    virtual void selectNotify();\n    void enableMultipleSelect(bool enabled);\n    void beginSelectBlock();\n    void endSelectBlock();\n\n    /*\n     * Host-only inspection seam. The original N32 getSelected()/\n     * getSelectedViewList() return the SGI collection at panel +0x20; this\n     * vector does not claim ABI equivalence.\n     */\n    const std::vector<ImdIconView *> &portableSelectedViews() const { return _portableSelectedViews; }\n\n    /*\n     * Original exported drag surface.''')
+          replace_exact(h,
+          '''    Widget _baseWidget;\n    ImdDragManager *_dragManager;\n    std::vector<ImdView *> _views;\n};''',
+          '''    Widget _baseWidget;\n    ImdDragManager *_dragManager;\n    std::vector<ImdView *> _views;\n\n    /* Host storage for the binary-proven selection collection/state. */\n    std::vector<ImdIconView *> _portableSelectedViews;\n    bool _portableMultipleSelect;\n    unsigned int _portableSelectBlockDepth;\n    bool _portableSelectionDirty;\n};''')
+
+          cpp='irix-re-verification/libimdIconPanel/ImdIconPanel.c++'
+          replace_exact(cpp,
+          '''ImdIconPanel::ImdIconPanel(const char *name, Widget parent, Arg *args, int count)\n    : _baseWidget(0),\n      _dragManager(0)\n{''',
+          '''ImdIconPanel::ImdIconPanel(const char *name, Widget parent, Arg *args, int count)\n    : _baseWidget(0),\n      _dragManager(0),\n      _portableSelectedViews(),\n      _portableMultipleSelect(false),\n      _portableSelectBlockDepth(0),\n      _portableSelectionDirty(false)\n{''')
+          replace_exact(cpp,
+          '''void ImdIconPanel::applySelectStrings(ImdIconView &view) { (void)view; }\n\nvoid\nImdIconPanel::dragStart''',
+          '''void ImdIconPanel::applySelectStrings(ImdIconView &view) { (void)view; }\n\nvoid ImdIconPanel::enableMultipleSelect(bool enabled)\n{\n    /* Original enableMultipleSelect() is an eight-byte state setter. */\n    _portableMultipleSelect = enabled;\n}\n\nvoid ImdIconPanel::beginSelectBlock()\n{\n    /* Original increments the select-block counter at N32 panel +0x5c. */\n    ++_portableSelectBlockDepth;\n}\n\nvoid ImdIconPanel::endSelectBlock()\n{\n    /* Original notifies when the outermost block closes. */\n    if (_portableSelectBlockDepth != 0)\n        --_portableSelectBlockDepth;\n    if (_portableSelectBlockDepth == 0 && _portableSelectionDirty)\n        selectNotify();\n}\n\nvoid ImdIconPanel::selectNotify()\n{\n    if (_portableSelectBlockDepth != 0) {\n        _portableSelectionDirty = true;\n        return;\n    }\n    _portableSelectionDirty = false;\n\n    /*\n     * The original invokes kSelectionChangedCallback here. The portable\n     * callback-object bridge is not reconstructed yet; redraw is the only\n     * host-visible side effect we can reproduce without inventing that ABI.\n     */\n    if (_baseWidget) ImdViewPanelRedraw(_baseWidget);\n}\n\nvoid ImdIconPanel::deselect()\n{\n    beginSelectBlock();\n    for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();\n         it != _portableSelectedViews.end(); ++it) {\n        if (!*it) continue;\n        (*it)->setFlag(8u, false);\n        /* Binary proves deselect also clears flag 64; meaning still unnamed. */\n        (*it)->setFlag(64u, false);\n    }\n    _portableSelectedViews.clear();\n    _portableSelectionDirty = true;\n    endSelectBlock();\n}\n\nvoid ImdIconPanel::toggleSelection(ImdIconView *view)\n{\n    if (!view) return;\n    const bool selected = view->getFlag(8u);\n    if (selected) {\n        view->setFlag(8u, false);\n        view->setFlag(64u, false);\n        _portableSelectedViews.erase(\n            std::remove(_portableSelectedViews.begin(), _portableSelectedViews.end(), view),\n            _portableSelectedViews.end());\n    } else {\n        view->setFlag(8u, true);\n        if (std::find(_portableSelectedViews.begin(), _portableSelectedViews.end(), view) ==\n            _portableSelectedViews.end())\n            _portableSelectedViews.push_back(view);\n    }\n    _portableSelectionDirty = true;\n}\n\nvoid ImdIconPanel::select(ImdIconView *view)\n{\n    if (!view) return;\n    beginSelectBlock();\n    if (_portableSelectedViews.size() != 1 ||\n        _portableSelectedViews.front() != view || !view->getFlag(8u)) {\n        for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();\n             it != _portableSelectedViews.end(); ++it) {\n            if (!*it || *it == view) continue;\n            (*it)->setFlag(8u, false);\n            (*it)->setFlag(64u, false);\n        }\n        _portableSelectedViews.clear();\n        view->setFlag(8u, true);\n        _portableSelectedViews.push_back(view);\n        _portableSelectionDirty = true;\n    }\n    endSelectBlock();\n}\n\nvoid ImdIconPanel::extendSelect(ImdIconView *view)\n{\n    if (!view) return;\n    /* Binary: multi-select path is toggleSelection(view), then selectNotify(). */\n    if (_portableMultipleSelect) {\n        toggleSelection(view);\n        selectNotify();\n    } else {\n        select(view);\n    }\n}\n\nvoid\nImdIconPanel::dragStart''')
+          replace_exact(cpp,
+          '''    _views.clear();\n}\n\nImdIconPanel::~ImdIconPanel()''',
+          '''    _views.clear();\n    _portableSelectedViews.clear();\n    _portableSelectBlockDepth = 0;\n    _portableSelectionDirty = false;\n}\n\nImdIconPanel::~ImdIconPanel()''')
+          # std::remove/std::find support
+          replace_exact(cpp,
+          '''#include <cstdio>\n#include <cstring>\n#include <map>''',
+          '''#include <algorithm>\n#include <cstdio>\n#include <cstring>\n#include <map>''')
+
+          fm='irix-re-verification/fm/FmMain.c++'
+          replace_exact(fm,
+          '''    state->selectedDNA = modelView->getDNA();\n    state->haveSelectedDNA = true;\n    state->lastClickTime = event->xbutton.time;''',
+          '''    if (event->xbutton.state & ShiftMask)\n        state->dirPanel->extendSelect(modelView);\n    else\n        state->dirPanel->select(modelView);\n\n    state->selectedDNA = modelView->getDNA();\n    state->haveSelectedDNA = true;\n    state->lastClickTime = event->xbutton.time;''')
+          replace_exact(fm,
+          '''static void selectAllCB(Widget, XtPointer client, XtPointer)\n{\n    FmState *state = (FmState *)client;\n    setStatus(state, "Select All awaits ImdIconPanel selection reconstruction");\n}''',
+          '''static void selectAllCB(Widget, XtPointer client, XtPointer)\n{\n    FmState *state = (FmState *)client;\n    const std::vector<ImdView *> &views = state->dirPanel->portableViews();\n    state->dirPanel->beginSelectBlock();\n    for (std::vector<ImdView *>::const_iterator it = views.begin(); it != views.end(); ++it) {\n        ImdIconView *view = dynamic_cast<ImdIconView *>(*it);\n        if (!view || !view->portableVisible() || view->getFlag(8u)) continue;\n        state->dirPanel->extendSelect(view);\n    }\n    state->dirPanel->endSelectBlock();\n\n    char text[96];\n    snprintf(text, sizeof(text), "%lu items selected",\n             (unsigned long)state->dirPanel->portableSelectedViews().size());\n    setStatus(state, text);\n}''')
+
+          # Enable original multiple-selection mode after the panel is created.
+          text=Path(fm).read_text()
+          needle='state.dirPanel = new ImdModelBasedIconPanel'
+          pos=text.find(needle)
+          if pos < 0:
+              raise SystemExit('FmMain.c++: panel construction not found')
+          semi=text.find(';', pos)
+          if semi < 0:
+              raise SystemExit('FmMain.c++: panel construction terminator not found')
+          insertion='\n    state.dirPanel->enableMultipleSelect(true);'
+          if insertion.strip() not in text:
+              text=text[:semi+1]+insertion+text[semi+1:]
+          Path(fm).write_text(text)
+          PY
+
+      - name: Confirm preserved baseline untouched
+        run: |
+          set -eu
+          git diff --exit-code -- irix-re/
+          git diff --check
+          git diff -- irix-re-verification/libimdIconPanel/ImdIconPanel.h \
+                       irix-re-verification/libimdIconPanel/ImdIconPanel.c++ \
+                       irix-re-verification/fm/FmMain.c++
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libmotif-dev libx11-dev libxt-dev
+
+      - name: Configure and build FM verification tree
+        run: |
+          set -eu
+          cmake -S irix-re-verification -B /tmp/irix-re-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/irix-re-build -j2
+
+      - name: Commit verified selection slice
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add irix-re-verification/libimdIconPanel/ImdIconPanel.h \
+                  irix-re-verification/libimdIconPanel/ImdIconPanel.c++ \
+                  irix-re-verification/fm/FmMain.c++
+          git diff --cached --quiet && exit 0
+          git commit -m 'fm: restore binary-proven icon selection core'
+          git push origin HEAD:irix-re
