@@ -15,6 +15,7 @@
   prom_runtime_compat.c
   prom_platform_hooks.c
   prom_product_logo.c
+  prom_product_logo_orientation.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
   manualmode_bringup.c
