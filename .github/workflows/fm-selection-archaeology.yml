@@ -15,19 +15,17 @@ jobs:
           ref: irix-re
           lfs: true
 
-      - name: Install MIPS and DWARF tools
+      - name: Install MIPS tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils-mips-linux-gnu python3-pyelftools
+          sudo apt-get install -y binutils-mips-linux-gnu
 
       - name: Extract original FM selection specimens
         run: |
           set -eu
-          # Read-only evidence comes from the frozen incoming tree. All
-          # reconstruction work remains under irix-re-verification/.
           FM="$GITHUB_WORKSPACE/irix-re/evidence/fm"
-          test -f "$FM"
           archive="$GITHUB_WORKSPACE/irix-re/evidence/shared_objects.tar"
+          test -f "$FM"
           entry="$(tar -tf "$archive" | grep '/usr/lib32/internal/libimdIconPanel.so$' | head -1)"
           test -n "$entry"
           mkdir -p /tmp/fm-selection
@@ -42,69 +40,57 @@ jobs:
         run: |
           set -eu
           mips-linux-gnu-readelf -Ws "$FM" > /tmp/fm-symbols.raw
-          mips-linux-gnu-readelf -Ws "$FM" | c++filt > /tmp/fm-symbols.txt
           mips-linux-gnu-readelf -Ws "$PANEL" > /tmp/panel-symbols.raw
+          mips-linux-gnu-readelf -Ws "$FM" | c++filt > /tmp/fm-symbols.txt
           mips-linux-gnu-readelf -Ws "$PANEL" | c++filt > /tmp/panel-symbols.txt
           grep -Ei 'FmMenuActions.*select|selectAll|select|deselect|selection|selected|ImdIconPanel|ImdIconView|ImdViewPanel' /tmp/fm-symbols.txt /tmp/panel-symbols.txt | tee /tmp/selection-symbols.txt || true
 
-      - name: Enumerate relevant DWARF functions
+      - name: Disassemble exact named selection functions
         run: |
           set -eu
-          cat > /tmp/dump.py <<'PY'
-          import os
-          from elftools.elf.elffile import ELFFile
-          from elftools.dwarf.descriptions import describe_form_class
+          out=/tmp/selection-disassembly.txt
+          : > "$out"
+          dump_symbol() {
+            image="$1"; table="$2"; symbol="$3"
+            row="$(awk -v s="$symbol" '$4=="FUNC" && $8==s {print $2, $3; exit}' "$table")"
+            test -n "$row" || { echo "missing symbol: $symbol" >> "$out"; return; }
+            start_hex="${row%% *}"; size="${row##* }"
+            start=$((16#$start_hex)); stop=$((start + size))
+            printf '\n===== %s 0x%x..0x%x size %d =====\n' "$symbol" "$start" "$stop" "$size" >> "$out"
+            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$image" >> "$out"
+          }
+          for s in \
+            selectAll__13FmMenuActionsGv \
+            selectAllHelper__13FmMenuActionsSGP7ImdViewPv \
+            selectAllCB__8FmWindowSGP10_WidgetRecPvT2 \
+            setSelectionHolder__13FmMenuActionsGP22ImdModelBasedIconPanel \
+            _getSelectionHolder__13FmMenuHandlerGv \
+            _selectionChangedCB__8FmWindowSGP16VkCallbackObjectPvT2; do
+            dump_symbol "$FM" /tmp/fm-symbols.raw "$s"
+          done
+          for s in \
+            enableMultipleSelect__12ImdIconPanelGb \
+            beginSelectBlock__12ImdIconPanelGv \
+            endSelectBlock__12ImdIconPanelGv \
+            select__12ImdIconPanelGP11ImdIconView \
+            extendSelect__12ImdIconPanelGP11ImdIconView \
+            deselect__12ImdIconPanelGv \
+            toggleSelection__12ImdIconPanelGP11ImdIconView \
+            selectNotify__12ImdIconPanelGv \
+            getSelected__12ImdIconPanelGv \
+            getSelectedViewList__12ImdIconPanelGv; do
+            dump_symbol "$PANEL" /tmp/panel-symbols.raw "$s"
+          done
+          cat "$out"
 
-          needles=('select','iconpanel','iconview','menuactions','viewpanel')
-          for image in (os.environ['FM'], os.environ['PANEL']):
-              with open(image,'rb') as fp:
-                  elf=ELFFile(fp)
-                  if not elf.has_dwarf_info():
-                      continue
-                  for cu in elf.get_dwarf_info().iter_CUs():
-                      top=cu.get_top_DIE()
-                      a=top.attributes.get('DW_AT_name')
-                      cu_name=(a.value.decode('utf-8','replace') if a and isinstance(a.value,bytes) else str(a.value) if a else '')
-                      for die in cu.iter_DIEs():
-                          if die.tag!='DW_TAG_subprogram':
-                              continue
-                          attrs=die.attributes
-                          n=attrs.get('DW_AT_name') or attrs.get('DW_AT_linkage_name')
-                          if not n: continue
-                          name=n.value.decode('utf-8','replace') if isinstance(n.value,bytes) else str(n.value)
-                          hay=(cu_name+' '+name).lower()
-                          if not any(k in hay for k in needles):
-                              continue
-                          lo=attrs.get('DW_AT_low_pc'); hi=attrs.get('DW_AT_high_pc')
-                          if not lo or not hi: continue
-                          start=int(lo.value)
-                          stop=int(hi.value) if describe_form_class(hi.form)=='address' else start+int(hi.value)
-                          if stop>start:
-                              print('FUNC\t%s\t%s\t%s\t0x%x\t0x%x\t%d'%(image,cu_name,name,start,stop,stop-start))
-          PY
-          python3 /tmp/dump.py | tee /tmp/selection-functions.tsv
-
-      - name: Disassemble exact selection function ranges
-        run: |
-          set -eu
-          : > /tmp/selection-disassembly.txt
-          while IFS=$'\t' read -r kind image cu name start stop size; do
-            [ "$kind" = FUNC ] || continue
-            printf '\n===== %s :: %s :: %s %s..%s size %s =====\n' "$image" "$cu" "$name" "$start" "$stop" "$size" >> /tmp/selection-disassembly.txt
-            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$image" >> /tmp/selection-disassembly.txt
-          done < /tmp/selection-functions.tsv
-          cat /tmp/selection-disassembly.txt
-
-      - name: Recover selection literals and imports
+      - name: Recover selection literals and translations
         run: |
           set -eu
           {
-            echo '===== FM imports/literals ====='
-            mips-linux-gnu-objdump -TC "$FM" | grep -Ei 'select|deselect|selection|iconpanel|viewpanel' || true
-            strings -a -t x "$FM" | grep -Ei 'select all|select|deselect|selection|selected' || true
-            echo '===== libimdIconPanel imports/literals ====='
-            mips-linux-gnu-objdump -TC "$PANEL" | grep -Ei 'select|deselect|selection' || true
-            strings -a -t x "$PANEL" | grep -Ei 'select|deselect|selection|selected' || true
+            echo '===== FM ====='
+            strings -a -t x "$FM" | grep -Ei 'select all|selectAll|select|deselect|selection|selected' || true
+            echo '===== libimdIconPanel ====='
+            strings -a -t x "$PANEL" | grep -Ei 'Select\(|ExtendSelect|Deselect|selectCallback|extendSelectCallback|selection|selected' || true
           } | tee /tmp/selection-literals.txt
 
       - name: Assemble evidence report
@@ -119,13 +105,10 @@ jobs:
             echo '===== symbols ====='
             cat /tmp/selection-symbols.txt
             echo
-            echo '===== functions ====='
-            cat /tmp/selection-functions.tsv
-            echo
-            echo '===== literals/imports ====='
+            echo '===== literals/translations ====='
             cat /tmp/selection-literals.txt
             echo
-            echo '===== disassembly ====='
+            echo '===== exact named disassembly ====='
             cat /tmp/selection-disassembly.txt
           } > /tmp/fm-selection-report/fm-selection-archaeology.txt
 
