@@ -59,4 +59,9 @@
   gEfiUsbIoProtocolGuid
 
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -D_LANGUAGE_C -D_STANDALONE
+  # IRIX 6.5.7m ARCS is late-1990s C.  Compile it in the language mode it
+  # expects rather than letting the host compiler's modern default rewrite
+  # the porting problem into source churn.  Keep SGI's standalone language
+  # defines as part of the compatibility environment beneath the pristine
+  # source tree.
+  GCC:*_*_*_CC_FLAGS = -std=gnu99 -D_LANGUAGE_C -DLANGUAGE_C -D_STANDALONE
