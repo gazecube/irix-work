@@ -36,6 +36,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/privstub3.c
   ../sgisrc/stand/arcs/lib/libsc/cmd/misc_cmd.c
   ../sgisrc/stand/arcs/lib/libsc/cmd/env_cmd.c
+  ../sgisrc/stand/arcs/lib/libsk/graphics/htport.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
