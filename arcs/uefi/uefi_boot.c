@@ -4,6 +4,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/LoadedImage.h>
+#include <Protocol/SimpleFileSystem.h>
 
 #include "uefi_boot.h"
 
@@ -17,6 +18,90 @@
  */
 
 static EFI_HANDLE ArcsImageHandle;
+
+static EFI_STATUS
+ArcsFindFileSystemImage(
+    IN CHAR16 *Path,
+    OUT EFI_DEVICE_PATH_PROTOCOL **DevicePath
+    )
+{
+    EFI_STATUS Status;
+    EFI_HANDLE *Handles;
+    UINTN HandleCount;
+    UINTN I;
+
+    if (Path == NULL || DevicePath == NULL)
+        return EFI_INVALID_PARAMETER;
+
+    *DevicePath = NULL;
+    Handles = NULL;
+    HandleCount = 0;
+
+    Status = gBS->LocateHandleBuffer(
+        ByProtocol,
+        &gEfiSimpleFileSystemProtocolGuid,
+        NULL,
+        &HandleCount,
+        &Handles
+        );
+    if (EFI_ERROR(Status))
+        return Status;
+
+    Status = EFI_NOT_FOUND;
+
+    for (I = 0; I < HandleCount; ++I) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *FileSystem;
+        EFI_FILE_PROTOCOL *Root;
+        EFI_FILE_PROTOCOL *File;
+        EFI_DEVICE_PATH_PROTOCOL *CandidatePath;
+        EFI_STATUS OpenStatus;
+
+        FileSystem = NULL;
+        Root = NULL;
+        File = NULL;
+        CandidatePath = NULL;
+
+        OpenStatus = gBS->HandleProtocol(
+            Handles[I],
+            &gEfiSimpleFileSystemProtocolGuid,
+            (VOID **)&FileSystem
+            );
+        if (EFI_ERROR(OpenStatus) || FileSystem == NULL)
+            continue;
+
+        OpenStatus = FileSystem->OpenVolume(FileSystem, &Root);
+        if (EFI_ERROR(OpenStatus) || Root == NULL)
+            continue;
+
+        OpenStatus = Root->Open(
+            Root,
+            &File,
+            Path,
+            EFI_FILE_MODE_READ,
+            0
+            );
+        if (!EFI_ERROR(OpenStatus) && File != NULL) {
+            (VOID)File->Close(File);
+            CandidatePath = FileDevicePath(Handles[I], Path);
+            if (CandidatePath != NULL) {
+                *DevicePath = CandidatePath;
+                Status = EFI_SUCCESS;
+            } else {
+                Status = EFI_OUT_OF_RESOURCES;
+            }
+        }
+
+        (VOID)Root->Close(Root);
+
+        if (!EFI_ERROR(Status))
+            break;
+    }
+
+    if (Handles != NULL)
+        FreePool(Handles);
+
+    return Status;
+}
 
 void
 ArcsUefiBootInit(EFI_HANDLE ImageHandle)
@@ -67,20 +152,35 @@ ArcsUefiBootDefault(void)
         HaveArcsGopMode = TRUE;
     }
 
-    /* First boot milestone: ARCS itself occupies the standard removable-media
-     * fallback path (\\EFI\\BOOT\\BOOTX64.EFI) in the QEMU test ESP, so use a
-     * distinct payload path to avoid recursively launching ARCS again.
+    /* Prefer a FreeBSD loader on its native filesystem.  In the current QEMU
+     * test setup /dev/sda1 is exposed as a standalone FAT filesystem whose
+     * host mount point is /boot; therefore the path visible through UEFI is
+     * \\EFI\\FreeBSD\\loader.efi.  Loading it from that filesystem handle keeps
+     * LoadedImage->DeviceHandle tied to the real FreeBSD boot filesystem so
+     * loader.efi can find loader.env and the rest of its boot tree normally.
      *
-     * The QEMU wrapper stages a detected test application here.  Later, the
-     * preserved SGI SystemPartition/OSLoader policy will translate to this
-     * backend instead of hard-coding this pathname.
+     * This filesystem search is reconstructed UEFI glue.  The eventual path
+     * selection policy still belongs to the preserved ARCS
+     * SystemPartition/OSLoader layer.
      */
-    DevicePath = FileDevicePath(
-        LoadedImage->DeviceHandle,
-        L"\\EFI\\ARCS\\BOOT.EFI"
+    DevicePath = NULL;
+    Status = ArcsFindFileSystemImage(
+        L"\\EFI\\FreeBSD\\loader.efi",
+        &DevicePath
         );
-    if (DevicePath == NULL)
-        return EFI_OUT_OF_RESOURCES;
+
+    /* Generic bringup fallback: ARCS itself occupies the standard removable
+     * media path in the temporary QEMU ESP, while the wrapper stages an EFI
+     * test payload at \\EFI\\ARCS\\BOOT.EFI on that same filesystem.
+     */
+    if (EFI_ERROR(Status)) {
+        DevicePath = FileDevicePath(
+            LoadedImage->DeviceHandle,
+            L"\\EFI\\ARCS\\BOOT.EFI"
+            );
+        if (DevicePath == NULL)
+            return EFI_OUT_OF_RESOURCES;
+    }
 
     ChildImage = NULL;
     Status = gBS->LoadImage(
