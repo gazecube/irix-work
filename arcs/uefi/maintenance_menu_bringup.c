@@ -9,7 +9,8 @@
 
 #include "drawbackground_bringup.h"
 #include "maintenance_menu_bringup.h"
-#include "uefi_boot.h"
+
+extern int menu_boot_sys(void);
 
 static const char *MenuItems[] = {
     "Start System",
@@ -39,7 +40,6 @@ MaintenanceMenuCallBack(struct Button *Button, __scunsigned_t Value)
 void
 ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
 {
-    EFI_STATUS Status;
     UINTN I;
 
     if (OneBasedIndex < 1 || OneBasedIndex > 5)
@@ -53,20 +53,16 @@ ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
         drawObject(guiobj(MenuButtons[I]));
     }
 
-    /* The original PROM menu dispatches item 1 to menu_boot_sys(), which
-     * enters autoboot() and ultimately calls ARCS Execute().  Until the full
-     * libsc autoboot/environment layer is linked into the UEFI build, keep
-     * that menu semantics and cross the platform boundary here: the UEFI
-     * backend performs the final image-load/execute operation.
+    /* Original pmenu_cmd.c dispatches item 1 to menu_boot_sys().  That path
+     * now enters the imported SystemPartition/OSLoader boot policy and reaches
+     * UEFI only at the reconstructed Execute() boundary.
      */
     if (OneBasedIndex == 1) {
-        Status = ArcsUefiBootDefault();
-        (void)Status;
+        (void)menu_boot_sys();
 
-        /* A booted OS does not return.  If an EFI utility does return, the
-         * child may have changed GOP mode and overwritten the framebuffer.
-         * The boot backend restores the saved GOP mode; release the latched
-         * Start System state, then repaint the existing PROM object tree.
+        /* A booted OS does not return.  If an EFI utility/loader does return,
+         * the Execute backend has restored GOP.  Release the latched Start
+         * System state and repaint the existing PROM object tree.
          */
         if (MenuButtons[0])
             stickButton(MenuButtons[0], 0);
