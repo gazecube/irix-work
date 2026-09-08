@@ -6,7 +6,6 @@
 
 #include "original_fonts.h"
 #include "gfxgui_bringup.h"
-#include "maintenance_menu_bringup.h"
 
 static ARCS_GFXGUI_BRINGUP Bringup;
 static struct htp_font Fonts[NUMFONTS];
@@ -24,7 +23,13 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
 
     initGfxGui(&Bringup.Htp);
     drawBackground();
-    ArcsDrawMaintenanceMenuBringup();
+
+    /* Match the original PROM startup ordering: initialize the graphical
+     * environment and background first, but do not enter/display the System
+     * Maintenance Menu until startup()/autoboot() has returned.  The previous
+     * bring-up path drew the maintenance menu here, which made the machine
+     * appear to enter maintenance immediately even while startup policy was
+     * supposed to run afterward. */
 
     return EFI_SUCCESS;
 }
