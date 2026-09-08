@@ -19,6 +19,8 @@
   input_diag.c
   usb_hid_pointer.c
   uefi_boot.c
+  prom_autoboot.c
+  ../sgisrc/libsc/lib/bootname.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
