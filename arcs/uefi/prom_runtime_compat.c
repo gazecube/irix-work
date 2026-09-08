@@ -3,8 +3,12 @@
 
 #include <arcs/io.h>
 #include <libsc.h>
-#include <libsk.h>
 #include <sys/types.h>
+
+/* Pristine stand/arcs/lib/libsk/graphics/htport.c entry point.  Do not pull
+ * the full machine-dependent <libsk.h> dependency graph into the UEFI
+ * compatibility boundary just to name this function. */
+extern int htp_write(char *, int);
 
 /*
  * Native X64/UEFI runtime boundary for standalone libsc.
