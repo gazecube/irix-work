@@ -9,6 +9,7 @@
 
 #include "drawbackground_bringup.h"
 #include "maintenance_menu_bringup.h"
+#include "manualmode_bringup.h"
 
 extern int menu_boot_sys(void);
 
@@ -68,7 +69,15 @@ ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
             stickButton(MenuButtons[0], 0);
 
         ArcsRedrawAfterReturnedImage();
+        return;
     }
+
+    /* Original prom_menu item 5 dispatches menu_manualmode(), then the PROM
+     * main loop enters command_parser().  The UEFI bridge preserves those two
+     * source-backed steps until the complete machine-dependent main loop is
+     * linked. */
+    if (OneBasedIndex == 5)
+        ArcsEnterCommandMonitor();
 }
 
 void
