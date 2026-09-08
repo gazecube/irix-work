@@ -9,6 +9,7 @@
  * Keep the UEFI bringup dependent only on the textport contract instead of
  * dragging the full libsk.h machine-dependent header graph into X64. */
 extern struct htp_state *gethtp(void);
+extern void txMap(struct htp_state *);
 extern void htp_init(void);
 
 EFI_STATUS
@@ -35,6 +36,12 @@ ArcsGfxGuiBringupInit(
     if (EFI_ERROR(Status))
         return Status;
 
+    /* Match stand/arcs/lib/libsk/graphics/gfx.c::htp_gfx_init().  The SGI
+     * graphics-board boundary installs the hardware vector, initializes the
+     * display dimensions, then calls txMap(htp) before htp_init().  txMap()
+     * also initializes page_r/page_g/page_b, which txConfig() consumes. */
+    txMap(State->Htp);
+
     /* htp_init() performs the original SGI txConfig/initFonts/txReset flow,
      * initializes gfxgui against the canonical htp, and leaves video in the
      * original VOFF state until the first textport write.  The X64 product
@@ -53,7 +60,7 @@ ArcsGfxGuiBringupMapPalette(
     ARCS_GFXGUI_BRINGUP *State
     )
 {
-    /* Palette ownership moved back to pristine htport.c::txMap(), reached by
-     * htp_init().  Retain this entry point while old bring-up callers vanish. */
+    /* Palette initialization is performed in the original SGI order by
+     * ArcsGfxGuiBringupInit(): attach hardware -> txMap() -> htp_init(). */
     (void)State;
 }
