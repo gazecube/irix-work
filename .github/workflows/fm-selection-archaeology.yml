@@ -23,9 +23,11 @@ jobs:
       - name: Extract original FM selection specimens
         run: |
           set -eu
-          FM="$GITHUB_WORKSPACE/irix-re-verification/evidence/fm"
+          # Read-only evidence comes from the frozen incoming tree. All
+          # reconstruction work remains under irix-re-verification/.
+          FM="$GITHUB_WORKSPACE/irix-re/evidence/fm"
           test -f "$FM"
-          archive="$GITHUB_WORKSPACE/irix-re-verification/evidence/shared_objects.tar"
+          archive="$GITHUB_WORKSPACE/irix-re/evidence/shared_objects.tar"
           entry="$(tar -tf "$archive" | grep '/usr/lib32/internal/libimdIconPanel.so$' | head -1)"
           test -n "$entry"
           mkdir -p /tmp/fm-selection
