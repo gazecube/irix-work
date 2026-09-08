@@ -98,7 +98,7 @@ addDialogButton(struct Dialog *d, int bmsg)
             d->flags |= DIALOGBUTTONS;
             move = DIALOGBUTMARGIN + TEXTBUTH;
             d->gui.y1 -= move>>1;
-            d->gui.y2 += move>>1 + (move&1);
+            d->gui.y2 += (move >> 1) + (move & 1);
         }
 
         d->button[i] = createButton(dialogButtonX(d,i),
@@ -208,7 +208,7 @@ static unsigned short ques_bits[] = {
 static unsigned short warn_bits[] = {
    0x6000, 0xf000, 0xf000, 0xf000, 0x6000, 0x0000, 0x0000, 0x0000,
    0x6000, 0x6000, 0x6000, 0x6000, 0x6000, 0x6000, 0xf000, 0xf000,
-   0xf000, 0xf000, 0xf000, 0x6000};
+   0xf000, 0xf000, 0xf000, 0xf000, 0xf000, 0x6000};
 
 static struct {
     unsigned short *bitmap;
