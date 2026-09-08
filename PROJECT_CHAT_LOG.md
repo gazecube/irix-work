@@ -849,3 +849,29 @@ The purpose is not to replace Git history. It records the reasoning, recovered s
 ## Current exact next work item
 
 Continue the genuine SGI Command Monitor port. First clean up source-fidelity debt in `parser.c`, `stringlist.c`, and `edit_gets.c`; audit SGI scalar/type definitions and parser dependencies; then integrate the original SGI host textport with the existing active UEFI Htp state and route ARCS `Write(StandardOut,...)` through `htp_write()`. Add UEFI-backed ARCS keyboard `Read`/`getc`/minimal standalone `ioctl` below the unchanged SGI parser/editor. Do not start Linux console work until the real SGI `>>` path is working.
+
+# 17. 2026-09-08 pristine libsc build milestone
+
+The Command Monitor port moved from a provisional extracted `edit_gets.c` toward the original SGI standalone build unit. `ArcsGfxBringup.inf` now compiles pristine `stand/arcs/lib/libsc/lib/stdio.c` directly. The previous extracted `edit_gets.c` failures were therefore eliminated by restoring the original translation-unit context rather than patching individual missing declarations.
+
+The compatibility environment added beneath pristine source during this pass includes:
+
+- `38ee78c1` / `f6c2d44d`: expose SGI ABI scalar ownership through the standalone type environment and stop modern warning policy from forcing source edits.
+- `cda32b9e`: prefer pristine SGI standalone headers in the package include graph.
+- `c593abfa` / `c56cc2df`: add the x86-64 ARCS scalar compatibility header and share it with `arcs/io.h`.
+- `1c4c6649` / `417e2237`: add original SGI `arcs/hinv.h` and `arcs/dirent.h`.
+- `081a3261` / `3b3e5b0d`: provide standalone SGI scalar names required by pristine `libsc.h` and match its `setenv()` / `panic()` declarations.
+- `4869c3e2` / `f3acacb6`: add an X64 `setjmp.h` architecture overlay backed by EDK BaseLib while leaving the pristine MIPS-oriented SGI header untouched.
+- `73f86cf0` / `49a03ffd`: provide the X64 standalone `sys/systm.h` boundary plus byte utility shims used by original libsc.
+- `dcd53624`, `2566a3e9`, `a1766431`, `6725f4df`: expose ARCS `Read`/`Write` contracts, provide an X64 SPB compatibility surface/storage for the original `SPB->DebugBlock` editor hook, and compile legacy SGI C permissively enough for the historical `char *` varargs entry points without editing pristine `stdio.c`.
+- `8a45f305`: build pristine SGI standalone `stdio.c` instead of the provisional extracted editor source.
+
+The clean build at 14:27:43 on 2026-09-08 completed successfully and emitted:
+
+```text
+/home/nekron/src/edk2/Build/ArcsPkg/DEBUG_GCC/X64/ArcsGfxBringup.efi
+```
+
+The remaining `stdio.c` diagnostics are warnings, notably the historical `char *` vs modern x86-64 `va_list` mismatch in `vsprintf()` and assignment-in-condition warnings. They no longer block compilation or linking. The EDK `.pdb` copy failure is explicitly ignored by the generated makefile and does not affect the EFI image.
+
+This is the first successful generic `arcs-uefi` build with the pristine SGI standalone stdio/editor translation unit in the image. The next task is runtime validation in QEMU before further source expansion: verify that the known-good GUI/autoboot path still behaves correctly, then exercise the current Command Monitor transition path and determine the next runtime boundary. Preserve the source-faithful direction and do not replace the SGI textport path with UEFI ConOut.
