@@ -12,6 +12,7 @@
 #include <gfxgui.h>
 #include <libsc.h>
 #include <parser.h>
+#include <setjmp.h>
 
 /* The complete IP22 command table is being brought across command by command
  * from the original PROM sources.  Keep the first live table deliberately
@@ -21,6 +22,22 @@ static struct cmd_table ArcsPromCmdTable[] = {
     { ".?",   help, "help:\t\t? [COMMAND]" },
     { 0,       0,    "" }
 };
+
+static jmp_buf ArcsMonitorReturn;
+static int ArcsMonitorReturnActive;
+
+/*
+ * Original libsc eimode.c calls the firmware transfer vector's
+ * EnterInteractiveMode entry.  On the native UEFI port the surrounding PROM
+ * main loop is this bridge, so reproduce that transfer by returning to the
+ * point immediately outside command_parser().
+ */
+void
+EnterInteractiveMode(void)
+{
+    if (ArcsMonitorReturnActive)
+        longjmp(ArcsMonitorReturn, 1);
+}
 
 int
 menu_manualmode(void)
@@ -46,6 +63,14 @@ ArcsEnterCommandMonitor(void)
         return;
 
     /* Original IP22 main.c performs this immediately after menu_parser()
-     * returns from menu_manualmode(). */
+     * returns from menu_manualmode().  EnterInteractiveMode() transfers back
+     * here on native X64 rather than jumping through a MIPS firmware vector. */
+    if (setjmp(ArcsMonitorReturn) != 0) {
+        ArcsMonitorReturnActive = 0;
+        return;
+    }
+
+    ArcsMonitorReturnActive = 1;
     command_parser(ArcsPromCmdTable, ">> ", 1, 0);
+    ArcsMonitorReturnActive = 0;
 }
