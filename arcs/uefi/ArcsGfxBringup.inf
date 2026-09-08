@@ -64,4 +64,7 @@
   # the porting problem into source churn.  SGI's original build used
   # -fullwarn, not warnings-as-errors, so keep diagnostics visible while
   # preventing modern GCC warning policy from becoming source churn.
-  GCC:*_*_*_CC_FLAGS = -std=gnu99 -Wno-error -D_LANGUAGE_C -DLANGUAGE_C -D_STANDALONE
+  # GCC 14+ promotes several old-C constraint diagnostics (including the
+  # char * va_list interface used by libsc) to hard errors; -fpermissive
+  # restores the warning-only behavior appropriate for this source base.
+  GCC:*_*_*_CC_FLAGS = -std=gnu99 -fpermissive -Wno-error -D_LANGUAGE_C -DLANGUAGE_C -D_STANDALONE
