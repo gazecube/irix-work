@@ -120,7 +120,7 @@ getenv(const char *Name)
 }
 
 int
-setenv(const char *Name, const char *Value)
+setenv(char *Name, char *Value)
 {
     if (!Name || !Value)
         return -1;
@@ -150,7 +150,7 @@ setenv(const char *Name, const char *Value)
 }
 
 void
-panic(const char *Message)
+panic(char *Message, ...)
 {
     (void)Message;
     for (;;)
