@@ -1,6 +1,9 @@
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 
+#include <gfxgui.h>
+#include <style.h>
+
 #include "uefi_boot.h"
 
 extern char *make_bootfile(int rewind);
@@ -8,11 +11,23 @@ extern char *getenv(const char *Name);
 extern int setenv(const char *Name, const char *Value);
 
 static EFI_SYSTEM_TABLE *ArcsAutobootSystemTable;
+static volatile int ArcsAutobootStopRequested;
+static char *defaultmsg = "\n\nStarting up the system...\n\n";
 
 void
 ArcsPromAutobootInit(EFI_SYSTEM_TABLE *SystemTable)
 {
     ArcsAutobootSystemTable = SystemTable;
+}
+
+/* Original auto.c stop callback semantics, adapted only at the non-local-jump
+ * boundary while setjmp/Signal are still being ported. */
+static void
+stopCallBack(struct Button *b, __scunsigned_t button)
+{
+    (void)b;
+    (void)button;
+    ArcsAutobootStopRequested = 1;
 }
 
 /*
@@ -58,6 +73,11 @@ ArcsAutobootPause(int Delay)
     Events[Count++] = Timer;
 
     for (;;) {
+        if (ArcsAutobootStopRequested) {
+            gBS->CloseEvent(Timer);
+            return 1;
+        }
+
         Status = gBS->WaitForEvent(Count, Events, &Which);
         if (EFI_ERROR(Status))
             break;
@@ -75,34 +95,47 @@ ArcsAutobootPause(int Delay)
     }
 
     gBS->CloseEvent(Timer);
-    return 0;
+    return ArcsAutobootStopRequested ? 1 : 0;
 }
 
 /*
- * First UEFI integration checkpoint for the original libsc auto.c policy.
+ * UEFI integration checkpoint for original libsc auto.c.
  *
- * The bootfile iteration is kept identical in shape: make_bootfile(1)
- * rewinds the SystemPartition/OSLoader lists, subsequent make_bootfile(0)
- * calls advance fallbacks, kernname is updated, and Execute() is the final
- * machine-specific boundary.
- *
- * The original auto.c also owns TIOCINTRCHAR, SIGINT/setjmp handling and the
- * graphical "Stop for Maintenance" progress dialog.  Those dependencies are
- * still being ported; the delay/Escape semantics above are the temporary UEFI
- * implementation of its pause() boundary, not a replacement boot policy.
+ * The SGI GUI portion is now restored with the original createDialog(),
+ * placement, progress icon, button text and object lifetime.  The remaining
+ * compatibility boundary is the standalone interrupt/pause runtime.
  */
 int
 autoboot(int delay, char *message1, char *message2)
 {
+    struct Dialog *d = 0;
+    char *startingmsg;
     char *bf;
     int bfcount = 0;
     INT32 rc = 1;
 
-    (void)message1;
     (void)message2;
 
-    if (delay && ArcsAutobootPause(delay))
-        return 0;
+    startingmsg = message1 ? message1 : defaultmsg;
+    ArcsAutobootStopRequested = 0;
+
+    if (isGuiMode()) {
+        d = createDialog(startingmsg,DIALOGPROGRESS,DIALOGBIGFONT);
+        moveObject(guiobj(d),d->gui.x1,
+                   MSGY1-((d->gui.y2-d->gui.y1)>>1));
+        if (delay) {
+            struct Button *b;
+            b = addDialogButton(d,DIALOGSTOP);
+            addButtonText(b,"Stop for Maintenance");
+            addButtonCallBack(b, stopCallBack, 1);
+        }
+        drawObject(guiobj(d));
+    }
+
+    if (delay && ArcsAutobootPause(delay)) {
+        rc = 0;
+        goto done;
+    }
 
     for (bf = make_bootfile(1); bf; bf = make_bootfile(0)) {
         char *argv[2];
@@ -121,10 +154,17 @@ autoboot(int delay, char *message1, char *message2)
     }
 
     if (bf)
-        return 0;
-    if (bfcount)
-        return 22; /* EINVAL in the original standalone environment. */
-    return 5;      /* EIO in the original standalone environment. */
+        rc = 0;
+    else if (bfcount)
+        rc = 22;
+    else
+        rc = 5;
+
+done:
+    if (d && isGuiMode())
+        deleteObject(guiobj(d));
+
+    return (int)rc;
 }
 
 /* Original pmenu_cmd.c item-1 service body, with giveup() deferred until the
