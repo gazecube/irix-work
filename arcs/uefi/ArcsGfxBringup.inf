@@ -13,6 +13,7 @@
   gfxgui_bringup.c
   original_fonts.c
   bootstrap_compat.c
+  saio_compat.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
   manualmode_bringup.c
