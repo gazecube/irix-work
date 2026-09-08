@@ -8,7 +8,8 @@
 #include "htp_gop.h"
 
 typedef struct {
-    struct htp_state Htp;
+    /* Canonical textport state is owned by pristine libsk htport.c. */
+    struct htp_state *Htp;
     ARCS_GOP_HTP GopBackend;
 } ARCS_GFXGUI_BRINGUP;
 
