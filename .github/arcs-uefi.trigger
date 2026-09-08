@@ -1,1 +1,1 @@
-usb-hid-pointer-fallback-2026-09-06
+retire-pointer-overlay-2026-09-07
