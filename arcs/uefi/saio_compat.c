@@ -1,4 +1,5 @@
 #include <arcs/io.h>
+#include <arcs/errno.h>
 #include <libsc.h>
 #include <saioctl.h>
 
@@ -48,4 +49,29 @@ isgraphic(ULONG fd)
 
     ioctl(fd, TIOCISGRAPHIC, (LONG)(unsigned long)&arg);
     return arg;
+}
+
+/*
+ * env_cmd.c uses the original ARCS Open()/Close() interface only to reopen
+ * serial(0)/serial(1) after dbaud/rbaud changes.  Native UEFI serial-device
+ * plumbing is not part of the current console implementation, so report the
+ * original ARCS ENODEV result rather than inventing a descriptor.  This keeps
+ * the pristine command path intact and makes those optional reopen blocks
+ * simply not execute until the serial backend is ported.
+ */
+LONG
+Open(CHAR *Path, OPENMODE Mode, ULONG *FileId)
+{
+    (void)Path;
+    (void)Mode;
+    if (FileId)
+        *FileId = 0;
+    return ENODEV;
+}
+
+LONG
+Close(ULONG FileId)
+{
+    (void)FileId;
+    return ESUCCESS;
 }
