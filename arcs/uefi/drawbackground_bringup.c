@@ -15,21 +15,21 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
 {
     EFI_STATUS Status;
 
+    /* Retained while the older bring-up font staging is removed.  Pristine
+     * htport.c now installs its own original SGI font table in htp_init(). */
     ArcsInitOriginalFonts(Fonts);
 
     Status = ArcsGfxGuiBringupInit(&Bringup, Gop, Fonts);
     if (EFI_ERROR(Status))
         return Status;
 
-    initGfxGui(&Bringup.Htp);
+    /* htp_init() has already initialized gfxgui against the canonical SGI
+     * hosttextport.  Draw the original root presentation on that state. */
     drawBackground();
 
     /* Match the original PROM startup ordering: initialize the graphical
      * environment and background first, but do not enter/display the System
-     * Maintenance Menu until startup()/autoboot() has returned.  The previous
-     * bring-up path drew the maintenance menu here, which made the machine
-     * appear to enter maintenance immediately even while startup policy was
-     * supposed to run afterward. */
+     * Maintenance Menu until startup()/autoboot() has returned. */
 
     return EFI_SUCCESS;
 }
@@ -37,12 +37,6 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
 void
 ArcsRedrawAfterReturnedImage(void)
 {
-    /* The EFI child owned the framebuffer while it was running.  Its contents
-     * and any software-cursor save-under pixels are therefore no longer valid.
-     * The boot backend has already restored the GOP mode before we get here.
-     * Reuse the existing SGI object tree and original draw path rather than
-     * creating a second maintenance menu or re-running startup initialization.
-     */
     Bringup.GopBackend.CursorDrawn = FALSE;
     Bringup.GopBackend.CursorSaveW = 0;
     Bringup.GopBackend.CursorSaveH = 0;
@@ -54,8 +48,10 @@ ArcsRedrawAfterReturnedImage(void)
             Bringup.GopBackend.Gop->Mode->Info->HorizontalResolution;
         Bringup.GopBackend.Height =
             Bringup.GopBackend.Gop->Mode->Info->VerticalResolution;
-        Bringup.Htp.xscreensize = (INT32)Bringup.GopBackend.Width;
-        Bringup.Htp.yscreensize = (INT32)Bringup.GopBackend.Height;
+        if (Bringup.Htp) {
+            Bringup.Htp->xscreensize = (INT32)Bringup.GopBackend.Width;
+            Bringup.Htp->yscreensize = (INT32)Bringup.GopBackend.Height;
+        }
     }
 
     drawBackground();
