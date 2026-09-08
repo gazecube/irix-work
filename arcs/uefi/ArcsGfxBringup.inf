@@ -26,7 +26,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/parser.c
   ../sgisrc/stand/arcs/lib/libsc/lib/expand.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
-  ../sgisrc/libsc/lib/edit_gets.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/stdio.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
