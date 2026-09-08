@@ -48,6 +48,48 @@ free(void *Ptr)
         FreePool(Ptr);
 }
 
+void
+bcopy(const void *Source, void *Dest, size_t Count)
+{
+    const unsigned char *S = Source;
+    unsigned char *D = Dest;
+
+    if (D == S || Count == 0)
+        return;
+
+    if (D < S || D >= S + Count) {
+        while (Count--)
+            *D++ = *S++;
+    } else {
+        S += Count;
+        D += Count;
+        while (Count--)
+            *--D = *--S;
+    }
+}
+
+void
+bzero(void *Dest, size_t Count)
+{
+    unsigned char *D = Dest;
+
+    while (Count--)
+        *D++ = 0;
+}
+
+int
+bcmp(const void *Left, const void *Right, size_t Count)
+{
+    const unsigned char *A = Left;
+    const unsigned char *B = Right;
+
+    while (Count--) {
+        if (*A++ != *B++)
+            return 1;
+    }
+    return 0;
+}
+
 size_t
 strlen(const char *String)
 {
