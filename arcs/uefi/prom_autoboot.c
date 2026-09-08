@@ -1,7 +1,9 @@
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 
+#include <stand_htport.h>
 #include <gfxgui.h>
+#include <guicore.h>
 #include <style.h>
 
 #include "uefi_boot.h"
@@ -13,6 +15,13 @@ extern int setenv(const char *Name, const char *Value);
 static EFI_SYSTEM_TABLE *ArcsAutobootSystemTable;
 static volatile int ArcsAutobootStopRequested;
 static char *defaultmsg = "\n\nStarting up the system...\n\n";
+
+/* Original IRIX 6.5.7m libsc/gui/gutil.c implementation. */
+int
+isGuiMode(void)
+{
+    return(gfxgui.htp && (gfxgui.htp->textport.state == GUI));
+}
 
 void
 ArcsPromAutobootInit(EFI_SYSTEM_TABLE *SystemTable)
