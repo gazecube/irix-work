@@ -14,13 +14,6 @@
  * backend is filled in beneath them.
  */
 
-/* The standalone parser passes this to commands and Execute().  The bootstrap
- * getenv/setenv store currently owns environment policy, so expose an empty
- * process-style vector until that store is promoted to the original environ
- * representation. */
-static char *ArcsEmptyEnvironment[] = { 0 };
-char **environ = ArcsEmptyEnvironment;
-
 /* symmon/debug are only reached by pristine edit_gets() when SPB->DebugBlock
  * is non-NULL.  The UEFI SPB compatibility object deliberately leaves that
  * field NULL, so retain the original symbols without inventing a debugger. */
