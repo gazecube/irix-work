@@ -18,6 +18,37 @@
 
 static EFI_HANDLE ArcsImageHandle;
 
+/* UEFI machine glue: make sure driver/controller trees have been started
+ * before looking for boot filesystems.  Interactive input bringup also does
+ * this for pointer discovery, but startup() runs before the interactive loop.
+ * Boot discovery must therefore be self-contained rather than depending on
+ * input initialization having happened first.
+ */
+static VOID
+ArcsConnectAllControllers(VOID)
+{
+    EFI_HANDLE *Handles;
+    UINTN HandleCount;
+    UINTN I;
+
+    Handles = NULL;
+    HandleCount = 0;
+
+    if (EFI_ERROR(gBS->LocateHandleBuffer(
+            AllHandles,
+            NULL,
+            NULL,
+            &HandleCount,
+            &Handles)))
+        return;
+
+    for (I = 0; I < HandleCount; ++I)
+        (VOID)gBS->ConnectController(Handles[I], NULL, NULL, TRUE);
+
+    if (Handles != NULL)
+        FreePool(Handles);
+}
+
 static EFI_STATUS
 ArcsFindFileSystemImage(
     IN CHAR16 *Path,
@@ -35,6 +66,12 @@ ArcsFindFileSystemImage(
     *DevicePath = NULL;
     Handles = NULL;
     HandleCount = 0;
+
+    /* startup() reaches Execute() before the interactive input layer has had
+     * any reason to enumerate devices.  Connect the firmware controller tree
+     * here so early autoboot and manual Start System see the same disks.
+     */
+    ArcsConnectAllControllers();
 
     Status = gBS->LocateHandleBuffer(
         ByProtocol,
