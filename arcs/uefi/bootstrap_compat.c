@@ -6,6 +6,22 @@
 
 int _prom = 1;
 
+/*
+ * Reconstructed bootstrap environment storage.
+ *
+ * The original libsc boot policy consumes SystemPartition, OSLoader and
+ * OSLoadOptions through getenv()/setenv().  Keep those names and semantics at
+ * the compatibility boundary so original bootname.c/autoboot code can run
+ * unchanged above it.  A full persistent ARCS environment backend will
+ * replace this fixed bootstrap store.
+ */
+static char ArcsEnvSgilogo[8] = "y";
+static char ArcsEnvSystemPartition[128] =
+    "scsi(0)disk(1)rdisk(0)partition(1)";
+static char ArcsEnvOSLoader[128] = "EFI/FreeBSD/loader.efi";
+static char ArcsEnvOSLoadOptions[128] = "auto";
+static char ArcsEnvKernname[256] = "";
+
 static struct htp_state *
 ArcsCompatGetHtp(void)
 {
@@ -53,19 +69,73 @@ strcpy(char *Dest, const char *Source)
     return Dest;
 }
 
+static int
+ArcsCompatStreq(const char *A, const char *B)
+{
+    while (*A && *B && *A == *B) {
+        ++A;
+        ++B;
+    }
+    return *A == *B;
+}
+
+static void
+ArcsCompatCopy(char *Dest, UINTN Capacity, const char *Source)
+{
+    UINTN I = 0;
+
+    if (!Dest || Capacity == 0)
+        return;
+
+    while (Source && Source[I] && I + 1 < Capacity) {
+        Dest[I] = Source[I];
+        ++I;
+    }
+    Dest[I] = '\0';
+}
+
 char *
 getenv(const char *Name)
 {
-    /* Preserve the stock standalone GUI logo path during early bring-up.
-     * ARCS environment storage will replace this compatibility hook. */
-    static char Yes[] = "y";
-
-    if (Name && Name[0] == 's' && Name[1] == 'g' && Name[2] == 'i' &&
-        Name[3] == 'l' && Name[4] == 'o' && Name[5] == 'g' &&
-        Name[6] == 'o' && Name[7] == '\0')
-        return Yes;
-
+    if (!Name)
+        return 0;
+    if (ArcsCompatStreq(Name, "sgilogo"))
+        return ArcsEnvSgilogo;
+    if (ArcsCompatStreq(Name, "SystemPartition"))
+        return ArcsEnvSystemPartition;
+    if (ArcsCompatStreq(Name, "OSLoader"))
+        return ArcsEnvOSLoader;
+    if (ArcsCompatStreq(Name, "OSLoadOptions"))
+        return ArcsEnvOSLoadOptions;
+    if (ArcsCompatStreq(Name, "kernname"))
+        return ArcsEnvKernname;
     return 0;
+}
+
+int
+setenv(const char *Name, const char *Value)
+{
+    if (!Name || !Value)
+        return -1;
+    if (ArcsCompatStreq(Name, "SystemPartition")) {
+        ArcsCompatCopy(ArcsEnvSystemPartition,
+                       sizeof(ArcsEnvSystemPartition), Value);
+        return 0;
+    }
+    if (ArcsCompatStreq(Name, "OSLoader")) {
+        ArcsCompatCopy(ArcsEnvOSLoader, sizeof(ArcsEnvOSLoader), Value);
+        return 0;
+    }
+    if (ArcsCompatStreq(Name, "OSLoadOptions")) {
+        ArcsCompatCopy(ArcsEnvOSLoadOptions,
+                       sizeof(ArcsEnvOSLoadOptions), Value);
+        return 0;
+    }
+    if (ArcsCompatStreq(Name, "kernname")) {
+        ArcsCompatCopy(ArcsEnvKernname, sizeof(ArcsEnvKernname), Value);
+        return 0;
+    }
+    return -1;
 }
 
 void
