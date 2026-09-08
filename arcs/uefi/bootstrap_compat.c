@@ -99,28 +99,6 @@ bcmp(const void *Left, const void *Right, size_t Count)
     return 0;
 }
 
-size_t
-strlen(const char *String)
-{
-    const char *P = String;
-
-    while (*P)
-        ++P;
-
-    return (size_t)(P - String);
-}
-
-char *
-strcpy(char *Dest, const char *Source)
-{
-    char *D = Dest;
-
-    while ((*D++ = *Source++) != '\0')
-        ;
-
-    return Dest;
-}
-
 static int
 ArcsCompatStreq(const char *A, const char *B)
 {
