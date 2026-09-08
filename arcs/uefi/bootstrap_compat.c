@@ -148,18 +148,6 @@ strncpy(char *Dest, const char *Source, size_t Count)
     return Ret;
 }
 
-char *
-strcat(char *Dest, const char *Source)
-{
-    char *Ret = Dest;
-
-    while (*Dest)
-        ++Dest;
-    while ((*Dest++ = *Source++) != '\0')
-        ;
-    return Ret;
-}
-
 static void
 ArcsCompatInitEnv(void)
 {
