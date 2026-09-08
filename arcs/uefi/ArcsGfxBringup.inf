@@ -14,6 +14,7 @@
   original_fonts.c
   bootstrap_compat.c
   saio_compat.c
+  prom_runtime_compat.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
   manualmode_bringup.c
@@ -30,6 +31,7 @@
   ../sgisrc/stand/arcs/lib/libsc/lib/stringlist.c
   ../sgisrc/stand/arcs/lib/libsc/lib/strstuff.c
   ../sgisrc/stand/arcs/lib/libsc/lib/stdio.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/stdio_lock.c
   ../sgisrc/stand/arcs/lib/libsc/lib/panel.c
   ../sgisrc/stand/arcs/lib/libsc/lib/privstub3.c
   ../sgisrc/libsc/gui/core.c
