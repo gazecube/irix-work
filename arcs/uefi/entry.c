@@ -4,6 +4,7 @@
 
 #include "drawbackground_bringup.h"
 #include "input_bringup.h"
+#include "maintenance_menu_bringup.h"
 #include "prom_startup.h"
 #include "uefi_boot.h"
 
@@ -32,9 +33,11 @@ UefiMain(
     /* Follow the original PROM startup policy before entering maintenance:
      * AutoLoad=Y and no NoAutoLoad -> five-second interruptible autoboot.
      * If Escape interrupts it, or a child returns/fails, startup() returns and
-     * the existing maintenance input loop takes over.
+     * only then is the System Maintenance Menu displayed.
      */
     startup();
+
+    ArcsDrawMaintenanceMenuBringup();
 
     /* Feed firmware keyboard and pointer state into the original SGI GUI
      * event machinery.  Escape returns to the containing UEFI firmware. */
