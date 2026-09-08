@@ -7,6 +7,7 @@
 #include <pcbm/recover.h>
 #include <pcbm/console.h>
 
+#include "drawbackground_bringup.h"
 #include "maintenance_menu_bringup.h"
 #include "uefi_boot.h"
 
@@ -62,14 +63,15 @@ ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
         Status = ArcsUefiBootDefault();
         (void)Status;
 
-        /* A booted OS does not return.  If the child image fails or returns,
-         * restore the maintenance menu rather than leaving Start System
-         * latched as if execution were still in progress.
+        /* A booted OS does not return.  If an EFI utility does return, the
+         * child may have changed GOP mode and overwritten the framebuffer.
+         * The boot backend restores the saved GOP mode; release the latched
+         * Start System state, then repaint the existing PROM object tree.
          */
-        if (MenuButtons[0]) {
+        if (MenuButtons[0])
             stickButton(MenuButtons[0], 0);
-            drawObject(guiobj(MenuButtons[0]));
-        }
+
+        ArcsRedrawAfterReturnedImage();
     }
 }
 
