@@ -4,7 +4,11 @@
 #include <Uefi.h>
 #include <stddef.h>
 
-/* SGI standalone sources use this unsigned scalar for callback payloads. */
-typedef UINTN __scunsigned_t;
+/*
+ * SGI ABI scalar names such as __scunsigned_t are supplied by sgidefs.h.
+ * Keep this compatibility header limited to the host declarations needed
+ * beneath the pristine standalone source instead of defining SGI ABI types
+ * a second time.
+ */
 
 #endif
