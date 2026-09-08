@@ -4,25 +4,20 @@
 #include <arcs/pvector.h>
 #include <arcs/spb.h>
 #include <libsc.h>
+#include <stringlist.h>
 
 int _prom = 1;
 
 /*
- * Reconstructed bootstrap environment storage.
+ * X64/UEFI backing for the standalone ARCS environment.
  *
- * The original libsc/libsk boot policy consumes AutoLoad, NoAutoLoad,
- * SystemPartition, OSLoader and OSLoadOptions through getenv()/setenv().
- * Keep those names and semantics at the compatibility boundary so original
- * bootname.c/startup/autoboot policy can run above it.  A persistent ARCS
- * environment backend will replace this fixed bootstrap store.
+ * The original PROM exposes both environ/environ_str and getenv/_setenv to
+ * libsc commands.  Keep that original in-memory representation here while
+ * deliberately leaving persistence/NVRAM outside this compatibility layer.
  */
-static char ArcsEnvSgilogo[8] = "y";
-static char ArcsEnvAutoLoad[8] = "Y";
-static char ArcsEnvSystemPartition[128] =
-    "scsi(0)disk(1)rdisk(0)partition(1)";
-static char ArcsEnvOSLoader[128] = "EFI/FreeBSD/loader.efi";
-static char ArcsEnvOSLoadOptions[128] = "auto";
-static char ArcsEnvKernname[256] = "";
+struct string_list environ_str;
+char **environ = environ_str.strptrs;
+static int ArcsEnvInitialized;
 
 static spb_t ArcsCompatSpb;
 
@@ -100,52 +95,107 @@ bcmp(const void *Left, const void *Right, size_t Count)
 }
 
 static int
-ArcsCompatStreq(const char *A, const char *B)
+ArcsCompatLower(int C)
 {
-    while (*A && *B && *A == *B) {
-        ++A;
-        ++B;
+    if (C >= 'A' && C <= 'Z')
+        return C + ('a' - 'A');
+    return C;
+}
+
+int
+strcasecmp(const char *A, const char *B)
+{
+    unsigned char CA, CB;
+
+    do {
+        CA = (unsigned char)ArcsCompatLower((unsigned char)*A++);
+        CB = (unsigned char)ArcsCompatLower((unsigned char)*B++);
+        if (CA != CB)
+            return (int)CA - (int)CB;
+    } while (CA != 0);
+    return 0;
+}
+
+int
+strncasecmp(const char *A, const char *B, size_t Count)
+{
+    unsigned char CA, CB;
+
+    while (Count--) {
+        CA = (unsigned char)ArcsCompatLower((unsigned char)*A++);
+        CB = (unsigned char)ArcsCompatLower((unsigned char)*B++);
+        if (CA != CB)
+            return (int)CA - (int)CB;
+        if (CA == 0)
+            break;
     }
-    return *A == *B;
+    return 0;
+}
+
+char *
+strncpy(char *Dest, const char *Source, size_t Count)
+{
+    char *Ret = Dest;
+
+    while (Count && *Source) {
+        *Dest++ = *Source++;
+        --Count;
+    }
+    while (Count) {
+        *Dest++ = '\0';
+        --Count;
+    }
+    return Ret;
+}
+
+char *
+strcat(char *Dest, const char *Source)
+{
+    char *Ret = Dest;
+
+    while (*Dest)
+        ++Dest;
+    while ((*Dest++ = *Source++) != '\0')
+        ;
+    return Ret;
 }
 
 static void
-ArcsCompatCopy(char *Dest, UINTN Capacity, const char *Source)
+ArcsCompatInitEnv(void)
 {
-    UINTN I = 0;
-
-    if (!Dest || Capacity == 0)
+    if (ArcsEnvInitialized)
         return;
 
-    while (Source && Source[I] && I + 1 < Capacity) {
-        Dest[I] = Source[I];
-        ++I;
-    }
-    Dest[I] = '\0';
+    init_str(&environ_str);
+    new_str2("sgilogo", "y", &environ_str);
+    new_str2("AutoLoad", "Y", &environ_str);
+    new_str2("SystemPartition",
+             "scsi(0)disk(1)rdisk(0)partition(1)", &environ_str);
+    new_str2("OSLoader", "EFI/FreeBSD/loader.efi", &environ_str);
+    new_str2("OSLoadOptions", "auto", &environ_str);
+    new_str2("kernname", "", &environ_str);
+    environ = environ_str.strptrs;
+    ArcsEnvInitialized = 1;
 }
 
 char *
 getenv(const char *Name)
 {
+    char *Entry;
+    char *Value;
+
     if (!Name)
         return 0;
-    if (ArcsCompatStreq(Name, "sgilogo"))
-        return ArcsEnvSgilogo;
-    if (ArcsCompatStreq(Name, "AutoLoad"))
-        return ArcsEnvAutoLoad;
-    /* NoAutoLoad is intentionally absent by default.  Returning NULL here
-     * preserves the original startup.c condition: !getenv("NoAutoLoad"). */
-    if (ArcsCompatStreq(Name, "NoAutoLoad"))
+
+    ArcsCompatInitEnv();
+    Entry = find_str((char *)Name, &environ_str);
+    if (!Entry)
         return 0;
-    if (ArcsCompatStreq(Name, "SystemPartition"))
-        return ArcsEnvSystemPartition;
-    if (ArcsCompatStreq(Name, "OSLoader"))
-        return ArcsEnvOSLoader;
-    if (ArcsCompatStreq(Name, "OSLoadOptions"))
-        return ArcsEnvOSLoadOptions;
-    if (ArcsCompatStreq(Name, "kernname"))
-        return ArcsEnvKernname;
-    return 0;
+
+    Value = Entry;
+    while (*Value && *Value != '=')
+        ++Value;
+    return *Value == '=' ? Value + 1 : 0;
 }
 
 int
@@ -153,29 +203,33 @@ setenv(char *Name, char *Value)
 {
     if (!Name || !Value)
         return -1;
-    if (ArcsCompatStreq(Name, "AutoLoad")) {
-        ArcsCompatCopy(ArcsEnvAutoLoad, sizeof(ArcsEnvAutoLoad), Value);
-        return 0;
-    }
-    if (ArcsCompatStreq(Name, "SystemPartition")) {
-        ArcsCompatCopy(ArcsEnvSystemPartition,
-                       sizeof(ArcsEnvSystemPartition), Value);
-        return 0;
-    }
-    if (ArcsCompatStreq(Name, "OSLoader")) {
-        ArcsCompatCopy(ArcsEnvOSLoader, sizeof(ArcsEnvOSLoader), Value);
-        return 0;
-    }
-    if (ArcsCompatStreq(Name, "OSLoadOptions")) {
-        ArcsCompatCopy(ArcsEnvOSLoadOptions,
-                       sizeof(ArcsEnvOSLoadOptions), Value);
-        return 0;
-    }
-    if (ArcsCompatStreq(Name, "kernname")) {
-        ArcsCompatCopy(ArcsEnvKernname, sizeof(ArcsEnvKernname), Value);
-        return 0;
-    }
-    return -1;
+
+    ArcsCompatInitEnv();
+    replace_str(Name, Value, &environ_str);
+    environ = environ_str.strptrs;
+    return 0;
+}
+
+/*
+ * Machine-dependent _setenv normally owns NVRAM policy.  The UEFI port keeps
+ * the original command contract but intentionally supplies only the volatile
+ * environment until a source-faithful persistent ARCS store is selected.
+ */
+int
+_setenv(char *Name, char *Value, int Override)
+{
+    (void)Override;
+
+    if (!Name || !Value)
+        return -1;
+
+    ArcsCompatInitEnv();
+    if (*Value == '\0')
+        delete_str(Name, &environ_str);
+    else
+        replace_str(Name, Value, &environ_str);
+    environ = environ_str.strptrs;
+    return 0;
 }
 
 void
