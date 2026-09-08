@@ -9,4 +9,7 @@ ArcsDrawBackgroundBringup(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop
     );
 
+void
+ArcsRedrawAfterReturnedImage(void);
+
 #endif
