@@ -42,6 +42,7 @@
   ArcsPkg/ArcsPkg.dec
 
 [LibraryClasses]
+  BaseLib
   BaseMemoryLib
   DevicePathLib
   MemoryAllocationLib
