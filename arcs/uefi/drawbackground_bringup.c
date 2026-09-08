@@ -4,22 +4,18 @@
 #include <guicore.h>
 #include <style.h>
 
-#include "original_fonts.h"
 #include "gfxgui_bringup.h"
 
 static ARCS_GFXGUI_BRINGUP Bringup;
-static struct htp_font Fonts[NUMFONTS];
 
 EFI_STATUS
 ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
 {
     EFI_STATUS Status;
 
-    /* Retained while the older bring-up font staging is removed.  Pristine
-     * htport.c now installs its own original SGI font table in htp_init(). */
-    ArcsInitOriginalFonts(Fonts);
-
-    Status = ArcsGfxGuiBringupInit(&Bringup, Gop, Fonts);
+    /* Pristine htport.c now owns the original SGI font table and initializes
+     * it in htp_init().  Keep UEFI below that ownership boundary. */
+    Status = ArcsGfxGuiBringupInit(&Bringup, Gop, NULL);
     if (EFI_ERROR(Status))
         return Status;
 
