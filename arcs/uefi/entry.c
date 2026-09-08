@@ -4,6 +4,7 @@
 
 #include "drawbackground_bringup.h"
 #include "input_bringup.h"
+#include "prom_startup.h"
 #include "uefi_boot.h"
 
 EFI_STATUS
@@ -17,6 +18,7 @@ UefiMain(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop;
 
     ArcsUefiBootInit(ImageHandle);
+    ArcsPromAutobootInit(SystemTable);
 
     Gop = NULL;
     Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
@@ -26,6 +28,13 @@ UefiMain(
     Status = ArcsDrawBackgroundBringup(Gop);
     if (EFI_ERROR(Status))
         return Status;
+
+    /* Follow the original PROM startup policy before entering maintenance:
+     * AutoLoad=Y and no NoAutoLoad -> five-second interruptible autoboot.
+     * If Escape interrupts it, or a child returns/fails, startup() returns and
+     * the existing maintenance input loop takes over.
+     */
+    startup();
 
     /* Feed firmware keyboard and pointer state into the original SGI GUI
      * event machinery.  Escape returns to the containing UEFI firmware. */
