@@ -11,10 +11,11 @@
   htp_gop.c
   profile_reality.c
   gfxgui_bringup.c
-  original_fonts.c
   bootstrap_compat.c
   saio_compat.c
   prom_runtime_compat.c
+  prom_platform_hooks.c
+  prom_product_logo.c
   drawbackground_bringup.c
   maintenance_menu_bringup.c
   manualmode_bringup.c
