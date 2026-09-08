@@ -11,6 +11,7 @@
 extern struct htp_state *gethtp(void);
 extern void txMap(struct htp_state *);
 extern void htp_init(void);
+extern void ArcsPrepareProductLogo(void);
 
 EFI_STATUS
 ArcsGfxGuiBringupInit(
@@ -41,6 +42,11 @@ ArcsGfxGuiBringupInit(
      * display dimensions, then calls txMap(htp) before htp_init().  txMap()
      * also initializes page_r/page_g/page_b, which txConfig() consumes. */
     txMap(State->Htp);
+
+    /* The custom SVG raster is conventional top-to-bottom image data, while
+     * SGI drawCalligraphy() walks span rows upward in logical coordinates.
+     * Normalize only the X64 product data before pristine htport consumes it. */
+    ArcsPrepareProductLogo();
 
     /* htp_init() performs the original SGI txConfig/initFonts/txReset flow,
      * initializes gfxgui against the canonical htp, and leaves video in the
