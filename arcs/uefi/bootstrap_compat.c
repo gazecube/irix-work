@@ -9,13 +9,14 @@ int _prom = 1;
 /*
  * Reconstructed bootstrap environment storage.
  *
- * The original libsc boot policy consumes SystemPartition, OSLoader and
- * OSLoadOptions through getenv()/setenv().  Keep those names and semantics at
- * the compatibility boundary so original bootname.c/autoboot code can run
- * unchanged above it.  A full persistent ARCS environment backend will
- * replace this fixed bootstrap store.
+ * The original libsc/libsk boot policy consumes AutoLoad, NoAutoLoad,
+ * SystemPartition, OSLoader and OSLoadOptions through getenv()/setenv().
+ * Keep those names and semantics at the compatibility boundary so original
+ * bootname.c/startup/autoboot policy can run above it.  A persistent ARCS
+ * environment backend will replace this fixed bootstrap store.
  */
 static char ArcsEnvSgilogo[8] = "y";
+static char ArcsEnvAutoLoad[8] = "Y";
 static char ArcsEnvSystemPartition[128] =
     "scsi(0)disk(1)rdisk(0)partition(1)";
 static char ArcsEnvOSLoader[128] = "EFI/FreeBSD/loader.efi";
@@ -101,6 +102,12 @@ getenv(const char *Name)
         return 0;
     if (ArcsCompatStreq(Name, "sgilogo"))
         return ArcsEnvSgilogo;
+    if (ArcsCompatStreq(Name, "AutoLoad"))
+        return ArcsEnvAutoLoad;
+    /* NoAutoLoad is intentionally absent by default.  Returning NULL here
+     * preserves the original startup.c condition: !getenv("NoAutoLoad"). */
+    if (ArcsCompatStreq(Name, "NoAutoLoad"))
+        return 0;
     if (ArcsCompatStreq(Name, "SystemPartition"))
         return ArcsEnvSystemPartition;
     if (ArcsCompatStreq(Name, "OSLoader"))
@@ -117,6 +124,10 @@ setenv(const char *Name, const char *Value)
 {
     if (!Name || !Value)
         return -1;
+    if (ArcsCompatStreq(Name, "AutoLoad")) {
+        ArcsCompatCopy(ArcsEnvAutoLoad, sizeof(ArcsEnvAutoLoad), Value);
+        return 0;
+    }
     if (ArcsCompatStreq(Name, "SystemPartition")) {
         ArcsCompatCopy(ArcsEnvSystemPartition,
                        sizeof(ArcsEnvSystemPartition), Value);
