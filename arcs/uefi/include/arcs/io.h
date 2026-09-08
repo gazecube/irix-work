@@ -21,7 +21,6 @@ typedef INT32   LONG;
 typedef UINT32  ULONG;
 typedef CHAR8   CHAR;
 typedef UINT8   UCHAR;
-typedef VOID    VOID;
 
 extern LONG Execute(CHAR *, LONG, CHAR *[], CHAR *[]);
 
