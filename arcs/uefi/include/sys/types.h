@@ -3,12 +3,12 @@
 
 #include <Uefi.h>
 #include <stddef.h>
+#include <sgidefs.h>
 
 /*
- * SGI ABI scalar names such as __scunsigned_t are supplied by sgidefs.h.
- * Keep this compatibility header limited to the host declarations needed
- * beneath the pristine standalone source instead of defining SGI ABI types
- * a second time.
+ * The original standalone headers expect sys/types.h to make the SGI ABI
+ * scalar namespace visible.  Keep ownership of those types in sgidefs.h;
+ * this wrapper only assembles the expected header environment on x86-64.
  */
 
 #endif
