@@ -50,6 +50,15 @@ void igl_backend_swapbuffers(
     struct igl_backend *backend,
     struct igl_backend_window *window);
 
+/*
+ * Backend synchronization boundary for IRIS GL gsync().
+ * A faithful backend should wait for the next display retrace.  The
+ * current X11 implementation can only provide a server-completion barrier.
+ */
+void igl_backend_gsync(
+    struct igl_backend *backend,
+    struct igl_backend_window *window);
+
 /* Returns 1 if an event was produced, 0 otherwise. */
 int igl_backend_poll_event(
     struct igl_backend *backend,
