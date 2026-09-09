@@ -24,6 +24,29 @@ static void igl_init_once(void)
     igl_initialized = 1;
 }
 
+static struct igl_colormap_entry *igl_find_colormap_entry(Colorindex index,
+                                                           int create)
+{
+    struct igl_colormap_entry *entry;
+
+    for (entry = igl.colormap; entry; entry = entry->next) {
+        if (entry->index == (long)index)
+            return entry;
+    }
+
+    if (!create)
+        return NULL;
+
+    entry = calloc(1, sizeof(*entry));
+    if (!entry)
+        return NULL;
+
+    entry->index = (long)index;
+    entry->next = igl.colormap;
+    igl.colormap = entry;
+    return entry;
+}
+
 static void igl_refresh_clip(struct igl_window_state *window)
 {
     int x = 0, y = 0, width = 0, height = 0;
@@ -68,11 +91,6 @@ void prefposition(long xmin, long xmax, long ymin, long ymax)
 
 void foreground(void)
 {
-    /*
-     * Milestone zero preserves foreground() as a distinct state transition,
-     * but no source-backed userspace field has yet been recovered for it.
-     * The X11 backend therefore performs no operation here.
-     */
     igl_init_once();
 }
 
@@ -133,6 +151,16 @@ void RGBmode(void)
     igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER;
 }
 
+void cmode(void)
+{
+    igl_init_once();
+    if (!igl.current_window)
+        return;
+
+    igl.current_window->requested.rgb_mode = 0;
+    igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER;
+}
+
 void gconfig(void)
 {
     struct igl_window_state *window;
@@ -151,6 +179,7 @@ void gconfig(void)
     igl.current_red = 0;
     igl.current_green = 0;
     igl.current_blue = 0;
+    igl.current_color_index = 0;
     igl_backend_set_rgb(igl.backend, window->backend_window, 0, 0, 0);
 
     igl_refresh_clip(window);
@@ -167,6 +196,40 @@ void RGBcolor(short red, short green, short blue)
     igl.current_blue = blue;
     igl_backend_set_rgb(igl.backend, igl.current_window->backend_window,
                         red, green, blue);
+}
+
+void mapcolor(Colorindex index, RGBvalue red, RGBvalue green, RGBvalue blue)
+{
+    struct igl_colormap_entry *entry;
+
+    igl_init_once();
+    entry = igl_find_colormap_entry(index, 1);
+    if (!entry)
+        return;
+
+    entry->red = (int16_t)red;
+    entry->green = (int16_t)green;
+    entry->blue = (int16_t)blue;
+}
+
+void color(Colorindex index)
+{
+    struct igl_colormap_entry *entry;
+
+    igl_init_once();
+    if (!igl.current_window)
+        return;
+
+    igl.current_color_index = (long)index;
+    entry = igl_find_colormap_entry(index, 0);
+    if (!entry)
+        return;
+
+    igl.current_red = entry->red;
+    igl.current_green = entry->green;
+    igl.current_blue = entry->blue;
+    igl_backend_set_rgb(igl.backend, igl.current_window->backend_window,
+                        entry->red, entry->green, entry->blue);
 }
 
 void clear(void)
@@ -192,11 +255,6 @@ long qtest(void)
                                 &device, &value, 0))
         return 0;
 
-    /*
-     * Milestone zero has one current window and only REDRAW events.
-     * Keep one pending event in process state without inventing a general
-     * queue layout before source evidence requires it.
-     */
     igl.events = (struct igl_event_queue *)(uintptr_t)device;
     return device;
 }
