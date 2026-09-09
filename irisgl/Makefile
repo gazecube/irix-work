@@ -39,7 +39,12 @@ badifred: $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
 		-o $@ $(SGI_BADIFRED) -L. -lgl -lX11 -lm
 
-clean:
-	rm -f $(OBJS) $(LIB) flash mode badifred
+rbuf: $(LIB)
+	@test -n "$(SGI_RBUF)" || (echo "Set SGI_RBUF=/path/to/original/irix/cmd/stress/Gfx/rbuf.c"; exit 1)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
+		-o $@ $(SGI_RBUF) -L. -lgl -lX11 -lm
 
-.PHONY: all clean flash mode badifred
+clean:
+	rm -f $(OBJS) $(LIB) flash mode badifred rbuf
+
+.PHONY: all clean flash mode badifred rbuf
