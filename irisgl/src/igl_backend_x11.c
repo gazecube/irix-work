@@ -1,6 +1,7 @@
 #include "igl_backend.h"
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,18 +17,6 @@ struct igl_backend {
     Display *display;
     int screen;
 };
-
-static struct igl_backend_window *lookup_window(struct igl_backend *backend,
-                                                Window xwindow)
-{
-    XPointer data = NULL;
-    XContext context = XUniqueContext();
-    (void)backend;
-    (void)xwindow;
-    (void)data;
-    (void)context;
-    return NULL;
-}
 
 struct igl_backend *igl_backend_create(void)
 {
@@ -214,32 +203,30 @@ int igl_backend_poll_event(struct igl_backend *backend,
                            int block)
 {
     XEvent event;
-    static struct igl_backend_window event_window;
 
     if (!backend || !backend->display)
         return 0;
 
-    if (!block && XPending(backend->display) == 0)
-        return 0;
+    for (;;) {
+        if (!block && XPending(backend->display) == 0)
+            return 0;
 
-    if (block)
-        XNextEvent(backend->display, &event);
-    else
         XNextEvent(backend->display, &event);
 
-    switch (event.type) {
-    case Expose:
-    case ConfigureNotify:
-        memset(&event_window, 0, sizeof(event_window));
-        event_window.xwindow = event.xany.window;
-        if (window)
-            *window = &event_window;
-        if (device)
-            *device = REDRAW;
-        if (value)
-            *value = 0;
-        return 1;
-    default:
-        return 0;
+        switch (event.type) {
+        case Expose:
+        case ConfigureNotify:
+            if (window)
+                *window = NULL;
+            if (device)
+                *device = REDRAW;
+            if (value)
+                *value = 0;
+            return 1;
+        default:
+            if (!block && XPending(backend->display) == 0)
+                return 0;
+            break;
+        }
     }
 }
