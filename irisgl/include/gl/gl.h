@@ -33,6 +33,7 @@ void cmode(void);
 void singlebuffer(void);
 void doublebuffer(void);
 void gconfig(void);
+void gsync(void);
 void RGBcolor(short red, short green, short blue);
 void color(Colorindex index);
 void mapcolor(Colorindex index, RGBvalue red, RGBvalue green, RGBvalue blue);
