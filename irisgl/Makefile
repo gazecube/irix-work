@@ -44,7 +44,17 @@ rbuf: $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
 		-o $@ $(SGI_RBUF) -L. -lgl -lX11 -lm
 
-clean:
-	rm -f $(OBJS) $(LIB) flash mode badifred rbuf
+cbuf: $(LIB)
+	@test -n "$(SGI_CBUF)" || (echo "Set SGI_CBUF=/path/to/original/irix/cmd/stress/Gfx/cbuf.c"; exit 1)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
+		-o $@ $(SGI_CBUF) -L. -lgl -lX11 -lm
 
-.PHONY: all clean flash mode badifred rbuf
+gsync: $(LIB)
+	@test -n "$(SGI_GSYNC)" || (echo "Set SGI_GSYNC=/path/to/original/irix/cmd/stress/Gfx/gsync.c"; exit 1)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
+		-o $@ $(SGI_GSYNC) -L. -lgl -lX11 -lm
+
+clean:
+	rm -f $(OBJS) $(LIB) flash mode badifred rbuf cbuf gsync
+
+.PHONY: all clean flash mode badifred rbuf cbuf gsync
