@@ -239,6 +239,15 @@ void gconfig(void)
     igl_refresh_clip(window);
 }
 
+void gsync(void)
+{
+    igl_init_once();
+    if (!igl.current_window)
+        return;
+
+    igl_backend_gsync(igl.backend, igl.current_window->backend_window);
+}
+
 void RGBcolor(short red, short green, short blue)
 {
     igl_init_once();
