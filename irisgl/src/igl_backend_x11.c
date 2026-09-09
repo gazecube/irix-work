@@ -2,6 +2,7 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/extensions/Xpresent.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -16,13 +17,34 @@ struct igl_backend_window {
     int back_width;
     int back_height;
     int doublebuffered;
+    XID present_event_id;
 };
 
 struct igl_backend {
     Display *display;
     int screen;
     long debug_clear_delay_ms;
+    int present_available;
+    int present_opcode;
+    uint32_t present_serial;
 };
+
+struct igl_present_wait {
+    int opcode;
+};
+
+static Bool igl_backend_present_complete(Display *display,
+                                         XEvent *event,
+                                         XPointer arg)
+{
+    struct igl_present_wait *wait = (struct igl_present_wait *)arg;
+
+    (void)display;
+
+    return event->type == GenericEvent &&
+           event->xcookie.extension == wait->opcode &&
+           event->xcookie.evtype == PresentCompleteNotify;
+}
 
 static long igl_backend_debug_delay_ms(void)
 {
@@ -75,6 +97,8 @@ static int igl_backend_ensure_backbuffer(struct igl_backend *backend,
 struct igl_backend *igl_backend_create(void)
 {
     struct igl_backend *backend;
+    int event_base;
+    int error_base;
 
     backend = calloc(1, sizeof(*backend));
     if (!backend)
@@ -88,6 +112,8 @@ struct igl_backend *igl_backend_create(void)
 
     backend->screen = DefaultScreen(backend->display);
     backend->debug_clear_delay_ms = igl_backend_debug_delay_ms();
+    backend->present_available = XPresentQueryExtension(
+        backend->display, &backend->present_opcode, &event_base, &error_base);
     return backend;
 }
 
@@ -164,6 +190,11 @@ struct igl_backend_window *igl_backend_open_window(
         return NULL;
     }
 
+    if (backend->present_available) {
+        window->present_event_id = XPresentSelectInput(
+            backend->display, window->xwindow, PresentCompleteNotifyMask);
+    }
+
     window->pixel = white;
     XSetForeground(backend->display, window->gc, window->pixel);
     XMapWindow(backend->display, window->xwindow);
@@ -177,6 +208,9 @@ void igl_backend_destroy_window(struct igl_backend *backend,
 {
     if (!backend || !window)
         return;
+    if (window->present_event_id)
+        XPresentFreeInput(backend->display, window->xwindow,
+                          window->present_event_id);
     if (window->backbuffer)
         XFreePixmap(backend->display, window->backbuffer);
     if (window->gc)
@@ -332,18 +366,56 @@ void igl_backend_swapbuffers(struct igl_backend *backend,
 void igl_backend_gsync(struct igl_backend *backend,
                        struct igl_backend_window *window)
 {
-    (void)window;
+    struct igl_present_wait wait;
+    XEvent event;
+    uint32_t serial;
 
-    if (!backend || !backend->display)
+    if (!backend || !backend->display || !window)
         return;
 
+    if (!backend->present_available || !window->present_event_id) {
+        /*
+         * Fallback only.  This preserves command completion on X servers
+         * without Present, but does not emulate IRIS GL vertical retrace.
+         */
+        XSync(backend->display, False);
+        return;
+    }
+
+    serial = ++backend->present_serial;
+    if (serial == 0)
+        serial = ++backend->present_serial;
+
     /*
-     * Host substitution only: XSync waits until the X server has processed
-     * preceding requests.  Historical IRIS GL gsync() waits for the next
-     * vertical retrace, so this is intentionally not claimed as complete
-     * retrace emulation.
+     * PresentNotifyMSC with target_msc=0, divisor=1, remainder=0 requests
+     * completion on the next media-stream-counter field.  That gives this
+     * backend a real display-refresh synchronization point for IRIS GL
+     * gsync(), instead of the old X server completion barrier.
      */
-    XSync(backend->display, False);
+    XPresentNotifyMSC(backend->display, window->xwindow,
+                      serial, 0, 1, 0);
+    XFlush(backend->display);
+
+    wait.opcode = backend->present_opcode;
+    for (;;) {
+        XPresentCompleteNotifyEvent *complete;
+
+        XIfEvent(backend->display, &event,
+                 igl_backend_present_complete, (XPointer)&wait);
+        if (!XGetEventData(backend->display, &event.xcookie))
+            continue;
+
+        complete = (XPresentCompleteNotifyEvent *)event.xcookie.data;
+        if (complete &&
+            complete->kind == PresentCompleteKindNotifyMSC &&
+            complete->serial_number == serial &&
+            complete->window == window->xwindow) {
+            XFreeEventData(backend->display, &event.xcookie);
+            break;
+        }
+
+        XFreeEventData(backend->display, &event.xcookie);
+    }
 }
 
 int igl_backend_poll_event(struct igl_backend *backend,
