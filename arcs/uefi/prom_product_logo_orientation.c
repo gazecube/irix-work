@@ -5,6 +5,51 @@
 extern unsigned char clogo_data[];
 extern int clogo_w;
 extern int clogo_h;
+extern const char ArcsProductLogoBase64[];
+extern const unsigned int ArcsProductLogoDecodedSize;
+
+static int
+Base64Value(char C)
+{
+    if (C >= 'A' && C <= 'Z')
+        return C - 'A';
+    if (C >= 'a' && C <= 'z')
+        return C - 'a' + 26;
+    if (C >= '0' && C <= '9')
+        return C - '0' + 52;
+    if (C == '+')
+        return 62;
+    if (C == '/')
+        return 63;
+    return -1;
+}
+
+static BOOLEAN
+DecodeProductLogo(void)
+{
+    const char *S = ArcsProductLogoBase64;
+    UINTN Out = 0;
+
+    while (*S) {
+        int A, B, C, D;
+
+        A = Base64Value(*S++);
+        B = Base64Value(*S++);
+        C = Base64Value(*S++);
+        D = Base64Value(*S++);
+        if (A < 0 || B < 0 || C < 0 || D < 0)
+            return FALSE;
+
+        if (Out + 3 > (UINTN)ArcsProductLogoDecodedSize)
+            return FALSE;
+
+        clogo_data[Out++] = (unsigned char)((A << 2) | (B >> 4));
+        clogo_data[Out++] = (unsigned char)((B << 4) | (C >> 2));
+        clogo_data[Out++] = (unsigned char)((C << 6) | D);
+    }
+
+    return Out == (UINTN)ArcsProductLogoDecodedSize;
+}
 
 /*
  * Original SGI drawCalligraphy() advances logical Y upward while walking
@@ -25,6 +70,9 @@ ArcsPrepareProductLogo(void)
     int Y;
 
     if (Prepared || clogo_w <= 0 || clogo_h <= 0)
+        return;
+
+    if (!DecodeProductLogo())
         return;
 
     RowOffsets = AllocatePool(((UINTN)clogo_h + 1) * sizeof(*RowOffsets));
@@ -49,6 +97,11 @@ ArcsPrepareProductLogo(void)
 
     RowOffsets[clogo_h] = (UINTN)(P - clogo_data);
     TotalBytes = RowOffsets[clogo_h];
+    if (TotalBytes != (UINTN)ArcsProductLogoDecodedSize) {
+        FreePool(RowOffsets);
+        return;
+    }
+
     Scratch = AllocatePool(TotalBytes);
     if (!Scratch) {
         FreePool(RowOffsets);
