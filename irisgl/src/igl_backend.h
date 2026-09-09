@@ -52,8 +52,8 @@ void igl_backend_swapbuffers(
 
 /*
  * Backend synchronization boundary for IRIS GL gsync().
- * A faithful backend should wait for the next display retrace.  The
- * current X11 implementation can only provide a server-completion barrier.
+ * The X11 backend waits for the next Present media-stream-counter field when
+ * the Present extension is available, with XSync retained only as a fallback.
  */
 void igl_backend_gsync(
     struct igl_backend *backend,
