@@ -4,7 +4,7 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror
 CPPFLAGS += -Iinclude -Iinclude/gl -Isrc
 
 LIB = libgl.a
-OBJS = src/igl_runtime.o src/igl_backend_x11.o
+OBJS = src/igl_runtime.o src/igl_backend_x11.o src/igl_hw_linux.o
 X11_LIBS = -lX11 -lXpresent
 
 LEGACY_CFLAGS = -std=gnu89 \
@@ -24,6 +24,12 @@ src/igl_runtime.o: src/igl_runtime.c src/igl_state.h src/igl_backend.h include/g
 
 src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+src/igl_hw_linux.o: src/igl_hw_linux.c src/igl_hw.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+hwprobe: src/igl_hw_linux.o tools/igl_hwprobe.c src/igl_hw.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_hwprobe.c src/igl_hw_linux.o
 
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
@@ -56,6 +62,6 @@ gsync: $(LIB)
 		-o $@ $(SGI_GSYNC) -L. -lgl $(X11_LIBS) -lm
 
 clean:
-	rm -f $(OBJS) $(LIB) flash mode badifred rbuf cbuf gsync
+	rm -f $(OBJS) $(LIB) hwprobe flash mode badifred rbuf cbuf gsync
 
-.PHONY: all clean flash mode badifred rbuf cbuf gsync
+.PHONY: all clean hwprobe flash mode badifred rbuf cbuf gsync
