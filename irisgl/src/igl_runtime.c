@@ -11,19 +11,6 @@
 static struct igl_runtime_state igl;
 static int igl_initialized;
 
-static void igl_init_once(void)
-{
-    if (igl_initialized)
-        return;
-
-    memset(&igl, 0, sizeof(igl));
-    igl.next_rnid = 1;
-    igl.next_clipid = 1;
-    igl.next_wid = 1;
-    igl.backend = igl_backend_create();
-    igl_initialized = 1;
-}
-
 static struct igl_colormap_entry *igl_find_colormap_entry(Colorindex index,
                                                            int create)
 {
@@ -45,6 +32,48 @@ static struct igl_colormap_entry *igl_find_colormap_entry(Colorindex index,
     entry->next = igl.colormap;
     igl.colormap = entry;
     return entry;
+}
+
+static void igl_set_colormap_entry(Colorindex index,
+                                   RGBvalue red,
+                                   RGBvalue green,
+                                   RGBvalue blue)
+{
+    struct igl_colormap_entry *entry;
+
+    entry = igl_find_colormap_entry(index, 1);
+    if (!entry)
+        return;
+
+    entry->red = (int16_t)red;
+    entry->green = (int16_t)green;
+    entry->blue = (int16_t)blue;
+}
+
+static void igl_init_default_colormap(void)
+{
+    igl_set_colormap_entry(BLACK,   0,   0,   0);
+    igl_set_colormap_entry(RED,   255,   0,   0);
+    igl_set_colormap_entry(GREEN,   0, 255,   0);
+    igl_set_colormap_entry(YELLOW,255, 255,   0);
+    igl_set_colormap_entry(BLUE,    0,   0, 255);
+    igl_set_colormap_entry(MAGENTA,255, 0, 255);
+    igl_set_colormap_entry(CYAN,    0, 255, 255);
+    igl_set_colormap_entry(WHITE, 255, 255, 255);
+}
+
+static void igl_init_once(void)
+{
+    if (igl_initialized)
+        return;
+
+    memset(&igl, 0, sizeof(igl));
+    igl.next_rnid = 1;
+    igl.next_clipid = 1;
+    igl.next_wid = 1;
+    igl_init_default_colormap();
+    igl.backend = igl_backend_create();
+    igl_initialized = 1;
 }
 
 static void igl_refresh_clip(struct igl_window_state *window)
@@ -161,6 +190,16 @@ void cmode(void)
     igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER;
 }
 
+void doublebuffer(void)
+{
+    igl_init_once();
+    if (!igl.current_window)
+        return;
+
+    igl.current_window->requested.double_buffer = 1;
+    igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER | IGL_RMASK_SWAPBUF;
+}
+
 void gconfig(void)
 {
     struct igl_window_state *window;
@@ -168,6 +207,11 @@ void gconfig(void)
     igl_init_once();
     window = igl.current_window;
     if (!window)
+        return;
+
+    if (!igl_backend_set_doublebuffer(igl.backend,
+                                      window->backend_window,
+                                      window->requested.double_buffer))
         return;
 
     window->committed = window->requested;
@@ -200,16 +244,8 @@ void RGBcolor(short red, short green, short blue)
 
 void mapcolor(Colorindex index, RGBvalue red, RGBvalue green, RGBvalue blue)
 {
-    struct igl_colormap_entry *entry;
-
     igl_init_once();
-    entry = igl_find_colormap_entry(index, 1);
-    if (!entry)
-        return;
-
-    entry->red = (int16_t)red;
-    entry->green = (int16_t)green;
-    entry->blue = (int16_t)blue;
+    igl_set_colormap_entry(index, red, green, blue);
 }
 
 void color(Colorindex index)
@@ -239,6 +275,15 @@ void clear(void)
         return;
 
     igl_backend_clear(igl.backend, igl.current_window->backend_window);
+}
+
+void swapbuffers(void)
+{
+    igl_init_once();
+    if (!igl.current_window || !igl.current_window->committed.double_buffer)
+        return;
+
+    igl_backend_swapbuffers(igl.backend, igl.current_window->backend_window);
 }
 
 long qtest(void)
