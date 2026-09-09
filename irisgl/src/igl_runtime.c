@@ -2,8 +2,10 @@
 #include <gl/device.h>
 
 #include "igl_backend.h"
+#include "igl_juniper_runtime.h"
 #include "igl_state.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -73,6 +75,7 @@ static void igl_init_once(void)
     igl.next_wid = 1;
     igl_init_default_colormap();
     igl.backend = igl_backend_create();
+    igl_juniper_runtime_init(&igl);
     igl_initialized = 1;
 }
 
@@ -94,6 +97,16 @@ static void igl_refresh_clip(struct igl_window_state *window)
     window->pane.clip.changed = 0;
     window->pane.validmask |= IGL_RMASK_CLIP;
     window->rnode.validmask |= IGL_RMASK_CLIP;
+}
+
+static uint32_t igl_host_rgba8(void)
+{
+    uint32_t red = (uint16_t)igl.current_red & 0xffu;
+    uint32_t green = (uint16_t)igl.current_green & 0xffu;
+    uint32_t blue = (uint16_t)igl.current_blue & 0xffu;
+
+    /* Reconstructed private host surface format: 0xAARRGGBB. */
+    return 0xff000000u | (red << 16) | (green << 8) | blue;
 }
 
 void prefsize(long width, long height)
@@ -167,6 +180,7 @@ long winopen(const char *name)
     igl.current_window = window;
     memset(&igl.next_window_prefs, 0, sizeof(igl.next_window_prefs));
     igl_refresh_clip(window);
+    igl_juniper_runtime_ensure_surface(&igl, window);
     return window->wid;
 }
 
@@ -237,6 +251,7 @@ void gconfig(void)
     igl_backend_set_rgb(igl.backend, window->backend_window, 0, 0, 0);
 
     igl_refresh_clip(window);
+    igl_juniper_runtime_ensure_surface(&igl, window);
 }
 
 void gsync(void)
@@ -293,6 +308,11 @@ void clear(void)
     if (!igl.current_window)
         return;
 
+    /*
+     * Native host acceleration path. The X11 clear remains the presentation
+     * path until the Radeon-backed surface is directly presentable.
+     */
+    igl_juniper_runtime_clear(&igl, igl.current_window, igl_host_rgba8());
     igl_backend_clear(igl.backend, igl.current_window->backend_window);
 }
 
@@ -357,6 +377,7 @@ void reshapeviewport(void)
 
     igl.current_window->pane.clip.changed = 1;
     igl_refresh_clip(igl.current_window);
+    igl_juniper_runtime_ensure_surface(&igl, igl.current_window);
 }
 
 /* IRIX libc compatibility needed by the original stress source. */
