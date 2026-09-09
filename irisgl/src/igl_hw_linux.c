@@ -56,6 +56,25 @@ static int igl_hw_is_card_entry(const char *name)
     return 1;
 }
 
+static int igl_hw_set_drm_node(char *dst, size_t dst_size, const char *name)
+{
+    static const char prefix[] = "/dev/dri/";
+    size_t prefix_len;
+    size_t name_len;
+
+    if (!dst || dst_size == 0 || !name)
+        return 0;
+
+    prefix_len = sizeof(prefix) - 1;
+    name_len = strlen(name);
+    if (prefix_len + name_len + 1 > dst_size)
+        return 0;
+
+    memcpy(dst, prefix, prefix_len);
+    memcpy(dst + prefix_len, name, name_len + 1);
+    return 1;
+}
+
 static void igl_hw_find_render_node(struct igl_hw_device *device,
                                     const char *card_name)
 {
@@ -77,9 +96,10 @@ static void igl_hw_find_render_node(struct igl_hw_device *device,
         snprintf(path, sizeof(path), "/sys/class/drm/%s/device/drm/%s",
                  card_name, entry->d_name);
         if (access(path, F_OK) == 0) {
-            snprintf(device->drm_render, sizeof(device->drm_render),
-                     "/dev/dri/%s", entry->d_name);
-            break;
+            if (igl_hw_set_drm_node(device->drm_render,
+                                    sizeof(device->drm_render),
+                                    entry->d_name))
+                break;
         }
 
         snprintf(linkpath, sizeof(linkpath), "/sys/class/drm/%s/device",
@@ -90,9 +110,10 @@ static void igl_hw_find_render_node(struct igl_hw_device *device,
         target[length] = '\0';
 
         if (strstr(target, card_name) != NULL) {
-            snprintf(device->drm_render, sizeof(device->drm_render),
-                     "/dev/dri/%s", entry->d_name);
-            break;
+            if (igl_hw_set_drm_node(device->drm_render,
+                                    sizeof(device->drm_render),
+                                    entry->d_name))
+                break;
         }
     }
 
@@ -138,8 +159,12 @@ int igl_hw_probe(struct igl_hw_device *device)
         device->chip = IGL_HW_CHIP_AMD_JUNIPER;
         device->vendor_id = (uint16_t)vendor;
         device->device_id = (uint16_t)product;
-        snprintf(device->drm_card, sizeof(device->drm_card),
-                 "/dev/dri/%s", entry->d_name);
+        if (!igl_hw_set_drm_node(device->drm_card,
+                                 sizeof(device->drm_card),
+                                 entry->d_name)) {
+            closedir(dir);
+            return 0;
+        }
         igl_hw_find_render_node(device, entry->d_name);
         closedir(dir);
         return 1;
