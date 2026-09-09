@@ -30,6 +30,7 @@ long winopen(const char *name);
 
 void RGBmode(void);
 void cmode(void);
+void singlebuffer(void);
 void doublebuffer(void);
 void gconfig(void);
 void RGBcolor(short red, short green, short blue);
