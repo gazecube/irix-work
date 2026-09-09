@@ -213,14 +213,21 @@ void igl_backend_clear(struct igl_backend *backend,
                    0, 0,
                    (unsigned int)attrs.width,
                    (unsigned int)attrs.height);
-    XFlush(backend->display);
 
     if (backend->debug_clear_delay_ms > 0) {
         struct timespec delay;
 
+        /*
+         * Debug-only synchronization: make the clear complete at the X
+         * server before sleeping so rapid alternating clears cannot be
+         * coalesced into an indistinct striped/flickering presentation.
+         */
+        XSync(backend->display, False);
         delay.tv_sec = backend->debug_clear_delay_ms / 1000;
         delay.tv_nsec = (backend->debug_clear_delay_ms % 1000) * 1000000L;
         nanosleep(&delay, NULL);
+    } else {
+        XFlush(backend->display);
     }
 }
 
