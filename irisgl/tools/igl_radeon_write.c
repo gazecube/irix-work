@@ -19,6 +19,7 @@
 #define PM4_PACKET3(op, n) \
     ((3u << 30) | (((uint32_t)(op) & 0xffu) << 8) | \
      (((uint32_t)(n) & 0x3fffu) << 16))
+#define PM4_PACKET3_NOP 0x10u
 #define PM4_PACKET3_EVENT_WRITE_EOP 0x47u
 #define PM4_EVENT_TYPE(x) ((uint32_t)(x) << 0)
 #define PM4_EVENT_INDEX(x) ((uint32_t)(x) << 8)
@@ -54,7 +55,7 @@ int main(void)
     struct drm_radeon_cs_chunk chunks[3];
     struct drm_radeon_cs cs;
     uint64_t chunk_ptrs[3];
-    uint32_t ib[6];
+    uint32_t ib[8];
     uint32_t flags[3];
     volatile uint32_t *words;
     void *mapping = MAP_FAILED;
@@ -121,7 +122,8 @@ int main(void)
     /*
      * EVENT_WRITE_EOP with DATA_SEL=1 asks the command processor to write
      * the low 32-bit payload to memory at end-of-pipe. The Radeon CS parser
-     * replaces the zero address below with the next relocation's GPU address.
+     * patches the zero address below from the relocation identified by the
+     * immediately following PACKET3_NOP relocation marker.
      */
     ib[0] = PM4_PACKET3(PM4_PACKET3_EVENT_WRITE_EOP, 4);
     ib[1] = PM4_EVENT_TYPE(PM4_CACHE_FLUSH_AND_INV_EVENT_TS) |
@@ -130,6 +132,15 @@ int main(void)
     ib[3] = PM4_DATA_SEL(1) | PM4_INT_SEL(2); /* address high patched here */
     ib[4] = TEST_PATTERN;
     ib[5] = 0;
+
+    /*
+     * Radeon KMS relocation protocol: address-bearing packets that call
+     * radeon_cs_packet_next_reloc() must be immediately followed by a
+     * PACKET3_NOP. Its payload is the dword index into the relocation chunk.
+     * This probe has one relocation starting at dword 0.
+     */
+    ib[6] = PM4_PACKET3(PM4_PACKET3_NOP, 0);
+    ib[7] = 0;
 
     memset(&reloc, 0, sizeof(reloc));
     reloc.handle = create.handle;
