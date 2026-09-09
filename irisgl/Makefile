@@ -6,6 +6,8 @@ CPPFLAGS += -Iinclude -Iinclude/gl -Isrc
 LIB = libgl.a
 OBJS = src/igl_runtime.o src/igl_backend_x11.o src/igl_hw_linux.o
 X11_LIBS = -lX11 -lXpresent
+LIBDRM_CFLAGS := $(shell pkg-config --cflags libdrm 2>/dev/null)
+LIBDRM_LIBS := $(shell pkg-config --libs libdrm 2>/dev/null)
 
 LEGACY_CFLAGS = -std=gnu89 \
 	-Wno-old-style-definition -Wno-strict-prototypes \
@@ -30,6 +32,11 @@ src/igl_hw_linux.o: src/igl_hw_linux.c src/igl_hw.h
 
 hwprobe: src/igl_hw_linux.o tools/igl_hwprobe.c src/igl_hw.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_hwprobe.c src/igl_hw_linux.o
+
+radeonprobe: src/igl_hw_linux.o tools/igl_radeon_uapi.c src/igl_hw.h
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -o $@ \
+		tools/igl_radeon_uapi.c src/igl_hw_linux.o $(LIBDRM_LIBS)
 
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
@@ -62,6 +69,6 @@ gsync: $(LIB)
 		-o $@ $(SGI_GSYNC) -L. -lgl $(X11_LIBS) -lm
 
 clean:
-	rm -f $(OBJS) $(LIB) hwprobe flash mode badifred rbuf cbuf gsync
+	rm -f $(OBJS) $(LIB) hwprobe radeonprobe flash mode badifred rbuf cbuf gsync
 
-.PHONY: all clean hwprobe flash mode badifred rbuf cbuf gsync
+.PHONY: all clean hwprobe radeonprobe flash mode badifred rbuf cbuf gsync
