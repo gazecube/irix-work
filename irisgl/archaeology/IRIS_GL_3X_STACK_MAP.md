@@ -13,8 +13,7 @@ The top-level `gl2/gl2/Makefile` says that processor-dependent trees do the
 actual build. It builds `ucode` first, then selects `ip2` when `machine` is
 `juniper`, otherwise `pm2`.
 
-The IP2 user library build is especially useful because it enumerates the
-entire common implementation. `ip2/Make.gl` searches these source directories:
+The IP2 user library build enumerates the common implementation directories:
 
 ```
 common/compiler
@@ -27,154 +26,88 @@ common/services
 common/windows
 ```
 
-and archives their objects as `libgl${PREF}.a`.
+and archives their objects as `libgl${PREF}.a`. The corresponding kernel build
+archives `kgl/` objects as `libkgl${PREF}.a`.
 
-The corresponding `ip2/Make.kgl` builds the kernel graphics implementation
-from `kgl/` as `libkgl${PREF}.a`.
-
-Therefore the source tree itself establishes this boundary:
+Therefore the source tree establishes this boundary:
 
 ```
 application
     |
     v
 libgl (user)
-    common/compiler
-    common/curve
-    common/feedback
-    common/hardcopy
-    common/immediate
-    common/object
-    common/services
-    common/windows
+    compiler / curve / feedback / hardcopy
+    immediate / object / services / windows
     |
     | grioctl + shared memory + command stream
     v
 libkgl (kernel)
-    kgl/grioctl.c
-    kgl/gr.c
-    kgl/retrace.c
-    kgl/queue.c
-    kgl/devices.c
-    kgl/ge.c
-    kgl/fbc.c
-    ...
+    grioctl / gr / retrace / queue / devices
+    GE / FBC / cursor / font / textport / ...
     |
     v
 GE/FBC/DC/UC hardware and ucode
 ```
 
-This is not a guessed architecture. Both libraries and their object lists are
-explicit in the SGI makefiles.
-
 ## 2. Shared user/kernel state
 
 `include/shmem.h` calls `struct shmem` the shared-memory data structure for
-"cooperative manipulation of the graphics hardware, between the kernel and the
-user". It also records the compatibility string `GLVERSION "GL2.4"`.
+cooperative manipulation of graphics hardware between kernel and user, and
+records compatibility string `GLVERSION "GL2.4"`.
 
-Important fields include:
+Important fields include the shared `windowstate`, current input channel and
+gfport, queue state, GE information, screen blanking, a small command/response
+buffer, and a mapcolor producer/consumer ring.
 
-```
-struct shmem
-    EOFpending
-    intbuf / intbuflen
-    fastfeed / numhits / hitbits
-    locked
-    inputchan
-    gfnum
-    windowstate ws
-    ge_mask / ge_found
-    qtop / qdev / qvalue
-    isblanked
-    smallbuf[128]
-    mapcolor producer/consumer ring
-```
-
-`globals.h` makes the current shared window state directly available as:
-
-```
-#define gl_wstatep (&(gl_shmemptr->ws))
-```
-
-and declares per-process/user-library state such as the object compiler,
-picking/feedback state, initialization state, and
-`gl_personal_buffer_mode`.
-
-This is a major correction/extension to our earlier abstract state model: old
-IRIS GL did not keep all rendering state purely inside a user library. A large
-`windowstate` was deliberately shared with KGL.
+`globals.h` exposes the current shared window state as `gl_wstatep` and also
+contains user-library state including `gl_personal_buffer_mode`.
 
 ## 3. Original windowstate
 
-`include/gltypes.h` defines the actual `windowstate` used by both user and
-kernel. It contains:
+`include/gltypes.h` defines the actual `windowstate` shared by user and kernel.
+It contains graphics/character position, backface and zbuffer modes, shade and
+line state, window bounds and visible rectangle list, viewport stack, matrix
+stack, attribute stack, bitplane mask, and font/pattern/cursor RAM state.
 
-```
-graphics position
-character position
-backface + zbuffer mode
-shade-range state
-line-style/pattern state
-window xmin/ymin/xmax/ymax
-visible rectangle list
-viewport stack + current viewport
-matrix stack
-attribute stack + current attributes
-bitplanemask
-font RAM locations
-```
+`struct atrdata` contains the hardware configuration word, line style,
+texture, current color index and write mask, line width/repeat, current font,
+RGB color, and RGB write masks.
 
-The current attributes (`struct atrdata`) contain the hardware configuration
-word, line style, texture, color index, write mask, line width, font, RGB color,
-and RGB write masks.
-
-The visible-region representation is especially relevant to the late RRM
-comparison: 3.x stores a window rectangle list directly in `windowstate`, while
-our late-IRIX reconstruction currently models RRM clip pieces separately.
+This is important to the late comparison: core current rendering attributes
+are attached to a window state, not represented only as process-global color
+variables.
 
 ## 4. Kernel window/input model
 
-`include/window.h` defines the kernel-side windowing structures:
+`include/window.h` defines distinct kernel objects:
 
 - `piece`: one visible rectangle of an obscured window.
 - `gfport`: graphics port with owner/input channel, bounds, and piece list.
-- `txport`: text-port state and display rows.
-- `inputchan`: per-process input/window state including event queue, current
-  gfport, swap interval, display mode, cursor offsets, and device state.
+- `txport`: text-port state.
+- `inputchan`: process/input state including queue, current gfport, swap
+  interval, display mode, cursor offsets, and device state.
 
-The original display modes are explicitly:
+Display modes are `MD_SINGLE`, `MD_DOUBLE`, and `MD_RGB`.
 
-```
-MD_SINGLE 0
-MD_DOUBLE 1
-MD_RGB    2
-```
-
-`inputchan.ic_displaymode` is the kernel's current mode for that graphics
-process/window channel.
-
-This is structurally important for comparison with late RRM: graphics-port,
-clip-piece, process/input-channel, display-mode, and swap state are distinct
-objects in 3.x rather than one flattened GL context.
+This already resembles concepts that later appear as distinct RRM resources:
+process binding, clipping, buffer/display mode, swap state, and retrace.
 
 ## 5. User/kernel control path
 
-`common/services/grioctl.c` is a user-space syscall/control wrapper layer.
-Examples:
+`common/services/grioctl.c` is the user control-wrapper layer. Examples:
 
 ```
 qdevice      -> grioctl(GR_QDEVICE)
-qread        -> flush mapcolor; grioctl(GR_QREAD); read qdev/qvalue from shmem
-qtest        -> gl_shmemptr->qtop
-RGBmode      -> flush mapcolor; grioctl(GR_RGBMODE)
-singlebuffer -> grioctl(GR_SINGLEBUFFER)
-doublebuffer -> grioctl(GR_DOUBLEBUFFER)
+qread        -> flush mapcolor; GR_QREAD; shared qdev/qvalue
+qtest        -> shared qtop
+RGBmode      -> flush mapcolor; GR_RGBMODE
+singlebuffer -> GR_SINGLEBUFFER
+doublebuffer -> GR_DOUBLEBUFFER
 mapcolor     -> shared producer/consumer ring
-swapinterval -> grioctl(GR_SWAPINTERVAL)
+swapinterval -> GR_SWAPINTERVAL
 ```
 
-`kgl/grioctl.c` is the matching kernel dispatcher. In particular:
+`kgl/grioctl.c` is the matching kernel dispatcher:
 
 ```
 GR_SINGLEBUFFER -> gl_setsinglebuffer()
@@ -184,39 +117,25 @@ GR_WAITFORSWAP  -> dowaitforswap()
 GR_QREAD        -> doqread()
 ```
 
-This gives us an exact end-to-end call path for several APIs we already
-implemented.
+## 6. GL2.4 buffer/display mode path
 
-## 6. Buffer/display mode path
-
-This is the first major semantic finding.
-
-In GL2.4, `singlebuffer()`, `doublebuffer()`, and `RGBmode()` are NOT merely
-userspace requests waiting for `gconfig()` to commit them. Their user wrappers
+In GL2.4, `singlebuffer()`, `doublebuffer()`, and `RGBmode()` are not merely
+userspace requests waiting for `gconfig()` to commit them. Their wrappers
 immediately issue graphics ioctls. `gl_singlebuffer()` and
-`gl_doublebuffer()` additionally update `gl_personal_buffer_mode`.
+`gl_doublebuffer()` also update `gl_personal_buffer_mode`.
 
 KGL's `gl_setsinglebuffer()`, `gl_setdoublebuffer()`, and `gl_setrgbmode()` in
-`kgl/retrace.c` then immediately update:
+`kgl/retrace.c` immediately update process display mode, global counts of
+buffer/RGB users, global hardware/textport mode when first/last users cross a
+boundary, `windowstate.curatrdata.myconfig`, bitplane masks, and hardware
+configuration via `setconfig()`.
 
-- the process `ic_displaymode`;
-- global counts of double-buffered and RGB processes;
-- global hardware mode when the first/last user requires a mode transition;
-- text-port mode;
-- `windowstate.curatrdata.myconfig`;
-- the window bitplane mask;
-- hardware configuration via `setconfig()`.
+The old global graphics mode is therefore shared and reference-counted across
+processes.
 
-The global hardware mode is therefore shared and reference-counted across
-processes. A process changing mode can cause system-wide graphics/text-port
-reconfiguration when it crosses the first/last-user boundary.
+### GL2.4 `gconfig()`
 
-This also explains the old source comment in `greset()` concerning another
-program running double-buffered under MEX.
-
-### `gconfig()` in GL2.4
-
-The original function is much narrower than our current reconstruction:
+The old implementation is much narrower:
 
 ```
 gl_resolvecolor();
@@ -227,126 +146,73 @@ else
 ```
 
 It resolves color mode and resets the appropriate write mask. It does not
-perform the `singlebuffer`/`doublebuffer` transition in this implementation.
-
-IMPORTANT: do not immediately rewrite the portable runtime around this fact.
-Our target is late IRIX compatibility and late RRM may have moved the commit
-boundary. This is now an explicit 3.x-vs-6.5 evolution question.
+perform the single/double transition in this implementation.
 
 ## 7. Swap path
 
-`common/compiler/buffer.c` defines `swapbuffers` through the GL command
-compiler/immediate macro machinery. Its immediate operation waits only when:
+`common/compiler/buffer.c` makes the immediate `swapbuffers` operation wait
+only when the personal mode is double buffered and the window hardware config
+also contains `UC_DOUBLE`.
 
-```
-gl_personal_buffer_mode == DMDOUBLE
-AND
-WS->curatrdata.myconfig contains UC_DOUBLE
-```
+The wait crosses through `gl_waitforswap()` -> `GR_WAITFORSWAP` -> KGL
+`dowaitforswap()`. KGL owns per-input-channel swap interval and retrace
+scheduling.
 
-The wait crosses into KGL through `gl_waitforswap()` ->
-`grioctl(GR_WAITFORSWAP)` -> `dowaitforswap()`.
-
-KGL's retrace subsystem owns swap interval and retrace scheduling. Thus old
-IRIS GL swap is not simply "copy a back buffer now"; presentation is tied to
-kernel-managed retrace state.
-
-Our X11 Pixmap implementation currently satisfies the visible `badifred`
-contract, but it is only a host-backend approximation of this deeper model.
+Our X11 Pixmap backend satisfies the visible `badifred` contract, but is only a
+host approximation of this deeper retrace/bank model.
 
 ## 8. Color path
 
-There are two distinct color paths.
-
 ### Color-index
 
-`color()` is generated through `common/compiler/config.c`. The immediate macro
-in `imattrib.h`:
+`color()` masks the index with `WS->bitplanemask`, stores it in
+`WS->curatrdata.mycolor`, and emits an FBC color command.
 
-1. masks the index with `WS->bitplanemask`;
-2. stores it in `WS->curatrdata.mycolor`;
-3. emits an FBC color command.
+`mapcolor()` instead writes index/R/G/B into a 64-entry shared ring. KGL
+consumes those updates independently. This proves true palette semantics:
+framebuffer pixels contain indices and palette mutation is independent from
+redrawing those pixels.
 
-`mapcolor()` is different: user-space writes index/R/G/B into a 64-entry shared
-ring in `struct shmem`. KGL consumes that ring during retrace (`gl_domapcolors`).
-`gl_flushmap()` waits for the consumer to catch up.
-
-This proves true hardware palette semantics and explains why our current
-index-to-RGB-at-draw-time implementation is incomplete: changing a palette
-entry is independent from rewriting framebuffer pixels.
+Our current index-to-host-RGB-at-`color()` implementation is therefore a
+functional bring-up approximation, not faithful indexed framebuffer behavior.
 
 ### RGB
 
-`RGBcolor` and `RGBwritemask` are generated by `common/compiler/rgbconfig.c`.
-The immediate macros store R/G/B values in `windowstate.curatrdata` and emit
-FBC commands directly.
+`RGBcolor` and `RGBwritemask` store their values in current `windowstate`
+attributes and emit FBC commands.
 
 ## 9. Window-manager boundary
 
-`common/windows/hints.c` is explicitly "provide hints to the window manager"
-and is attributed to Paul Haeberli, 1984.
+`common/windows/hints.c` is explicitly the hints interface to the window
+manager. It establishes old semantics for `prefsize`, `prefposition`,
+`foreground`, `getport`, and `reshapeviewport`.
 
-It gives exact old semantics for APIs already reconstructed:
+`prefposition` normalizes endpoint order with MIN/ABS and uses inclusive `+1`
+dimensions. Our current implementation assumes increasing endpoints, so this
+is a known old-version mismatch awaiting late-version confirmation.
 
-- `prefsize`: set preferred-size flag and dimensions.
-- `prefposition`: normalize the two endpoints with MIN/ABS, set both preferred
-  origin and preferred size, and use inclusive `+1` dimensions.
-- `foreground`: clear `gl_putinbackground`.
-- `reshapeviewport`: set viewport to current shared window extents.
+`common/windows/winstuff.c` describes itself as the procedural interface to
+MEX. `winopen` allocates a KGL gfport, allocates/saves a `windowstate`, switches
+to it, sends a `PORTREQ` to `WINDOWMAN`, initializes stacks and viewport, then
+emits current buffer configuration.
 
-Our current `prefposition()` does not normalize reversed endpoints; that is a
-source-proven old-version mismatch worth fixing only after checking late
-behavior.
-
-`common/windows/winstuff.c` describes itself as the "procedural interface to
-mex" (Rocky Rhodes, 1985). `winopen`/`winope`:
-
-1. initializes GL/getport if needed;
-2. allocates a kernel gfport with `GR_GETGFPORT`;
-3. allocates/saves a `windowstate` for that gfport;
-4. switches to it with `winset`;
-5. sends a `PORTREQ` to `WINDOWMAN` through `GR_SEND`;
-6. initializes stacks;
-7. reshapes viewport and establishes an ortho2 mapping;
-8. emits current buffer configuration.
-
-Other routines send MEX messages for move, reshape, title, attach, push/pop,
-window lookup, text-port open/close, and new hints.
-
-This establishes a clean old boundary:
-
-```
-IRIS GL window API
-    |
-    +-- KGL gfport/windowstate allocation and switching
-    |
-    `-- explicit IPC messages to MEX for window-management policy
-```
-
-That is directly relevant to a future MEX Linux port: the original MEX-facing
-protocol can potentially be preserved above a replacement kernel/backend
-transport.
+Thus old IRIS GL separates KGL graphics-port/resource management from explicit
+MEX policy IPC.
 
 ## 10. Compiler vs immediate architecture
 
-The source layout and macro files establish two execution forms for many GL
-operations.
+The tree establishes separate compiled/object and immediate execution forms.
+`common/compiler` contains generated/root/interpreter forms for state and draw
+operations, while `common/object` owns retained display-list storage/editing.
+Private headers such as `imattrib.h`, `imdraw.h`, `immatrix.h`, `immed.h`, and
+`imsetup.h` define immediate hardware-command forms.
 
-`common/compiler` contains generated/root/interpreter forms for drawing and
-state operations, including `color`, `RGBcolor`, `clear`, matrices, viewport,
-geometry, buffer control, and object calls. `common/object` owns retained GL
-object/display-list storage and editing. `globals.h` exposes object compiler
-state such as current object/chunk pointers and function hooks.
+The same private-header family names recur in the late IRIX 6.5 CLOVER census,
+which is a strong architectural lineage marker.
 
-`imattrib.h`, `imdraw.h`, `immatrix.h`, `imsetup.h`, and related headers define
-the immediate hardware-command forms. This family of private header names
-survives in the later IRIX 6.5 CLOVER census, making it a high-confidence
-architectural lineage marker.
+## 11. 3.x -> 6.5 structural cross-reference
 
-## 11. First 3.x -> 6.5 structural cross-reference
-
-The following correspondences are already strong enough to guide archaeology,
-although they are not claims of identical layouts:
+Strong conceptual correspondences, without claiming identical layouts:
 
 ```
 GL2.4 / 3.x                    late IRIX 6.5 evidence
@@ -358,12 +224,12 @@ ic_displaymode                  framebuffer/display-mode state
 ic_SwapInterval                 RRM swap interval
 kernel retrace scheduler        RRM retrace/swap resources
 shared user/kernel state        mapped graphics/RRM state machinery
-gr_ioctl command dispatcher     GFX/RRM ioctl/operation layer
-GE/FBC command generation       late device-dependent GL command path
+gr_ioctl dispatcher             GFX/RRM ioctl/operation layer
+GE/FBC command generation       late device-dependent command path
 MEX explicit IPC                later window-system integration
 ```
 
-The private-header-name continuity is particularly striking:
+Private-header-name continuity:
 
 ```
 3.x include/                    6.5 CLOVER census
@@ -377,11 +243,122 @@ imsetup.h                       imsetup.h
 shmem.h                         shmem.h
 ```
 
-This strongly suggests evolution of the same internal family rather than an
-unrelated rewrite, but exact 6.5 definitions are still missing and must not be
-invented.
+## 12. Late IRIX buffer/configuration evidence
 
-## 12. Cross-reference against our current runtime
+This section resolves what can and cannot currently be claimed about the
+GL2.4-vs-6.5 buffer-mode discrepancy.
+
+### 12.1 Source-proven late kernel contract
+
+The surviving IRIX 6.5 source-side headers establish a Rendering Resource
+Manager with separate resources for:
+
+```
+RRM_RMASK_PCX       graphics context
+RRM_RMASK_CLIP      clipping
+RRM_RMASK_BUFFER    buffer/double-buffer resource
+RRM_RMASK_SWAPBUF   swap-buffer resource
+RRM_RMASK_RETRACE   retrace
+RRM_RMASK_MESSAGE   message
+RRM_RMASK_READ      read
+RRM_RMASK_REFERENCE reference-monitor resource
+```
+
+The late RRM operation set includes `RRM_OPENRN`, process/rendering-node
+binding, clip binding/validation, `RRM_SWAPBUF`, `RRM_SETSWAPINTERVAL`,
+`RRM_WAITFORRETRACE`, `RRM_SETDISPLAYMODE`, invalidation/validation operations,
+and vsync operations.
+
+This proves that by late IRIX, buffer/display/swap configuration had become an
+explicit rendering-resource contract rather than the old GL2.4 global
+`inputchan` + hardware-mode counter arrangement.
+
+It does NOT by itself prove which public call (`doublebuffer` or `gconfig`)
+causes each RRM operation.
+
+### 12.2 Source-proven late native-IrisGL distinction
+
+`sys/gfx.h` explicitly retains native IrisGL kernel semantics, including
+IrisGL sproc graphics groups, IrisGL-specific run counts, a
+`GTHREAD_IGL_SGRAPH` state, and separate IrisGL/OpenGL vsync counters. It also
+contains a `SUPPORT_NATIVE_IRISGL` distinction for machine families.
+
+Therefore the late library was not merely a compatibility veneer over OpenGL;
+it still participated in a kernel-visible IrisGL-specific resource model.
+
+### 12.3 Binary-proven late dispatch
+
+The IP22 `libgl.so` gives these original internal implementation names for the
+relevant public calls:
+
+```
+RGBmode  -> gl_g_RGBmode / gl_d_RGBmode
+gconfig  -> gl_g_gconfig / gl_d_gconfig
+```
+
+The prefix meanings remain intentionally unresolved.
+
+`gl_d_gconfig` encodes command word `0x2e` into the same internal command
+transport used by `gl_d_RGBcolor` and `gl_d_clear`. Therefore `gconfig` remains
+a first-class operation in the late implementation and is not merely an empty
+legacy wrapper.
+
+This is compatible with, but does not alone prove, a later request/commit
+model.
+
+### 12.4 What is NOT yet proven
+
+We do not currently possess the late CLOVER implementation bodies for
+`singlebuffer`, `doublebuffer`, `RGBmode`, or `gconfig`. The surviving public
+source tree contains the RRM contract and manifests naming private GL headers,
+but not enough implementation source to place the public-call commit boundary
+with source-level certainty.
+
+Accordingly:
+
+```
+Claim                                                     Status
+--------------------------------------------------------  --------
+GL2.4 buffer mode changes immediately in KGL              PROVEN
+GL2.4 gconfig does not perform buffer transition          PROVEN
+6.5 has explicit RRM buffer/swap/display-mode resources   PROVEN
+6.5 gconfig is a real encoded late GL operation           PROVEN
+6.5 doublebuffer only records a request                   NOT PROVEN
+6.5 gconfig performs the RRM buffer commit                NOT PROVEN
+6.5 retained GL2.4 immediate mode-change semantics        NOT PROVEN
+```
+
+This corrects an earlier reconstruction assumption: requested-vs-committed
+buffer state remains a useful RRM-shaped scaffold, but it must not be described
+as source-proven late public API semantics yet.
+
+### 12.5 Stress-test evidence
+
+The surviving 6.5 stress programs deliberately use sequences such as:
+
+```
+doublebuffer();
+gconfig();
+```
+
+and repeatedly:
+
+```
+singlebuffer();
+gconfig();
+...
+doublebuffer();
+gconfig();
+```
+
+`badifred` and `rbuf` therefore establish that `gconfig` is part of the
+supported late configuration protocol. They do not distinguish whether the
+preceding mode call is immediate, deferred, or partially immediate.
+
+The tests are behavioral contracts, not sufficient evidence for an internal
+commit boundary.
+
+## 13. Current runtime cross-reference
 
 Current portable state:
 
@@ -397,107 +374,99 @@ igl_runtime_state
 
 ### Good architectural matches
 
-- Window and clipping state are not flattened into drawing calls.
+- Window/clipping state is not flattened into drawing calls.
 - Backend/resource separation leaves room for replacing X11.
-- Buffer/swap state is represented explicitly.
-- Window preferences are separate from the current rendering window.
-- Late RRM concepts are retained rather than pretending X11 is IRIS GL.
+- Buffer/swap state is explicit.
+- Window preferences are separate from current rendering state.
+- Late RRM concepts are represented instead of pretending X11 itself is IRIS
+  GL.
 
-### Known or newly exposed mismatches
+### Known mismatches or unresolved assumptions
 
-1. **GL2.4 buffer commit boundary**
-   Our `singlebuffer`/`doublebuffer` modify `requested`, with `gconfig`
-   committing. GL2.4 immediately crosses into KGL. Late behavior must now be
-   checked before changing ours.
+1. **Buffer commit boundary**
+   Current `singlebuffer`/`doublebuffer` modify `requested`, while `gconfig`
+   commits the backend. This matches a plausible interpretation of late RRM
+   configuration but is NOT yet source/binary proven. GL2.4 is explicitly
+   different.
 
-2. **GL2.4 `gconfig` semantics**
-   Our `gconfig` commits backend double buffering and resets current color.
-   GL2.4 `gconfig` resolves color and resets write mask. This needs direct
-   late-version cross-checking.
+2. **`gconfig` behavior**
+   Current `gconfig` commits backend double buffering and resets color state.
+   GL2.4 instead resolves color and resets write masks. Late `gconfig` is
+   binary-proven to remain a real operation, but its full semantics remain
+   unresolved.
 
 3. **Colormap semantics**
-   Our sparse map resolves an index to host RGB at `color()` time. GL2.4 has a
-   real palette update path consumed independently by KGL/retrace. Existing
-   framebuffer pixels therefore need not be redrawn when map entries change.
+   Current sparse map resolves index to host RGB at draw time. GL2.4 has a
+   genuine independently mutable palette.
 
 4. **Current state granularity**
-   Our current RGB/index values are process-global. GL2.4 stores core current
-   attributes in per-window `windowstate`, with explicit save/restore on
-   `winset`.
+   Current RGB/index values are process-global. GL2.4 puts core attributes in
+   per-window `windowstate`, with save/restore on `winset`.
 
 5. **Multiple windows**
-   Our runtime tracks one current allocated window without the old per-gfport
-   save/restore machinery. GL2.4 `winset` explicitly swaps `windowstate`.
+   Current runtime has one current allocated window and no old gfport-style
+   saved-state switching.
 
 6. **Events**
-   Our event shim is deliberately minimal. GL2.4 has per-input-channel queues,
-   queued device state, REDRAW/INPUTCHANGE/mode/piece-change events, ties,
-   valuators, timers, and retrace integration.
+   Current event handling is minimal compared with GL2.4 per-input-channel
+   queues/devices/timers/retrace integration.
 
 7. **Swap/retrace**
-   Our X11 backend presents immediately. GL2.4 swaps are kernel/retrace
-   coordinated with per-input-channel swap intervals.
+   Current X11 presentation is immediate. GL2.4 presentation is
+   kernel/retrace coordinated. Late RRM also retains explicit swap/retrace
+   resources.
 
 8. **Window-manager IPC**
-   Our X11 backend directly creates/manages a host window. GL2.4 separates KGL
-   gfport allocation from explicit MEX policy IPC.
+   Current backend directly creates/manages X windows. GL2.4 separates gfport
+   allocation from MEX policy IPC.
 
-9. **`prefposition` endpoint normalization**
-   GL2.4 accepts endpoints in either order and normalizes them. Our current
-   code assumes increasing endpoints.
+9. **`prefposition` normalization**
+   Old source accepts reversed endpoints; current code does not. Late behavior
+   remains to be checked.
 
-## 13. API tracing table - first pass
+## 14. API evolution matrix
 
-| API | GL2.4 user implementation | KGL/hardware path | Current portable path | Status |
+| API | GL2.4 | Late 6.5 evidence | Current portable | Disposition |
 | --- | --- | --- | --- | --- |
-| `prefsize` | `common/windows/hints.c` -> `portreq` | MEX message at port creation | next-window prefs -> X11 | structurally similar |
-| `prefposition` | normalized `portreq` origin+size | MEX | next-window prefs -> X11 | old semantic mismatch |
-| `foreground` | disables getport background fork | MEX-sensitive process behavior | no-op | incomplete |
-| `winopen` | `winstuff.c`, gfport + saved `windowstate` + PORTREQ | KGL + MEX | allocate reconstructed window + X11 | major abstraction replacement |
-| `reshapeviewport` | viewport from shared window extents | GE/FBC viewport path | refresh host clip geometry | incomplete semantic match |
-| `singlebuffer` | immediate GR ioctl + personal mode | KGL `gl_setsinglebuffer` | requested config | evolution question |
-| `doublebuffer` | immediate GR ioctl + personal mode | KGL `gl_setdoublebuffer` | requested config | evolution question |
-| `RGBmode` | immediate GR ioctl | KGL `gl_setrgbmode` | requested config | evolution question |
-| `gconfig` | resolve color + reset writemask | immediate/FBC state | commit backend config | major evolution question |
-| `swapbuffers` | compiler/immediate op -> wait for swap | KGL retrace | X11 back-buffer present | visible contract passes; internals incomplete |
-| `mapcolor` | shared map ring | KGL/retrace -> hardware LUT | userspace sparse RGB map | incomplete |
-| `color` | compiler/immediate attribute op | FBC color command | resolve index -> host RGB | incomplete LUT model |
-| `RGBcolor` | compiler/immediate RGB op | FBC RGB command | host RGB | broadly analogous |
-| `qtest` | read shared `qtop` | KGL queue | host event poll/cache | minimal substitute |
-| `qread` | flush map ring, ioctl, read shared qdev/qvalue | KGL queue/block | host event poll | minimal substitute |
+| `prefsize` | MEX `portreq` hint | late `gl_g/gl_d_prefsize` symbols | next-window X11 preference | structurally plausible |
+| `prefposition` | normalized MEX origin+size | late dispatch symbols | non-normalizing preference | old mismatch; late TBD |
+| `foreground` | suppress background fork under MEX | late dispatch symbols | no-op | incomplete |
+| `winopen` | gfport + `windowstate` + MEX `PORTREQ` | large X11-integrated `gl_g_winopen` | backend X window | intentionally substituted boundary |
+| `RGBmode` | immediate `GR_RGBMODE` -> KGL | RRM display-mode contract + late dispatch | requested state | commit timing unresolved |
+| `singlebuffer` | immediate `GR_SINGLEBUFFER` -> KGL | RRM buffer/display-mode contract | requested state | commit timing unresolved |
+| `doublebuffer` | immediate `GR_DOUBLEBUFFER` -> KGL | RRM buffer/display-mode contract | requested state | commit timing unresolved |
+| `gconfig` | resolve color + reset writemask | real late operation; `gl_d_gconfig` opcode `0x2e` | commits backend + resets color | late semantics unresolved |
+| `swapbuffers` | KGL/retrace wait | RRM swap/retrace resources | backend present/copy | visible contract passes; deeper model incomplete |
+| `mapcolor` | shared LUT update ring | late implementation not yet mapped | userspace sparse RGB map | known semantic approximation |
+| `color` | masked index -> FBC | late implementation not yet mapped | index -> RGB lookup | known semantic approximation |
+| `RGBcolor` | per-window attr -> FBC | late `i/c/d` implementations mapped | process-global RGB -> backend | granularity mismatch |
+| `clear` | compiler/immediate FBC operation | late `i/c/d` implementations mapped | backend clear | basic visible semantics only |
+| `reshapeviewport` | viewport from shared window extents | late dispatch symbols | refresh host geometry/clip | partial |
 
-## 14. Immediate next cross-reference work
+## 15. Decision for the portable runtime
 
-Before changing runtime semantics, map these late-IRIX points against the old
-source:
+No buffer/gconfig semantic rewrite is justified by the current evidence.
 
-1. late `gconfig` binary path and any RRM display-mode requests;
-2. late `singlebuffer` / `doublebuffer` / `RGBmode` dispatch and when their RRM
-   requests become valid;
-3. late swap interval and swapbuffer resource ownership;
-4. late clip validation vs old `piece`/`rectlist` behavior;
-5. late per-window/context attribute storage vs old `windowstate`;
-6. late `qread`/`qtest` event transport;
-7. late `winopen` X/MEX-era replacement and how much of the old gfport model
-   survived;
-8. exact CLOVER private-header lineage using all names available in census;
-9. old GE/FBC command encoding vs late `gl_i_`/`gl_c_`/`gl_d_` paths, without
-   assigning meanings to those prefixes until source/binary evidence proves
-   them.
+The correct next action is to keep the existing passing bring-up behavior while
+continuing binary archaeology specifically on the late `gl_g/gl_d` buffer mode
+entry points and their relationship to `gl_g/gl_d_gconfig` and RRM calls.
 
-## 15. Reconstruction policy after this discovery
+When that boundary is resolved, change the runtime once, from evidence, rather
+than oscillating between the GL2.4 and guessed late models.
 
-Do not blindly transplant GL2.4 into the portable runtime and do not discard
-the late-RRM scaffold. Instead:
+## 16. Next binary/source targets
 
-```
-old SGI source       -> original names, architecture, exact old semantics
-late SGI source/API  -> evolved kernel/resource contracts
-late libgl binary    -> final implementation cross-check
-late stress suite    -> final observable behavior
-portable runtime     -> preserve proven architecture; replace hardware/OS glue
-```
+Priority order:
 
-Where old and late evidence agree, prefer the original SGI architecture and
-names. Where they differ, record the evolution point explicitly and target the
-late behavior unless the project deliberately exposes a historical GL2 mode.
+1. Recover/disassemble late `singlebuffer` and `doublebuffer` implementation
+   families and their public wrappers.
+2. Fully disassemble `gl_g_RGBmode`, `gl_d_RGBmode`, `gl_g_gconfig`, and
+   `gl_d_gconfig` and resolve callees/GOT targets.
+3. Identify late calls or command records corresponding to
+   `RRM_SETDISPLAYMODE`, buffer validation, and swap-buffer validation.
+4. Map `swapbuffers`/swapinterval/retrace late paths.
+5. Map late `color`/`mapcolor` and determine whether palette semantics remain
+   hardware-indexed on the target path.
+6. Compare private CLOVER manifest/header names against GL2.4 state fields and
+   recover late layouts wherever binaries expose offsets.
+7. Only then revise `igl_state.h` and public mode/gconfig semantics.
