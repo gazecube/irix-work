@@ -19,7 +19,8 @@ src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device
 
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
-	$(CC) $(CPPFLAGS) $(CFLAGS) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -std=gnu89 \
+		-Wno-old-style-definition -Wno-strict-prototypes \
 		-Wno-implicit-int -Wno-implicit-function-declaration \
 		-Wno-return-type -Wno-builtin-declaration-mismatch \
 		-Wno-unused-parameter \
