@@ -24,6 +24,23 @@ Base64Value(char C)
     return -1;
 }
 
+static int
+NextBase64Value(const char **Input)
+{
+    const char *S = *Input;
+    int Value;
+
+    while (*S == ' ' || *S == '\t' || *S == '\r' || *S == '\n')
+        ++S;
+
+    if (!*S)
+        return -1;
+
+    Value = Base64Value(*S++);
+    *Input = S;
+    return Value;
+}
+
 static BOOLEAN
 DecodeProductLogo(void)
 {
@@ -33,10 +50,15 @@ DecodeProductLogo(void)
     while (*S) {
         int A, B, C, D;
 
-        A = Base64Value(*S++);
-        B = Base64Value(*S++);
-        C = Base64Value(*S++);
-        D = Base64Value(*S++);
+        while (*S == ' ' || *S == '\t' || *S == '\r' || *S == '\n')
+            ++S;
+        if (!*S)
+            break;
+
+        A = NextBase64Value(&S);
+        B = NextBase64Value(&S);
+        C = NextBase64Value(&S);
+        D = NextBase64Value(&S);
         if (A < 0 || B < 0 || C < 0 || D < 0)
             return FALSE;
 
@@ -87,8 +109,6 @@ ArcsPrepareProductLogo(void)
         while (Px < (UINTN)clogo_w)
             Px += *P++;
 
-        /* A malformed span stream must never be allowed to walk arbitrarily
-         * through firmware memory. */
         if (Px != (UINTN)clogo_w) {
             FreePool(RowOffsets);
             return;
