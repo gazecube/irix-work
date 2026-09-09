@@ -34,7 +34,12 @@ mode: $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
 		-o $@ $(SGI_MODE) -L. -lgl -lX11 -lm
 
-clean:
-	rm -f $(OBJS) $(LIB) flash mode
+badifred: $(LIB)
+	@test -n "$(SGI_BADIFRED)" || (echo "Set SGI_BADIFRED=/path/to/original/irix/cmd/stress/Gfx/badifred.c"; exit 1)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
+		-o $@ $(SGI_BADIFRED) -L. -lgl -lX11 -lm
 
-.PHONY: all clean flash mode
+clean:
+	rm -f $(OBJS) $(LIB) flash mode badifred
+
+.PHONY: all clean flash mode badifred
