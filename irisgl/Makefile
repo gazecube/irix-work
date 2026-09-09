@@ -30,6 +30,10 @@ src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device
 src/igl_hw_linux.o: src/igl_hw_linux.c src/igl_hw.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+src/igl_juniper.o: src/igl_juniper.c src/igl_juniper.h src/igl_hw.h
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
+
 hwprobe: src/igl_hw_linux.o tools/igl_hwprobe.c src/igl_hw.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_hwprobe.c src/igl_hw_linux.o
 
@@ -47,6 +51,11 @@ radeonwrite: src/igl_hw_linux.o tools/igl_radeon_write.c src/igl_hw.h
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -o $@ \
 		tools/igl_radeon_write.c src/igl_hw_linux.o $(LIBDRM_LIBS)
+
+juniperclear: src/igl_hw_linux.o src/igl_juniper.o tools/igl_juniper_clear.c src/igl_juniper.h
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -o $@ \
+		tools/igl_juniper_clear.c src/igl_juniper.o src/igl_hw_linux.o $(LIBDRM_LIBS)
 
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
@@ -79,6 +88,6 @@ gsync: $(LIB)
 		-o $@ $(SGI_GSYNC) -L. -lgl $(X11_LIBS) -lm
 
 clean:
-	rm -f $(OBJS) $(LIB) hwprobe radeonprobe radeoncs radeonwrite flash mode badifred rbuf cbuf gsync
+	rm -f $(OBJS) src/igl_juniper.o $(LIB) hwprobe radeonprobe radeoncs radeonwrite juniperclear flash mode badifred rbuf cbuf gsync
 
-.PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite flash mode badifred rbuf cbuf gsync
+.PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite juniperclear flash mode badifred rbuf cbuf gsync
