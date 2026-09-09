@@ -4,6 +4,7 @@
 #include <X11/Xutil.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <gl/device.h>
 
@@ -16,7 +17,25 @@ struct igl_backend_window {
 struct igl_backend {
     Display *display;
     int screen;
+    long debug_clear_delay_ms;
 };
+
+static long igl_backend_debug_delay_ms(void)
+{
+    const char *value;
+    char *end;
+    long delay;
+
+    value = getenv("IRISGL_DEBUG_CLEAR_DELAY");
+    if (!value || !*value)
+        return 0;
+
+    delay = strtol(value, &end, 10);
+    if (*end != '\0' || delay <= 0)
+        return 0;
+
+    return delay;
+}
 
 struct igl_backend *igl_backend_create(void)
 {
@@ -33,6 +52,7 @@ struct igl_backend *igl_backend_create(void)
     }
 
     backend->screen = DefaultScreen(backend->display);
+    backend->debug_clear_delay_ms = igl_backend_debug_delay_ms();
     return backend;
 }
 
@@ -194,6 +214,14 @@ void igl_backend_clear(struct igl_backend *backend,
                    (unsigned int)attrs.width,
                    (unsigned int)attrs.height);
     XFlush(backend->display);
+
+    if (backend->debug_clear_delay_ms > 0) {
+        struct timespec delay;
+
+        delay.tv_sec = backend->debug_clear_delay_ms / 1000;
+        delay.tv_nsec = (backend->debug_clear_delay_ms % 1000) * 1000000L;
+        nanosleep(&delay, NULL);
+    }
 }
 
 int igl_backend_poll_event(struct igl_backend *backend,
