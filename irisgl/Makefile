@@ -10,7 +10,7 @@ LEGACY_CFLAGS = -std=gnu89 \
 	-Wno-old-style-definition -Wno-strict-prototypes \
 	-Wno-implicit-int -Wno-implicit-function-declaration \
 	-Wno-return-type -Wno-builtin-declaration-mismatch \
-	-Wno-unused-parameter \
+	-Wno-unused-parameter -Wno-parentheses \
 	-D_MIPS_SIM=1 -D_MIPS_SIM_NABI32=2
 
 all: $(LIB)
