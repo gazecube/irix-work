@@ -22,6 +22,7 @@ flash: $(LIB)
 	$(CC) $(CPPFLAGS) $(CFLAGS) \
 		-Wno-implicit-int -Wno-implicit-function-declaration \
 		-Wno-return-type -Wno-builtin-declaration-mismatch \
+		-Wno-unused-parameter \
 		-D_MIPS_SIM=1 -D_MIPS_SIM_NABI32=2 \
 		-o $@ $(SGI_FLASH) -L. -lgl -lX11 -lm
 
