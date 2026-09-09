@@ -190,6 +190,16 @@ void cmode(void)
     igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER;
 }
 
+void singlebuffer(void)
+{
+    igl_init_once();
+    if (!igl.current_window)
+        return;
+
+    igl.current_window->requested.double_buffer = 0;
+    igl.current_window->rnode.reqmask |= IGL_RMASK_BUFFER | IGL_RMASK_SWAPBUF;
+}
+
 void doublebuffer(void)
 {
     igl_init_once();
