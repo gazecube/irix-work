@@ -51,9 +51,11 @@ void igl_backend_swapbuffers(
     struct igl_backend_window *window);
 
 /*
- * Backend synchronization boundary for IRIS GL gsync().
- * The X11 backend waits for the next Present media-stream-counter field when
- * the Present extension is available, with XSync retained only as a fallback.
+ * Backend synchronization boundary for IRIS GL gsync().  The X11 backend
+ * uses Present MSC timing and, once gsync() is used in single-buffer mode,
+ * stages frames in alternating pixmaps so completed drawing is presented on
+ * retrace without modifying the pixmap currently in use by the server.
+ * XSync remains only as a compatibility fallback when Present is unavailable.
  */
 void igl_backend_gsync(
     struct igl_backend *backend,
