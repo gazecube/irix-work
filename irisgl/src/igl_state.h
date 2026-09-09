@@ -112,6 +112,19 @@ struct igl_config_state {
     int double_buffer;
 };
 
+/*
+ * Sparse reconstructed userspace representation of IRIS GL colormap state.
+ * Original source establishes indexed LUT semantics; this deliberately does
+ * not invent a maximum index before source evidence identifies one.
+ */
+struct igl_colormap_entry {
+    long index;
+    int16_t red;
+    int16_t green;
+    int16_t blue;
+    struct igl_colormap_entry *next;
+};
+
 /* Host/backend object. Layout deliberately hidden from the IRIS GL core. */
 struct igl_backend_window;
 struct igl_backend;
@@ -143,6 +156,8 @@ struct igl_runtime_state {
     int16_t current_red;
     int16_t current_green;
     int16_t current_blue;
+    long current_color_index;
+    struct igl_colormap_entry *colormap;
 
     struct igl_event_queue *events;
     struct igl_backend *backend;
