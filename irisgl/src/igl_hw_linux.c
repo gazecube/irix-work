@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define IGL_AMD_VENDOR_ID 0x1002u
 #define IGL_AMD_JUNIPER_XT_HD6770 0x68bau
