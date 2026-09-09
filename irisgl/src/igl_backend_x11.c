@@ -12,6 +12,10 @@ struct igl_backend_window {
     Window xwindow;
     GC gc;
     unsigned long pixel;
+    Pixmap backbuffer;
+    int back_width;
+    int back_height;
+    int doublebuffered;
 };
 
 struct igl_backend {
@@ -35,6 +39,37 @@ static long igl_backend_debug_delay_ms(void)
         return 0;
 
     return delay;
+}
+
+static int igl_backend_ensure_backbuffer(struct igl_backend *backend,
+                                         struct igl_backend_window *window,
+                                         int width,
+                                         int height)
+{
+    Pixmap pixmap;
+
+    if (!backend || !window || width <= 0 || height <= 0)
+        return 0;
+
+    if (window->backbuffer &&
+        window->back_width == width &&
+        window->back_height == height)
+        return 1;
+
+    pixmap = XCreatePixmap(backend->display, window->xwindow,
+                           (unsigned int)width, (unsigned int)height,
+                           (unsigned int)DefaultDepth(backend->display,
+                                                      backend->screen));
+    if (!pixmap)
+        return 0;
+
+    if (window->backbuffer)
+        XFreePixmap(backend->display, window->backbuffer);
+
+    window->backbuffer = pixmap;
+    window->back_width = width;
+    window->back_height = height;
+    return 1;
 }
 
 struct igl_backend *igl_backend_create(void)
@@ -142,6 +177,8 @@ void igl_backend_destroy_window(struct igl_backend *backend,
 {
     if (!backend || !window)
         return;
+    if (window->backbuffer)
+        XFreePixmap(backend->display, window->backbuffer);
     if (window->gc)
         XFreeGC(backend->display, window->gc);
     if (window->xwindow)
@@ -198,10 +235,42 @@ void igl_backend_set_rgb(struct igl_backend *backend,
     }
 }
 
+int igl_backend_set_doublebuffer(struct igl_backend *backend,
+                                 struct igl_backend_window *window,
+                                 int enabled)
+{
+    XWindowAttributes attrs;
+
+    if (!backend || !window)
+        return 0;
+
+    if (!enabled) {
+        window->doublebuffered = 0;
+        if (window->backbuffer) {
+            XFreePixmap(backend->display, window->backbuffer);
+            window->backbuffer = 0;
+            window->back_width = 0;
+            window->back_height = 0;
+        }
+        return 1;
+    }
+
+    if (!XGetWindowAttributes(backend->display, window->xwindow, &attrs))
+        return 0;
+
+    if (!igl_backend_ensure_backbuffer(backend, window,
+                                       attrs.width, attrs.height))
+        return 0;
+
+    window->doublebuffered = 1;
+    return 1;
+}
+
 void igl_backend_clear(struct igl_backend *backend,
                        struct igl_backend_window *window)
 {
     XWindowAttributes attrs;
+    Drawable drawable;
 
     if (!backend || !window)
         return;
@@ -209,7 +278,15 @@ void igl_backend_clear(struct igl_backend *backend,
     if (!XGetWindowAttributes(backend->display, window->xwindow, &attrs))
         return;
 
-    XFillRectangle(backend->display, window->xwindow, window->gc,
+    drawable = window->xwindow;
+    if (window->doublebuffered) {
+        if (!igl_backend_ensure_backbuffer(backend, window,
+                                           attrs.width, attrs.height))
+            return;
+        drawable = window->backbuffer;
+    }
+
+    XFillRectangle(backend->display, drawable, window->gc,
                    0, 0,
                    (unsigned int)attrs.width,
                    (unsigned int)attrs.height);
@@ -217,11 +294,6 @@ void igl_backend_clear(struct igl_backend *backend,
     if (backend->debug_clear_delay_ms > 0) {
         struct timespec delay;
 
-        /*
-         * Debug-only synchronization: make the clear complete at the X
-         * server before sleeping so rapid alternating clears cannot be
-         * coalesced into an indistinct striped/flickering presentation.
-         */
         XSync(backend->display, False);
         delay.tv_sec = backend->debug_clear_delay_ms / 1000;
         delay.tv_nsec = (backend->debug_clear_delay_ms % 1000) * 1000000L;
@@ -229,6 +301,32 @@ void igl_backend_clear(struct igl_backend *backend,
     } else {
         XFlush(backend->display);
     }
+}
+
+void igl_backend_swapbuffers(struct igl_backend *backend,
+                             struct igl_backend_window *window)
+{
+    XWindowAttributes attrs;
+
+    if (!backend || !window || !window->doublebuffered)
+        return;
+
+    if (!XGetWindowAttributes(backend->display, window->xwindow, &attrs))
+        return;
+
+    if (!igl_backend_ensure_backbuffer(backend, window,
+                                       attrs.width, attrs.height))
+        return;
+
+    XCopyArea(backend->display,
+              window->backbuffer,
+              window->xwindow,
+              window->gc,
+              0, 0,
+              (unsigned int)attrs.width,
+              (unsigned int)attrs.height,
+              0, 0);
+    XFlush(backend->display);
 }
 
 int igl_backend_poll_event(struct igl_backend *backend,
