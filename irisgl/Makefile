@@ -1,7 +1,7 @@
 CC ?= cc
 AR ?= ar
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror
-CPPFLAGS += -Iinclude -Isrc
+CPPFLAGS += -Iinclude -Iinclude/gl -Isrc
 
 LIB = libgl.a
 OBJS = src/igl_runtime.o src/igl_backend_x11.o
@@ -19,7 +19,10 @@ src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device
 
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Wno-implicit-int -Wno-implicit-function-declaration \
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		-Wno-implicit-int -Wno-implicit-function-declaration \
+		-Wno-return-type -Wno-builtin-declaration-mismatch \
+		-D_MIPS_SIM=1 -D_MIPS_SIM_NABI32=2 \
 		-o $@ $(SGI_FLASH) -L. -lgl -lX11 -lm
 
 clean:
