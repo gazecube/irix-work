@@ -18,6 +18,12 @@ struct igl_backend_window {
     int back_height;
     int doublebuffered;
     XID present_event_id;
+    Pixmap present_pixmaps[2];
+    int present_width;
+    int present_height;
+    int present_front;
+    int present_pending;
+    int gsync_present_mode;
 };
 
 struct igl_backend {
@@ -33,9 +39,9 @@ struct igl_present_wait {
     int opcode;
 };
 
-static Bool igl_backend_present_complete(Display *display,
-                                         XEvent *event,
-                                         XPointer arg)
+static Bool igl_backend_present_event(Display *display,
+                                      XEvent *event,
+                                      XPointer arg)
 {
     struct igl_present_wait *wait = (struct igl_present_wait *)arg;
 
@@ -43,7 +49,8 @@ static Bool igl_backend_present_complete(Display *display,
 
     return event->type == GenericEvent &&
            event->xcookie.extension == wait->opcode &&
-           event->xcookie.evtype == PresentCompleteNotify;
+           (event->xcookie.evtype == PresentCompleteNotify ||
+            event->xcookie.evtype == PresentIdleNotify);
 }
 
 static long igl_backend_debug_delay_ms(void)
@@ -92,6 +99,60 @@ static int igl_backend_ensure_backbuffer(struct igl_backend *backend,
     window->back_width = width;
     window->back_height = height;
     return 1;
+}
+
+static int igl_backend_ensure_present_pixmaps(struct igl_backend *backend,
+                                              struct igl_backend_window *window,
+                                              int width,
+                                              int height)
+{
+    Pixmap first;
+    Pixmap second;
+    unsigned int depth;
+
+    if (!backend || !window || width <= 0 || height <= 0)
+        return 0;
+
+    if (window->present_pixmaps[0] && window->present_pixmaps[1] &&
+        window->present_width == width &&
+        window->present_height == height)
+        return 1;
+
+    depth = (unsigned int)DefaultDepth(backend->display, backend->screen);
+    first = XCreatePixmap(backend->display, window->xwindow,
+                          (unsigned int)width, (unsigned int)height, depth);
+    if (!first)
+        return 0;
+
+    second = XCreatePixmap(backend->display, window->xwindow,
+                           (unsigned int)width, (unsigned int)height, depth);
+    if (!second) {
+        XFreePixmap(backend->display, first);
+        return 0;
+    }
+
+    if (window->present_pixmaps[0])
+        XFreePixmap(backend->display, window->present_pixmaps[0]);
+    if (window->present_pixmaps[1])
+        XFreePixmap(backend->display, window->present_pixmaps[1]);
+
+    window->present_pixmaps[0] = first;
+    window->present_pixmaps[1] = second;
+    window->present_width = width;
+    window->present_height = height;
+    window->present_front = -1;
+    window->present_pending = -1;
+    return 1;
+}
+
+static uint32_t igl_backend_next_present_serial(struct igl_backend *backend)
+{
+    uint32_t serial;
+
+    serial = ++backend->present_serial;
+    if (serial == 0)
+        serial = ++backend->present_serial;
+    return serial;
 }
 
 struct igl_backend *igl_backend_create(void)
@@ -147,6 +208,9 @@ struct igl_backend_window *igl_backend_open_window(
     if (!window)
         return NULL;
 
+    window->present_front = -1;
+    window->present_pending = -1;
+
     black = BlackPixel(backend->display, backend->screen);
     white = WhitePixel(backend->display, backend->screen);
 
@@ -192,7 +256,8 @@ struct igl_backend_window *igl_backend_open_window(
 
     if (backend->present_available) {
         window->present_event_id = XPresentSelectInput(
-            backend->display, window->xwindow, PresentCompleteNotifyMask);
+            backend->display, window->xwindow,
+            PresentCompleteNotifyMask | PresentIdleNotifyMask);
     }
 
     window->pixel = white;
@@ -211,6 +276,10 @@ void igl_backend_destroy_window(struct igl_backend *backend,
     if (window->present_event_id)
         XPresentFreeInput(backend->display, window->xwindow,
                           window->present_event_id);
+    if (window->present_pixmaps[0])
+        XFreePixmap(backend->display, window->present_pixmaps[0]);
+    if (window->present_pixmaps[1])
+        XFreePixmap(backend->display, window->present_pixmaps[1]);
     if (window->backbuffer)
         XFreePixmap(backend->display, window->backbuffer);
     if (window->gc)
@@ -305,6 +374,7 @@ void igl_backend_clear(struct igl_backend *backend,
 {
     XWindowAttributes attrs;
     Drawable drawable;
+    int present_index;
 
     if (!backend || !window)
         return;
@@ -318,6 +388,15 @@ void igl_backend_clear(struct igl_backend *backend,
                                            attrs.width, attrs.height))
             return;
         drawable = window->backbuffer;
+    } else if (window->gsync_present_mode && backend->present_available &&
+               window->present_event_id) {
+        if (!igl_backend_ensure_present_pixmaps(backend, window,
+                                                attrs.width, attrs.height))
+            return;
+
+        present_index = window->present_front == 0 ? 1 : 0;
+        drawable = window->present_pixmaps[present_index];
+        window->present_pending = present_index;
     }
 
     XFillRectangle(backend->display, drawable, window->gc,
@@ -363,35 +442,14 @@ void igl_backend_swapbuffers(struct igl_backend *backend,
     XFlush(backend->display);
 }
 
-void igl_backend_gsync(struct igl_backend *backend,
-                       struct igl_backend_window *window)
+static void igl_backend_wait_next_msc(struct igl_backend *backend,
+                                      struct igl_backend_window *window)
 {
     struct igl_present_wait wait;
     XEvent event;
     uint32_t serial;
 
-    if (!backend || !backend->display || !window)
-        return;
-
-    if (!backend->present_available || !window->present_event_id) {
-        /*
-         * Fallback only.  This preserves command completion on X servers
-         * without Present, but does not emulate IRIS GL vertical retrace.
-         */
-        XSync(backend->display, False);
-        return;
-    }
-
-    serial = ++backend->present_serial;
-    if (serial == 0)
-        serial = ++backend->present_serial;
-
-    /*
-     * PresentNotifyMSC with target_msc=0, divisor=1, remainder=0 requests
-     * completion on the next media-stream-counter field.  That gives this
-     * backend a real display-refresh synchronization point for IRIS GL
-     * gsync(), instead of the old X server completion barrier.
-     */
+    serial = igl_backend_next_present_serial(backend);
     XPresentNotifyMSC(backend->display, window->xwindow,
                       serial, 0, 1, 0);
     XFlush(backend->display);
@@ -401,9 +459,14 @@ void igl_backend_gsync(struct igl_backend *backend,
         XPresentCompleteNotifyEvent *complete;
 
         XIfEvent(backend->display, &event,
-                 igl_backend_present_complete, (XPointer)&wait);
+                 igl_backend_present_event, (XPointer)&wait);
         if (!XGetEventData(backend->display, &event.xcookie))
             continue;
+
+        if (event.xcookie.evtype != PresentCompleteNotify) {
+            XFreeEventData(backend->display, &event.xcookie);
+            continue;
+        }
 
         complete = (XPresentCompleteNotifyEvent *)event.xcookie.data;
         if (complete &&
@@ -416,6 +479,110 @@ void igl_backend_gsync(struct igl_backend *backend,
 
         XFreeEventData(backend->display, &event.xcookie);
     }
+}
+
+static void igl_backend_present_pending(struct igl_backend *backend,
+                                        struct igl_backend_window *window)
+{
+    struct igl_present_wait wait;
+    XEvent event;
+    uint32_t serial;
+    Pixmap pixmap;
+    Pixmap old_pixmap = None;
+    int old_front;
+    int complete_seen = 0;
+    int old_idle_seen;
+
+    old_front = window->present_front;
+    if (old_front >= 0)
+        old_pixmap = window->present_pixmaps[old_front];
+    old_idle_seen = old_front < 0;
+
+    pixmap = window->present_pixmaps[window->present_pending];
+    serial = igl_backend_next_present_serial(backend);
+
+    XPresentPixmap(backend->display,
+                   window->xwindow,
+                   pixmap,
+                   serial,
+                   None,
+                   None,
+                   0,
+                   0,
+                   None,
+                   None,
+                   None,
+                   0,
+                   0,
+                   1,
+                   0,
+                   NULL,
+                   0);
+    XFlush(backend->display);
+
+    wait.opcode = backend->present_opcode;
+    while (!complete_seen || !old_idle_seen) {
+        XIfEvent(backend->display, &event,
+                 igl_backend_present_event, (XPointer)&wait);
+        if (!XGetEventData(backend->display, &event.xcookie))
+            continue;
+
+        if (event.xcookie.evtype == PresentCompleteNotify) {
+            XPresentCompleteNotifyEvent *complete;
+
+            complete = (XPresentCompleteNotifyEvent *)event.xcookie.data;
+            if (complete &&
+                complete->kind == PresentCompleteKindPixmap &&
+                complete->serial_number == serial &&
+                complete->window == window->xwindow)
+                complete_seen = 1;
+        } else if (event.xcookie.evtype == PresentIdleNotify && old_front >= 0) {
+            XPresentIdleNotifyEvent *idle;
+
+            idle = (XPresentIdleNotifyEvent *)event.xcookie.data;
+            if (idle && idle->window == window->xwindow &&
+                idle->pixmap == old_pixmap)
+                old_idle_seen = 1;
+        }
+
+        XFreeEventData(backend->display, &event.xcookie);
+    }
+
+    window->present_front = window->present_pending;
+    window->present_pending = -1;
+}
+
+void igl_backend_gsync(struct igl_backend *backend,
+                       struct igl_backend_window *window)
+{
+    if (!backend || !backend->display || !window)
+        return;
+
+    if (!backend->present_available || !window->present_event_id) {
+        /*
+         * Fallback only.  This preserves command completion on X servers
+         * without Present, but does not emulate IRIS GL vertical retrace.
+         */
+        XSync(backend->display, False);
+        return;
+    }
+
+    /*
+     * The first gsync() establishes that this single-buffered application
+     * is explicitly retrace-synchronized.  Subsequent drawing is staged in
+     * alternating Present pixmaps so we never modify the pixmap currently
+     * being scanned out.  PresentPixmap then makes that completed frame
+     * visible on the next MSC field.  Applications which never call gsync()
+     * retain the ordinary immediate single-buffer path.
+     */
+    if (!window->doublebuffered && window->present_pending >= 0) {
+        igl_backend_present_pending(backend, window);
+        return;
+    }
+
+    igl_backend_wait_next_msc(backend, window);
+    if (!window->doublebuffered)
+        window->gsync_present_mode = 1;
 }
 
 int igl_backend_poll_event(struct igl_backend *backend,
