@@ -24,7 +24,6 @@ enum {
     IGL_RMASK_REFERENCE = 0x00000080u
 };
 
-/* Reconstructed counterpart of the source-defined RRM clip piece concept. */
 struct igl_clip_piece {
     int x;
     int y;
@@ -32,10 +31,6 @@ struct igl_clip_piece {
     int ysize;
 };
 
-/*
- * Reconstructed userspace clip state.
- * Fields mirror source-proven RRM_ValidateClip concepts only.
- */
 struct igl_clip_state {
     int rnid;
     int clipid;
@@ -53,10 +48,6 @@ struct igl_clip_state {
     int fboffset;
 };
 
-/*
- * Reconstructed userspace rendering-node state.
- * Canonical field concepts come from struct rrm_rnode.
- */
 struct igl_rnode_state {
     int rnid;
     uint16_t reqmask;
@@ -70,10 +61,6 @@ struct igl_rnode_state {
     int16_t pcxid;
 };
 
-/*
- * Reconstructed userspace pane state.
- * Canonical field concepts come from struct pane.
- */
 struct igl_pane_state {
     int clipid;
     uint16_t validmask;
@@ -85,11 +72,6 @@ struct igl_pane_state {
     struct igl_clip_state clip;
 };
 
-/*
- * Reconstructed window preference state.
- * This is userspace bookkeeping for prefsize()/prefposition(); it is not
- * claimed to match an original SGI private structure.
- */
 struct igl_window_preferences {
     int have_size;
     int width;
@@ -102,21 +84,11 @@ struct igl_window_preferences {
     int ymax;
 };
 
-/*
- * Reconstructed configuration state.
- * Keep requested and committed state separate so RGBmode()/cmode() and
- * buffer-mode requests are not flattened across gconfig().
- */
 struct igl_config_state {
     int rgb_mode;
     int double_buffer;
 };
 
-/*
- * Sparse reconstructed userspace representation of IRIS GL colormap state.
- * Original source establishes indexed LUT semantics; this deliberately does
- * not invent a maximum index before source evidence identifies one.
- */
 struct igl_colormap_entry {
     long index;
     int16_t red;
@@ -125,12 +97,22 @@ struct igl_colormap_entry {
     struct igl_colormap_entry *next;
 };
 
-/* Host/backend object. Layout deliberately hidden from the IRIS GL core. */
 struct igl_backend_window;
 struct igl_backend;
 struct igl_event_queue;
+struct igl_juniper_device;
+struct igl_juniper_bo;
 
-/* Reconstructed userspace window association. */
+/*
+ * Reconstructed host color-surface association.
+ * This is host implementation state, not an original SGI structure.
+ */
+struct igl_host_color_surface {
+    struct igl_juniper_bo *bo;
+    int width;
+    int height;
+};
+
 struct igl_window_state {
     long wid;
     struct igl_window_preferences prefs;
@@ -142,9 +124,9 @@ struct igl_window_state {
     struct igl_pane_state pane;
 
     struct igl_backend_window *backend_window;
+    struct igl_host_color_surface host_color;
 };
 
-/* Reconstructed process/runtime state for milestone 0. */
 struct igl_runtime_state {
     struct igl_window_preferences next_window_prefs;
     struct igl_window_state *current_window;
@@ -161,6 +143,7 @@ struct igl_runtime_state {
 
     struct igl_event_queue *events;
     struct igl_backend *backend;
+    struct igl_juniper_device *juniper;
 };
 
 #endif /* IRISGL_IGL_STATE_H */
