@@ -37,7 +37,16 @@ void igl_backend_set_rgb(
     int16_t green,
     int16_t blue);
 
+int igl_backend_set_doublebuffer(
+    struct igl_backend *backend,
+    struct igl_backend_window *window,
+    int enabled);
+
 void igl_backend_clear(
+    struct igl_backend *backend,
+    struct igl_backend_window *window);
+
+void igl_backend_swapbuffers(
     struct igl_backend *backend,
     struct igl_backend_window *window);
 
