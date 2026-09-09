@@ -329,6 +329,23 @@ void igl_backend_swapbuffers(struct igl_backend *backend,
     XFlush(backend->display);
 }
 
+void igl_backend_gsync(struct igl_backend *backend,
+                       struct igl_backend_window *window)
+{
+    (void)window;
+
+    if (!backend || !backend->display)
+        return;
+
+    /*
+     * Host substitution only: XSync waits until the X server has processed
+     * preceding requests.  Historical IRIS GL gsync() waits for the next
+     * vertical retrace, so this is intentionally not claimed as complete
+     * retrace emulation.
+     */
+    XSync(backend->display, False);
+}
+
 int igl_backend_poll_event(struct igl_backend *backend,
                            struct igl_backend_window **window,
                            long *device,
