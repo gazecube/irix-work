@@ -5,10 +5,49 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #define IGL_AMD_VENDOR_ID 0x1002u
 #define IGL_AMD_JUNIPER_XT_HD6770 0x68bau
+
+static int igl_hw_join(char *dst, size_t dst_size,
+                       const char *a, const char *b,
+                       const char *c, const char *d)
+{
+    const char *parts[4];
+    size_t lengths[4];
+    size_t total;
+    size_t offset;
+    int i;
+
+    if (!dst || dst_size == 0)
+        return 0;
+
+    parts[0] = a;
+    parts[1] = b;
+    parts[2] = c;
+    parts[3] = d;
+    total = 1;
+
+    for (i = 0; i < 4; ++i) {
+        lengths[i] = parts[i] ? strlen(parts[i]) : 0;
+        if (lengths[i] > dst_size - total)
+            return 0;
+        total += lengths[i];
+    }
+
+    if (total > dst_size)
+        return 0;
+
+    offset = 0;
+    for (i = 0; i < 4; ++i) {
+        if (lengths[i] == 0)
+            continue;
+        memcpy(dst + offset, parts[i], lengths[i]);
+        offset += lengths[i];
+    }
+    dst[offset] = '\0';
+    return 1;
+}
 
 static int igl_hw_read_hex_file(const char *path, unsigned int *value)
 {
@@ -56,23 +95,29 @@ static int igl_hw_is_card_entry(const char *name)
     return 1;
 }
 
+static int igl_hw_is_render_entry(const char *name)
+{
+    const char *p;
+
+    if (strncmp(name, "renderD", 7) != 0)
+        return 0;
+
+    p = name + 7;
+    if (*p == '\0')
+        return 0;
+
+    while (*p) {
+        if (*p < '0' || *p > '9')
+            return 0;
+        ++p;
+    }
+
+    return 1;
+}
+
 static int igl_hw_set_drm_node(char *dst, size_t dst_size, const char *name)
 {
-    static const char prefix[] = "/dev/dri/";
-    size_t prefix_len;
-    size_t name_len;
-
-    if (!dst || dst_size == 0 || !name)
-        return 0;
-
-    prefix_len = sizeof(prefix) - 1;
-    name_len = strlen(name);
-    if (prefix_len + name_len + 1 > dst_size)
-        return 0;
-
-    memcpy(dst, prefix, prefix_len);
-    memcpy(dst + prefix_len, name, name_len + 1);
-    return 1;
+    return igl_hw_join(dst, dst_size, "/dev/dri/", name, NULL, NULL);
 }
 
 static void igl_hw_find_render_node(struct igl_hw_device *device,
@@ -80,41 +125,25 @@ static void igl_hw_find_render_node(struct igl_hw_device *device,
 {
     DIR *dir;
     struct dirent *entry;
-    char path[256];
-    char linkpath[256];
-    char target[256];
-    ssize_t length;
+    char drm_dir[256];
 
-    dir = opendir("/sys/class/drm");
+    if (!igl_hw_join(drm_dir, sizeof(drm_dir),
+                     "/sys/class/drm/", card_name,
+                     "/device/drm", NULL))
+        return;
+
+    dir = opendir(drm_dir);
     if (!dir)
         return;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "renderD", 7) != 0)
+        if (!igl_hw_is_render_entry(entry->d_name))
             continue;
 
-        snprintf(path, sizeof(path), "/sys/class/drm/%s/device/drm/%s",
-                 card_name, entry->d_name);
-        if (access(path, F_OK) == 0) {
-            if (igl_hw_set_drm_node(device->drm_render,
-                                    sizeof(device->drm_render),
-                                    entry->d_name))
-                break;
-        }
-
-        snprintf(linkpath, sizeof(linkpath), "/sys/class/drm/%s/device",
-                 entry->d_name);
-        length = readlink(linkpath, target, sizeof(target) - 1);
-        if (length <= 0)
-            continue;
-        target[length] = '\0';
-
-        if (strstr(target, card_name) != NULL) {
-            if (igl_hw_set_drm_node(device->drm_render,
-                                    sizeof(device->drm_render),
-                                    entry->d_name))
-                break;
-        }
+        if (igl_hw_set_drm_node(device->drm_render,
+                                sizeof(device->drm_render),
+                                entry->d_name))
+            break;
     }
 
     closedir(dir);
@@ -141,13 +170,17 @@ int igl_hw_probe(struct igl_hw_device *device)
         if (!igl_hw_is_card_entry(entry->d_name))
             continue;
 
-        snprintf(path, sizeof(path), "/sys/class/drm/%s/device/vendor",
-                 entry->d_name);
+        if (!igl_hw_join(path, sizeof(path),
+                         "/sys/class/drm/", entry->d_name,
+                         "/device/vendor", NULL))
+            continue;
         if (!igl_hw_read_hex_file(path, &vendor))
             continue;
 
-        snprintf(path, sizeof(path), "/sys/class/drm/%s/device/device",
-                 entry->d_name);
+        if (!igl_hw_join(path, sizeof(path),
+                         "/sys/class/drm/", entry->d_name,
+                         "/device/device", NULL))
+            continue;
         if (!igl_hw_read_hex_file(path, &product))
             continue;
 
