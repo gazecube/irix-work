@@ -51,6 +51,22 @@ void igl_backend_swapbuffers(
     struct igl_backend_window *window);
 
 /*
+ * Reconstructed host zero-copy presentation boundary. Imports a dma-buf as
+ * an X11 DRI3 pixmap and presents that pixmap directly. Returns 1 when the
+ * supplied buffer became the presentation source, 0 when the caller should
+ * retain its compatibility presentation path.
+ */
+int igl_backend_present_dma_buf(
+    struct igl_backend *backend,
+    struct igl_backend_window *window,
+    int dma_buf_fd,
+    uint32_t token,
+    uint32_t size,
+    int width,
+    int height,
+    int stride);
+
+/*
  * Backend synchronization boundary for IRIS GL gsync().  The X11 backend
  * uses Present MSC timing and, once gsync() is used in single-buffer mode,
  * stages frames in alternating pixmaps so completed drawing is presented on
