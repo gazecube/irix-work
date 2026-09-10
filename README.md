@@ -1,6 +1,6 @@
-# Clogin reconstruction
+# Clogin decompilation project.
 
-Cleanroom reimplementation of the SGI IRIX graphical login program `/usr/Cadmin/bin/clogin`, targeting X11/Motif systems.
+This is a cleanroom decompilation of the SGI IRIX graphical login program `/usr/Cadmin/bin/clogin`, targeting X11/Motif systems.
 
 This branch combines two deliberately separate layers:
 
@@ -9,7 +9,7 @@ This branch combines two deliberately separate layers:
 
 The original SGI binary and runtime resources are valid reverse-engineering evidence. Leaked IRIX source code is not implementation input and must not be copied into this repository or its documentation.
 
-## Current reconstruction scope
+## Current decompilation scope
 
 The project currently has binary-backed reconstruction work for:
 
@@ -31,7 +31,7 @@ Leaked IRIX source is kept outside the reconstruction path. It may be used only 
 
 See `EVIDENCE_POLICY.md` for the project rule in explicit form.
 
-## Building the runnable port
+## Building
 
 Requirements:
 
