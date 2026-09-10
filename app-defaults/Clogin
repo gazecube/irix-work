@@ -1,0 +1,76 @@
+! Clogin resources recovered from the shipped sysadmdesktop runtime.
+! This file is permitted runtime evidence, not leaked source input.
+
+Clogin*useSchemes: all
+Clogin*schemeFileList: SgiSpec, ImdSpec
+Clogin*paletteFileList: ImdPalette
+Clogin*sgiMode: True
+Clogin*arrowsType: XmNO_THUMB_WHEN_EMPTY
+Clogin*frame.shadowThickness: 0
+Clogin*panelWindow.shadowThickness: 0
+Clogin*form.XmText.blinkRate: 0
+
+Clogin*useNoHang: True
+
+Clogin*ImdViewPanel.invertedTeeMargin: 3
+Clogin*ImdViewPanel.noDragNDrop: True
+Clogin*panel.traversalOn: False
+Clogin*helpButton.traversalOn: False
+Clogin*loginButton.traversalOn: False
+Clogin*scrolledWindow*traversalOn: False
+Clogin*Xdraw.traversalOn: False
+
+Clogin*userFullNameLabel.fontList: -adobe-helvetica-medium-o-normal--*-240-75-75-p-*-iso8859-1
+Clogin*warningLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
+Clogin*userLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
+Clogin*passwordLabel.fontList: SGI_DYNAMIC ExtraLargeBoldLabelFont
+Clogin*hostLabel.fontList: -adobe-helvetica-bold-o-normal--*-240-100-100-p-*-iso8859-1
+Clogin*userText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*passwordText.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*helpButton.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+Clogin*loginButton.fontList: -adobe-helvetica-medium-r-normal-*-17-*-*-*-*-*-iso8859-1
+
+Clogin*iconLabelYOff: 4
+
+Clogin*loginButton.labelString: Log In
+Clogin*helpButton.labelString: Help
+Clogin*userLabel.labelString: Login name:
+Clogin*passwordLabel.labelString: Password:
+
+Clogin*passwordLabel.bottomOffset: 95
+Clogin*passwordLabel.leftOffset: 45
+Clogin*passwordLabel.width: 120
+Clogin*passwordText.bottomOffset: -6
+Clogin*passwordText.leftOffset: 0
+Clogin*passwordText.width: 225
+
+Clogin*userLabel.bottomOffset: 18
+Clogin*userLabel.leftOffset: 45
+Clogin*userLabel.width: 120
+Clogin*userText.bottomOffset: -5
+Clogin*userText.leftOffset: 6
+Clogin*userText.width: 225
+
+Clogin*warningLabel.topOffset: 0
+Clogin*warningLabel.leftOffset: 35
+Clogin*warningLabel.width: 700
+Clogin*warningLabel.height: 30
+Clogin*userFullNameLabel.bottomOffset: 0
+Clogin*userFullNameLabel.leftOffset: 10
+Clogin*panelWindow.topOffset: 35
+Clogin*panelWindow.bottomOffset: 25
+Clogin*panelWindow.leftOffset: 35
+Clogin*panelWindow.rightOffset: 30
+Clogin*helpButton.bottomOffset: 25
+Clogin*helpButton.rightOffset: 30
+Clogin*helpButton.width: 72
+Clogin*helpButton.marginHeight: 3
+Clogin*loginButton.bottomOffset: 25
+Clogin*loginButton.rightOffset: 8
+Clogin*loginButton.width: 72
+Clogin*loginButton.marginHeight: 3
+Clogin*hostLabel.bottomOffset: 22
+Clogin*hostLabel.leftOffset: 33
+
+Clogin*dragInitiatorProtocolStyle: DRAG_NONE
+Clogin*dragReceiverProtocolStyle: DRAG_NONE
