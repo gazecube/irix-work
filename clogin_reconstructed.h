@@ -222,6 +222,37 @@ static CloginDirectoryState clogin_check_directory(const char *path)
 	}
 	return state;
 }
+/* Host portability seam.  The original IRIX classifier returns LOCAL only
+ * for efs/xfs.  On Linux our native filesystems therefore remain OTHER in
+ * clogin_check_directory(), preserving the recovered numeric contract.
+ *
+ * The runnable port still needs to decide whether an OTHER home is local
+ * enough to satisfy IRIX's local-home policy.  Keep that Linux decision here
+ * instead of falsifying checkDirectory() itself.  NFS remains remote; an
+ * existing directory on a non-NFS Linux filesystem is accepted as host-local.
+ */
+static int clogin_host_directory_is_local(const char *path,
+	CloginDirectoryState state)
+{
+	struct stat st;
+
+	if(state == CLOGIN_DIR_LOCAL) return 1;
+	if(state == CLOGIN_DIR_NFS || state == CLOGIN_DIR_MISSING) return 0;
+	if(path == NULL || path[0] != '/') return 0;
+	if(stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
+
+#ifdef __linux__
+	{
+		struct statfs fs;
+		if(statfs(path, &fs) != 0) return 0;
+		if((unsigned long)fs.f_type == (unsigned long)NFS_SUPER_MAGIC) return 0;
+		return 1;
+	}
+#else
+	return 0;
+#endif
+}
+
 static int clogin_user_eligible(const struct passwd *pw)
 {
 	const CloginPolicyEntry *entry;
@@ -237,7 +268,8 @@ static int clogin_user_eligible(const struct passwd *pw)
 
 	state = clogin_check_directory(pw->pw_dir);
 	if(state == CLOGIN_DIR_MISSING) return 0;
-	if(!g_clogin_policy.where_home && state != CLOGIN_DIR_LOCAL) return 0;
+	if(!g_clogin_policy.where_home &&
+		!clogin_host_directory_is_local(pw->pw_dir, state)) return 0;
 	return 1;
 }
 
@@ -317,7 +349,7 @@ static int clogin_find_face(const struct passwd *pw, char *out, size_t out_size)
 	if(g_clogin_policy.where_icons != 1)
 	{
 		home_state = clogin_check_directory(pw->pw_dir);
-		if(home_state != CLOGIN_DIR_LOCAL) return 0;
+		if(!clogin_host_directory_is_local(pw->pw_dir, home_state)) return 0;
 	}
 
 	snprintf(path, sizeof(path), "%s/.icons/login.icon", pw->pw_dir);
