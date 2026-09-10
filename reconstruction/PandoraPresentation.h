@@ -1,7 +1,7 @@
 #ifndef IRIX_RE_CLOGIN_PANDORA_PRESENTATION_H
 #define IRIX_RE_CLOGIN_PANDORA_PRESENTATION_H
 
-#include "ImdIconPanel.h"
+#include "imd/ImdIconPanel.h"
 
 #include <X11/Intrinsic.h>
 #include <Xm/Xm.h>

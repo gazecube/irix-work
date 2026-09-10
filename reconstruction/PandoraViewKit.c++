@@ -1,6 +1,6 @@
 #include "PandoraViewKit.h"
 #include "PandoraPresentation.h"
-#include "ImdIconPanel.h"
+#include "imd/ImdIconPanel.h"
 #include "ImdFtrVisualCompat.h"
 #include "Base/PwdNameList.h"
 #include "Filesystem/DirectoryCheck.h"
