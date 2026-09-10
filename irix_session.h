@@ -1,11 +1,14 @@
 /*
  * IRIX-style desktop session handoff for dvlogin/clogin reconstruction.
  *
- * This is deliberately a compatibility layer rather than a MaXX-specific
- * session launcher.  The observed IRIX Xsession behavior gives a readable
- * $HOME/.xsession precedence over the system desktop session.  MaXX's
- * Xsession.dt is currently used as the system desktop backend while the
- * remaining IRIX startup sequence is reconstructed here incrementally.
+ * The login manager currently exposes one implicit desktop session.  That
+ * session is MaXX Interactive Desktop's normal Xsession.dt entrypoint.  The
+ * small session descriptor below is intentionally shaped so a future session
+ * switcher can select another descriptor without changing the login/session
+ * handoff itself.
+ *
+ * A readable $HOME/.xsession still takes precedence, matching the recovered
+ * IRIX-style per-user override behavior.
  */
 
 #ifndef DVLOGIN_IRIX_SESSION_H
@@ -18,9 +21,25 @@
 #include <string.h>
 #include <pwd.h>
 
-#ifndef IRIX_SYSTEM_XSESSION
-#define IRIX_SYSTEM_XSESSION "/opt/MaXX/etc/skel/Xsession.dt"
+#ifndef CLOGIN_DEFAULT_SESSION_PATH
+#define CLOGIN_DEFAULT_SESSION_PATH "/opt/MaXX/etc/skel/Xsession.dt"
 #endif
+
+#ifndef CLOGIN_DEFAULT_SESSION_NAME
+#define CLOGIN_DEFAULT_SESSION_NAME "MaXX Interactive Desktop"
+#endif
+
+typedef struct CloginSession
+{
+	const char *name;
+	const char *path;
+} CloginSession;
+
+static const CloginSession g_clogin_default_session =
+{
+	CLOGIN_DEFAULT_SESSION_NAME,
+	CLOGIN_DEFAULT_SESSION_PATH
+};
 
 static int irix_session_is_readable_regular(const char *path)
 {
@@ -35,6 +54,32 @@ static int irix_session_is_readable_regular(const char *path)
 	return S_ISREG(st.st_mode);
 }
 
+static const CloginSession *clogin_selected_session(void)
+{
+	/*
+	 * Future session switcher hook.  Until a selector UI exists, the selected
+	 * session is always the MaXX default descriptor above.
+	 */
+	return &g_clogin_default_session;
+}
+
+static void clogin_exec_session(const CloginSession *session)
+{
+	if(session == NULL || session->path == NULL || session->path[0] == '\0')
+	{
+		errno = EINVAL;
+		perror("dvlogin: invalid session descriptor");
+		_exit(1);
+	}
+
+	execl(session->path, session->path, (char *)NULL);
+	fprintf(stderr, "dvlogin: exec session '%s' (%s) failed: %s\n",
+		session->name ? session->name : "unnamed",
+		session->path,
+		strerror(errno));
+	_exit(1);
+}
+
 /*
  * Reconstruct the top-level IRIX Xsession selection rule:
  *
@@ -42,7 +87,7 @@ static int irix_session_is_readable_regular(const char *path)
  *         - exec directly when executable
  *         - otherwise run it through /bin/sh
  *
- *     otherwise use the system desktop session.
+ *     otherwise use the currently selected desktop session.
  *
  * This function is called only after dvlogin has dropped to the authenticated
  * uid/gid and installed HOME/USER/LOGNAME/SHELL/DISPLAY/XAUTHORITY.
@@ -81,15 +126,7 @@ static void irix_exec_user_session(const struct passwd *pw)
 		_exit(1);
 	}
 
-	/*
-	 * Transitional backend: MaXX advertises Xsession.dt as its desktop
-	 * session entrypoint.  Keeping this decision here (rather than in the
-	 * login manager core) lets us replace it piece-by-piece with reconstructed
-	 * IRIX Xsession behavior without changing run_user_session() again.
-	 */
-	execl(IRIX_SYSTEM_XSESSION, IRIX_SYSTEM_XSESSION, (char *)NULL);
-	perror("dvlogin: exec system Xsession");
-	_exit(1);
+	clogin_exec_session(clogin_selected_session());
 }
 
 #endif /* DVLOGIN_IRIX_SESSION_H */
