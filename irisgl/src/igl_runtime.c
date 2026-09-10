@@ -2,6 +2,7 @@
 #include <gl/device.h>
 
 #include "igl_backend.h"
+#include "igl_juniper.h"
 #include "igl_juniper_runtime.h"
 #include "igl_state.h"
 
@@ -12,6 +13,23 @@
 
 static struct igl_runtime_state igl;
 static int igl_initialized;
+
+/*
+ * Reconstructed/incomplete first polygon accumulator.
+ *
+ * SGI documents bgnpolygon/endpolygon as delimiting one polygon with up to
+ * 256 vertices. Until the matrix/viewport path is reconstructed, v3f values
+ * are passed to the proven Juniper screen-space VTX_XY_FMT path unchanged.
+ * Only the exactly-three-vertex case is submitted to hardware in this first
+ * bridge. This is deliberately narrower than full IRIS GL polygon semantics.
+ */
+struct igl_polygon_accum {
+    int active;
+    int count;
+    float vertex[256][4];
+};
+
+static struct igl_polygon_accum igl_polygon;
 
 static struct igl_colormap_entry *igl_find_colormap_entry(Colorindex index,
                                                            int create)
@@ -70,6 +88,7 @@ static void igl_init_once(void)
         return;
 
     memset(&igl, 0, sizeof(igl));
+    memset(&igl_polygon, 0, sizeof(igl_polygon));
     igl.next_rnid = 1;
     igl.next_clipid = 1;
     igl.next_wid = 1;
@@ -107,6 +126,15 @@ static uint32_t igl_host_rgba8(void)
 
     /* Reconstructed private host surface format: 0xAARRGGBB. */
     return 0xff000000u | (red << 16) | (green << 8) | blue;
+}
+
+static uint32_t igl_host_rgb24(void)
+{
+    uint32_t red = (uint16_t)igl.current_red & 0xffu;
+    uint32_t green = (uint16_t)igl.current_green & 0xffu;
+    uint32_t blue = (uint16_t)igl.current_blue & 0xffu;
+
+    return (red << 16) | (green << 8) | blue;
 }
 
 void prefsize(long width, long height)
@@ -313,6 +341,71 @@ void color(Colorindex index)
     igl.current_blue = entry->blue;
     igl_backend_set_rgb(igl.backend, igl.current_window->backend_window,
                         entry->red, entry->green, entry->blue);
+}
+
+void bgnpolygon(void)
+{
+    igl_init_once();
+    igl_polygon.active = 1;
+    igl_polygon.count = 0;
+}
+
+void v3f(const float v[3])
+{
+    int i;
+
+    igl_init_once();
+    if (!igl_polygon.active || !v || igl_polygon.count >= 256)
+        return;
+
+    i = igl_polygon.count++;
+    igl_polygon.vertex[i][0] = v[0];
+    igl_polygon.vertex[i][1] = v[1];
+    igl_polygon.vertex[i][2] = v[2];
+    igl_polygon.vertex[i][3] = 1.0f;
+}
+
+void endpolygon(void)
+{
+    struct igl_window_state *window;
+    struct igl_juniper_bo *bo;
+    int draw;
+    int ok;
+
+    igl_init_once();
+    if (!igl_polygon.active)
+        return;
+
+    igl_polygon.active = 0;
+    if (igl_polygon.count != 3)
+        return;
+
+    window = igl.current_window;
+    if (!window || !igl.juniper)
+        return;
+
+    if (!igl_juniper_runtime_ensure_surface(&igl, window))
+        return;
+
+    draw = window->host_color.draw;
+    if (draw < 0 || draw >= window->host_color.count)
+        return;
+    bo = window->host_color.bo[draw];
+    if (!bo)
+        return;
+
+    ok = igl_juniper_draw_flat_triangle(igl.juniper,
+                                        bo,
+                                        window->host_color.width,
+                                        window->host_color.height,
+                                        window->host_color.stride,
+                                        igl_polygon.vertex,
+                                        igl_host_rgb24());
+    if (!ok)
+        return;
+
+    if (!window->committed.double_buffer)
+        igl_juniper_runtime_present(&igl, window);
 }
 
 void clear(void)
