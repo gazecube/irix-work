@@ -5,8 +5,15 @@
 #include "igl_state.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+static int igl_juniper_debug_enabled(void)
+{
+    const char *value = getenv("IRISGL_DEBUG_DRI3");
+    return value && *value && *value != '0';
+}
 
 static void igl_juniper_runtime_destroy_surfaces(
     struct igl_runtime_state *runtime,
@@ -198,6 +205,9 @@ int igl_juniper_runtime_present(struct igl_runtime_state *runtime,
 int igl_juniper_runtime_swap(struct igl_runtime_state *runtime,
                              struct igl_window_state *window)
 {
+    struct igl_juniper_bo *bo;
+    volatile uint32_t *words;
+    size_t last_word;
     int presented;
 
     if (!runtime || !window || !window->committed.double_buffer)
@@ -208,9 +218,20 @@ int igl_juniper_runtime_swap(struct igl_runtime_state *runtime,
         return 0;
 
     presented = window->host_color.draw;
-    if (!igl_juniper_runtime_present_bo(runtime,
-                                        window,
-                                        window->host_color.bo[presented]))
+    bo = window->host_color.bo[presented];
+
+    if (igl_juniper_debug_enabled() && bo && bo->map && bo->size >= 4) {
+        words = (volatile uint32_t *)bo->map;
+        last_word = (size_t)(bo->size / 4u) - 1u;
+        fprintf(stderr,
+                "IRISGL Juniper: pre-present draw=%d token=%u first=0x%08x last=0x%08x\n",
+                presented,
+                bo->handle,
+                (uint32_t)words[0],
+                (uint32_t)words[last_word]);
+    }
+
+    if (!igl_juniper_runtime_present_bo(runtime, window, bo))
         return 0;
 
     window->host_color.front = presented;
