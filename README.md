@@ -1,4 +1,4 @@
-# Clogin decompilation project.
+# Pandora decompilation project.
 
 This is a cleanroom decompilation of the SGI IRIX graphical login program `/usr/Cadmin/bin/clogin`, targeting X11/Motif systems.
 
