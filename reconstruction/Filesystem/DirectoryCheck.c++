@@ -6,45 +6,31 @@
 #ifndef NFS_SUPER_MAGIC
 #define NFS_SUPER_MAGIC 0x6969
 #endif
-#ifndef XFS_SUPER_MAGIC
-#define XFS_SUPER_MAGIC 0x58465342
-#endif
-#ifndef EXT2_SUPER_MAGIC
-#define EXT2_SUPER_MAGIC 0xEF53
-#endif
-#ifndef BTRFS_SUPER_MAGIC
-#define BTRFS_SUPER_MAGIC 0x9123683E
-#endif
-#ifndef TMPFS_MAGIC
-#define TMPFS_MAGIC 0x01021994
-#endif
 
 namespace clogin {
-
-static bool isKnownLocal(long type)
-{
-    switch (static_cast<unsigned long>(type)) {
-    case XFS_SUPER_MAGIC:
-    case EXT2_SUPER_MAGIC:
-    case BTRFS_SUPER_MAGIC:
-    case TMPFS_MAGIC:
-        return true;
-    default:
-        return false;
-    }
-}
 
 DirectoryState checkDirectoryPortable(const std::string &path)
 {
     if (path.empty() || path[0] != '/' || path == "/dev/null")
         return kDirectoryOther;
 
+    /*
+     * Preserve the original checkDirectory() numeric contract.
+     *
+     * The shipped IRIX binary classifies NFS as 1, native IRIX local
+     * filesystems (efs/xfs) as 0, and everything else as 2.  A Linux
+     * filesystem such as ext4, btrfs, or tmpfs must therefore remain OTHER
+     * here rather than being re-labelled LOCAL for host convenience.
+     *
+     * Callers are responsible for their own state-2 behavior.  In particular,
+     * pandora::createIconList() performs an ordinary stat() fallback for state
+     * 2, while PandoraComponent::findUserPicture() requires state 0 exactly in
+     * local-picture mode.
+     */
     struct statfs fs;
     if (::statfs(path.c_str(), &fs) == 0) {
         if (static_cast<unsigned long>(fs.f_type) == NFS_SUPER_MAGIC)
             return kDirectoryNfs;
-        if (isKnownLocal(fs.f_type))
-            return kDirectoryLocal;
     }
 
     struct stat st;
