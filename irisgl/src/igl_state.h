@@ -12,7 +12,6 @@
  * be original libgl private names.
  */
 
-/* Canonical RRM resource-mask values from SGI sys/rrm.h. */
 enum {
     IGL_RMASK_PCX       = 0x00000001u,
     IGL_RMASK_CLIP      = 0x00000002u,
@@ -106,11 +105,19 @@ struct igl_juniper_bo;
 /*
  * Reconstructed host color-surface association.
  * This is host implementation state, not an original SGI structure.
+ *
+ * Single-buffer mode uses bo[0]. Double-buffer mode uses both entries; draw
+ * selects the back surface receiving commands, and front records the last
+ * surface handed to Present. A front value of -1 means no Juniper surface
+ * has been presented yet.
  */
 struct igl_host_color_surface {
-    struct igl_juniper_bo *bo;
+    struct igl_juniper_bo *bo[2];
     int width;
     int height;
+    int count;
+    int draw;
+    int front;
 };
 
 struct igl_window_state {
