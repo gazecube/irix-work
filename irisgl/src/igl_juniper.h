@@ -33,4 +33,16 @@ int igl_juniper_cp_dma_clear(struct igl_juniper_device *dev,
                              uint64_t size,
                              uint32_t value);
 
+/*
+ * Reconstructed bring-up boundary for the first native Juniper 3D draw.
+ * This is deliberately kept separate from the IRIS GL runtime until the
+ * hardware sequence is proven. The target is a linear RGBA8/BGRA-in-memory
+ * color surface with a 256-byte-aligned byte stride.
+ */
+int igl_juniper_draw_test_triangle(struct igl_juniper_device *dev,
+                                   struct igl_juniper_bo *color,
+                                   int width,
+                                   int height,
+                                   int stride);
+
 #endif /* IRISGL_IGL_JUNIPER_H */
