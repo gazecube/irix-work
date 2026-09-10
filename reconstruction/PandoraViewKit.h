@@ -47,7 +47,8 @@ private:
     void displayIcon();
     void showPasswordPrompt();
 
-    static void userViewActivateCB(Widget, XtPointer, XtPointer);
+    static void userViewSelectionCB(Widget, XtPointer, XtPointer);
+    static void userViewCommandCB(Widget, XtPointer, XtPointer);
     static void userTextActivateCB(Widget, XtPointer, XtPointer);
     static void passwordTextModifyVerifyCB(Widget, XtPointer, XtPointer);
 

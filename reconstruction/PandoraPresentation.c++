@@ -51,8 +51,12 @@ PandoraLayout::PandoraLayout(Widget panelWidget)
     : _panelWidget(panelWidget),
       _container(panelWidget),
       _fontProbe(NULL),
-      _activateCallback(NULL),
-      _activateClientData(NULL)
+      _selectionCallback(NULL),
+      _selectionClientData(NULL),
+      _commandCallback(NULL),
+      _commandClientData(NULL),
+      _selectedView(NULL),
+      _lastClickTime(0)
 {
     /*
      * Binary-proven PandoraLayout constants:
@@ -123,12 +127,20 @@ PandoraLayout::~PandoraLayout()
     }
 }
 
-void PandoraLayout::setActivateCallback(
+void PandoraLayout::setSelectionCallback(
     XtCallbackProc callback,
     XtPointer clientData)
 {
-    _activateCallback = callback;
-    _activateClientData = clientData;
+    _selectionCallback = callback;
+    _selectionClientData = clientData;
+}
+
+void PandoraLayout::setCommandCallback(
+    XtCallbackProc callback,
+    XtPointer clientData)
+{
+    _commandCallback = callback;
+    _commandClientData = clientData;
 }
 
 XmFontList PandoraLayout::fontList() const
@@ -178,13 +190,34 @@ void PandoraLayout::panelButtonEvent(
     UserView *view = self->viewAt(
         static_cast<Position>(event->xbutton.x),
         static_cast<Position>(event->xbutton.y));
-    if (view && self->_activateCallback)
+    if (!view)
+        return;
+
+    const bool selectionChanged = view != self->_selectedView;
+    if (selectionChanged)
     {
-        self->_activateCallback(
-            widget,
-            self->_activateClientData,
-            (XtPointer)view);
+        self->_selectedView = view;
+        if (self->_selectionCallback)
+            self->_selectionCallback(
+                widget, self->_selectionClientData, (XtPointer)view);
     }
+
+    /*
+     * Portable bridge for the binary-proven CheckForDoubleClick()/command
+     * channel. The original ImdIconPanel owns this state and emits
+     * kCommandCallback separately from kSelectionChangedCallback. Keep the
+     * channels separate here until the complete Imd callback/list ABI is
+     * reconstructed.
+     */
+    const Time now = event->xbutton.time;
+    const int multiClick = XtGetMultiClickTime(XtDisplay(widget));
+    const bool command = !selectionChanged && self->_lastClickTime != 0 &&
+        now - self->_lastClickTime <= static_cast<Time>(multiClick);
+    self->_lastClickTime = now;
+
+    if (command && self->_commandCallback)
+        self->_commandCallback(
+            widget, self->_commandClientData, (XtPointer)view);
 }
 
 void PandoraLayout::panelExposeCallback(

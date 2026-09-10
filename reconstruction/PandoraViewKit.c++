@@ -413,8 +413,11 @@ void PandoraComponent::createIconAreaScaffold()
             _renderer->setGallery(true);
 
         _layout = new PandoraLayout(panelWidget);
-        _layout->setActivateCallback(
-            &PandoraComponent::userViewActivateCB,
+        _layout->setSelectionCallback(
+            &PandoraComponent::userViewSelectionCB,
+            (XtPointer)this);
+        _layout->setCommandCallback(
+            &PandoraComponent::userViewCommandCB,
             (XtPointer)this);
         ImdViewPanelAdoptLayout(panelWidget, _layout);
 
@@ -479,7 +482,7 @@ void PandoraComponent::showPasswordPrompt()
     XmProcessTraversal(_passwordText, XmTRAVERSE_CURRENT);
 }
 
-void PandoraComponent::userViewActivateCB(
+void PandoraComponent::userViewSelectionCB(
     Widget,
     XtPointer clientData,
     XtPointer callData)
@@ -499,6 +502,29 @@ void PandoraComponent::userViewActivateCB(
     XmTextSetString(
         self->_userText,
         const_cast<char *>(view->name().c_str()));
+    self->showPasswordPrompt();
+}
+
+void PandoraComponent::userViewCommandCB(
+    Widget,
+    XtPointer clientData,
+    XtPointer callData)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    UserView *view = static_cast<UserView *>(callData);
+    if (!self || !view)
+        return;
+
+    /*
+     * Binary-proven commandCB resolves the command view's login and passes it
+     * to pandora::doubleClicked(). That state machine is the next RE target.
+     * Preserve the separate command boundary now; the portable action remains
+     * limited to keeping the selected login/prompt active until doubleClicked
+     * is reconstructed from the binary.
+     */
+    if (self->_userText)
+        XmTextSetString(
+            self->_userText, const_cast<char *>(view->name().c_str()));
     self->showPasswordPrompt();
 }
 

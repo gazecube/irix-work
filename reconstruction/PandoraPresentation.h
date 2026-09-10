@@ -37,7 +37,8 @@ public:
     void addView(UserView *view);
     void update();
     void resize();
-    void setActivateCallback(XtCallbackProc callback, XtPointer clientData);
+    void setSelectionCallback(XtCallbackProc callback, XtPointer clientData);
+    void setCommandCallback(XtCallbackProc callback, XtPointer clientData);
 
 private:
     static void panelStructureEvent(
@@ -62,8 +63,12 @@ private:
     Widget _panelWidget;
     Widget _container;
     Widget _fontProbe;
-    XtCallbackProc _activateCallback;
-    XtPointer _activateClientData;
+    XtCallbackProc _selectionCallback;
+    XtPointer _selectionClientData;
+    XtCallbackProc _commandCallback;
+    XtPointer _commandClientData;
+    UserView *_selectedView;
+    Time _lastClickTime;
     std::vector<UserView *> _views;
 };
 
