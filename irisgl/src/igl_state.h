@@ -111,12 +111,15 @@ struct igl_juniper_bo;
  * surface handed to Present. A front value of -1 means no Juniper surface
  * has been presented yet.
  *
- * native_present is reconstructed host bookkeeping. It becomes true only
- * after a Juniper BO has actually completed the DRI3/Present path, allowing
- * the compatibility X11 mirror to be suppressed on subsequent clears.
+ * token[] is a host lifetime identity, deliberately separate from the Radeon
+ * GEM handle. GEM handles may be reused immediately after gconfig() replaces
+ * a surface, while a cached DRI3 pixmap can still refer to the old storage.
+ * native_present becomes true only after a Juniper BO has completed the
+ * DRI3/Present path, allowing the compatibility X11 mirror to be suppressed.
  */
 struct igl_host_color_surface {
     struct igl_juniper_bo *bo[2];
+    uint32_t token[2];
     int width;
     int height;
     int stride;
