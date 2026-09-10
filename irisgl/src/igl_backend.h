@@ -67,6 +67,16 @@ int igl_backend_present_dma_buf(
     int stride);
 
 /*
+ * Reconstructed host lifetime boundary. Drop all cached DRI3 pixmaps for a
+ * window before the Radeon BOs backing them are destroyed or replaced. GEM
+ * handles may be reused immediately, so handle identity alone is not a safe
+ * lifetime key across gconfig()/resize transitions.
+ */
+void igl_backend_forget_dma_buf_surfaces(
+    struct igl_backend *backend,
+    struct igl_backend_window *window);
+
+/*
  * Backend synchronization boundary for IRIS GL gsync().  The X11 backend
  * uses Present MSC timing and, once gsync() is used in single-buffer mode,
  * stages frames in alternating pixmaps so completed drawing is presented on
