@@ -45,4 +45,20 @@ int igl_juniper_draw_test_triangle(struct igl_juniper_device *dev,
                                    int height,
                                    int stride);
 
+/*
+ * Reconstructed generalized bring-up boundary. Vertices are screen-space
+ * float4 values matching the proven PA_CL_VTE_CNTL/VTX_XY_FMT path. rgb is
+ * packed 0x00RRGGBB; alpha remains 1.0 in the fixed flat-color PS.
+ *
+ * Keep this separate from the public IRIS GL API until original primitive
+ * entry-point behavior is recovered and verified.
+ */
+int igl_juniper_draw_flat_triangle(struct igl_juniper_device *dev,
+                                   struct igl_juniper_bo *color,
+                                   int width,
+                                   int height,
+                                   int stride,
+                                   const float vertices[3][4],
+                                   uint32_t rgb);
+
 #endif /* IRISGL_IGL_JUNIPER_H */
