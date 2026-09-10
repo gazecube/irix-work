@@ -1,0 +1,94 @@
+name: Clogin enumeration archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-enumeration-archaeology.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  archaeology:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          fetch-depth: 1
+
+      - name: Locate original clogin binary
+        run: |
+          set -eu
+          rm -rf /tmp/clogin-evidence
+          mkdir -p /tmp/clogin-evidence
+          found=''
+          while IFS= read -r tarball; do
+            if tar tf "$tarball" 2>/dev/null | grep -q '/usr/Cadmin/bin/clogin$\|^usr/Cadmin/bin/clogin$'; then
+              echo "found clogin in $tarball"
+              tar xf "$tarball" -C /tmp/clogin-evidence
+              found=$(find /tmp/clogin-evidence -type f -path '*/usr/Cadmin/bin/clogin' -print -quit)
+              break
+            fi
+          done < <(find irix-re/evidence -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' \) -print)
+          if [ -z "$found" ]; then
+            found=$(find irix-re/evidence -type f -name clogin -print -quit)
+          fi
+          test -n "$found"
+          cp "$found" /tmp/clogin
+          file /tmp/clogin
+          sha256sum /tmp/clogin
+
+      - name: Dump enumeration symbols and call sites
+        run: |
+          set -eu
+          out=/tmp/clogin-enumeration-archaeology.txt
+          : > "$out"
+          {
+            echo '== file =='
+            file /tmp/clogin
+            sha256sum /tmp/clogin
+            echo
+            echo '== relevant symbols =='
+            readelf -Ws /tmp/clogin | grep -E 'createIconList|addUser|alreadyKnown|IsInIgnoreList|checkDirectory|getShowAnywayList|getNoshowList|getIgnoreList|isBuiltInName|PwdNameList' || true
+            echo
+            echo '== all dynamic symbols around Pandora/PwdNameList =='
+            readelf -Ws /tmp/clogin | grep -E 'Pandora|pandora|PwdNameList' || true
+            echo
+            echo '== relocations / symbol references =='
+            readelf -r /tmp/clogin | grep -E 'getpwent|setpwent|endpwent|stat|strcmp|PwdNameList|Ignore|ShowAnyway|Noshow' || true
+          } >> "$out"
+
+          python3 - <<'PY' >> "$out"
+          import re, subprocess
+          binary='/tmp/clogin'
+          txt=subprocess.check_output(['readelf','-Ws',binary], text=True, errors='replace')
+          names=['createIconList__7pandoraGv','addUser__16PandoraComponentGP7xpasswd','alreadyKnown__16PandoraComponentGPc','IsInIgnoreList','getShowAnywayList__11PwdNameListGv','getNoshowList__11PwdNameListGv','getIgnoreList__11PwdNameListGv']
+          syms=[]
+          for line in txt.splitlines():
+            m=re.search(r'\b([0-9a-fA-F]{8,16})\s+(\d+)\s+FUNC\s+\S+\s+\S+\s+\S+\s+(.+)$', line)
+            if not m: continue
+            addr=int(m.group(1),16); size=int(m.group(2)); name=m.group(3).strip().split('@')[0]
+            if any(k in name for k in names) or any(k in name for k in ['createIconList','addUser','alreadyKnown','IsInIgnoreList']):
+              syms.append((addr,size,name))
+          print('\n== targeted disassembly ==')
+          for addr,size,name in syms:
+            stop=addr+max(size,64)
+            print(f'\n-- {name} 0x{addr:x} size={size} --')
+            try:
+              print(subprocess.check_output(['objdump','-dr','--start-address',hex(addr),'--stop-address',hex(stop),binary], text=True, errors='replace'))
+            except subprocess.CalledProcessError as e:
+              print(e.output)
+          PY
+
+          echo >> "$out"
+          echo '== textual references to show/noshow/ignore and +/- ==' >> "$out"
+          strings -a -t x /tmp/clogin | grep -E 'show|noshow|ignore|machineicon|noicon|nodelete|^.*[[:space:]][+-][[:space:]]*$' >> "$out" || true
+          cat "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clogin-enumeration-archaeology
+          path: /tmp/clogin-enumeration-archaeology.txt
+          if-no-files-found: error
