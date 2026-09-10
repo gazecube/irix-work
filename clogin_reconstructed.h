@@ -193,25 +193,35 @@ static int clogin_path_is_ignored(const char *path)
 static CloginDirectoryState clogin_check_directory(const char *path)
 {
 	struct stat st;
-	if(path == NULL || path[0] == '\0') { return CLOGIN_DIR_MISSING; }
-	if(stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) { return CLOGIN_DIR_MISSING; }
+	CloginDirectoryState state = CLOGIN_DIR_OTHER;
+
+	/* Original checkDirectory() returns 2 for NULL/non-absolute paths and
+	 * explicitly treats /dev/null as the same unclassified state. */
+	if(path == NULL || path[0] != '/') return CLOGIN_DIR_OTHER;
+	if(strcmp(path, "/dev/null") == 0) return CLOGIN_DIR_OTHER;
+
 #ifdef __linux__
 	{
 		struct statfs fs;
 		if(statfs(path, &fs) == 0)
 		{
 			if((unsigned long)fs.f_type == (unsigned long)NFS_SUPER_MAGIC)
-				return CLOGIN_DIR_NFS;
-			/* Linux has no direct efs/xfs equivalence to IRIX's local test;
-			 * all non-NFS mounted directories are treated as local for the
-			 * portability boundary. */
-			return CLOGIN_DIR_LOCAL;
+				state = CLOGIN_DIR_NFS;
+			else
+				state = CLOGIN_DIR_OTHER;
 		}
 	}
 #endif
-	return CLOGIN_DIR_OTHER;
-}
 
+	/* The original validates classified states other than OTHER with
+	 * stat(); failure or non-directory becomes state 3. */
+	if(state != CLOGIN_DIR_OTHER)
+	{
+		if(stat(path, &st) != 0 || !S_ISDIR(st.st_mode))
+			return CLOGIN_DIR_MISSING;
+	}
+	return state;
+}
 static int clogin_user_eligible(const struct passwd *pw)
 {
 	const CloginPolicyEntry *entry;
