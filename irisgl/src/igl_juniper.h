@@ -24,6 +24,9 @@ void igl_juniper_bo_destroy(struct igl_juniper_device *dev,
                             struct igl_juniper_bo *bo);
 int igl_juniper_bo_wait(struct igl_juniper_device *dev,
                         struct igl_juniper_bo *bo);
+int igl_juniper_bo_export_prime(struct igl_juniper_device *dev,
+                                struct igl_juniper_bo *bo,
+                                int *dma_buf_fd);
 int igl_juniper_cp_dma_clear(struct igl_juniper_device *dev,
                              struct igl_juniper_bo *bo,
                              uint64_t offset,
