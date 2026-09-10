@@ -29,19 +29,38 @@ static int run_login_gui(int argc, char **argv,
 
 	if(pid == 0)
 	{
+		char child_username[MAX_USERNAME_LEN + 1];
+		int authenticated = 0;
+		const char *legacy = getenv("CLOGIN_USE_LEGACY_MOTIF");
+
 		close(pipefd[0]);
-
 		setenv("DISPLAY", g_display_str, 1);
-		memset(g_auth_username, 0, sizeof(g_auth_username));
+		memset(child_username, 0, sizeof(child_username));
 
-		/* Keep the known-good Motif greeter live while the reconstructed
-		 * Pandora tree remains available for controlled testing. */
-		run_motif_gui(argc, argv);
-
-		if(strlen(g_auth_username) > 0)
+		/*
+		 * The reconstructed ViewKit Pandora implementation is the primary
+		 * greeter. Keep the old Motif prototype available only as an explicit
+		 * debugging fallback while host integration is being shaken out.
+		 */
+		if(legacy != NULL && legacy[0] != '\0' && strcmp(legacy, "0") != 0)
 		{
-			write(pipefd[1], g_auth_username, strlen(g_auth_username));
+			memset(g_auth_username, 0, sizeof(g_auth_username));
+			run_motif_gui(argc, argv);
+			if(strlen(g_auth_username) > 0)
+			{
+				strncpy(child_username, g_auth_username, MAX_USERNAME_LEN);
+				child_username[MAX_USERNAME_LEN] = '\0';
+				authenticated = 1;
+			}
 		}
+		else
+		{
+			authenticated = run_pandora_gui(
+				argc, argv, child_username, sizeof(child_username));
+		}
+
+		if(authenticated && strlen(child_username) > 0)
+			write(pipefd[1], child_username, strlen(child_username));
 
 		close(pipefd[1]);
 		_exit(0);
