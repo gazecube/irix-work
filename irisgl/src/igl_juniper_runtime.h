@@ -18,5 +18,7 @@ int igl_juniper_runtime_ensure_surface(struct igl_runtime_state *runtime,
 int igl_juniper_runtime_clear(struct igl_runtime_state *runtime,
                               struct igl_window_state *window,
                               uint32_t rgba8);
+int igl_juniper_runtime_present(struct igl_runtime_state *runtime,
+                                struct igl_window_state *window);
 
 #endif /* IRISGL_IGL_JUNIPER_RUNTIME_H */
