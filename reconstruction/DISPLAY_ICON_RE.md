@@ -7,38 +7,62 @@ Targets:
 
 ## displayIcon()
 
-The function operates on the component's Imd icon panel/model rather than directly painting Motif labels.
+The function operates on the component's Imd icon panel/model rather than directly painting Motif labels or enumerating passwd entries.
 
 Recovered flow:
 
 1. Begin a blocked Imd panel update with `ImdViewPanelBeginBlockChanges`.
-2. Iterate the component's user/model collection at `PandoraComponent +0x50`.
-3. For each model object, construct a `UserView` (`UserView::UserView(const ImdString &, long, long)`).
-4. Add/configure that view through the panel/view interfaces at `PandoraComponent +0x84`.
+2. Iterate the component's already-built user/model collection at `PandoraComponent +0x50`.
+3. For each model object, construct a `UserView` using the binary-proven constructor payload.
+4. Add/adopt that view through the Imd panel/view interfaces at `PandoraComponent +0x84`.
 5. Continue until the model iterator is exhausted.
 6. End the blocked update with `ImdViewPanelEndBlockChanges`.
 
-This proves the original icon screen is an Imd view/model pipeline, not a row of Motif push buttons.
+This proves the original icon screen is an Imd model/view pipeline, not a row of Motif push buttons and not a passwd-enumeration routine.
 
-## Current live Linux probe boundary
+## Responsibility split now used by the reconstruction
 
-The ViewKit probe now calls a reconstructed `PandoraComponent::displayIcon()` after the binary-proven `ImdIconPanel("panel", ...)` is created.
+The cleanroom C++ path now follows the recovered architecture:
 
-Account enumeration follows the recovered IRIX gates already documented for `pandora::createIconList()` where they map cleanly to Linux today:
+```text
+pandora::createIconList()
+    -> passwd / NIS enumeration
+    -> policy and directory filtering
+    -> PandoraComponent::addUser()
+    -> component user-model collection
 
-- enumerate with `getpwent()` rather than a UID threshold,
-- reject empty login names,
-- reject empty home paths,
-- reject a literal `"*"` passwd field,
-- honor `noshow` and `noicon` from `/var/sysadm/config/clogin.conf`,
-- honor configured ignored home prefixes,
-- require the home path to exist and be a directory.
+PandoraComponent::displayIcon()
+    -> iterate component user-model collection
+    -> construct UserView instances
+    -> PandoraLayout::addView()
+    -> ImdIconPanel::adoptView()
+```
 
-When `/var/sysadm/config/clogin.conf` is absent on a Linux development machine, the probe additionally suppresses accounts whose shell basename is `nologin` or `false`. This is explicitly a reconstructed Linux probe fallback for the missing SGI account metadata, not original IRIX policy. It must disappear as an eligibility rule once the installed Clogin configuration/passwd metadata path is available.
+The portable `PandoraUserModel` type is explicitly reconstructed storage for this boundary. Its name and C++ layout are not claims about the original 0x1c-byte SGI model object's concrete class or ABI; the original class name remains unresolved.
 
-The actual `UserView`/renderer/layout classes are still being reconstructed. Until those interfaces are linkable, each accepted account is represented by a Motif push-button child inside a temporary RowColumn under the reconstructed `imdViewPanelWidgetClass`. Activating one copies the account name into the existing `userText` field. This temporary rendering backend preserves the original `displayIcon()` boundary and user-selection direction without claiming the push buttons are original UI machinery.
+## UserView constructor
 
-No generic Linux `UID >= 1000` filter is used.
+The exported/mangled constructor evidence identifies the original constructor shape as:
+
+```text
+UserView(const ImdString &login, long uid, const ImdString &home)
+```
+
+The portable reconstruction currently carries equivalent logical values as C++ strings plus uid storage while preserving the original constructor boundary at the presentation layer.
+
+## Account filtering belongs before displayIcon()
+
+Binary evidence for `pandora::createIconList()` shows that account-source and filtering work happens before `displayIcon()`:
+
+- passwd enumeration uses `setpwent()` / `getpwent()`;
+- local-home policy affects IRIX passwd/YP enumeration through `_getpwent_no_yp`;
+- leading `+` / `-` records use the recovered passwd/NIS compatibility path;
+- `PwdNameList` `noshow` / `noicon` flags participate in filtering;
+- ignore-list paths participate in filtering;
+- `checkDirectory()` state handling participates in filtering;
+- accepted records become component model objects through `addUser()`.
+
+`displayIcon()` must not duplicate these gates.
 
 ## showPicture()
 
@@ -55,11 +79,20 @@ High-confidence operations:
 
 The image file descriptor/path has already been selected by `findUserPicture()`; `showPicture()` is the rendering/presentation half.
 
-## Porting consequence
+## Current reconstruction boundary
 
-For the first Linux implementation we do not need to reproduce the entire libimd renderer before a working login screen is possible. The behavioral boundary can be preserved as:
+The next fidelity target is no longer passwd enumeration inside `displayIcon()`. It is panel selection and callback behavior:
 
-- `displayIcon()` -> populate a user-icon view from the reconstructed user model
-- `showPicture()` -> switch to a selected-user picture view
+```text
+ImdIconPanel::kSelectionChangedCallback
+    -> PandoraComponent::selectCB
+    -> selected-view list
+    -> selected UserView/model login
+    -> userText / selected-user presentation
 
-The initial portable renderer may use Motif/Xpm while retaining these original function boundaries. Replacing it with reconstructed Imd UI machinery can happen incrementally.
+ImdIconPanel::kCommandCallback
+    -> PandoraComponent::commandCB
+    -> command/double-activation path
+```
+
+Until the complete selected-view list ABI is reconstructed, any direct layout activation callback must remain explicitly marked as a portable temporary seam rather than original Clogin behavior.
