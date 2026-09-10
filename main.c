@@ -60,6 +60,7 @@
 #undef XtRealizeWidget
 
 #include "pandora_ui.h"
+#include "pandora_runtime.h"
 #include "x11mgmt.h"
 #include "irix_session.h"
 #include "session.h"
