@@ -76,6 +76,16 @@ static int igl_dri3_debug_enabled(void)
     return value && *value && *value != '0';
 }
 
+static uint32_t igl_dri3_next_serial(struct igl_backend *backend)
+{
+    uint32_t serial;
+
+    serial = ++backend->present_serial;
+    if (serial == 0)
+        serial = ++backend->present_serial;
+    return serial;
+}
+
 static void igl_dri3_report_failure(const char *reason)
 {
     if (!igl_dri3_debug_enabled() || igl_dri3_reported_failure)
@@ -205,14 +215,6 @@ static int igl_dri3_wait_present(struct igl_backend *backend,
                 complete->serial_number == serial &&
                 complete->window == window->xwindow) {
                 complete_seen = 1;
-
-                /*
-                 * COPY mode does not retain scanout ownership of the source
-                 * pixmap. The previously presented source is therefore also
-                 * reusable even if its IdleNotify was delivered (and possibly
-                 * consumed by the IRIS GL event poller) before this swap.
-                 * FLIP mode still requires the explicit old-front IdleNotify.
-                 */
                 if (complete->mode == PresentCompleteModeCopy)
                     old_idle_seen = 1;
 
@@ -234,6 +236,57 @@ static int igl_dri3_wait_present(struct igl_backend *backend,
     }
 
     return 1;
+}
+
+void igl_backend_wait_retrace(struct igl_backend *backend,
+                              struct igl_backend_window *window)
+{
+    struct igl_dri3_present_wait wait;
+    XEvent event;
+    uint32_t serial;
+
+    if (!backend || !backend->display || !window)
+        return;
+
+    if (!backend->present_available || !window->present_event_id) {
+        XSync(backend->display, False);
+        return;
+    }
+
+    serial = igl_dri3_next_serial(backend);
+    XPresentNotifyMSC(backend->display, window->xwindow,
+                      serial, 0, 1, 0);
+    XFlush(backend->display);
+
+    wait.opcode = backend->present_opcode;
+    for (;;) {
+        XPresentCompleteNotifyEvent *complete;
+
+        XIfEvent(backend->display, &event,
+                 igl_dri3_present_event, (XPointer)&wait);
+        if (!XGetEventData(backend->display, &event.xcookie))
+            continue;
+
+        if (event.xcookie.evtype != PresentCompleteNotify) {
+            XFreeEventData(backend->display, &event.xcookie);
+            continue;
+        }
+
+        complete = (XPresentCompleteNotifyEvent *)event.xcookie.data;
+        if (complete &&
+            complete->kind == PresentCompleteKindNotifyMSC &&
+            complete->serial_number == serial &&
+            complete->window == window->xwindow) {
+            if (igl_dri3_debug_enabled())
+                fprintf(stderr,
+                        "IRISGL DRI3: native retrace complete serial=%u msc=%llu\n",
+                        serial, (unsigned long long)complete->msc);
+            XFreeEventData(backend->display, &event.xcookie);
+            return;
+        }
+
+        XFreeEventData(backend->display, &event.xcookie);
+    }
 }
 
 int igl_backend_present_dma_buf(struct igl_backend *backend,
@@ -323,18 +376,9 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
         surface->stride = stride;
     }
 
-    /*
-     * Debug-only cross-check: read the imported pixmap through X before
-     * Present. If the Radeon BO readback is white but X sees black here,
-     * the remaining bug is in dma-buf import/layout/coherency rather than
-     * IRIS GL state or Juniper command generation.
-     */
     igl_dri3_trace_pixel(backend, surface);
 
-    serial = ++backend->present_serial;
-    if (serial == 0)
-        serial = ++backend->present_serial;
-
+    serial = igl_dri3_next_serial(backend);
     old_front = window_state->front;
 
     XPresentPixmap(backend->display,
