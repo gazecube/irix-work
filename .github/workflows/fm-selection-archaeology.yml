@@ -61,11 +61,11 @@ jobs:
           }
           for s in \
             selectAll__13FmMenuActionsGv \
+            selectAllCB__13FmMenuActionsSF9ImdViewerT1P7ImdViewPvT3_i \
             selectAllHelper__13FmMenuActionsSGP7ImdViewPv \
-            selectAllCB__8FmWindowSGP10_WidgetRecPvT2 \
-            setSelectionHolder__13FmMenuActionsGP22ImdModelBasedIconPanel \
+            setSelectionHolder__13FmMenuActionsGv \
             _getSelectionHolder__13FmMenuHandlerGv \
-            _selectionChangedCB__8FmWindowSGP16VkCallbackObjectPvT2; do
+            _selectionChangedCB__8FmWindowSF9ImdViewerT1P7ImdViewPvT3_i; do
             dump_symbol "$FM" /tmp/fm-symbols.raw "$s"
           done
           for s in \
