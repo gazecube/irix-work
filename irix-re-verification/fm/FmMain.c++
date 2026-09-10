@@ -354,22 +354,37 @@ static void openSelectedCB(Widget, XtPointer client, XtPointer)
     openEntry(state, entry);
 }
 
+/*
+ * Original fm exports selectAllHelper(ImdView *, void *). The N32 body:
+ *   - converts the generic ImdView to an icon view,
+ *   - rejects views whose visible/state bit is clear,
+ *   - rejects views already carrying icon-state flag 8, and
+ *   - asks the selection holder to extend the selection.
+ *
+ * The portable dynamic_cast/portableVisible() calls are host ABI seams; the
+ * ordering and selection test come from the original fm disassembly.
+ */
+static void selectAllHelper(ImdView *rawView, void *client)
+{
+    ImdModelBasedIconPanel *selectionHolder = (ImdModelBasedIconPanel *)client;
+    ImdIconView *view = dynamic_cast<ImdIconView *>(rawView);
+    if (!selectionHolder || !view) return;
+    if (!view->portableVisible()) return;
+    if (view->getFlag(8u)) return;
+    selectionHolder->extendSelect(view);
+}
+
 static void selectAllCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    const std::vector<ImdView *> &views = state->dirPanel->portableViews();
-    state->dirPanel->beginSelectBlock();
-    for (std::vector<ImdView *>::const_iterator it = views.begin(); it != views.end(); ++it) {
-        ImdIconView *view = dynamic_cast<ImdIconView *>(*it);
-        if (!view || !view->portableVisible() || view->getFlag(8u)) continue;
-        state->dirPanel->extendSelect(view);
-    }
-    state->dirPanel->endSelectBlock();
+    ImdModelBasedIconPanel *selectionHolder = state->dirPanel;
+    if (!selectionHolder) return;
 
-    char text[96];
-    snprintf(text, sizeof(text), "%lu items selected",
-             (unsigned long)state->dirPanel->portableSelectedViews().size());
-    setStatus(state, text);
+    const std::vector<ImdView *> &views = selectionHolder->portableViews();
+    selectionHolder->beginSelectBlock();
+    for (std::vector<ImdView *>::const_iterator it = views.begin(); it != views.end(); ++it)
+        selectAllHelper(*it, selectionHolder);
+    selectionHolder->endSelectBlock();
 }
 
 static void showHiddenCB(Widget widget, XtPointer client, XtPointer call)
