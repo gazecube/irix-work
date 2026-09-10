@@ -304,26 +304,28 @@ void color(Colorindex index)
 void clear(void)
 {
     int hardware_clear;
+    struct igl_window_state *window;
 
     igl_init_once();
-    if (!igl.current_window)
+    window = igl.current_window;
+    if (!window)
         return;
 
-    hardware_clear = igl_juniper_runtime_clear(
-        &igl, igl.current_window, igl_host_rgba8());
+    hardware_clear = igl_juniper_runtime_clear(&igl, window, igl_host_rgba8());
 
-    if (hardware_clear &&
-        !igl.current_window->committed.double_buffer &&
-        igl_juniper_runtime_present(&igl, igl.current_window))
+    if (hardware_clear && !window->committed.double_buffer) {
+        if (igl_juniper_runtime_present(&igl, window))
+            return;
+    } else if (hardware_clear && window->host_color.native_present) {
+        /*
+         * A native double-buffer Present has already completed for this
+         * surface set, so the Juniper draw BO is now the authoritative back
+         * buffer. Do not also paint the compatibility X11 backbuffer.
+         */
         return;
+    }
 
-    /*
-     * During initial native double-buffer bring-up, preserve the X11
-     * backbuffer mirror so swapbuffers() still has a valid fallback if DRI3
-     * import/presentation fails. Once native swapping is proven on hardware,
-     * this duplicate rendering can be removed.
-     */
-    igl_backend_clear(igl.backend, igl.current_window->backend_window);
+    igl_backend_clear(igl.backend, window->backend_window);
 }
 
 void swapbuffers(void)
