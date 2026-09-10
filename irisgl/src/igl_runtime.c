@@ -243,7 +243,6 @@ void gconfig(void)
     window->pane.validmask |= window->rnode.reqmask;
     window->rnode.reqmask = 0;
 
-    /* Documented IRIS GL gconfig semantics reset current color state. */
     igl.current_red = 0;
     igl.current_green = 0;
     igl.current_blue = 0;
@@ -304,15 +303,26 @@ void color(Colorindex index)
 
 void clear(void)
 {
+    int hardware_clear;
+
     igl_init_once();
     if (!igl.current_window)
         return;
 
+    hardware_clear = igl_juniper_runtime_clear(
+        &igl, igl.current_window, igl_host_rgba8());
+
     /*
-     * Native host acceleration path. The X11 clear remains the presentation
-     * path until the Radeon-backed surface is directly presentable.
+     * In single-buffer mode a successful DRI3 Present makes the Juniper BO
+     * itself the visible source. Keep the old X11 rendering path as a strict
+     * compatibility fallback, and retain it for double buffering until the
+     * native front/back surface pair is implemented.
      */
-    igl_juniper_runtime_clear(&igl, igl.current_window, igl_host_rgba8());
+    if (hardware_clear &&
+        !igl.current_window->committed.double_buffer &&
+        igl_juniper_runtime_present(&igl, igl.current_window))
+        return;
+
     igl_backend_clear(igl.backend, igl.current_window->backend_window);
 }
 
@@ -380,7 +390,6 @@ void reshapeviewport(void)
     igl_juniper_runtime_ensure_surface(&igl, igl.current_window);
 }
 
-/* IRIX libc compatibility needed by the original stress source. */
 long sginap(long ticks)
 {
     struct timespec req;
