@@ -2,6 +2,7 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xlib-xcb.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/Xpresent.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -81,6 +82,32 @@ static void igl_dri3_report_failure(const char *reason)
         return;
     fprintf(stderr, "IRISGL DRI3: fallback (%s)\n", reason);
     igl_dri3_reported_failure = 1;
+}
+
+static void igl_dri3_trace_pixel(struct igl_backend *backend,
+                                 struct igl_dri3_surface *surface)
+{
+    XImage *image;
+    unsigned long pixel;
+
+    if (!igl_dri3_debug_enabled() || !backend || !surface || !surface->pixmap)
+        return;
+
+    image = XGetImage(backend->display, surface->pixmap,
+                      0, 0, 1, 1, AllPlanes, ZPixmap);
+    if (!image) {
+        fprintf(stderr,
+                "IRISGL DRI3: XGetImage failed token=%u pixmap=0x%lx\n",
+                surface->token, (unsigned long)surface->pixmap);
+        return;
+    }
+
+    pixel = XGetPixel(image, 0, 0);
+    fprintf(stderr,
+            "IRISGL DRI3: X sees token=%u pixmap=0x%lx pixel=0x%08lx\n",
+            surface->token, (unsigned long)surface->pixmap,
+            pixel & 0xfffffffful);
+    XDestroyImage(image);
 }
 
 static Bool igl_dri3_present_event(Display *display,
@@ -295,6 +322,14 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
         surface->height = height;
         surface->stride = stride;
     }
+
+    /*
+     * Debug-only cross-check: read the imported pixmap through X before
+     * Present. If the Radeon BO readback is white but X sees black here,
+     * the remaining bug is in dma-buf import/layout/coherency rather than
+     * IRIS GL state or Juniper command generation.
+     */
+    igl_dri3_trace_pixel(backend, surface);
 
     serial = ++backend->present_serial;
     if (serial == 0)
