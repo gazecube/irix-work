@@ -54,7 +54,18 @@ struct igl_dri3_surface {
     struct igl_dri3_surface *next;
 };
 
+struct igl_dri3_window_state {
+    struct igl_backend_window *window;
+    Pixmap front;
+    struct igl_dri3_window_state *next;
+};
+
+struct igl_dri3_present_wait {
+    int opcode;
+};
+
 static struct igl_dri3_surface *igl_dri3_surfaces;
+static struct igl_dri3_window_state *igl_dri3_windows;
 static int igl_dri3_reported_success;
 static int igl_dri3_reported_failure;
 
@@ -72,24 +83,40 @@ static void igl_dri3_report_failure(const char *reason)
     igl_dri3_reported_failure = 1;
 }
 
+static Bool igl_dri3_present_event(Display *display,
+                                   XEvent *event,
+                                   XPointer arg)
+{
+    struct igl_dri3_present_wait *wait;
+
+    (void)display;
+    wait = (struct igl_dri3_present_wait *)arg;
+    return event->type == GenericEvent &&
+           event->xcookie.extension == wait->opcode &&
+           (event->xcookie.evtype == PresentCompleteNotify ||
+            event->xcookie.evtype == PresentIdleNotify);
+}
+
 static struct igl_dri3_surface *igl_dri3_find(
-    struct igl_backend_window *window)
+    struct igl_backend_window *window,
+    uint32_t token)
 {
     struct igl_dri3_surface *surface;
 
     for (surface = igl_dri3_surfaces; surface; surface = surface->next) {
-        if (surface->window == window)
+        if (surface->window == window && surface->token == token)
             return surface;
     }
     return NULL;
 }
 
 static struct igl_dri3_surface *igl_dri3_get(
-    struct igl_backend_window *window)
+    struct igl_backend_window *window,
+    uint32_t token)
 {
     struct igl_dri3_surface *surface;
 
-    surface = igl_dri3_find(window);
+    surface = igl_dri3_find(window, token);
     if (surface)
         return surface;
 
@@ -97,9 +124,73 @@ static struct igl_dri3_surface *igl_dri3_get(
     if (!surface)
         return NULL;
     surface->window = window;
+    surface->token = token;
     surface->next = igl_dri3_surfaces;
     igl_dri3_surfaces = surface;
     return surface;
+}
+
+static struct igl_dri3_window_state *igl_dri3_window_get(
+    struct igl_backend_window *window)
+{
+    struct igl_dri3_window_state *state;
+
+    for (state = igl_dri3_windows; state; state = state->next) {
+        if (state->window == window)
+            return state;
+    }
+
+    state = calloc(1, sizeof(*state));
+    if (!state)
+        return NULL;
+    state->window = window;
+    state->front = None;
+    state->next = igl_dri3_windows;
+    igl_dri3_windows = state;
+    return state;
+}
+
+static int igl_dri3_wait_present(struct igl_backend *backend,
+                                 struct igl_backend_window *window,
+                                 uint32_t serial,
+                                 Pixmap old_front)
+{
+    struct igl_dri3_present_wait wait;
+    XEvent event;
+    int complete_seen;
+    int old_idle_seen;
+
+    complete_seen = 0;
+    old_idle_seen = old_front == None;
+    wait.opcode = backend->present_opcode;
+
+    while (!complete_seen || !old_idle_seen) {
+        XIfEvent(backend->display, &event,
+                 igl_dri3_present_event, (XPointer)&wait);
+        if (!XGetEventData(backend->display, &event.xcookie))
+            continue;
+
+        if (event.xcookie.evtype == PresentCompleteNotify) {
+            XPresentCompleteNotifyEvent *complete;
+            complete = (XPresentCompleteNotifyEvent *)event.xcookie.data;
+            if (complete &&
+                complete->kind == PresentCompleteKindPixmap &&
+                complete->serial_number == serial &&
+                complete->window == window->xwindow)
+                complete_seen = 1;
+        } else if (event.xcookie.evtype == PresentIdleNotify &&
+                   old_front != None) {
+            XPresentIdleNotifyEvent *idle;
+            idle = (XPresentIdleNotifyEvent *)event.xcookie.data;
+            if (idle && idle->window == window->xwindow &&
+                idle->pixmap == old_front)
+                old_idle_seen = 1;
+        }
+
+        XFreeEventData(backend->display, &event.xcookie);
+    }
+
+    return 1;
 }
 
 int igl_backend_present_dma_buf(struct igl_backend *backend,
@@ -112,12 +203,14 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
                                 int stride)
 {
     struct igl_dri3_surface *surface;
+    struct igl_dri3_window_state *window_state;
     xcb_connection_t *connection;
     xcb_void_cookie_t cookie;
     xcb_generic_error_t *error;
     xcb_pixmap_t pixmap;
     uint32_t serial;
     unsigned int depth;
+    Pixmap old_front;
 
     if (!backend || !backend->display || !window || dma_buf_fd < 0 ||
         width <= 0 || height <= 0 || stride <= 0 || !size) {
@@ -125,11 +218,7 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
         return 0;
     }
 
-    if (window->doublebuffered) {
-        igl_dri3_report_failure("native double buffering not implemented yet");
-        return 0;
-    }
-    if (!backend->present_available) {
+    if (!backend->present_available || !window->present_event_id) {
         igl_dri3_report_failure("X Present extension unavailable");
         return 0;
     }
@@ -140,13 +229,19 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
         return 0;
     }
 
-    surface = igl_dri3_get(window);
+    surface = igl_dri3_get(window, token);
     if (!surface) {
         igl_dri3_report_failure("surface cache allocation failed");
         return 0;
     }
 
-    if (!surface->pixmap || surface->token != token ||
+    window_state = igl_dri3_window_get(window);
+    if (!window_state) {
+        igl_dri3_report_failure("window presentation state allocation failed");
+        return 0;
+    }
+
+    if (!surface->pixmap ||
         surface->width != width || surface->height != height ||
         surface->stride != stride) {
         if (surface->pixmap)
@@ -180,7 +275,6 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
         }
 
         surface->pixmap = (Pixmap)pixmap;
-        surface->token = token;
         surface->width = width;
         surface->height = height;
         surface->stride = stride;
@@ -189,6 +283,8 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
     serial = ++backend->present_serial;
     if (serial == 0)
         serial = ++backend->present_serial;
+
+    old_front = window_state->front;
 
     XPresentPixmap(backend->display,
                    window->xwindow,
@@ -209,10 +305,25 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
                    0);
     XFlush(backend->display);
 
+    /*
+     * In native double-buffer mode, do not return the old front buffer to
+     * IRIS GL for drawing until Present reports it idle. This is the host
+     * equivalent of the source-proven front/back ownership transition.
+     */
+    if (window->doublebuffered &&
+        !igl_dri3_wait_present(backend, window, serial, old_front))
+        return 0;
+
+    window_state->front = surface->pixmap;
+
     if (igl_dri3_debug_enabled() && !igl_dri3_reported_success) {
         fprintf(stderr,
                 "IRISGL DRI3: Juniper dma-buf is direct presentation source\n");
         igl_dri3_reported_success = 1;
     }
+    if (igl_dri3_debug_enabled() && window->doublebuffered)
+        fprintf(stderr,
+                "IRISGL DRI3: native Juniper front/back swap token=%u\n",
+                token);
     return 1;
 }
