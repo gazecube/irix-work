@@ -63,6 +63,7 @@ CXX_SOURCES = \
 	reconstruction/ImdFtrVisualCompat.c++ \
 	reconstruction/Base/PwdNameList.c++ \
 	reconstruction/Filesystem/DirectoryCheck.c++ \
+	reconstruction/Icon/UserPictureResolver.c++ \
 	reconstruction/imd/ImdString.c++ \
 	reconstruction/imd/ImdIconPanel.c++ \
 	reconstruction/imd/DragManager.c++ \
