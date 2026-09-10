@@ -4,9 +4,11 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror
 CPPFLAGS += -Iinclude -Iinclude/gl -Isrc
 
 LIB = libgl.a
-OBJS = src/igl_runtime.o src/igl_backend_x11.o src/igl_hw_linux.o \
-	src/igl_juniper.o src/igl_juniper_runtime.o
-X11_LIBS = -lX11 -lXpresent
+OBJS = src/igl_runtime.o src/igl_backend_x11.o src/igl_backend_dri3.o \
+	src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_runtime.o
+X11_DRI3_CFLAGS := $(shell pkg-config --cflags x11-xcb xcb xcb-dri3 2>/dev/null)
+X11_DRI3_LIBS := $(shell pkg-config --libs x11-xcb xcb xcb-dri3 2>/dev/null)
+X11_LIBS = -lX11 -lXpresent $(X11_DRI3_LIBS)
 LIBDRM_CFLAGS := $(shell pkg-config --cflags libdrm 2>/dev/null)
 LIBDRM_LIBS := $(shell pkg-config --libs libdrm 2>/dev/null)
 
@@ -28,6 +30,10 @@ src/igl_runtime.o: src/igl_runtime.c src/igl_state.h src/igl_backend.h src/igl_j
 src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
+src/igl_backend_dri3.o: src/igl_backend_dri3.c src/igl_backend.h
+	@test -n "$(X11_DRI3_LIBS)" || (echo "X11/XCB DRI3 development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(X11_DRI3_CFLAGS) $(CFLAGS) -c -o $@ $<
+
 src/igl_hw_linux.o: src/igl_hw_linux.c src/igl_hw.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
@@ -35,7 +41,7 @@ src/igl_juniper.o: src/igl_juniper.c src/igl_juniper.h src/igl_hw.h
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
 
-src/igl_juniper_runtime.o: src/igl_juniper_runtime.c src/igl_juniper_runtime.h src/igl_juniper.h src/igl_state.h
+src/igl_juniper_runtime.o: src/igl_juniper_runtime.c src/igl_juniper_runtime.h src/igl_juniper.h src/igl_state.h src/igl_backend.h
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
 
