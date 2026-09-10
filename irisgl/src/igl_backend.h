@@ -67,11 +67,19 @@ int igl_backend_present_dma_buf(
     int stride);
 
 /*
- * Backend synchronization boundary for IRIS GL gsync().  The X11 backend
- * uses Present MSC timing and, once gsync() is used in single-buffer mode,
- * stages frames in alternating pixmaps so completed drawing is presented on
- * retrace without modifying the pixmap currently in use by the server.
- * XSync remains only as a compatibility fallback when Present is unavailable.
+ * Reconstructed native retrace barrier. Waits for the next Present MSC
+ * without entering the compatibility X11 staging-pixmap path. This is used
+ * when a hardware-backed Juniper surface is already the visible source.
+ */
+void igl_backend_wait_retrace(
+    struct igl_backend *backend,
+    struct igl_backend_window *window);
+
+/*
+ * Compatibility synchronization boundary for IRIS GL gsync(). The X11
+ * backend may stage frames in alternating X pixmaps after gsync() is used in
+ * single-buffer mode. Native Juniper presentation bypasses that staging and
+ * uses igl_backend_wait_retrace() instead.
  */
 void igl_backend_gsync(
     struct igl_backend *backend,
