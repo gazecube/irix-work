@@ -39,6 +39,9 @@ public:
     Widget userText() const { return _userText; }
     Widget passwordText() const { return _passwordText; }
     const char *password() const { return _password; }
+    bool passwordFieldEnabled() const { return _passwordFieldEnabled; }
+    bool directLoginPending() const { return _directLoginPending; }
+    const std::string &directLoginUser() const { return _directLoginUser; }
 
 private:
     void createIconList();
@@ -46,6 +49,8 @@ private:
     void createIconAreaScaffold();
     void displayIcon();
     void showPasswordPrompt();
+    void enablePwdField(bool enable);
+    void doubleClicked(UserView *view);
 
     static void userViewSelectionCB(Widget, XtPointer, XtPointer);
     static void userViewCommandCB(Widget, XtPointer, XtPointer);
@@ -78,6 +83,24 @@ private:
      */
     int _passwordLength;
     char _password[22];
+
+    /*
+     * Host-side storage for binary-proven pandora state. The original
+     * pandora::enablePwdField(int) stores its argument as a byte at pandora
+     * +0x00 after forwarding to PandoraComponent::enablePwdField(int).
+     * This portable class does not claim the original pandora ABI layout.
+     */
+    bool _passwordFieldEnabled;
+
+    /*
+     * Portability seam at the recovered LoginTheUser() boundary. The shipped
+     * binary calls LoginTheUser immediately when the copied passwd field is
+     * empty. Authentication/session handoff is not reconstructed in this C++
+     * path yet, so retain that decision as explicit, testable state rather
+     * than inventing a replacement backend.
+     */
+    bool _directLoginPending;
+    std::string _directLoginUser;
 };
 
 class PandoraWindow : public VkSimpleWindow

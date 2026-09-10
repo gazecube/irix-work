@@ -79,7 +79,10 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _hostLabel(NULL),
       _helpButton(NULL),
       _loginButton(NULL),
-      _passwordLength(0)
+      _passwordLength(0),
+      _passwordFieldEnabled(false),
+      _directLoginPending(false),
+      _directLoginUser()
 {
     Widget managed[6];
     std::memset(_password, 0, sizeof(_password));
@@ -459,9 +462,36 @@ void PandoraComponent::displayIcon()
     ImdViewPanelEndBlockChanges(panelWidget);
 }
 
+void PandoraComponent::enablePwdField(bool enable)
+{
+    if (!_passwordLabel || !_passwordText)
+        return;
+
+    /*
+     * Binary anchor: pandora::enablePwdField(int) @ 0x10014e84 forwards the
+     * requested state to PandoraComponent::enablePwdField(int), then stores
+     * that state at pandora +0x00. This is the portable UI/state equivalent.
+     */
+    _passwordFieldEnabled = enable;
+    XtSetMappedWhenManaged(_passwordLabel, enable ? True : False);
+
+    if (enable)
+    {
+        if (!XtIsManaged(_passwordText))
+            XtManageChild(_passwordText);
+        else
+            XtSetMappedWhenManaged(_passwordText, True);
+        XmProcessTraversal(_passwordText, XmTRAVERSE_CURRENT);
+    }
+    else
+    {
+        XtSetMappedWhenManaged(_passwordText, False);
+    }
+}
+
 void PandoraComponent::showPasswordPrompt()
 {
-    if (!_userText || !_passwordLabel || !_passwordText)
+    if (!_userText)
         return;
 
     char *name = XmTextGetString(_userText);
@@ -469,17 +499,47 @@ void PandoraComponent::showPasswordPrompt()
     if (name)
         XtFree(name);
 
-    if (!haveName)
+    if (haveName)
+        enablePwdField(true);
+}
+
+void PandoraComponent::doubleClicked(UserView *view)
+{
+    if (!view)
         return;
 
-    XtSetMappedWhenManaged(_passwordLabel, True);
+    /*
+     * Binary-proven pandora::doubleClicked(char *, char *) @ 0x10014704:
+     *   - resolve the selected login with getpwnam()
+     *   - copy the returned passwd record with pwd0_copyPwd()
+     *   - strlen(copy->pw_passwd) decides the branch
+     *   - empty passwd -> LoginTheUser(copy, NULL)
+     *   - non-empty passwd and byte +0 already set -> return
+     *   - non-empty passwd and byte +0 clear -> enablePwdField(1)
+     *
+     * libc passwd storage is transient. std::string is the portable stable
+     * copy for the one field needed by this recovered decision.
+     */
+    struct passwd *pwd = getpwnam(view->name().c_str());
+    if (!pwd)
+        return;
 
-    if (!XtIsManaged(_passwordText))
-        XtManageChild(_passwordText);
-    else
-        XtSetMappedWhenManaged(_passwordText, True);
+    const std::string copiedPasswd = pwd->pw_passwd ? pwd->pw_passwd : "";
 
-    XmProcessTraversal(_passwordText, XmTRAVERSE_CURRENT);
+    if (copiedPasswd.empty())
+    {
+        _directLoginPending = true;
+        _directLoginUser = view->name();
+        return;
+    }
+
+    _directLoginPending = false;
+    _directLoginUser.clear();
+
+    if (_passwordFieldEnabled)
+        return;
+
+    enablePwdField(true);
 }
 
 void PandoraComponent::userViewSelectionCB(
@@ -516,16 +576,11 @@ void PandoraComponent::userViewCommandCB(
         return;
 
     /*
-     * Binary-proven commandCB resolves the command view's login and passes it
-     * to pandora::doubleClicked(). That state machine is the next RE target.
-     * Preserve the separate command boundary now; the portable action remains
-     * limited to keeping the selected login/prompt active until doubleClicked
-     * is reconstructed from the binary.
+     * Binary-proven commandCB @ 0x10011090 resolves the command UserView login
+     * and forwards it to pandora::doubleClicked(). Keep that command boundary
+     * separate from selectCB; do not synthesize another selection action here.
      */
-    if (self->_userText)
-        XmTextSetString(
-            self->_userText, const_cast<char *>(view->name().c_str()));
-    self->showPasswordPrompt();
+    self->doubleClicked(view);
 }
 
 void PandoraComponent::userTextActivateCB(
