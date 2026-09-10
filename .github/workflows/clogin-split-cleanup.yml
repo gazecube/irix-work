@@ -1,0 +1,61 @@
+name: Remove exported Clogin from IID tree
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-split-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          fetch-depth: 0
+
+      - name: Verify clean export branch exists and is orphaned
+        run: |
+          set -eu
+          git fetch origin clogin-export:refs/remotes/origin/clogin-export
+          export_commit="$(git rev-parse refs/remotes/origin/clogin-export)"
+          test "$export_commit" = "787a8edc2bf9cb6b170e7792f03bf45b31fedd6d"
+          test "$(git rev-list --parents -n1 "$export_commit" | wc -w)" -eq 1
+
+      - name: Remove Clogin-owned material from IID branch
+        run: |
+          set -eu
+          git rm -r -- \
+            Makefile README.md br.sh callbacks.h clogin_autologin.h \
+            clogin_features.h clogin_reconstructed.h clogin_ui.h fwddec.h \
+            global.h gui.h irix_session.h main.c pandora_ui.h session.h \
+            shortcuts.h vt.h x11mgmt.h services screenshots \
+            irix-re/clogin irix-re-verification/clogin
+
+          # The split must not disturb any shared IID implementation subtree.
+          test -d irix-re/libSgm
+          test -d irix-re/libimdUtil
+          test -d irix-re/libimdModel
+          test -d irix-re/libimdIconPanel
+          test -d irix-re/libimdApp
+          test -d irix-re/viewkit
+          test -d irix-re/fm
+
+          # Clogin was never in the IID CMake build graph; assert that remains true.
+          ! grep -R -E 'add_subdirectory\([[:space:]]*clogin[[:space:]]*\)' \
+              irix-re/CMakeLists.txt irix-re-verification/CMakeLists.txt
+
+          git diff --check
+
+      - name: Commit split cleanup
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git diff --cached --quiet && exit 0
+          git commit -m 'repo: split Clogin from IID reconstruction'
+          git push origin HEAD:irix-re
