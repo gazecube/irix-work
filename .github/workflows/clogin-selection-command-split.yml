@@ -1,0 +1,51 @@
+name: Clogin selection command split
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - '.github/workflows/clogin-selection-command-split.yml'
+      - '.github/scripts/split_clogin_selection_command.py'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Load reconstruction patch helper
+        run: git show origin/irix-re:.github/scripts/split_clogin_selection_command.py > /tmp/split_clogin_selection_command.py
+
+      - name: Apply binary-backed callback split
+        run: python3 /tmp/split_clogin_selection_command.py
+
+      - name: Verify separate callback channels
+        run: |
+          grep -q 'setSelectionCallback' reconstruction/PandoraPresentation.h
+          grep -q 'setCommandCallback' reconstruction/PandoraPresentation.h
+          grep -q 'userViewSelectionCB' reconstruction/PandoraViewKit.c++
+          grep -q 'userViewCommandCB' reconstruction/PandoraViewKit.c++
+          ! grep -q 'setActivateCallback' reconstruction/PandoraViewKit.c++
+
+      - name: Compile standalone Imd subset
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev
+          cxx="${CXX:-g++}"
+          for f in ImdString.c++ ImdIconPanel.c++ DragManager.c++ ViewPanelAdopt.c++ InvertedTeeRenderer.c++; do
+            "$cxx" -std=c++11 -Ireconstruction/imd -c "reconstruction/imd/$f" -o "/tmp/${f//+/p}.o"
+          done
+
+      - name: Commit refinement
+        run: |
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add reconstruction/PandoraPresentation.h reconstruction/PandoraPresentation.c++ reconstruction/PandoraViewKit.h reconstruction/PandoraViewKit.c++
+          git commit -m 'clogin: separate selection and command callbacks'
+          git push origin HEAD:clogin-export
