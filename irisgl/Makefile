@@ -50,6 +50,10 @@ src/igl_juniper_3d_generic.o: src/igl_juniper_3d_generic.c src/igl_juniper_3d_ma
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
 
+src/igl_juniper_3d_list.o: src/igl_juniper_3d_list.c src/igl_juniper_3d_main.c src/igl_juniper_3d.c src/igl_juniper.h tools/igl_juniper_tri_shaders.h
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
+
 src/igl_juniper_runtime.o: src/igl_juniper_runtime.c src/igl_juniper_runtime.h src/igl_juniper.h src/igl_state.h src/igl_backend.h
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -c -o $@ $<
@@ -95,6 +99,15 @@ junipertri-generic: src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_3d_gene
 		src/igl_hw_linux.o src/igl_backend_x11.o src/igl_backend_dri3.o \
 		$(X11_LIBS) $(LIBDRM_LIBS)
 
+junipertris: src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_3d_list.o \
+		src/igl_backend_x11.o src/igl_backend_dri3.o tools/igl_juniper_triangles.c
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	@test -n "$(X11_DRI3_LIBS)" || (echo "X11/XCB DRI3 development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(X11_DRI3_CFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -o $@ \
+		tools/igl_juniper_triangles.c src/igl_juniper_3d_list.o src/igl_juniper.o \
+		src/igl_hw_linux.o src/igl_backend_x11.o src/igl_backend_dri3.o \
+		$(X11_LIBS) $(LIBDRM_LIBS)
+
 irisgltri: $(LIB) tools/igl_irisgl_triangle.c
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_irisgl_triangle.c \
@@ -132,9 +145,9 @@ gsync: $(LIB)
 
 clean:
 	rm -f $(OBJS) src/igl_juniper_3d.o src/igl_juniper_3d_main.o \
-		src/igl_juniper_3d_generic.o $(LIB) hwprobe radeonprobe radeoncs \
-		radeonwrite juniperclear junipertri junipertri-generic irisgltri \
+		src/igl_juniper_3d_generic.o src/igl_juniper_3d_list.o $(LIB) hwprobe radeonprobe radeoncs \
+		radeonwrite juniperclear junipertri junipertri-generic junipertris irisgltri \
 		flash mode badifred rbuf cbuf gsync
 
 .PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite juniperclear \
-	junipertri junipertri-generic irisgltri flash mode badifred rbuf cbuf gsync
+	junipertri junipertri-generic junipertris irisgltri flash mode badifred rbuf cbuf gsync
