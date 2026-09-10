@@ -1,6 +1,7 @@
 #include <gl/gl.h>
 
 #include <stdio.h>
+#include <unistd.h>
 
 int main(void)
 {
@@ -29,6 +30,6 @@ int main(void)
     endpolygon();
 
     /* Keep the window visible long enough for manual verification. */
-    sginap(1000);
+    sleep(10);
     return 0;
 }
