@@ -5,7 +5,8 @@ CPPFLAGS += -Iinclude -Iinclude/gl -Isrc
 
 LIB = libgl.a
 OBJS = src/igl_runtime.o src/igl_backend_x11.o src/igl_backend_dri3.o \
-	src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_runtime.o
+	src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_runtime.o \
+	src/igl_juniper_3d_generic.o
 X11_DRI3_CFLAGS := $(shell pkg-config --cflags x11-xcb xcb xcb-dri3 2>/dev/null)
 X11_DRI3_LIBS := $(shell pkg-config --libs x11-xcb xcb xcb-dri3 2>/dev/null)
 X11_LIBS = -lX11 -lXpresent $(X11_DRI3_LIBS)
@@ -24,7 +25,7 @@ all: $(LIB)
 $(LIB): $(OBJS)
 	$(AR) rcs $@ $(OBJS)
 
-src/igl_runtime.o: src/igl_runtime.c src/igl_state.h src/igl_backend.h src/igl_juniper_runtime.h include/gl/gl.h include/gl/device.h
+src/igl_runtime.o: src/igl_runtime.c src/igl_state.h src/igl_backend.h src/igl_juniper.h src/igl_juniper_runtime.h include/gl/gl.h include/gl/device.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 src/igl_backend_x11.o: src/igl_backend_x11.c src/igl_backend.h include/gl/device.h
@@ -94,6 +95,11 @@ junipertri-generic: src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_3d_gene
 		src/igl_hw_linux.o src/igl_backend_x11.o src/igl_backend_dri3.o \
 		$(X11_LIBS) $(LIBDRM_LIBS)
 
+irisgltri: $(LIB) tools/igl_irisgl_triangle.c
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_irisgl_triangle.c \
+		-L. -lgl $(X11_LIBS) $(LIBDRM_LIBS) -lm
+
 flash: $(LIB)
 	@test -n "$(SGI_FLASH)" || (echo "Set SGI_FLASH=/path/to/original/irix/cmd/stress/Gfx/flash.c"; exit 1)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LEGACY_CFLAGS) \
@@ -127,6 +133,8 @@ gsync: $(LIB)
 clean:
 	rm -f $(OBJS) src/igl_juniper_3d.o src/igl_juniper_3d_main.o \
 		src/igl_juniper_3d_generic.o $(LIB) hwprobe radeonprobe radeoncs \
-		radeonwrite juniperclear junipertri junipertri-generic flash mode badifred rbuf cbuf gsync
+		radeonwrite juniperclear junipertri junipertri-generic irisgltri \
+		flash mode badifred rbuf cbuf gsync
 
-.PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite juniperclear junipertri junipertri-generic flash mode badifred rbuf cbuf gsync
+.PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite juniperclear \
+	junipertri junipertri-generic irisgltri flash mode badifred rbuf cbuf gsync
