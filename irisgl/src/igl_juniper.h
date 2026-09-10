@@ -61,4 +61,18 @@ int igl_juniper_draw_flat_triangle(struct igl_juniper_device *dev,
                                    const float vertices[3][4],
                                    uint32_t rgb);
 
+/*
+ * Reconstructed batched triangle-list boundary. The stream is non-indexed
+ * float4 screen-space vertices and vertex_count must be a multiple of three.
+ * It uses one vertex BO and one DRAW_INDEX_AUTO submission for the list.
+ */
+int igl_juniper_draw_flat_triangles(struct igl_juniper_device *dev,
+                                    struct igl_juniper_bo *color,
+                                    int width,
+                                    int height,
+                                    int stride,
+                                    const float (*vertices)[4],
+                                    uint32_t vertex_count,
+                                    uint32_t rgb);
+
 #endif /* IRISGL_IGL_JUNIPER_H */
