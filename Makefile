@@ -51,7 +51,7 @@ ifneq ($(strip $(VIEWKIT_INCLUDE_DIR)),)
 CPPFLAGS += -I$(VIEWKIT_INCLUDE_DIR)
 endif
 ifneq ($(strip $(VIEWKIT_LIBRARY_DIR)),)
-LDFLAGS += -L$(VIEWKIT_LIBRARY_DIR)
+LDFLAGS += -L$(VIEWKIT_LIBRARY_DIR) -Wl,-rpath,$(VIEWKIT_LIBRARY_DIR)
 endif
 
 C_SOURCE = main.c
@@ -73,9 +73,11 @@ C_OBJECTS = $(C_SOURCE:.c=.o)
 CXX_OBJECTS = $(CXX_SOURCES:.c++=.o)
 OBJECTS = $(C_OBJECTS) $(CXX_OBJECTS)
 
-# MaXX ViewKit/SGI compatibility libraries. Override VIEWKIT_LIBS if your
-# installation uses a non-default library split or search path.
-VIEWKIT_LIBS ?= -lVk -lSgm
+# MaXX ViewKit/SGI compatibility libraries. libScheme provides MaXX look/style
+# helpers referenced by the ViewKit stack (for example IsModernLook and
+# IsSmoothText). Override VIEWKIT_LIBS if your installation uses a different
+# library split.
+VIEWKIT_LIBS ?= -lVk -lSgm -lScheme
 LDLIBS ?= $(VIEWKIT_LIBS) -lXm -lX11 -lXt -lXpm -lXcursor -lXinerama -lpthread -lpam -ldl
 
 TARGET = dvlogin
@@ -97,6 +99,7 @@ viewkit-info:
 	@echo "VIEWKIT_INCLUDE_DIR=$(VIEWKIT_INCLUDE_DIR)"
 	@echo "VIEWKIT_LIBRARY_DIR=$(VIEWKIT_LIBRARY_DIR)"
 	@echo "VIEWKIT_LIBS=$(VIEWKIT_LIBS)"
+	@echo "RPATH=$(VIEWKIT_LIBRARY_DIR)"
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(LDFLAGS) -o $@ $(OBJECTS) $(LDLIBS)
