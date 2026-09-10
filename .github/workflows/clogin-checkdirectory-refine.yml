@@ -1,0 +1,113 @@
+name: Refine exported Clogin checkDirectory
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-checkdirectory-refine.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Apply recovered checkDirectory semantics
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('clogin_reconstructed.h')
+          s = p.read_text()
+          old = '''static CloginDirectoryState clogin_check_directory(const char *path)
+{
+\tstruct stat st;
+\tif(path == NULL || path[0] == '\\0') { return CLOGIN_DIR_MISSING; }
+\tif(stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) { return CLOGIN_DIR_MISSING; }
+#ifdef __linux__
+\t{
+\t\tstruct statfs fs;
+\t\tif(statfs(path, &fs) == 0)
+\t\t{
+\t\t\tif((unsigned long)fs.f_type == (unsigned long)NFS_SUPER_MAGIC)
+\t\t\t\treturn CLOGIN_DIR_NFS;
+\t\t\t/* Linux has no direct efs/xfs equivalence to IRIX's local test;
+\t\t\t * all non-NFS mounted directories are treated as local for the
+\t\t\t * portability boundary. */
+\t\t\treturn CLOGIN_DIR_LOCAL;
+\t\t}
+\t}
+#endif
+\treturn CLOGIN_DIR_OTHER;
+}
+'''
+          new = '''static CloginDirectoryState clogin_check_directory(const char *path)
+{
+\tstruct stat st;
+\tCloginDirectoryState state = CLOGIN_DIR_OTHER;
+
+\t/* Original checkDirectory() returns 2 for NULL/non-absolute paths and
+\t * explicitly treats /dev/null as the same unclassified state. */
+\tif(path == NULL || path[0] != '/') return CLOGIN_DIR_OTHER;
+\tif(strcmp(path, "/dev/null") == 0) return CLOGIN_DIR_OTHER;
+
+#ifdef __linux__
+\t{
+\t\tstruct statfs fs;
+\t\tif(statfs(path, &fs) == 0)
+\t\t{
+\t\t\tif((unsigned long)fs.f_type == (unsigned long)NFS_SUPER_MAGIC)
+\t\t\t\tstate = CLOGIN_DIR_NFS;
+\t\t\telse
+\t\t\t{
+\t\t\t\t/* Portable seam: original IRIX returns LOCAL only for efs/xfs.
+\t\t\t\t * Linux has no equivalent filesystem-name contract here, so
+\t\t\t\t * non-NFS filesystems remain OTHER unless caller policy treats
+\t\t\t\t * the host filesystem as local. */
+\t\t\t\tstate = CLOGIN_DIR_OTHER;
+\t\t\t}
+\t\t}
+\t}
+#endif
+
+\t/* Original verifies the target with stat() for classified states other
+\t * than OTHER; failure or non-directory becomes state 3. For OTHER, the
+\t * caller may perform its own ordinary stat() check. */
+\tif(state != CLOGIN_DIR_OTHER)
+\t{
+\t\tif(stat(path, &st) != 0 || !S_ISDIR(st.st_mode))
+\t\t\treturn CLOGIN_DIR_MISSING;
+\t}
+\treturn state;
+}
+'''
+          if old not in s:
+              raise SystemExit('expected checkDirectory compatibility body not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- clogin_reconstructed.h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev libxpm-dev libxcursor-dev libxinerama-dev libpam0g-dev
+
+      - name: Build Clogin prototype
+        run: make clean all
+
+      - name: Commit refinement
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add clogin_reconstructed.h
+          git diff --cached --quiet && exit 0
+          git commit -m 'clogin: preserve recovered directory-state semantics'
+          git push origin HEAD:clogin-export
