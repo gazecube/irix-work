@@ -1,0 +1,7 @@
+#!/bin/sh
+# Run the reconstructed File Manager with its staged SGI app-defaults.
+# This keeps the original FileManager resource database local to the build
+# instead of requiring a system-wide /usr/lib/X11/app-defaults install.
+XAPPLRESDIR="@FM_RUNTIME_APP_DEFAULTS_DIR@"
+export XAPPLRESDIR
+exec "@FM_RUNTIME_BINARY@" "$@"
