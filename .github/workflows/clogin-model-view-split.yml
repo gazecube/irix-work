@@ -1,0 +1,56 @@
+name: Clogin model/view split
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - '.github/workflows/clogin-model-view-split.yml'
+      - '.github/scripts/split_clogin_model_view.py'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Load reconstruction patch helper
+        run: git show origin/irix-re:.github/scripts/split_clogin_model_view.py > /tmp/split_clogin_model_view.py
+
+      - name: Apply binary-backed model/view split
+        run: python3 /tmp/split_clogin_model_view.py
+
+      - name: Verify model/view responsibility split
+        run: |
+          grep -q 'void PandoraComponent::createIconList()' reconstruction/PandoraViewKit.c++
+          grep -q 'void PandoraComponent::addUser' reconstruction/PandoraViewKit.c++
+          grep -q 'for (std::size_t i = 0; i < _users.size(); ++i)' reconstruction/PandoraViewKit.c++
+          python3 - <<'PY'
+          from pathlib import Path
+          s = Path('reconstruction/PandoraViewKit.c++').read_text()
+          a = s.index('void PandoraComponent::displayIcon()')
+          b = s.index('void PandoraComponent::showPasswordPrompt()', a)
+          block = s[a:b]
+          assert 'getpwent' not in block
+          assert 'setpwent' not in block
+          assert 'PwdNameList' not in block
+          PY
+
+      - name: Build runnable Clogin port
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev libxpm-dev libxcursor-dev libxinerama-dev libpam0g-dev
+          make clean all
+
+      - name: Commit refinement
+        run: |
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add reconstruction/PandoraViewKit.c++ reconstruction/PandoraViewKit.h
+          git commit -m 'clogin: split user model construction from display'
+          git push origin HEAD:clogin-export
