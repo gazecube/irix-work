@@ -110,11 +110,15 @@ struct igl_juniper_bo;
  * selects the back surface receiving commands, and front records the last
  * surface handed to Present. A front value of -1 means no Juniper surface
  * has been presented yet.
+ *
+ * stride is the actual host pixmap pitch in bytes. Juniper/Xorg shared
+ * surfaces require an aligned pitch rather than assuming width * 4.
  */
 struct igl_host_color_surface {
     struct igl_juniper_bo *bo[2];
     int width;
     int height;
+    int stride;
     int count;
     int draw;
     int front;
