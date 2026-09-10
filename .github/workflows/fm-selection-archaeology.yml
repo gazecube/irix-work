@@ -43,7 +43,7 @@ jobs:
           mips-linux-gnu-readelf -Ws "$PANEL" > /tmp/panel-symbols.raw
           mips-linux-gnu-readelf -Ws "$FM" | c++filt > /tmp/fm-symbols.txt
           mips-linux-gnu-readelf -Ws "$PANEL" | c++filt > /tmp/panel-symbols.txt
-          grep -Ei 'FmMenuActions.*select|selectAll|select|deselect|selection|selected|ImdIconPanel|ImdIconView|ImdViewPanel' /tmp/fm-symbols.txt /tmp/panel-symbols.txt | tee /tmp/selection-symbols.txt || true
+          grep -Ei 'FmMenuActions.*select|FmMenuHandler.*select|FmWindow.*select|SelectionHolder|selectionChanged|selectAll|select|deselect|selection|selected|ImdIconPanel|ImdIconView|ImdViewPanel' /tmp/fm-symbols.txt /tmp/panel-symbols.txt | tee /tmp/selection-symbols.txt || true
 
       - name: Disassemble exact named selection functions
         run: |
@@ -61,11 +61,13 @@ jobs:
           }
           for s in \
             selectAll__13FmMenuActionsGv \
-            selectAllCB__13FmMenuActionsSF9ImdViewerT1P7ImdViewPvT3_i \
             selectAllHelper__13FmMenuActionsSGP7ImdViewPv \
-            setSelectionHolder__13FmMenuActionsGv \
+            setSelectionHolder__13FmMenuActionsGP22ImdModelBasedIconPanel \
             _getSelectionHolder__13FmMenuHandlerGv \
-            _selectionChangedCB__8FmWindowSF9ImdViewerT1P7ImdViewPvT3_i; do
+            selectChanged__13FmMenuHandlerGv \
+            selectAllCB__8FmWindowSGP10_WidgetRecPvT2 \
+            setSelectionHolder__8FmWindowGP22ImdModelBasedIconPanel \
+            _selectionChangedCB__8FmWindowSGP16VkCallbackObjectPvT2; do
             dump_symbol "$FM" /tmp/fm-symbols.raw "$s"
           done
           for s in \
