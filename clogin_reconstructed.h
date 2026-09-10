@@ -219,7 +219,6 @@ static int clogin_user_eligible(const struct passwd *pw)
 
 	if(pw == NULL || pw->pw_name == NULL || pw->pw_name[0] == '\0') return 0;
 	if(pw->pw_dir == NULL || pw->pw_dir[0] == '\0') return 0;
-	if(pw->pw_passwd != NULL && strcmp(pw->pw_passwd, "*") == 0) return 0;
 	if(clogin_path_is_ignored(pw->pw_dir)) return 0;
 
 	entry = clogin_policy_find(pw->pw_name);
@@ -453,7 +452,6 @@ static void clogin_add_shortcuts(Widget container)
 	while((pw = getpwent()) != NULL)
 	{
 		if(!clogin_user_eligible(pw)) continue;
-		if(strcmp(pw->pw_name, "root") == 0 && !enableRootShortcut) continue;
 		clogin_add_shortcut(container, pw,
 			strcmp(pw->pw_name, "root") == 0 ? SHIRT_COLOR_ROOT : SHIRT_COLOR_USER);
 	}
