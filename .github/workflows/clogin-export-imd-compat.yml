@@ -1,0 +1,97 @@
+name: Clogin standalone Imd compatibility
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - '.github/workflows/clogin-export-imd-compat.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Export binary-reconstructed Imd subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reconstruction/imd
+          for f in ImdIconPanel.h ImdIconPanel.c++ DragManager.h DragManager.c++ ViewPanelAdopt.c++ InvertedTeeRenderer.c++; do
+            git show "origin/irix-re:irix-re/libimdIconPanel/$f" > "reconstruction/imd/$f"
+          done
+          git show origin/irix-re:irix-re/libimdModel/Base/ImdString.h > reconstruction/imd/ImdString.h
+          git show origin/irix-re:irix-re/libimdModel/Base/ImdString.c++ > reconstruction/imd/ImdString.c++
+
+      - name: Add standalone Imd build file
+        shell: bash
+        run: |
+          cat > reconstruction/imd/CMakeLists.txt <<'EOF'
+          add_library(clogin_imd_compat STATIC
+              ImdString.c++
+              ImdIconPanel.c++
+              DragManager.c++
+              ViewPanelAdopt.c++
+              InvertedTeeRenderer.c++
+          )
+          target_include_directories(clogin_imd_compat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+          target_link_libraries(clogin_imd_compat PUBLIC Xm Xt X11)
+          set_property(TARGET clogin_imd_compat PROPERTY CXX_STANDARD 11)
+          set_property(TARGET clogin_imd_compat PROPERTY CXX_STANDARD_REQUIRED ON)
+          EOF
+
+          cat > reconstruction/imd/README.md <<'EOF'
+          # Clogin Imd compatibility subset
+
+          This directory is a standalone snapshot of the independently reconstructed Imd panel surface required by the Clogin Pandora path.
+
+          The code is derived from shipped binary/symbol evidence for `libimdIconPanel.so` and related runtime artifacts. It is not leaked IRIX source.
+
+          Only the subset currently needed by Clogin is kept here. The canonical broader reconstruction remains in IID's `libimdIconPanel` tree; additions should be copied only when Clogin proves the dependency is needed.
+          EOF
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libmotif-dev libx11-dev libxt-dev
+
+      - name: Compile standalone Imd subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cxx="${CXX:-g++}"
+          for f in ImdString.c++ ImdIconPanel.c++ DragManager.c++ ViewPanelAdopt.c++ InvertedTeeRenderer.c++; do
+            "$cxx" -std=c++11 -Ireconstruction/imd -c "reconstruction/imd/$f" -o "/tmp/${f//+/p}.o"
+          done
+
+      - name: Repoint Pandora includes to standalone Imd subset
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ('PandoraViewKit.c++', 'PandoraPresentation.h'):
+              p = Path('reconstruction') / name
+              s = p.read_text()
+              s = s.replace('#include "ImdIconPanel.h"', '#include "imd/ImdIconPanel.h"')
+              p.write_text(s)
+          PY
+
+      - name: Verify no IID-tree dependency
+        run: |
+          test -f reconstruction/imd/ImdIconPanel.h
+          test -f reconstruction/imd/ImdIconPanel.c++
+          grep -q '#include "imd/ImdIconPanel.h"' reconstruction/PandoraPresentation.h
+          ! grep -R 'irix-re/libimdIconPanel' reconstruction --include='*.c++' --include='*.h'
+
+      - name: Commit standalone compatibility layer
+        run: |
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add reconstruction/imd reconstruction/PandoraViewKit.c++ reconstruction/PandoraPresentation.h
+          git commit -m 'clogin: make Pandora Imd layer self-contained'
+          git push origin HEAD:clogin-export
