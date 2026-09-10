@@ -1,13 +1,18 @@
 #include "PandoraPresentation.h"
 #include "FtiVectorIcon.h"
+#include "Icon/UserPictureResolver.h"
+#include "Base/PwdNameList.h"
+#include "Filesystem/DirectoryCheck.h"
 
 #include <Xm/DrawingA.h>
 #include <Xm/Label.h>
 #include <Xm/Xm.h>
 
 #include <X11/Xlib.h>
+#include <X11/xpm.h>
 
 #include <pwd.h>
+#include <unistd.h>
 
 #ifndef PANDORA_USER_TOKEN_FTI_PATH
 #define PANDORA_USER_TOKEN_FTI_PATH ""
@@ -29,6 +34,195 @@ FtiVectorIcon &portableUserTokenIcon()
     }
 
     return icon;
+}
+
+std::string resolvedUserPicturePath(
+    const std::string &name,
+    const std::string &home)
+{
+    struct passwd *pwd = getpwnam(name.c_str());
+    if (!pwd)
+        return std::string();
+
+    const char *configPath = "/var/sysadm/config/clogin.conf";
+    const bool haveIrixConfig = access(configPath, R_OK) == 0;
+    PwdNameList config(haveIrixConfig ? configPath : NULL);
+
+    UserPicturePolicy policy;
+    policy.howDisplay = config.displayFaces() ? 0 : 1;
+    policy.whereIcons = config.lookForPicturesLocally() ? 0 : 1;
+
+    const int directoryState = static_cast<int>(
+        clogin::checkDirectoryPortable(home));
+    const UserPictureResult result = resolveUserPicture(
+        *pwd,
+        config,
+        policy,
+        directoryState);
+
+    return result.found ? result.path : std::string();
+}
+
+bool drawPixmapFile(
+    Widget widget,
+    const std::string &path,
+    int x,
+    int y,
+    unsigned int extent)
+{
+    if (!widget || !XtIsRealized(widget) || path.empty())
+        return false;
+
+    Display *display = XtDisplay(widget);
+    Window window = XtWindow(widget);
+    if (!display || !window)
+        return false;
+
+    Pixmap pixmap = None;
+    Pixmap mask = None;
+
+    if (XpmReadFileToPixmap(
+            display,
+            window,
+            const_cast<char *>(path.c_str()),
+            &pixmap,
+            &mask,
+            NULL) == XpmSuccess && pixmap != None)
+    {
+        Window root;
+        int sourceX;
+        int sourceY;
+        unsigned int width;
+        unsigned int height;
+        unsigned int border;
+        unsigned int depth;
+
+        if (XGetGeometry(
+                display,
+                pixmap,
+                &root,
+                &sourceX,
+                &sourceY,
+                &width,
+                &height,
+                &border,
+                &depth))
+        {
+            const unsigned int copyWidth = width < extent ? width : extent;
+            const unsigned int copyHeight = height < extent ? height : extent;
+            const int drawX = x + static_cast<int>((extent - copyWidth) / 2);
+            const int drawY = y + static_cast<int>((extent - copyHeight) / 2);
+
+            GC gc = XCreateGC(display, window, 0, NULL);
+            if (mask != None)
+            {
+                XSetClipMask(display, gc, mask);
+                XSetClipOrigin(display, gc, drawX, drawY);
+            }
+            XCopyArea(
+                display,
+                pixmap,
+                window,
+                gc,
+                0,
+                0,
+                copyWidth,
+                copyHeight,
+                drawX,
+                drawY);
+            XFreeGC(display, gc);
+            XFreePixmap(display, pixmap);
+            if (mask != None)
+                XFreePixmap(display, mask);
+            return true;
+        }
+
+        XFreePixmap(display, pixmap);
+        if (mask != None)
+            XFreePixmap(display, mask);
+    }
+
+    unsigned int bitmapWidth = 0;
+    unsigned int bitmapHeight = 0;
+    int hotX = 0;
+    int hotY = 0;
+    if (XReadBitmapFile(
+            display,
+            window,
+            path.c_str(),
+            &bitmapWidth,
+            &bitmapHeight,
+            &pixmap,
+            &hotX,
+            &hotY) == BitmapSuccess && pixmap != None)
+    {
+        const unsigned int copyWidth = bitmapWidth < extent ? bitmapWidth : extent;
+        const unsigned int copyHeight = bitmapHeight < extent ? bitmapHeight : extent;
+        const int drawX = x + static_cast<int>((extent - copyWidth) / 2);
+        const int drawY = y + static_cast<int>((extent - copyHeight) / 2);
+
+        Pixel foreground = 0;
+        Pixel background = 0;
+        XtVaGetValues(
+            widget,
+            XmNforeground, &foreground,
+            XmNbackground, &background,
+            NULL);
+
+        XGCValues values;
+        values.foreground = foreground;
+        values.background = background;
+        GC gc = XCreateGC(
+            display,
+            window,
+            GCForeground | GCBackground,
+            &values);
+        XCopyPlane(
+            display,
+            pixmap,
+            window,
+            gc,
+            0,
+            0,
+            copyWidth,
+            copyHeight,
+            drawX,
+            drawY,
+            1);
+        XFreeGC(display, gc);
+        XFreePixmap(display, pixmap);
+        return true;
+    }
+
+    return false;
+}
+
+bool drawResolvedUserPicture(
+    Widget widget,
+    const std::string &name,
+    const std::string &home,
+    int x,
+    int y,
+    unsigned int extent)
+{
+    const std::string path = resolvedUserPicturePath(name, home);
+    if (path.empty())
+        return false;
+
+    /*
+     * Portable rendering bridge only. The original UserView uses the Imd/Ftr
+     * image/icon machinery after findUserPicture() returns an open descriptor.
+     * Preserve the binary-proven lookup decision above; then try the portable
+     * decoders currently available in this cleanroom tree.
+     */
+    FtiVectorIcon vectorIcon;
+    if (vectorIcon.load(path) && vectorIcon.loaded())
+    {
+        vectorIcon.draw(widget, x, y, extent);
+        return true;
+    }
+
+    return drawPixmapFile(widget, path, x, y, extent);
 }
 }
 
@@ -482,22 +676,29 @@ void UserView::drawPortableContents(
      * by ImdIconView. It configures ImdFtrIcon scale/offset/state and invokes
      * the icon object's virtual draw path. libimdFtrIcon.so provides
      * ImdFtrIconX::drawIcon(), getPixmap(), getMask(), cache and colormap
-     * machinery, plus FtrImageIconLib. Therefore FtiVectorIcon below is only
-     * a portable visual test backend for the preserved Users.Token.fti asset,
-     * not a reconstruction of the original runtime renderer.
+     * machinery, plus FtrImageIconLib. The decoder calls here are therefore a
+     * portable visual bridge after the binary-backed findUserPicture() lookup,
+     * not a reconstruction of the original image-rendering ABI.
      */
     const int localIconX = _width > iconExtent
         ? static_cast<int>((_width - iconExtent) / 2)
         : 0;
+    const int iconX = static_cast<int>(_x) + localIconX;
+    const int iconY = static_cast<int>(_y);
 
-    FtiVectorIcon &icon = portableUserTokenIcon();
-    if (icon.loaded())
+    bool pictureDrawn = drawResolvedUserPicture(
+        panelWidget,
+        _name,
+        _home,
+        iconX,
+        iconY,
+        iconExtent);
+
+    if (!pictureDrawn)
     {
-        icon.draw(
-            panelWidget,
-            static_cast<int>(_x) + localIconX,
-            static_cast<int>(_y),
-            iconExtent);
+        FtiVectorIcon &icon = portableUserTokenIcon();
+        if (icon.loaded())
+            icon.draw(panelWidget, iconX, iconY, iconExtent);
     }
 
     XmString label = XmStringCreateLocalized(
