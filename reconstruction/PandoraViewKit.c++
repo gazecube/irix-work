@@ -4,6 +4,7 @@
 #include "ImdFtrVisualCompat.h"
 #include "Base/PwdNameList.h"
 #include "Filesystem/DirectoryCheck.h"
+#include "Login/LoginTheUserModel.h"
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
@@ -82,7 +83,9 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
       _passwordLength(0),
       _passwordFieldEnabled(false),
       _directLoginPending(false),
-      _directLoginUser()
+      _directLoginUser(),
+      _loginHandoff(NULL),
+      _loginHandoffData(NULL)
 {
     Widget managed[6];
     std::memset(_password, 0, sizeof(_password));
@@ -248,6 +251,18 @@ PandoraComponent::PandoraComponent(const char *name, Widget parent)
         _userText,
         XmNactivateCallback,
         &PandoraComponent::userTextActivateCB,
+        (XtPointer)this);
+
+    /* Both original callbacks feed PandoraComponent::doLogin(). */
+    XtAddCallback(
+        _passwordText,
+        XmNactivateCallback,
+        &PandoraComponent::passwordTextActivateCB,
+        (XtPointer)this);
+    XtAddCallback(
+        _loginButton,
+        XmNactivateCallback,
+        &PandoraComponent::loginButtonCB,
         (XtPointer)this);
 
     /*
@@ -530,6 +545,7 @@ void PandoraComponent::doubleClicked(UserView *view)
     {
         _directLoginPending = true;
         _directLoginUser = view->name();
+        handoffLogin(view->name().c_str(), "", true);
         return;
     }
 
@@ -540,6 +556,76 @@ void PandoraComponent::doubleClicked(UserView *view)
         return;
 
     enablePwdField(true);
+}
+
+void PandoraComponent::handoffLogin(
+    const char *username,
+    const char *password,
+    bool directLogin)
+{
+    if (!username || !*username)
+        return;
+
+    /*
+     * Portability boundary only. The original successful path is
+     * LoginTheUser() -> setupEnvironment() -> reportSuccess(). Linux PAM and
+     * session launching must be supplied by the host, not disguised as SGI
+     * behavior in this class.
+     */
+    if (_loginHandoff)
+        _loginHandoff(username, password ? password : "", directLogin,
+                      _loginHandoffData);
+}
+
+void PandoraComponent::doLogin()
+{
+    if (!_userText)
+        return;
+
+    char *typedName = XmTextGetString(_userText);
+    const std::string login = typedName ? typedName : "";
+    if (typedName)
+        XtFree(typedName);
+
+    if (login.empty())
+        return;
+
+    struct passwd *pwd = getpwnam(login.c_str());
+
+    /*
+     * pandora::doLogin() deliberately does not reveal an unknown account on
+     * the first submit. It enables the password field first and reaches the
+     * generic failure path only after credentials have been supplied.
+     */
+    if (!pwd)
+    {
+        if (!_passwordFieldEnabled)
+            enablePwdField(true);
+        else if (_passwordLength != 0)
+            handoffLogin(login.c_str(), _password, false);
+        return;
+    }
+
+    const std::string copiedPasswd = pwd->pw_passwd ? pwd->pw_passwd : "";
+
+    if (_passwordLength != 0)
+    {
+        _directLoginPending = false;
+        _directLoginUser.clear();
+        handoffLogin(login.c_str(), _password, false);
+        return;
+    }
+
+    if (copiedPasswd.empty())
+    {
+        _directLoginPending = true;
+        _directLoginUser = login;
+        handoffLogin(login.c_str(), "", true);
+        return;
+    }
+
+    if (!_passwordFieldEnabled)
+        enablePwdField(true);
 }
 
 void PandoraComponent::userViewSelectionCB(
@@ -592,7 +678,24 @@ void PandoraComponent::userTextActivateCB(
     if (!self)
         return;
 
+    /* Username Enter follows the prompt-transition path. */
     self->showPasswordPrompt();
+}
+
+void PandoraComponent::passwordTextActivateCB(
+    Widget, XtPointer clientData, XtPointer)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    if (self)
+        self->doLogin();
+}
+
+void PandoraComponent::loginButtonCB(
+    Widget, XtPointer clientData, XtPointer)
+{
+    PandoraComponent *self = static_cast<PandoraComponent *>(clientData);
+    if (self)
+        self->doLogin();
 }
 
 void PandoraComponent::passwordTextModifyVerifyCB(

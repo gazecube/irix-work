@@ -12,6 +12,12 @@ class PandoraRenderer;
 class PandoraLayout;
 class UserView;
 
+typedef void (*PandoraLoginHandoff)(
+    const char *username,
+    const char *password,
+    bool directLogin,
+    XtPointer clientData);
+
 /*
  * Reconstructed portable storage for the binary-proven per-user model
  * collection held by PandoraComponent before displayIcon() builds UserView
@@ -43,6 +49,14 @@ public:
     bool directLoginPending() const { return _directLoginPending; }
     const std::string &directLoginUser() const { return _directLoginUser; }
 
+    /* Host portability seam. The SGI control flow ends at LoginTheUser()/
+     * reportSuccess(); Linux PAM/session startup belongs outside that model. */
+    void setLoginHandoff(PandoraLoginHandoff callback, XtPointer clientData)
+    {
+        _loginHandoff = callback;
+        _loginHandoffData = clientData;
+    }
+
 private:
     void createIconList();
     void addUser(const struct passwd *pwd, const char *loginOverride = NULL);
@@ -51,10 +65,14 @@ private:
     void showPasswordPrompt();
     void enablePwdField(bool enable);
     void doubleClicked(UserView *view);
+    void doLogin();
+    void handoffLogin(const char *username, const char *password, bool directLogin);
 
     static void userViewSelectionCB(Widget, XtPointer, XtPointer);
     static void userViewCommandCB(Widget, XtPointer, XtPointer);
     static void userTextActivateCB(Widget, XtPointer, XtPointer);
+    static void passwordTextActivateCB(Widget, XtPointer, XtPointer);
+    static void loginButtonCB(Widget, XtPointer, XtPointer);
     static void passwordTextModifyVerifyCB(Widget, XtPointer, XtPointer);
 
     Widget _form;
@@ -101,6 +119,9 @@ private:
      */
     bool _directLoginPending;
     std::string _directLoginUser;
+
+    PandoraLoginHandoff _loginHandoff;
+    XtPointer _loginHandoffData;
 };
 
 class PandoraWindow : public VkSimpleWindow
