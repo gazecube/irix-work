@@ -19,11 +19,9 @@ jobs:
           ref: clogin-export
           fetch-depth: 0
 
-      - name: Fetch reconstruction patch helper
+      - name: Load reconstruction patch helper
         run: |
-          curl -fsSL \
-            https://raw.githubusercontent.com/gazecube/irix-work/irix-re/.github/scripts/refine_clogin_pandora.py \
-            -o /tmp/refine_clogin_pandora.py
+          git show origin/irix-re:.github/scripts/refine_clogin_pandora.py > /tmp/refine_clogin_pandora.py
 
       - name: Apply binary-backed Pandora cleanup
         run: python3 /tmp/refine_clogin_pandora.py
