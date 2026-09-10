@@ -151,9 +151,10 @@ static void stop_xserver(pid_t pid)
 	waitpid(pid, &status, 0);
 }
 
-static int wait_for_xserver(const char *display, int timeout_secs, pid_t xpid)
+static int wait_for_xserver(const char *display, int timeout_secs)
 {
 	int elapsed = 0;
+	pid_t xpid = g_xserver_pid;
 
 	while(elapsed < timeout_secs)
 	{
@@ -162,14 +163,17 @@ static int wait_for_xserver(const char *display, int timeout_secs, pid_t xpid)
 
 		if(g_shutdown) { return 0; }
 
-		ret = waitpid(xpid, &status, WNOHANG);
-		if(ret == xpid)
+		if(xpid > 0)
 		{
-			if(WIFEXITED(status))
-				fprintf(stderr, "dvlogin: Xorg exited early with status %d; see /tmp/dvlogin-xorg.log\n", WEXITSTATUS(status));
-			else if(WIFSIGNALED(status))
-				fprintf(stderr, "dvlogin: Xorg died from signal %d; see /tmp/dvlogin-xorg.log\n", WTERMSIG(status));
-			return 0;
+			ret = waitpid(xpid, &status, WNOHANG);
+			if(ret == xpid)
+			{
+				if(WIFEXITED(status))
+					fprintf(stderr, "dvlogin: Xorg exited early with status %d; see /tmp/dvlogin-xorg.log\n", WEXITSTATUS(status));
+				else if(WIFSIGNALED(status))
+					fprintf(stderr, "dvlogin: Xorg died from signal %d; see /tmp/dvlogin-xorg.log\n", WTERMSIG(status));
+				return 0;
+			}
 		}
 
 		Display *dpy = XOpenDisplay(display);
