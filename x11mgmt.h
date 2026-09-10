@@ -3,10 +3,9 @@
 	
 	The parent process has already switched to the target VT and
 	claimed it as its controlling terminal, so the Xorg child
-	inherits a real console session.  -keeptty tells Xorg to
+	inherits a real console session. -keeptty tells Xorg to
 	stay on this inherited TTY rather than trying to open one
-	itself (which would trigger "only console users" errors
-	when started from init).
+	itself.
 */
 static pid_t start_xserver(const char *display, const char *vt, const char *authfile)
 {
@@ -20,6 +19,14 @@ static pid_t start_xserver(const char *display, const char *vt, const char *auth
 
 	if(pid == 0)
 	{
+		int logfd = open("/tmp/dvlogin-xorg.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+		if(logfd >= 0)
+		{
+			dup2(logfd, STDOUT_FILENO);
+			dup2(logfd, STDERR_FILENO);
+			if(logfd > STDERR_FILENO) close(logfd);
+		}
+
 		if(authfile != NULL)
 		{
 			execlp("Xorg", "Xorg", display, vt,
@@ -38,7 +45,6 @@ static pid_t start_xserver(const char *display, const char *vt, const char *auth
 				(char *)NULL);
 		}
 
-		/* only reached on exec failure */
 		perror("dvlogin: execlp (Xorg)");
 		_exit(1);
 	}
@@ -46,15 +52,6 @@ static pid_t start_xserver(const char *display, const char *vt, const char *auth
 	return pid;
 }
 
-
-
-
-/*	make_session_xauth - generate a fresh MIT-MAGIC-COOKIE-1,
-	install it for the given display via xauth, and chown the
-	file to the session user so the unprivileged client can
-	read it.  Run as root; xauth creates the file 0600/root,
-	then we hand it over.  Returns 0 on success, -1 on failure.
-*/
 static int make_session_xauth(const char *authfile, const char *display,
 	uid_t uid, gid_t gid)
 {
@@ -70,7 +67,6 @@ static int make_session_xauth(const char *authfile, const char *display,
 		return -1;
 	}
 
-	/* 128 bits of cookie */
 	{
 		int fd = open("/dev/urandom", O_RDONLY);
 		if(fd < 0)
@@ -93,7 +89,6 @@ static int make_session_xauth(const char *authfile, const char *display,
 	}
 	cookie[32] = '\0';
 
-	/* fresh file each session so stale cookies don't pile up */
 	unlink(authfile);
 
 	pid = fork();
@@ -122,7 +117,6 @@ static int make_session_xauth(const char *authfile, const char *display,
 		return -1;
 	}
 
-	/* hand the cookie to the session user */
 	if(chown(authfile, uid, gid) < 0)
 	{
 		perror("dvlogin: chown (authfile)");
@@ -137,39 +131,46 @@ static int make_session_xauth(const char *authfile, const char *display,
 	return 0;
 }
 
-
-
-
 static void stop_xserver(pid_t pid)
 {
 	if(pid <= 0) { return; }
 
 	kill(pid, SIGTERM);
 
-	/* give it a moment to shut down gracefully */
 	int status;
 	int tries = 0;
 	while(tries < 20)
 	{
 		pid_t ret = waitpid(pid, &status, WNOHANG);
 		if(ret != 0) { return; }
-		usleep(100000);  /* 100 ms */
+		usleep(100000);
 		tries++;
 	}
 
-	/* still alive - force kill */
 	kill(pid, SIGKILL);
 	waitpid(pid, &status, 0);
 }
 
-
-static int wait_for_xserver(const char *display, int timeout_secs)
+static int wait_for_xserver(const char *display, int timeout_secs, pid_t xpid)
 {
 	int elapsed = 0;
 
 	while(elapsed < timeout_secs)
 	{
+		int status;
+		pid_t ret;
+
 		if(g_shutdown) { return 0; }
+
+		ret = waitpid(xpid, &status, WNOHANG);
+		if(ret == xpid)
+		{
+			if(WIFEXITED(status))
+				fprintf(stderr, "dvlogin: Xorg exited early with status %d; see /tmp/dvlogin-xorg.log\n", WEXITSTATUS(status));
+			else if(WIFSIGNALED(status))
+				fprintf(stderr, "dvlogin: Xorg died from signal %d; see /tmp/dvlogin-xorg.log\n", WTERMSIG(status));
+			return 0;
+		}
 
 		Display *dpy = XOpenDisplay(display);
 		if(dpy != NULL)
