@@ -68,8 +68,8 @@ static int igl_tri_set_color_target_main(struct igl_tri_cs *cs,
         !igl_tri_emit(cs, pitch_tile_max) ||       /* PITCH */
         !igl_tri_emit(cs, slice_tile_max) ||       /* SLICE */
         !igl_tri_emit(cs, 0) ||                    /* VIEW */
-        !igl_tri_emit(cs, 0x01088068u) ||           /* INFO */
-        !igl_tri_emit(cs, 0x00000010u) ||           /* ATTRIB */
+        !igl_tri_emit(cs, 0x01088068u) ||          /* INFO */
+        !igl_tri_emit(cs, 0x00000010u) ||          /* ATTRIB */
         !igl_tri_emit(cs, 0) ||                    /* DIM */
         !igl_tri_emit(cs, 0) ||                    /* CMASK */
         !igl_tri_emit(cs, 0) ||                    /* CMASK_SLICE */
@@ -83,6 +83,47 @@ static int igl_tri_set_color_target_main(struct igl_tri_cs *cs,
            igl_tri_emit_reloc(cs, color, 0, RADEON_GEM_DOMAIN_GTT) &&
            igl_tri_emit_reloc(cs, color, 0, RADEON_GEM_DOMAIN_GTT) &&
            igl_tri_emit_reloc(cs, color, 0, RADEON_GEM_DOMAIN_GTT);
+}
+
+/*
+ * Current Mesa's Radeon DRM winsys submits legacy r600/evergreen CS with
+ * RADEON_CS_KEEP_TILING_FLAGS. Without it evergreen_cs.c may consume an
+ * additional relocation while processing CB_COLOR0_INFO, shifting the
+ * BASE/ATTRIB/CMASK/FMASK relocation sequence.
+ */
+static int igl_tri_submit_main(struct igl_juniper_device *dev,
+                               struct igl_tri_cs *builder)
+{
+    struct drm_radeon_cs_chunk chunks[3];
+    struct drm_radeon_cs submit;
+    uint64_t chunk_ptrs[3];
+    uint32_t flags[3];
+
+    flags[0] = RADEON_CS_KEEP_TILING_FLAGS;
+    flags[1] = RADEON_CS_RING_GFX;
+    flags[2] = 0;
+
+    memset(chunks, 0, sizeof(chunks));
+    chunks[0].chunk_id = RADEON_CHUNK_ID_IB;
+    chunks[0].length_dw = (uint32_t)builder->cdw;
+    chunks[0].chunk_data = (uint64_t)(uintptr_t)builder->ib;
+    chunks[1].chunk_id = RADEON_CHUNK_ID_RELOCS;
+    chunks[1].length_dw = (uint32_t)(builder->nreloc *
+                           sizeof(struct drm_radeon_cs_reloc) /
+                           sizeof(uint32_t));
+    chunks[1].chunk_data = (uint64_t)(uintptr_t)builder->reloc;
+    chunks[2].chunk_id = RADEON_CHUNK_ID_FLAGS;
+    chunks[2].length_dw = 3;
+    chunks[2].chunk_data = (uint64_t)(uintptr_t)flags;
+
+    chunk_ptrs[0] = (uint64_t)(uintptr_t)&chunks[0];
+    chunk_ptrs[1] = (uint64_t)(uintptr_t)&chunks[1];
+    chunk_ptrs[2] = (uint64_t)(uintptr_t)&chunks[2];
+
+    memset(&submit, 0, sizeof(submit));
+    submit.num_chunks = 3;
+    submit.chunks = (uint64_t)(uintptr_t)chunk_ptrs;
+    return igl_tri_ioctl(dev->fd, DRM_IOCTL_RADEON_CS, &submit);
 }
 
 int igl_juniper_draw_test_triangle(struct igl_juniper_device *dev,
@@ -283,7 +324,7 @@ int igl_juniper_draw_test_triangle(struct igl_juniper_device *dev,
                                     IGL_EG_CB0_DEST_BASE_ENA,
                                     0, RADEON_GEM_DOMAIN_GTT);
 
-    if (!ok || !igl_tri_submit(dev, &cs) || !igl_juniper_bo_wait(dev, color))
+    if (!ok || !igl_tri_submit_main(dev, &cs) || !igl_juniper_bo_wait(dev, color))
         goto fail;
 
     memset(&domain, 0, sizeof(domain));
