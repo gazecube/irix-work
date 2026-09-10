@@ -1,0 +1,14 @@
+diff --git a/irix-re/fm/FmMain.c++ b/irix-re/fm/FmMain.c++
+--- a/irix-re/fm/FmMain.c++
++++ b/irix-re/fm/FmMain.c++
+@@
+-    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
++    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,
+@@
+     controlBoard = createControlBoard(form, &state);
+     XtVaSetValues(controlBoard,
+                   XmNtopAttachment, XmATTACH_WIDGET,
+                   XmNtopWidget, finderForm,
+-                  XmNbottomAttachment, XmATTACH_WIDGET,
+-                  XmNbottomWidget, state.status,
+                   NULL);
