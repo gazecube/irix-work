@@ -8,6 +8,9 @@ on:
       - '.github/workflows/clogin-doubleclick-binary.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   refine:
     runs-on: ubuntu-latest
