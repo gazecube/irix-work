@@ -1,0 +1,61 @@
+name: Refine exported Clogin enumeration
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-enumeration-refine.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Apply binary-proven enumeration cleanup
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('clogin_reconstructed.h')
+          s = p.read_text()
+
+          locked = '\tif(pw->pw_passwd != NULL && strcmp(pw->pw_passwd, "*") == 0) return 0;\n'
+          root_gate = '\t\tif(strcmp(pw->pw_name, "root") == 0 && !enableRootShortcut) continue;\n'
+
+          if locked not in s:
+              raise SystemExit('expected prototype locked-password gate not found')
+          if root_gate not in s:
+              raise SystemExit('expected prototype root shortcut gate not found')
+
+          s = s.replace(locked, '', 1)
+          s = s.replace(root_gate, '', 1)
+          p.write_text(s)
+          PY
+
+          git diff --check
+          git diff -- clogin_reconstructed.h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev libxpm-dev libxcursor-dev libxinerama-dev libpam0g-dev
+
+      - name: Build Clogin prototype
+        run: make clean all
+
+      - name: Commit refinement
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add clogin_reconstructed.h
+          git diff --cached --quiet && exit 0
+          git commit -m 'clogin: align user enumeration with recovered policy'
+          git push origin HEAD:clogin-export
