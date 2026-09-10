@@ -4,6 +4,7 @@
 #include <Xm/DrawingA.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -189,7 +190,11 @@ void ImdIconView::setLabel(const ImdString &label) { _portableLabel = label; }
 
 ImdIconPanel::ImdIconPanel(const char *name, Widget parent, Arg *args, int count)
     : _baseWidget(0),
-      _dragManager(0)
+      _dragManager(0),
+      _portableSelectedViews(),
+      _portableMultipleSelect(false),
+      _portableSelectBlockDepth(0),
+      _portableSelectionDirty(false)
 {
     _baseWidget = ImdCreateViewPanel(parent, const_cast<char *>(name), args, static_cast<Cardinal>(count));
 
@@ -213,6 +218,109 @@ void ImdIconPanel::adoptView(ImdIconView *view, ImdIconView *parentView)
 }
 
 void ImdIconPanel::applySelectStrings(ImdIconView &view) { (void)view; }
+
+void ImdIconPanel::enableMultipleSelect(bool enabled)
+{
+    /* Original enableMultipleSelect() is an eight-byte state setter. */
+    _portableMultipleSelect = enabled;
+}
+
+void ImdIconPanel::beginSelectBlock()
+{
+    /* Original increments the select-block counter at N32 panel +0x5c. */
+    ++_portableSelectBlockDepth;
+}
+
+void ImdIconPanel::endSelectBlock()
+{
+    /* Original notifies when the outermost block closes. */
+    if (_portableSelectBlockDepth != 0)
+        --_portableSelectBlockDepth;
+    if (_portableSelectBlockDepth == 0 && _portableSelectionDirty)
+        selectNotify();
+}
+
+void ImdIconPanel::selectNotify()
+{
+    if (_portableSelectBlockDepth != 0) {
+        _portableSelectionDirty = true;
+        return;
+    }
+    _portableSelectionDirty = false;
+
+    /*
+     * The original invokes kSelectionChangedCallback here. The portable
+     * callback-object bridge is not reconstructed yet; redraw is the only
+     * host-visible side effect we can reproduce without inventing that ABI.
+     */
+    if (_baseWidget) ImdViewPanelRedraw(_baseWidget);
+}
+
+void ImdIconPanel::deselect()
+{
+    beginSelectBlock();
+    for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();
+         it != _portableSelectedViews.end(); ++it) {
+        if (!*it) continue;
+        (*it)->setFlag(8u, false);
+        /* Binary proves deselect also clears flag 64; meaning still unnamed. */
+        (*it)->setFlag(64u, false);
+    }
+    _portableSelectedViews.clear();
+    _portableSelectionDirty = true;
+    endSelectBlock();
+}
+
+void ImdIconPanel::toggleSelection(ImdIconView *view)
+{
+    if (!view) return;
+    const bool selected = view->getFlag(8u);
+    if (selected) {
+        view->setFlag(8u, false);
+        view->setFlag(64u, false);
+        _portableSelectedViews.erase(
+            std::remove(_portableSelectedViews.begin(), _portableSelectedViews.end(), view),
+            _portableSelectedViews.end());
+    } else {
+        view->setFlag(8u, true);
+        if (std::find(_portableSelectedViews.begin(), _portableSelectedViews.end(), view) ==
+            _portableSelectedViews.end())
+            _portableSelectedViews.push_back(view);
+    }
+    _portableSelectionDirty = true;
+}
+
+void ImdIconPanel::select(ImdIconView *view)
+{
+    if (!view) return;
+    beginSelectBlock();
+    if (_portableSelectedViews.size() != 1 ||
+        _portableSelectedViews.front() != view || !view->getFlag(8u)) {
+        for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();
+             it != _portableSelectedViews.end(); ++it) {
+            if (!*it || *it == view) continue;
+            (*it)->setFlag(8u, false);
+            (*it)->setFlag(64u, false);
+        }
+        _portableSelectedViews.clear();
+        view->setFlag(8u, true);
+        _portableSelectedViews.push_back(view);
+        _portableSelectionDirty = true;
+    }
+    endSelectBlock();
+}
+
+void ImdIconPanel::extendSelect(ImdIconView *view)
+{
+    if (!view) return;
+    /* Binary: multi-select path is toggleSelection(view), then selectNotify(). */
+    if (_portableMultipleSelect) {
+        toggleSelection(view);
+        selectNotify();
+    } else {
+        select(view);
+    }
+}
 
 void
 ImdIconPanel::dragStart(int item, long x, long y, XEvent *event)
@@ -253,6 +361,9 @@ void ImdIconPanel::portableResetViews(bool destroyViews)
         for (std::vector<ImdView *>::iterator it = _views.begin(); it != _views.end(); ++it) delete *it;
     }
     _views.clear();
+    _portableSelectedViews.clear();
+    _portableSelectBlockDepth = 0;
+    _portableSelectionDirty = false;
 }
 
 ImdIconPanel::~ImdIconPanel()
