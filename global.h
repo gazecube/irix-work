@@ -1,5 +1,3 @@
-#include <stdarg.h>
-
 #define MAX_USERNAME_LEN 32
 #define MAX_PASSWORD_LEN 128
 #define XSERVER_TIMEOUT  10
@@ -12,45 +10,6 @@
 #define SHIRT_COLOR_USER  "#499b94"
 #define SHIRT_COLOR_DEMO  "#9177a5"
 
-/*
- * Host-side runtime diagnostic sink.
- *
- * Clogin runs on a dedicated VT, which makes its existing stdout/stderr
- * diagnostics awkward to inspect after a failed login attempt. Mirror those
- * messages to a file while preserving the original console output. No
- * password bytes are written by any of the existing diagnostics.
- *
- * This is portability/debugging infrastructure, not reconstructed SGI
- * behavior.
- */
-static int clogin_trace_fprintf(FILE *stream, const char *format, ...)
-{
-	int result;
-	va_list args;
-	va_list copy;
-
-	va_start(args, format);
-	va_copy(copy, args);
-	result = vfprintf(stream, format, args);
-	va_end(args);
-
-	{
-		FILE *trace = fopen("/tmp/dvlogin-trace.log", "a");
-		if(trace != NULL)
-		{
-			fprintf(trace, "[pid %ld] ", (long)getpid());
-			vfprintf(trace, format, copy);
-			fflush(trace);
-			fclose(trace);
-		}
-	}
-
-	va_end(copy);
-	return result;
-}
-
-/* Mirror diagnostics from the remainder of the single C translation unit. */
-#define fprintf clogin_trace_fprintf
 
 int enableRootShortcut = 1;
 
