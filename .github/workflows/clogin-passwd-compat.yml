@@ -2,9 +2,11 @@ name: Clogin passwd compatibility reconstruction
 
 on:
   push:
-    branches: [irix-re]
+    branches:
+      - irix-re
     paths:
       - '.github/workflows/clogin-passwd-compat.yml'
+      - '.github/scripts/apply-clogin-passwd-compat.py'
 
 permissions:
   contents: write
@@ -18,120 +20,12 @@ jobs:
           ref: clogin-export
           fetch-depth: 0
 
-      - name: Apply binary-backed passwd compatibility loop
-        shell: bash
+      - name: Fetch patch helper
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('clogin_reconstructed.h')
-          s = p.read_text()
-          old = r'''static void clogin_add_shortcuts(Widget container)
-{
-	struct passwd *pw;
-	clogin_load_policy();
-	setpwent();
-	while((pw = getpwent()) != NULL)
-	{
-		if(!clogin_user_eligible(pw)) continue;
-		clogin_add_shortcut(container, pw,
-			strcmp(pw->pw_name, "root") == 0 ? SHIRT_COLOR_ROOT : SHIRT_COLOR_USER);
-	}
-	endpwent();
-}
-'''
-          new = r'''typedef struct
-{
-	struct passwd pw;
-	char name[MAX_USERNAME_LEN + 1];
-	char dir[MAXPATHLEN];
-	char gecos[512];
-} CloginPasswdSnapshot;
+          git show origin/irix-re:.github/scripts/apply-clogin-passwd-compat.py > /tmp/apply-clogin-passwd-compat.py
 
-static void clogin_snapshot_passwd(CloginPasswdSnapshot *dst,
-	const struct passwd *src, const char *name_override)
-{
-	memset(dst, 0, sizeof(*dst));
-	dst->pw = *src;
-	strncpy(dst->name,
-		name_override != NULL ? name_override : (src->pw_name != NULL ? src->pw_name : ""),
-		MAX_USERNAME_LEN);
-	dst->name[MAX_USERNAME_LEN] = '\0';
-	strncpy(dst->dir, src->pw_dir != NULL ? src->pw_dir : "", MAXPATHLEN - 1);
-	dst->dir[MAXPATHLEN - 1] = '\0';
-	strncpy(dst->gecos, src->pw_gecos != NULL ? src->pw_gecos : "", sizeof(dst->gecos) - 1);
-	dst->gecos[sizeof(dst->gecos) - 1] = '\0';
-	dst->pw.pw_name = dst->name;
-	dst->pw.pw_dir = dst->dir;
-	dst->pw.pw_gecos = dst->gecos;
-}
-
-static void clogin_restore_passwd_position(size_t seen)
-{
-	size_t i;
-	setpwent();
-	for(i = 0; i < seen; ++i)
-	{
-		if(getpwent() == NULL) break;
-	}
-}
-
-static void clogin_add_shortcuts(Widget container)
-{
-	struct passwd *pw;
-	size_t seen = 0;
-
-	clogin_load_policy();
-	setpwent();
-	while((pw = getpwent()) != NULL)
-	{
-		const struct passwd *candidate = pw;
-		CloginPasswdSnapshot snap;
-		const char *name;
-
-		++seen;
-		if(pw->pw_name == NULL || pw->pw_name[0] == '\0') continue;
-
-		/* pandora::createIconList(): a leading '-' record exits the
-		 * enumeration routine rather than entering ordinary filtering. */
-		if(pw->pw_name[0] == '-') break;
-
-		name = pw->pw_name[0] == '+' ? pw->pw_name + 1 : pw->pw_name;
-
-		/* The original resolves an entry with an empty home directory via
-		 * getpwnam(), copies the result, then rewinds setpwent()/getpwent()
-		 * to the saved record count because the lookup disturbs iteration. */
-		if(pw->pw_dir == NULL || pw->pw_dir[0] == '\0')
-		{
-			struct passwd *resolved = getpwnam(name);
-			if(resolved == NULL)
-			{
-				clogin_restore_passwd_position(seen);
-				break;
-			}
-			if(resolved->pw_name != NULL && resolved->pw_name[0] == '+')
-				clogin_snapshot_passwd(&snap, resolved, resolved->pw_name + 1);
-			else
-				clogin_snapshot_passwd(&snap, resolved, NULL);
-			candidate = &snap.pw;
-			clogin_restore_passwd_position(seen);
-		}
-		else if(pw->pw_name[0] == '+')
-		{
-			clogin_snapshot_passwd(&snap, pw, name);
-			candidate = &snap.pw;
-		}
-
-		if(!clogin_user_eligible(candidate)) continue;
-		clogin_add_shortcut(container, candidate,
-			strcmp(candidate->pw_name, "root") == 0 ? SHIRT_COLOR_ROOT : SHIRT_COLOR_USER);
-	}
-	endpwent();
-}
-'''
-          if old not in s:
-              raise SystemExit('target clogin_add_shortcuts block not found')
-          p.write_text(s.replace(old, new, 1))
-          PY
+      - name: Apply binary-backed passwd compatibility loop
+        run: python3 /tmp/apply-clogin-passwd-compat.py
 
       - name: Install build dependencies
         run: |
@@ -144,9 +38,9 @@ static void clogin_add_shortcuts(Widget container)
       - name: Verify compatibility shape
         run: |
           grep -q 'clogin_restore_passwd_position' clogin_reconstructed.h
+          grep -q 'getpwnam(name)' clogin_reconstructed.h
           grep -q "pw->pw_name\[0\] == '-'" clogin_reconstructed.h
           grep -q "pw->pw_name\[0\] == '+'" clogin_reconstructed.h
-          grep -q 'getpwnam(name)' clogin_reconstructed.h
 
       - name: Commit refinement
         run: |
