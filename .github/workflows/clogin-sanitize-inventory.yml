@@ -1,0 +1,66 @@
+name: Sanitize Clogin inventory source excerpt
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-sanitize-inventory.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          fetch-depth: 1
+
+      - name: Remove verbatim leaked-source specimen by section markers
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path('irix-re/clogin/INVENTORY.md'),
+              Path('irix-re-verification/clogin/INVENTORY.md'),
+          ]
+          start_marker = 'Observed tokens include:\n\n```text\n'
+          end_marker = '```\n\nConfirmed token vocabulary from this file:'
+          replacement = (
+              'The source records per-account presentation metadata using the token '\
+              'vocabulary summarized below. The original account records are intentionally '\
+              'not reproduced here so this reconstruction inventory does not carry source '\
+              'text from the comparison tree.\n\n'
+              'Confirmed token vocabulary from this file:'
+          )
+
+          for path in paths:
+              text = path.read_text()
+              start = text.find(start_marker)
+              if start < 0:
+                  raise SystemExit(f'{path}: start marker not found')
+              end = text.find(end_marker, start)
+              if end < 0:
+                  raise SystemExit(f'{path}: end marker not found')
+              end += len(end_marker)
+              path.write_text(text[:start] + replacement + text[end:])
+          PY
+          git diff --check
+          git diff -- irix-re/clogin/INVENTORY.md irix-re-verification/clogin/INVENTORY.md
+
+      - name: Verify canonical and verification inventories remain identical
+        run: cmp irix-re/clogin/INVENTORY.md irix-re-verification/clogin/INVENTORY.md
+
+      - name: Commit sanitized inventories
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add irix-re/clogin/INVENTORY.md irix-re-verification/clogin/INVENTORY.md
+          git diff --cached --quiet && exit 0
+          git commit -m 'clogin: remove leaked-source specimen from inventory'
+          git push origin HEAD:irix-re
