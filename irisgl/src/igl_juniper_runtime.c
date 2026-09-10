@@ -1,10 +1,12 @@
 #include "igl_juniper_runtime.h"
 
+#include "igl_backend.h"
 #include "igl_juniper.h"
 #include "igl_state.h"
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 void igl_juniper_runtime_init(struct igl_runtime_state *runtime)
 {
@@ -85,4 +87,37 @@ int igl_juniper_runtime_clear(struct igl_runtime_state *runtime,
                                     0,
                                     size,
                                     rgba8);
+}
+
+int igl_juniper_runtime_present(struct igl_runtime_state *runtime,
+                                struct igl_window_state *window)
+{
+    struct igl_juniper_bo *bo;
+    int dma_buf_fd;
+    int stride;
+    int ok;
+
+    if (!runtime || !runtime->juniper || !runtime->backend || !window ||
+        !window->backend_window || !window->host_color.bo)
+        return 0;
+
+    bo = window->host_color.bo;
+    if (bo->size > UINT32_MAX)
+        return 0;
+
+    dma_buf_fd = -1;
+    if (!igl_juniper_bo_export_prime(runtime->juniper, bo, &dma_buf_fd))
+        return 0;
+
+    stride = window->host_color.width * 4;
+    ok = igl_backend_present_dma_buf(runtime->backend,
+                                     window->backend_window,
+                                     dma_buf_fd,
+                                     bo->handle,
+                                     (uint32_t)bo->size,
+                                     window->host_color.width,
+                                     window->host_color.height,
+                                     stride);
+    close(dma_buf_fd);
+    return ok;
 }
