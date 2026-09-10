@@ -82,3 +82,15 @@ addUser()
 - semantic names for every `checkDirectory()` return value
 - exact role of `show` / getShowAnywayList in surrounding libc/passwd behavior
 - exact original class name of the 0x1c-byte per-user object
+
+
+## 2026-09-10 caller-semantics refinement
+
+Direct disassembly of the shipped IRIX `clogin` binary with MIPS cross-binutils resolved the `checkDirectory()` caller contract inside `pandora::createIconList()`.
+
+- return 3: suppress the user
+- return 2: call ordinary `stat()` on `pw_dir`; suppress on stat failure or when `st_mode & S_IFMT` is not `S_IFDIR`
+- return 0 or 1: continue the normal add-user decision without the state-2 fallback
+- `getWhereHome()==0` controls passwd/NIS enumeration through IRIX libc `_getpwent_no_yp`; it is not implemented as `checkDirectory()==LOCAL` filtering after enumeration
+
+This is distinct from `PandoraComponent::findUserPicture()`, where local-picture mode requires `checkDirectory(pw_dir)==0` before trying the home icon.
