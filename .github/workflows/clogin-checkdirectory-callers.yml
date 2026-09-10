@@ -1,0 +1,89 @@
+name: Clogin checkDirectory caller semantics
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - '.github/workflows/clogin-checkdirectory-callers.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Apply binary-backed caller semantics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('clogin_reconstructed.h')
+          s = p.read_text()
+
+          # Remove the temporary Linux locality compatibility helper.  The
+          # original binary treats checkDirectory state 2 differently at each
+          # caller, so a shared host-local reinterpretation is incorrect.
+          s, n = re.subn(
+              r'/\* Host portability seam\..*?^}\n\nstatic int clogin_user_eligible',
+              'static int clogin_user_eligible',
+              s,
+              count=1,
+              flags=re.S | re.M,
+          )
+          if n != 1:
+              raise SystemExit('failed to remove temporary locality seam')
+
+          old = '''\tstate = clogin_check_directory(pw->pw_dir);\n\tif(state == CLOGIN_DIR_MISSING) return 0;\n\tif(!g_clogin_policy.where_home &&\n\t\t!clogin_host_directory_is_local(pw->pw_dir, state)) return 0;\n\treturn 1;'''
+          new = '''\tstate = clogin_check_directory(pw->pw_dir);\n\tif(state == CLOGIN_DIR_MISSING) return 0;\n\n\t/* Binary evidence from pandora::createIconList(): state 2 is not a\n\t * locality rejection.  The original performs an ordinary stat() and\n\t * accepts the account when the target exists and is a directory.\n\t * States 0 (local) and 1 (NFS) continue without this fallback. */\n\tif(state == CLOGIN_DIR_OTHER)\n\t{\n\t\tstruct stat st;\n\t\tif(stat(pw->pw_dir, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;\n\t}\n\n\t/* getWhereHome()==0 affects passwd/NIS enumeration in the original\n\t * createIconList() via _getpwent_no_yp; it is not a post-enumeration\n\t * checkDirectory()==LOCAL filter. */\n\treturn 1;'''
+          if old not in s:
+              raise SystemExit('user eligibility block not found')
+          s = s.replace(old, new, 1)
+
+          old = '''\tif(g_clogin_policy.where_icons != 1)\n\t{\n\t\thome_state = clogin_check_directory(pw->pw_dir);\n\t\tif(!clogin_host_directory_is_local(pw->pw_dir, home_state)) return 0;\n\t}'''
+          new = '''\tif(g_clogin_policy.where_icons != 1)\n\t{\n\t\thome_state = clogin_check_directory(pw->pw_dir);\n\t\t/* findUserPicture() requires checkDirectory(home)==0 exactly in\n\t\t * local-picture mode; unlike createIconList(), state 2 has no stat\n\t\t * fallback here. */\n\t\tif(home_state != CLOGIN_DIR_LOCAL) return 0;\n\t}'''
+          if old not in s:
+              raise SystemExit('local picture gate not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          notes = Path('reconstruction/USER_ENUMERATION_RE.md')
+          text = notes.read_text()
+          marker = '## 2026-09-10 caller-semantics refinement'
+          if marker not in text:
+              text += '''\n\n## 2026-09-10 caller-semantics refinement\n\nDirect disassembly of the shipped IRIX `clogin` binary with MIPS cross-binutils resolved the `checkDirectory()` caller contract inside `pandora::createIconList()`.\n\n- return 3: suppress the user\n- return 2: call ordinary `stat()` on `pw_dir`; suppress on stat failure or when `st_mode & S_IFMT` is not `S_IFDIR`\n- return 0 or 1: continue the normal add-user decision without the state-2 fallback\n- `getWhereHome()==0` controls passwd/NIS enumeration through IRIX libc `_getpwent_no_yp`; it is not implemented as `checkDirectory()==LOCAL` filtering after enumeration\n\nThis is distinct from `PandoraComponent::findUserPicture()`, where local-picture mode requires `checkDirectory(pw_dir)==0` before trying the home icon.\n'''
+              notes.write_text(text)
+          PY
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev libxpm-dev libxcursor-dev libxinerama-dev libpam0g-dev
+
+      - name: Build Clogin prototype
+        run: make clean all
+
+      - name: Verify recovered caller shape
+        run: |
+          grep -q 'if(state == CLOGIN_DIR_OTHER)' clogin_reconstructed.h
+          grep -q 'if(home_state != CLOGIN_DIR_LOCAL)' clogin_reconstructed.h
+          ! grep -q 'clogin_host_directory_is_local' clogin_reconstructed.h
+          ! grep -q '!g_clogin_policy.where_home &&' clogin_reconstructed.h
+
+      - name: Commit refinement
+        shell: bash
+        run: |
+          git config user.name db2k
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add clogin_reconstructed.h reconstruction/USER_ENUMERATION_RE.md
+          git diff --cached --quiet && exit 0
+          git commit -m 'clogin: match recovered directory caller semantics'
+          git push origin HEAD:clogin-export
