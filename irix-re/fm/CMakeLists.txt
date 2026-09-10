@@ -76,7 +76,94 @@ if(TARGET fm)
 
     set_property(TARGET fm PROPERTY CXX_STANDARD 11)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
-    install(TARGETS fm RUNTIME DESTINATION bin)
+
+    # Stage the preserved SGI FileManager app-default database beside the
+    # executable.  The current FM bootstrap already uses the original widget
+    # names; loading this database restores the original pixmap-labeled sidebar
+    # controls, spacing, accelerators, panel geometry and ThumbWheel resources.
+    set(FM_RUNTIME_APP_DEFAULTS_DIR "${CMAKE_CURRENT_BINARY_DIR}/app-defaults")
+    set(FM_RUNTIME_BITMAP_DIR "${CMAKE_CURRENT_BINARY_DIR}/sgidesktop")
+    file(MAKE_DIRECTORY "${FM_RUNTIME_APP_DEFAULTS_DIR}")
+    file(MAKE_DIRECTORY "${FM_RUNTIME_BITMAP_DIR}")
+
+    set(_fm_preserved_app_defaults "${CMAKE_SOURCE_DIR}/evidence/FileManager")
+    set(_fm_staged_app_defaults "${FM_RUNTIME_APP_DEFAULTS_DIR}/FileManager")
+    if(EXISTS "${_fm_preserved_app_defaults}")
+        file(READ "${_fm_preserved_app_defaults}" _fm_app_defaults_text)
+
+        # The preserved resources use the original IRIX absolute bitmap path.
+        # Extract the matching shipped bitmap payload from desktop_eoe when it
+        # is present, then retarget the resource database to the build-local
+        # copy so Linux hosts do not need an SGI /usr/include tree installed.
+        set(_fm_desktop_eoe_tar "${CMAKE_SOURCE_DIR}/evidence/desktop_eoe(1).tar")
+        if(EXISTS "${_fm_desktop_eoe_tar}")
+            find_program(FM_TAR_EXECUTABLE tar)
+            if(FM_TAR_EXECUTABLE)
+                set(_fm_extract_dir "${CMAKE_CURRENT_BINARY_DIR}/desktop-eoe-stage")
+                file(REMOVE_RECURSE "${_fm_extract_dir}")
+                file(MAKE_DIRECTORY "${_fm_extract_dir}")
+                execute_process(
+                    COMMAND "${FM_TAR_EXECUTABLE}" -xf "${_fm_desktop_eoe_tar}" -C "${_fm_extract_dir}"
+                    RESULT_VARIABLE _fm_tar_result
+                )
+                if(_fm_tar_result EQUAL 0)
+                    foreach(_fm_bitmap
+                            pathfinder.bm
+                            iconicDirView.bm
+                            listDirView.bm
+                            treeDirView.bm
+                            columnDirView.bm
+                            galleryDirView.bm
+                            shelf.bm)
+                        file(GLOB_RECURSE _fm_bitmap_candidates
+                            "${_fm_extract_dir}/*/${_fm_bitmap}"
+                            "${_fm_extract_dir}/${_fm_bitmap}")
+                        list(LENGTH _fm_bitmap_candidates _fm_bitmap_count)
+                        if(_fm_bitmap_count GREATER 0)
+                            list(GET _fm_bitmap_candidates 0 _fm_bitmap_source)
+                            configure_file("${_fm_bitmap_source}"
+                                           "${FM_RUNTIME_BITMAP_DIR}/${_fm_bitmap}"
+                                           COPYONLY)
+                        endif()
+                    endforeach()
+                else()
+                    message(WARNING "Could not extract desktop_eoe bitmap evidence; FM will use host SGI bitmap paths")
+                endif()
+            endif()
+        endif()
+
+        file(TO_CMAKE_PATH "${FM_RUNTIME_BITMAP_DIR}" _fm_bitmap_resource_dir)
+        string(REPLACE
+            "/usr/include/X11/bitmaps/sgidesktop"
+            "${_fm_bitmap_resource_dir}"
+            _fm_app_defaults_text
+            "${_fm_app_defaults_text}")
+        file(WRITE "${_fm_staged_app_defaults}" "${_fm_app_defaults_text}")
+    else()
+        message(WARNING "Preserved FileManager app-defaults unavailable; FM will use fallback resources")
+    endif()
+
+    # Keep the actual ELF as fm.bin and make ./build/fm/fm the normal launcher
+    # that supplies XAPPLRESDIR.  This makes a local build behave like the IRIX
+    # installation without touching the user's global X resource setup.
+    set_property(TARGET fm PROPERTY OUTPUT_NAME "fm.bin")
+    set(FM_RUNTIME_BINARY "${CMAKE_CURRENT_BINARY_DIR}/fm.bin")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/fm-launcher.in"
+                   "${CMAKE_CURRENT_BINARY_DIR}/fm"
+                   @ONLY)
+    file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/fm"
+         PERMISSIONS
+            OWNER_READ OWNER_WRITE OWNER_EXECUTE
+            GROUP_READ GROUP_EXECUTE
+            WORLD_READ WORLD_EXECUTE)
+
+    install(TARGETS fm RUNTIME DESTINATION libexec/irix-re)
+    install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/fm"
+            DESTINATION bin)
+    if(EXISTS "${_fm_staged_app_defaults}")
+        install(FILES "${_fm_staged_app_defaults}"
+                DESTINATION share/irix-re/app-defaults)
+    endif()
 endif()
 
 # Runnable background/desktop host.  This keeps the binary-proven
