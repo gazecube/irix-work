@@ -17,15 +17,13 @@ jobs:
         with:
           ref: irix-re
       - name: Patch FM sidebar composition
-        shell: python
         run: |
+          python3 - <<'PY'
           from pathlib import Path
           p = Path('irix-re/fm/FmMain.c++')
           s = p.read_text()
-          old = '''    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
-'''
-          new = '''    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,
-'''
+          old = '    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,\n'
+          new = '    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,\n'
           if old not in s:
               raise SystemExit('scaleZoom parent pattern not found')
           s = s.replace(old, new, 1)
@@ -45,6 +43,7 @@ jobs:
               raise SystemExit('controlBoard attachment pattern not found')
           s = s.replace(old, new, 1)
           p.write_text(s)
+          PY
       - name: Commit correction
         run: |
           git config user.name "db2k"
