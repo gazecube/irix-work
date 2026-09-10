@@ -75,25 +75,7 @@ High-value source target: `sysadm/SaCloginConf.h`.
 
 Source: `eoe/cmd/adm/passwd.sgi` in the 6.5.7m tree.
 
-This file explicitly says it contains additional information about some logins shipped with `/etc/passwd`. Observed tokens include:
-
-```text
-root:machineicon
-sysadm:machineicon:noicon
-daemon:noshow
-bin:noshow
-uucp:noshow
-sys:noshow
-adm:noshow
-lp:machineicon:noicon
-nuucp:machineicon:noicon
-sgiweb:noshow
-man:noshow
-rfindd:noshow
-nobody:noshow
-/hosts:ignore
-/net:ignore
-```
+This file explicitly says it contains additional information about some logins shipped with `/etc/passwd`. The source records per-account presentation metadata using the token vocabulary summarized below. The original account records are intentionally not reproduced here so this reconstruction inventory does not carry source text from the comparison tree.
 
 Confirmed token vocabulary from this file:
 
