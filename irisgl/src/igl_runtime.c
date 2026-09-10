@@ -255,11 +255,25 @@ void gconfig(void)
 
 void gsync(void)
 {
+    struct igl_window_state *window;
+
     igl_init_once();
-    if (!igl.current_window)
+    window = igl.current_window;
+    if (!window)
         return;
 
-    igl_backend_gsync(igl.backend, igl.current_window->backend_window);
+    /*
+     * Once a Juniper surface is the real presentation source, gsync() is
+     * only the source-proven retrace barrier. Do not enter the older X11
+     * staging-pixmap path, which would duplicate rendering and disconnect
+     * synchronization from the hardware-backed surface.
+     */
+    if (window->host_color.native_present) {
+        igl_backend_wait_retrace(igl.backend, window->backend_window);
+        return;
+    }
+
+    igl_backend_gsync(igl.backend, window->backend_window);
 }
 
 void RGBcolor(short red, short green, short blue)
@@ -317,11 +331,6 @@ void clear(void)
         if (igl_juniper_runtime_present(&igl, window))
             return;
     } else if (hardware_clear && window->host_color.native_present) {
-        /*
-         * A native double-buffer Present has already completed for this
-         * surface set, so the Juniper draw BO is now the authoritative back
-         * buffer. Do not also paint the compatibility X11 backbuffer.
-         */
         return;
     }
 
