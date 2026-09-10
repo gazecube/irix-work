@@ -52,9 +52,9 @@ void igl_backend_swapbuffers(
 
 /*
  * Reconstructed host zero-copy presentation boundary. Imports a dma-buf as
- * an X11 DRI3 pixmap and presents that pixmap directly. Returns 1 when the
- * supplied buffer became the presentation source, 0 when the caller should
- * retain its compatibility presentation path.
+ * an X11 DRI3 pixmap and presents that pixmap directly. token is a host-side
+ * surface lifetime identity, not a Radeon GEM handle; GEM handles may be
+ * reused immediately when gconfig() replaces a surface.
  */
 int igl_backend_present_dma_buf(
     struct igl_backend *backend,
@@ -65,16 +65,6 @@ int igl_backend_present_dma_buf(
     int width,
     int height,
     int stride);
-
-/*
- * Reconstructed host lifetime boundary. Drop all cached DRI3 pixmaps for a
- * window before the Radeon BOs backing them are destroyed or replaced. GEM
- * handles may be reused immediately, so handle identity alone is not a safe
- * lifetime key across gconfig()/resize transitions.
- */
-void igl_backend_forget_dma_buf_surfaces(
-    struct igl_backend *backend,
-    struct igl_backend_window *window);
 
 /*
  * Backend synchronization boundary for IRIS GL gsync().  The X11 backend
