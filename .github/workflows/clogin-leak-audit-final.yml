@@ -1,0 +1,118 @@
+name: Verify sanitized Clogin export boundary
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-leak-audit-final.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          fetch-depth: 1
+
+      - name: Fetch IRIX 6.5.7m comparison source
+        run: git clone --depth=1 https://github.com/calmsacibis995/irix-657m-src.git /tmp/irix-657m-src
+
+      - name: Hard-gate complete Clogin export
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, re
+          from collections import defaultdict, Counter
+
+          repo = Path(os.environ['GITHUB_WORKSPACE'])
+          leak = Path('/tmp/irix-657m-src')
+          out = Path('/tmp/clogin-final-audit.txt')
+
+          excluded_dirs = {'.git', '.github', 'desktop-prototype', 'irix-re', 'irix-re-verification'}
+          excluded_files = {'.gitattributes', '.gitmodules'}
+          candidates = []
+          for p in repo.iterdir():
+              if p.name in excluded_dirs or p.name in excluded_files:
+                  continue
+              if p.is_file():
+                  candidates.append(p)
+              elif p.is_dir() and p.name in {'services', 'screenshots'}:
+                  candidates.extend(x for x in p.rglob('*') if x.is_file())
+          candidates.extend(x for x in (repo/'irix-re'/'clogin').rglob('*') if x.is_file())
+          candidates = sorted(set(candidates))
+
+          def digest(p):
+              h = hashlib.sha256()
+              with p.open('rb') as f:
+                  for chunk in iter(lambda: f.read(1024*1024), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def lines(p):
+              data = p.read_bytes()
+              if not data or b'\0' in data[:8192] or len(data) > 2*1024*1024:
+                  return None
+              try: text = data.decode('utf-8')
+              except UnicodeDecodeError: text = data.decode('latin-1')
+              return [re.sub(r'\s+', ' ', x.strip()) for x in text.splitlines() if x.strip()]
+
+          sources = [p for p in leak.rglob('*') if p.is_file() and '/.git/' not in str(p)]
+          hashes = defaultdict(list)
+          for p in sources:
+              if p.stat().st_size:
+                  hashes[digest(p)].append(p.relative_to(leak).as_posix())
+
+          W = 10
+          idx = defaultdict(list)
+          for p in sources:
+              ls = lines(p)
+              if not ls or len(ls) < W: continue
+              rel = p.relative_to(leak).as_posix()
+              for i in range(len(ls)-W+1):
+                  k = hashlib.sha256('\n'.join(ls[i:i+W]).encode()).digest()
+                  if len(idx[k]) < 8: idx[k].append((rel, i+1))
+
+          exact, overlap = [], []
+          manifest = []
+          for p in candidates:
+              rel = p.relative_to(repo).as_posix()
+              size = p.stat().st_size
+              d = digest(p)
+              manifest.append((rel, d, size))
+              if size and d in hashes: exact.append((rel, hashes[d]))
+              ls = lines(p)
+              if not ls or len(ls) < W: continue
+              hits = Counter()
+              for i in range(len(ls)-W+1):
+                  k = hashlib.sha256('\n'.join(ls[i:i+W]).encode()).digest()
+                  for src, _ in idx.get(k, ()): hits[src] += 1
+              if hits: overlap.append((rel, hits.most_common(1)[0]))
+
+          report = [
+              'Sanitized Clogin export audit',
+              '=============================',
+              f'candidate_files={len(candidates)}',
+              f'exact_nonempty_matches={len(exact)}',
+              f'files_with_10_line_overlap={len(overlap)}',
+              '', 'Exact matches:'
+          ]
+          report += [f'{r}: {", ".join(s)}' for r,s in exact] or ['none']
+          report += ['', '10-line overlap flags:']
+          report += [f'{r}: source={s}; matching_windows={n}' for r,(s,n) in overlap] or ['none']
+          report += ['', 'Manifest:']
+          report += [f'{d} {size:8d} {r}' for r,d,size in manifest]
+          out.write_text('\n'.join(report)+'\n')
+          print('\n'.join(report[:20]))
+          if exact or overlap:
+              raise SystemExit('Clogin export remains contaminated')
+          PY
+
+      - name: Upload final audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clogin-final-audit
+          path: /tmp/clogin-final-audit.txt
+          if-no-files-found: error
