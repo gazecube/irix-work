@@ -9,12 +9,13 @@ int main(void)
     float c[3] = { 192.0f, 192.0f, 0.0f };
 
     prefsize(256, 256);
-    RGBmode();
-    singlebuffer();
     if (winopen("IRIS GL native Juniper triangle") < 0) {
         fprintf(stderr, "irisgltri: winopen failed\n");
         return 1;
     }
+
+    RGBmode();
+    singlebuffer();
     gconfig();
 
     RGBcolor(0, 0, 0);
