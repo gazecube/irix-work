@@ -16,7 +16,18 @@ bool readableByOriginalOpen(const std::string &path)
 
 UserPictureResult firstExisting(const std::string &path)
 {
-    return { path, readableByOriginalOpen(path) };
+    UserPictureResult result;
+    result.path = path;
+    result.found = readableByOriginalOpen(path);
+    return result;
+}
+
+UserPictureResult emptyResult()
+{
+    UserPictureResult result;
+    result.path.clear();
+    result.found = false;
+    return result;
 }
 }
 
@@ -26,12 +37,12 @@ UserPictureResult resolveUserPicture(const passwd &pw,
     int directoryCheckResult)
 {
     if (pw.pw_name == nullptr || pw.pw_dir == nullptr)
-        return {};
+        return emptyResult();
 
     // Original findUserPicture(): when whereIcons != 1, checkDirectory(home)
     // is consulted before the per-user home icon. Non-zero aborts lookup.
     if (policy.whereIcons != 1 && directoryCheckResult != 0)
-        return {};
+        return emptyResult();
 
     UserPictureResult result = firstExisting(
         std::string(pw.pw_dir) + "/.icons/login.icon");
