@@ -3,6 +3,7 @@
 #include "ImdIconPanel.h"
 #include "ImdFtrVisualCompat.h"
 #include "Base/PwdNameList.h"
+#include "Filesystem/DirectoryCheck.h"
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
@@ -59,16 +60,6 @@ bool homeIsDirectory(const char *home)
     return stat(home, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-bool linuxProbeInteractiveShell(const char *shell)
-{
-    if (!shell || !*shell)
-        return false;
-
-    const char *base = std::strrchr(shell, '/');
-    base = base ? base + 1 : shell;
-    return std::strcmp(base, "nologin") != 0 &&
-           std::strcmp(base, "false") != 0;
-}
 }
 
 PandoraComponent::PandoraComponent(const char *name, Widget parent)
@@ -365,8 +356,6 @@ void PandoraComponent::displayIcon()
             continue;
         if (!pwd->pw_dir || !*pwd->pw_dir)
             continue;
-        if (pwd->pw_passwd && std::strcmp(pwd->pw_passwd, "*") == 0)
-            continue;
 
         const PwdNameListEntry *entry = config.findEntry(pwd->pw_name);
         if (entry && (entry->flags &
@@ -374,10 +363,19 @@ void PandoraComponent::displayIcon()
             continue;
         if (homeIsIgnored(pwd->pw_dir))
             continue;
-        if (!homeIsDirectory(pwd->pw_dir))
-            continue;
 
-        if (!haveIrixConfig && !linuxProbeInteractiveShell(pwd->pw_shell))
+        /*
+         * Binary-proven createIconList() caller semantics:
+         *   3 -> reject
+         *   2 -> ordinary stat()/S_IFDIR fallback
+         *   0/1 -> continue
+         * checkDirectoryPortable() performs the state-2 stat fallback while
+         * preserving Linux filesystems as OTHER instead of relabelling them
+         * as the original IRIX LOCAL state.
+         */
+        const clogin::DirectoryState directoryState =
+            clogin::checkDirectoryPortable(pwd->pw_dir);
+        if (directoryState == clogin::kDirectoryMissing)
             continue;
 
         /*
