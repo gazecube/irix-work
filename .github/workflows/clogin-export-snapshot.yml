@@ -65,7 +65,6 @@ jobs:
           fi
 
           git switch --orphan clogin-export
-          git rm -rf .
           cp -a /tmp/clogin-export/. .
           git add -A
           git commit -m 'clogin: clean audited export snapshot'
