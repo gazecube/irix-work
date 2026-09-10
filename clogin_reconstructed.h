@@ -470,16 +470,90 @@ static void clogin_add_shortcut(Widget container, const struct passwd *pw,
 	clogin_make_shortcut_interactive(label_widget, data);
 }
 
+typedef struct
+{
+	struct passwd pw;
+	char name[MAX_USERNAME_LEN + 1];
+	char dir[MAXPATHLEN];
+	char gecos[512];
+} CloginPasswdSnapshot;
+
+static void clogin_snapshot_passwd(CloginPasswdSnapshot *dst,
+	const struct passwd *src, const char *name_override)
+{
+	memset(dst, 0, sizeof(*dst));
+	dst->pw = *src;
+	strncpy(dst->name,
+		name_override != NULL ? name_override : (src->pw_name != NULL ? src->pw_name : ""),
+		MAX_USERNAME_LEN);
+	dst->name[MAX_USERNAME_LEN] = '\0';
+	strncpy(dst->dir, src->pw_dir != NULL ? src->pw_dir : "", MAXPATHLEN - 1);
+	dst->dir[MAXPATHLEN - 1] = '\0';
+	strncpy(dst->gecos, src->pw_gecos != NULL ? src->pw_gecos : "", sizeof(dst->gecos) - 1);
+	dst->gecos[sizeof(dst->gecos) - 1] = '\0';
+	dst->pw.pw_name = dst->name;
+	dst->pw.pw_dir = dst->dir;
+	dst->pw.pw_gecos = dst->gecos;
+}
+
+static void clogin_restore_passwd_position(size_t seen)
+{
+	size_t i;
+	setpwent();
+	for(i = 0; i < seen; ++i)
+	{
+		if(getpwent() == NULL) break;
+	}
+}
+
 static void clogin_add_shortcuts(Widget container)
 {
 	struct passwd *pw;
+	size_t seen = 0;
+
 	clogin_load_policy();
 	setpwent();
 	while((pw = getpwent()) != NULL)
 	{
-		if(!clogin_user_eligible(pw)) continue;
-		clogin_add_shortcut(container, pw,
-			strcmp(pw->pw_name, "root") == 0 ? SHIRT_COLOR_ROOT : SHIRT_COLOR_USER);
+		const struct passwd *candidate = pw;
+		CloginPasswdSnapshot snap;
+		const char *name;
+
+		++seen;
+		if(pw->pw_name == NULL || pw->pw_name[0] == '\0') continue;
+
+		/* Binary-backed createIconList() behavior: a leading '-' record
+		 * terminates this enumeration routine. */
+		if(pw->pw_name[0] == '-') break;
+
+		name = pw->pw_name[0] == '+' ? pw->pw_name + 1 : pw->pw_name;
+
+		/* Empty-home records are resolved by name.  The original copies the
+		 * result before rewinding passwd enumeration to its previous count. */
+		if(pw->pw_dir == NULL || pw->pw_dir[0] == '\0')
+		{
+			struct passwd *resolved = getpwnam(name);
+			if(resolved == NULL)
+			{
+				clogin_restore_passwd_position(seen);
+				break;
+			}
+			if(resolved->pw_name != NULL && resolved->pw_name[0] == '+')
+				clogin_snapshot_passwd(&snap, resolved, resolved->pw_name + 1);
+			else
+				clogin_snapshot_passwd(&snap, resolved, NULL);
+			candidate = &snap.pw;
+			clogin_restore_passwd_position(seen);
+		}
+		else if(pw->pw_name[0] == '+')
+		{
+			clogin_snapshot_passwd(&snap, pw, name);
+			candidate = &snap.pw;
+		}
+
+		if(!clogin_user_eligible(candidate)) continue;
+		clogin_add_shortcut(container, candidate,
+			strcmp(candidate->pw_name, "root") == 0 ? SHIRT_COLOR_ROOT : SHIRT_COLOR_USER);
 	}
 	endpwent();
 }
