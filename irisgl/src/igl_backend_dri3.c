@@ -176,8 +176,24 @@ static int igl_dri3_wait_present(struct igl_backend *backend,
             if (complete &&
                 complete->kind == PresentCompleteKindPixmap &&
                 complete->serial_number == serial &&
-                complete->window == window->xwindow)
+                complete->window == window->xwindow) {
                 complete_seen = 1;
+
+                /*
+                 * COPY mode does not retain scanout ownership of the source
+                 * pixmap. The previously presented source is therefore also
+                 * reusable even if its IdleNotify was delivered (and possibly
+                 * consumed by the IRIS GL event poller) before this swap.
+                 * FLIP mode still requires the explicit old-front IdleNotify.
+                 */
+                if (complete->mode == PresentCompleteModeCopy)
+                    old_idle_seen = 1;
+
+                if (igl_dri3_debug_enabled())
+                    fprintf(stderr,
+                            "IRISGL DRI3: Present complete serial=%u mode=%u\n",
+                            serial, complete->mode);
+            }
         } else if (event.xcookie.evtype == PresentIdleNotify &&
                    old_front != None) {
             XPresentIdleNotifyEvent *idle;
@@ -305,11 +321,6 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
                    0);
     XFlush(backend->display);
 
-    /*
-     * In native double-buffer mode, do not return the old front buffer to
-     * IRIS GL for drawing until Present reports it idle. This is the host
-     * equivalent of the source-proven front/back ownership transition.
-     */
     if (window->doublebuffered &&
         !igl_dri3_wait_present(backend, window, serial, old_front))
         return 0;
