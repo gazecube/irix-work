@@ -6,6 +6,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
+#include <unistd.h>
+#include <limits.h>
 
 extern "C" int authenticateLogin(char *username, char *password);
 
@@ -18,6 +21,43 @@ struct PandoraRuntimeContext
     Widget exitWidget;
     bool authenticated;
 };
+
+/*
+ * Host portability seam for Xt app-default discovery.
+ *
+ * The shipped Clogin binary relies on its installed app-defaults resource
+ * file for widget offsets, widths, labels, fonts, and Imd panel resources.
+ * A login VT cannot be assumed to have an SGI/MaXX XFILESEARCHPATH, so the
+ * reconstruction points Xt at the cleanroom runtime-resource copy before
+ * VkApp initializes. CLOGIN_APP_DEFAULTS_DIR may override the location.
+ */
+void prepareCloginAppDefaults()
+{
+    const char *configured = std::getenv("CLOGIN_APP_DEFAULTS_DIR");
+    if (configured && *configured)
+    {
+        setenv("XAPPLRESDIR", configured, 1);
+        return;
+    }
+
+    if (access("app-defaults/Clogin", R_OK) != 0)
+        return;
+
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd)))
+        return;
+
+    char resourceDir[PATH_MAX];
+    const int written = std::snprintf(
+        resourceDir,
+        sizeof(resourceDir),
+        "%s/app-defaults",
+        cwd);
+    if (written <= 0 || written >= static_cast<int>(sizeof(resourceDir)))
+        return;
+
+    setenv("XAPPLRESDIR", resourceDir, 1);
+}
 
 void pandoraHostLoginHandoff(
     const char *username,
@@ -66,6 +106,8 @@ extern "C" int run_pandora_gui(
         return 0;
 
     username_out[0] = '\0';
+
+    prepareCloginAppDefaults();
 
     VkApp app("Clogin", &argc, argv);
     PandoraWindow window("pandoraWindow");
