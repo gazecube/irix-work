@@ -293,6 +293,11 @@ static void panelEventHandler(Widget widget, XtPointer client, XEvent *event, Bo
         event->xbutton.time >= state->lastClickTime &&
         event->xbutton.time - state->lastClickTime <= 400;
 
+    if (event->xbutton.state & ShiftMask)
+        state->dirPanel->extendSelect(modelView);
+    else
+        state->dirPanel->select(modelView);
+
     state->selectedDNA = modelView->getDNA();
     state->haveSelectedDNA = true;
     state->lastClickTime = event->xbutton.time;
@@ -349,10 +354,37 @@ static void openSelectedCB(Widget, XtPointer client, XtPointer)
     openEntry(state, entry);
 }
 
+/*
+ * Original fm exports selectAllHelper(ImdView *, void *). The N32 body:
+ *   - converts the generic ImdView to an icon view,
+ *   - rejects views whose visible/state bit is clear,
+ *   - rejects views already carrying icon-state flag 8, and
+ *   - asks the selection holder to extend the selection.
+ *
+ * The portable dynamic_cast/portableVisible() calls are host ABI seams; the
+ * ordering and selection test come from the original fm disassembly.
+ */
+static void selectAllHelper(ImdView *rawView, void *client)
+{
+    ImdModelBasedIconPanel *selectionHolder = (ImdModelBasedIconPanel *)client;
+    ImdIconView *view = dynamic_cast<ImdIconView *>(rawView);
+    if (!selectionHolder || !view) return;
+    if (!view->portableVisible()) return;
+    if (view->getFlag(8u)) return;
+    selectionHolder->extendSelect(view);
+}
+
 static void selectAllCB(Widget, XtPointer client, XtPointer)
 {
     FmState *state = (FmState *)client;
-    setStatus(state, "Select All awaits ImdIconPanel selection reconstruction");
+    ImdModelBasedIconPanel *selectionHolder = state->dirPanel;
+    if (!selectionHolder) return;
+
+    const std::vector<ImdView *> &views = selectionHolder->portableViews();
+    selectionHolder->beginSelectBlock();
+    for (std::vector<ImdView *>::const_iterator it = views.begin(); it != views.end(); ++it)
+        selectAllHelper(*it, selectionHolder);
+    selectionHolder->endSelectBlock();
 }
 
 static void showHiddenCB(Widget widget, XtPointer client, XtPointer call)
@@ -621,6 +653,7 @@ int main(int argc, char **argv)
                                        NULL);
 
     state.dirPanel = new ImdModelBasedIconPanel("panel", scroller, 0, NULL, 0);
+    state.dirPanel->enableMultipleSelect(true);
     state.panelWidget = state.dirPanel->baseWidget();
 
     /*
