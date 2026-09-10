@@ -1,0 +1,81 @@
+name: Stage clean Clogin export snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-export-snapshot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          fetch-depth: 1
+
+      - name: Assert audited Clogin content has not changed
+        run: |
+          set -eu
+          AUDITED=7411eb2056d3c4a55801af08a96c2de678627651
+          git diff --exit-code "$AUDITED" HEAD -- \
+            Makefile README.md br.sh callbacks.h clogin_autologin.h \
+            clogin_features.h clogin_reconstructed.h clogin_ui.h fwddec.h \
+            global.h gui.h irix_session.h main.c pandora_ui.h session.h \
+            shortcuts.h vt.h x11mgmt.h services screenshots irix-re/clogin
+
+      - name: Assemble audited snapshot outside the worktree
+        run: |
+          set -eu
+          export_dir=/tmp/clogin-export
+          rm -rf "$export_dir"
+          mkdir -p "$export_dir"
+
+          cp Makefile README.md br.sh callbacks.h clogin_autologin.h \
+             clogin_features.h clogin_reconstructed.h clogin_ui.h fwddec.h \
+             global.h gui.h irix_session.h main.c pandora_ui.h session.h \
+             shortcuts.h vt.h x11mgmt.h "$export_dir"/
+          cp -a services "$export_dir"/
+          cp -a screenshots "$export_dir"/
+          cp -a irix-re/clogin "$export_dir/reconstruction"
+
+          # Empty keep-files have no content and are unnecessary in the export.
+          rm -f "$export_dir/services/.gitkeep" "$export_dir/screenshots/.gitkeep"
+
+          if find "$export_dir" -name .gitmodules -o -name 'irix-657m-src' | grep -q .; then
+            echo 'forbidden source/submodule material reached export tree' >&2
+            exit 1
+          fi
+
+          find "$export_dir" -type f -print | LC_ALL=C sort > /tmp/clogin-export-files.txt
+
+      - name: Create orphan export branch
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+
+          if git ls-remote --exit-code --heads origin clogin-export >/dev/null 2>&1; then
+            echo 'clogin-export already exists; refusing to rewrite clean snapshot' >&2
+            exit 1
+          fi
+
+          git switch --orphan clogin-export
+          git rm -rf .
+          cp -a /tmp/clogin-export/. .
+          git add -A
+          git commit -m 'clogin: clean audited export snapshot'
+
+          # A clean snapshot must be a root commit with no parents.
+          test "$(git rev-list --parents -n1 HEAD | wc -w)" -eq 1
+          test ! -e .gitmodules
+          test ! -e irix-re
+          test ! -e irix-re-verification
+          test ! -e desktop-prototype
+          test ! -e .github
+
+          git push origin HEAD:refs/heads/clogin-export
