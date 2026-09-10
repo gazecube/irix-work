@@ -1,0 +1,75 @@
+name: Clogin host locality seam
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/clogin-host-locality-seam.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: clogin-export
+          fetch-depth: 0
+
+      - name: Apply explicit Linux locality compatibility seam
+        run: |
+          set -eu
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('clogin_reconstructed.h')
+          s = p.read_text()
+
+          marker = '''static int clogin_user_eligible(const struct passwd *pw)\n{\n'''
+          helper = '''/* Host portability seam.  The original IRIX classifier returns LOCAL only\n * for efs/xfs.  On Linux our native filesystems therefore remain OTHER in\n * clogin_check_directory(), preserving the recovered numeric contract.\n *\n * The runnable port still needs to decide whether an OTHER home is local\n * enough to satisfy IRIX's local-home policy.  Keep that Linux decision here\n * instead of falsifying checkDirectory() itself.  NFS remains remote; an\n * existing directory on a non-NFS Linux filesystem is accepted as host-local.\n */\nstatic int clogin_host_directory_is_local(const char *path,\n\tCloginDirectoryState state)\n{\n\tstruct stat st;\n\n\tif(state == CLOGIN_DIR_LOCAL) return 1;\n\tif(state == CLOGIN_DIR_NFS || state == CLOGIN_DIR_MISSING) return 0;\n\tif(path == NULL || path[0] != '/') return 0;\n\tif(stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;\n\n#ifdef __linux__\n\t{\n\t\tstruct statfs fs;\n\t\tif(statfs(path, &fs) != 0) return 0;\n\t\tif((unsigned long)fs.f_type == (unsigned long)NFS_SUPER_MAGIC) return 0;\n\t\treturn 1;\n\t}\n#else\n\treturn 0;\n#endif\n}\n\nstatic int clogin_user_eligible(const struct passwd *pw)\n{\n'''
+          if marker not in s:
+              raise SystemExit('user eligibility marker not found')
+          s = s.replace(marker, helper, 1)
+
+          old = '''\tstate = clogin_check_directory(pw->pw_dir);\n\tif(state == CLOGIN_DIR_MISSING) return 0;\n\tif(!g_clogin_policy.where_home && state != CLOGIN_DIR_LOCAL) return 0;\n\treturn 1;\n'''
+          new = '''\tstate = clogin_check_directory(pw->pw_dir);\n\tif(state == CLOGIN_DIR_MISSING) return 0;\n\tif(!g_clogin_policy.where_home &&\n\t\t!clogin_host_directory_is_local(pw->pw_dir, state)) return 0;\n\treturn 1;\n'''
+          if old not in s:
+              raise SystemExit('eligibility locality block not found')
+          s = s.replace(old, new, 1)
+
+          old_face = '''\tif(g_clogin_policy.where_icons != 1)\n\t{\n\t\thome_state = clogin_check_directory(pw->pw_dir);\n\t\tif(home_state != CLOGIN_DIR_LOCAL) return 0;\n\t}\n'''
+          new_face = '''\tif(g_clogin_policy.where_icons != 1)\n\t{\n\t\thome_state = clogin_check_directory(pw->pw_dir);\n\t\tif(!clogin_host_directory_is_local(pw->pw_dir, home_state)) return 0;\n\t}\n'''
+          if old_face not in s:
+              raise SystemExit('face locality block not found')
+          s = s.replace(old_face, new_face, 1)
+
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- clogin_reconstructed.h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libmotif-dev libx11-dev libxt-dev libxpm-dev libxcursor-dev libxinerama-dev libpam0g-dev
+
+      - name: Build Clogin prototype
+        run: make clean all
+
+      - name: Verify seam placement
+        run: |
+          set -eu
+          grep -q 'clogin_host_directory_is_local' clogin_reconstructed.h
+          grep -q 'state == CLOGIN_DIR_NFS || state == CLOGIN_DIR_MISSING' clogin_reconstructed.h
+          grep -q 'NFS_SUPER_MAGIC' clogin_reconstructed.h
+
+      - name: Commit refinement
+        run: |
+          set -eu
+          git config user.name 'db2k'
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add clogin_reconstructed.h
+          git diff --cached --quiet && exit 0
+          git commit -m 'clogin: isolate Linux home-locality compatibility'
+          git push origin HEAD:clogin-export
