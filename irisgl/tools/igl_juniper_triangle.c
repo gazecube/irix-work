@@ -1,6 +1,7 @@
 #include "igl_backend.h"
 #include "igl_juniper.h"
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -52,9 +53,14 @@ int main(void)
         goto fail;
     }
 
+    errno = 0;
     if (!igl_juniper_draw_test_triangle(&dev, &color,
                                         TRI_WIDTH, TRI_HEIGHT, TRI_STRIDE)) {
-        fprintf(stderr, "junipertri: native 3D submission failed\n");
+        int saved_errno = errno;
+        fprintf(stderr,
+                "junipertri: native 3D submission failed: errno=%d (%s)\n",
+                saved_errno,
+                saved_errno ? strerror(saved_errno) : "no errno reported");
         goto fail;
     }
 
