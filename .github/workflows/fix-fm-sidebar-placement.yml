@@ -1,0 +1,54 @@
+name: Fix FM sidebar placement
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - .github/workflows/fix-fm-sidebar-placement.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Patch FM sidebar composition
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('irix-re/fm/FmMain.c++')
+          s = p.read_text()
+          old = '''    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
+'''
+          new = '''    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,
+'''
+          if old not in s:
+              raise SystemExit('scaleZoom parent pattern not found')
+          s = s.replace(old, new, 1)
+          old = '''    XtVaSetValues(controlBoard,
+                  XmNtopAttachment, XmATTACH_WIDGET,
+                  XmNtopWidget, finderForm,
+                  XmNbottomAttachment, XmATTACH_WIDGET,
+                  XmNbottomWidget, state.status,
+                  NULL);
+'''
+          new = '''    XtVaSetValues(controlBoard,
+                  XmNtopAttachment, XmATTACH_WIDGET,
+                  XmNtopWidget, finderForm,
+                  NULL);
+'''
+          if old not in s:
+              raise SystemExit('controlBoard attachment pattern not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+      - name: Commit correction
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/fm/FmMain.c++
+          git commit -m "fm: restore compact sidebar thumbwheel placement"
+          git push origin HEAD:irix-re
