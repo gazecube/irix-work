@@ -56,6 +56,7 @@ static void igl_juniper_runtime_destroy_surfaces(
     window->host_color.count = 0;
     window->host_color.draw = 0;
     window->host_color.front = -1;
+    window->host_color.native_present = 0;
 }
 
 static struct igl_juniper_bo *igl_juniper_runtime_draw_bo(
@@ -184,6 +185,7 @@ int igl_juniper_runtime_ensure_surface(struct igl_runtime_state *runtime,
     window->host_color.count = wanted_count;
     window->host_color.draw = 0;
     window->host_color.front = -1;
+    window->host_color.native_present = 0;
 
     if (igl_juniper_debug_enabled())
         fprintf(stderr,
@@ -228,10 +230,13 @@ int igl_juniper_runtime_present(struct igl_runtime_state *runtime,
     if (!bo)
         return 0;
 
-    if (!igl_juniper_runtime_present_bo(runtime, window, bo))
+    if (!igl_juniper_runtime_present_bo(runtime, window, bo)) {
+        window->host_color.native_present = 0;
         return 0;
+    }
 
     window->host_color.front = window->host_color.draw;
+    window->host_color.native_present = 1;
     return 1;
 }
 
@@ -265,10 +270,13 @@ int igl_juniper_runtime_swap(struct igl_runtime_state *runtime,
                 window->host_color.stride);
     }
 
-    if (!igl_juniper_runtime_present_bo(runtime, window, bo))
+    if (!igl_juniper_runtime_present_bo(runtime, window, bo)) {
+        window->host_color.native_present = 0;
         return 0;
+    }
 
     window->host_color.front = presented;
     window->host_color.draw = presented ^ 1;
+    window->host_color.native_present = 1;
     return 1;
 }
