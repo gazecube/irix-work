@@ -20,7 +20,7 @@ jobs:
           set -eu
           git clone --depth=1 https://github.com/calmsacibis995/irix-657m-src.git /tmp/irix-657m-src
 
-      - name: Audit proposed Clogin export
+      - name: Audit complete proposed Clogin export
         run: |
           set -eu
           python3 - <<'PY'
@@ -35,6 +35,10 @@ jobs:
           outdir = Path('/tmp/clogin-leak-audit')
           outdir.mkdir(parents=True, exist_ok=True)
 
+          # Legacy dvlogin/Clogin application lives at repository root. The
+          # evidence-oriented reconstruction lives at irix-re/clogin. The
+          # verification copy is byte-identical today and is intentionally
+          # omitted so the split contains one authoritative copy.
           excluded_root_dirs = {'.git', '.github', 'desktop-prototype', 'irix-re', 'irix-re-verification'}
           excluded_root_files = {'.gitattributes', '.gitmodules'}
 
@@ -46,7 +50,10 @@ jobs:
                   candidates.append(p)
               elif p.is_dir() and p.name in {'services', 'screenshots'}:
                   candidates.extend(x for x in p.rglob('*') if x.is_file())
-          candidates = sorted(candidates)
+
+          reconstruction = repo / 'irix-re' / 'clogin'
+          candidates.extend(x for x in reconstruction.rglob('*') if x.is_file())
+          candidates = sorted(set(candidates))
 
           def sha256(path):
               h = hashlib.sha256()
@@ -60,7 +67,7 @@ jobs:
                   data = path.read_bytes()
               except OSError:
                   return None
-              if b'\0' in data[:8192] or len(data) > 2 * 1024 * 1024:
+              if not data or b'\0' in data[:8192] or len(data) > 2 * 1024 * 1024:
                   return None
               try:
                   text = data.decode('utf-8')
@@ -69,7 +76,6 @@ jobs:
                       text = data.decode('latin-1')
                   except UnicodeDecodeError:
                       return None
-              # Whitespace-normalized, content-preserving comparison. Do not emit source text.
               lines = []
               for line in text.splitlines():
                   line = re.sub(r'\s+', ' ', line.strip())
@@ -81,12 +87,15 @@ jobs:
           leak_hashes = defaultdict(list)
           for p in leak_files:
               try:
+                  if p.stat().st_size == 0:
+                      continue
                   leak_hashes[sha256(p)].append(p.relative_to(leak).as_posix())
               except OSError:
                   pass
 
-          # Build 10-line fingerprints from source. Ten consecutive normalized lines is
-          # intentionally conservative: generic include blocks should not dominate the audit.
+          # Ten consecutive normalized nonblank lines is deliberately strict
+          # enough to avoid ordinary include/boilerplate noise while catching
+          # meaningful copied source blocks. No matching text is emitted.
           WINDOW = 10
           shingle_index = defaultdict(list)
           for p in leak_files:
@@ -96,33 +105,30 @@ jobs:
               rel = p.relative_to(leak).as_posix()
               for i in range(len(lines) - WINDOW + 1):
                   key = hashlib.sha256('\n'.join(lines[i:i+WINDOW]).encode()).digest()
-                  # Cap repeated boilerplate to keep memory bounded and reduce noise.
                   if len(shingle_index[key]) < 8:
                       shingle_index[key].append((rel, i + 1))
 
           exact = []
           overlap_rows = []
-          clean = []
           manifest = []
 
           for p in candidates:
               rel = p.relative_to(repo).as_posix()
+              size = p.stat().st_size
               digest = sha256(p)
-              manifest.append((rel, digest, p.stat().st_size))
-              if digest in leak_hashes:
+              manifest.append((rel, digest, size))
+              if size > 0 and digest in leak_hashes:
                   exact.append((rel, leak_hashes[digest]))
 
               lines = text_lines(p)
               if not lines or len(lines) < WINDOW:
-                  if digest not in leak_hashes:
-                      clean.append(rel)
                   continue
 
               hits = Counter()
               first = {}
               for i in range(len(lines) - WINDOW + 1):
                   key = hashlib.sha256('\n'.join(lines[i:i+WINDOW]).encode()).digest()
-                  for src, src_line in shingle_index.get(key, ()): 
+                  for src, src_line in shingle_index.get(key, ()):
                       hits[src] += 1
                       first.setdefault(src, (i + 1, src_line))
 
@@ -130,21 +136,21 @@ jobs:
                   src, count = hits.most_common(1)[0]
                   c_line, s_line = first[src]
                   overlap_rows.append((rel, src, count, c_line, s_line))
-              elif digest not in leak_hashes:
-                  clean.append(rel)
 
           report = []
           report.append('Clogin leaked-source transfer audit')
           report.append('===================================')
           report.append('')
           report.append('Comparison source: calmsacibis995/irix-657m-src (depth-1 main checkout)')
-          report.append('Candidate boundary: legacy repository-root login manager + services/ + screenshots/.')
-          report.append('Excluded from export: .github/, .gitmodules, .gitattributes, desktop-prototype/, irix-re/, irix-re-verification/.')
+          report.append('Candidate boundary: legacy root login manager + services/ + screenshots/ + irix-re/clogin/.')
+          report.append('irix-re-verification/clogin is omitted because it currently has the same Git tree as irix-re/clogin.')
+          report.append('Excluded from export: .github/, .gitmodules, .gitattributes, desktop-prototype/, all non-Clogin irix-re content, irix-re-verification/.')
+          report.append('Zero-byte files are ignored for exact-hash matching.')
           report.append(f'Fingerprint rule: {WINDOW} consecutive whitespace-normalized nonblank lines.')
           report.append('No leaked source text is reproduced in this report.')
           report.append('')
           report.append(f'Candidate files: {len(candidates)}')
-          report.append(f'Exact whole-file matches: {len(exact)}')
+          report.append(f'Exact nonempty whole-file matches: {len(exact)}')
           report.append(f'Files with >=1 matching {WINDOW}-line window: {len(overlap_rows)}')
           report.append('')
 
@@ -174,10 +180,10 @@ jobs:
           (outdir / 'clogin-leak-audit.txt').write_text('\n'.join(report) + '\n')
           print('\n'.join(report[:40]))
 
-          # A flagged overlap is review-required, not an automatic failure. Exact copied files
-          # do fail the gate because they must never be transferred into the split repository.
-          if exact:
-              raise SystemExit('audit gate failed: exact leaked-source file match detected')
+          # This is a transfer gate, not merely an informational scan: either
+          # an exact nonempty match or a copied 10-line window blocks export.
+          if exact or overlap_rows:
+              raise SystemExit('audit gate failed: leaked-source overlap detected')
           PY
 
       - name: Upload audit report
