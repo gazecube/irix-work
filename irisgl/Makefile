@@ -108,6 +108,19 @@ junipertris: src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_3d_list.o \
 		src/igl_hw_linux.o src/igl_backend_x11.o src/igl_backend_dri3.o \
 		$(X11_LIBS) $(LIBDRM_LIBS)
 
+tools/miku_mesh.h: tools/extract_miku_fbx.py
+	@test -n "$(MIKU_FBX)" || (echo "Set MIKU_FBX=/path/to/Miku.fbx"; exit 1)
+	python3 tools/extract_miku_fbx.py "$(MIKU_FBX)" tools/miku_mesh.h
+
+miku: src/igl_hw_linux.o src/igl_juniper.o src/igl_juniper_3d_list.o \
+		src/igl_backend_x11.o src/igl_backend_dri3.o tools/miku_mesh.h tools/igl_miku.c
+	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
+	@test -n "$(X11_DRI3_LIBS)" || (echo "X11/XCB DRI3 development files are required"; exit 1)
+	$(CC) $(CPPFLAGS) $(X11_DRI3_CFLAGS) $(LIBDRM_CFLAGS) $(CFLAGS) -o $@ \
+		tools/igl_miku.c src/igl_juniper_3d_list.o src/igl_juniper.o \
+		src/igl_hw_linux.o src/igl_backend_x11.o src/igl_backend_dri3.o \
+		$(X11_LIBS) $(LIBDRM_LIBS)
+
 irisgltri: $(LIB) tools/igl_irisgl_triangle.c
 	@test -n "$(LIBDRM_LIBS)" || (echo "libdrm development files are required"; exit 1)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tools/igl_irisgl_triangle.c \
@@ -146,8 +159,8 @@ gsync: $(LIB)
 clean:
 	rm -f $(OBJS) src/igl_juniper_3d.o src/igl_juniper_3d_main.o \
 		src/igl_juniper_3d_generic.o src/igl_juniper_3d_list.o $(LIB) hwprobe radeonprobe radeoncs \
-		radeonwrite juniperclear junipertri junipertri-generic junipertris irisgltri \
+		radeonwrite juniperclear junipertri junipertri-generic junipertris miku irisgltri \
 		flash mode badifred rbuf cbuf gsync
 
 .PHONY: all clean hwprobe radeonprobe radeoncs radeonwrite juniperclear \
-	junipertri junipertri-generic junipertris irisgltri flash mode badifred rbuf cbuf gsync
+	junipertri junipertri-generic junipertris miku irisgltri flash mode badifred rbuf cbuf gsync
