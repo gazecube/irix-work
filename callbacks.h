@@ -294,6 +294,25 @@ fail:
 }
 
 
+/*
+ * Host-side authentication diagnostics only. Keep this separate from the
+ * reconstructed SGI behavior and never record password data.
+ */
+static void auth_trace_stage(const char *username, const char *stage,
+	pam_handle_t *pamh, int retval)
+{
+	FILE *fp = fopen("/tmp/dvlogin-auth.log", "a");
+	if(fp == NULL) { return; }
+
+	fprintf(fp, "user=%s stage=%s code=%d message=%s\n",
+		username ? username : "",
+		stage ? stage : "",
+		retval,
+		pam_strerror(pamh, retval));
+	fclose(fp);
+}
+
+
 int authenticateLogin(char *username, char *password)
 {
 	pam_handle_t *pamh = NULL;
@@ -311,6 +330,7 @@ int authenticateLogin(char *username, char *password)
 	conv.appdata_ptr = &creds;
 
 	retval = pam_start("login", username, &conv, &pamh);
+	auth_trace_stage(username, "pam_start", pamh, retval);
 	if(retval != PAM_SUCCESS)
 	{
 		fprintf(stderr, "PAM start failed: %s\n", pam_strerror(pamh, retval));
@@ -318,6 +338,7 @@ int authenticateLogin(char *username, char *password)
 	}
 
 	retval = pam_authenticate(pamh, 0);
+	auth_trace_stage(username, "pam_authenticate", pamh, retval);
 	if(retval != PAM_SUCCESS)
 	{
 		fprintf(stderr, "Authentication failed: %s\n", pam_strerror(pamh, retval));
@@ -327,6 +348,7 @@ int authenticateLogin(char *username, char *password)
 	}
 
 	retval = pam_acct_mgmt(pamh, 0);
+	auth_trace_stage(username, "pam_acct_mgmt", pamh, retval);
 	if(retval != PAM_SUCCESS)
 	{
 		fprintf(stderr, "Account validation failed: %s\n", pam_strerror(pamh, retval));
