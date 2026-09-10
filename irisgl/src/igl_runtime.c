@@ -312,17 +312,17 @@ void clear(void)
     hardware_clear = igl_juniper_runtime_clear(
         &igl, igl.current_window, igl_host_rgba8());
 
-    /*
-     * In single-buffer mode a successful DRI3 Present makes the Juniper BO
-     * itself the visible source. Keep the old X11 rendering path as a strict
-     * compatibility fallback, and retain it for double buffering until the
-     * native front/back surface pair is implemented.
-     */
     if (hardware_clear &&
         !igl.current_window->committed.double_buffer &&
         igl_juniper_runtime_present(&igl, igl.current_window))
         return;
 
+    /*
+     * During initial native double-buffer bring-up, preserve the X11
+     * backbuffer mirror so swapbuffers() still has a valid fallback if DRI3
+     * import/presentation fails. Once native swapping is proven on hardware,
+     * this duplicate rendering can be removed.
+     */
     igl_backend_clear(igl.backend, igl.current_window->backend_window);
 }
 
@@ -330,6 +330,9 @@ void swapbuffers(void)
 {
     igl_init_once();
     if (!igl.current_window || !igl.current_window->committed.double_buffer)
+        return;
+
+    if (igl_juniper_runtime_swap(&igl, igl.current_window))
         return;
 
     igl_backend_swapbuffers(igl.backend, igl.current_window->backend_window);
