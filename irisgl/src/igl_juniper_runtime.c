@@ -11,10 +11,22 @@
 
 #define IGL_JUNIPER_SHARED_PITCH_ALIGN 256u
 
+static uint32_t igl_juniper_next_present_token = 1u;
+
 static int igl_juniper_debug_enabled(void)
 {
     const char *value = getenv("IRISGL_DEBUG_DRI3");
     return value && *value && *value != '0';
+}
+
+static uint32_t igl_juniper_alloc_present_token(void)
+{
+    uint32_t token;
+
+    token = igl_juniper_next_present_token++;
+    if (token == 0)
+        token = igl_juniper_next_present_token++;
+    return token;
 }
 
 static int igl_juniper_aligned_stride(int width)
@@ -43,11 +55,12 @@ static void igl_juniper_runtime_destroy_surfaces(
         return;
 
     for (i = 0; i < 2; ++i) {
-        if (!window->host_color.bo[i])
-            continue;
-        igl_juniper_bo_destroy(runtime->juniper, window->host_color.bo[i]);
-        free(window->host_color.bo[i]);
-        window->host_color.bo[i] = NULL;
+        if (window->host_color.bo[i]) {
+            igl_juniper_bo_destroy(runtime->juniper, window->host_color.bo[i]);
+            free(window->host_color.bo[i]);
+            window->host_color.bo[i] = NULL;
+        }
+        window->host_color.token[i] = 0;
     }
 
     window->host_color.width = 0;
@@ -73,10 +86,27 @@ static struct igl_juniper_bo *igl_juniper_runtime_draw_bo(
     return window->host_color.bo[draw];
 }
 
+static uint32_t igl_juniper_runtime_token_for_bo(
+    struct igl_window_state *window,
+    struct igl_juniper_bo *bo)
+{
+    int i;
+
+    if (!window || !bo)
+        return 0;
+
+    for (i = 0; i < window->host_color.count; ++i) {
+        if (window->host_color.bo[i] == bo)
+            return window->host_color.token[i];
+    }
+    return 0;
+}
+
 static int igl_juniper_runtime_present_bo(struct igl_runtime_state *runtime,
                                           struct igl_window_state *window,
                                           struct igl_juniper_bo *bo)
 {
+    uint32_t token;
     int dma_buf_fd;
     int ok;
 
@@ -87,6 +117,10 @@ static int igl_juniper_runtime_present_bo(struct igl_runtime_state *runtime,
     if (bo->size > UINT32_MAX)
         return 0;
 
+    token = igl_juniper_runtime_token_for_bo(window, bo);
+    if (!token)
+        return 0;
+
     dma_buf_fd = -1;
     if (!igl_juniper_bo_export_prime(runtime->juniper, bo, &dma_buf_fd))
         return 0;
@@ -94,7 +128,7 @@ static int igl_juniper_runtime_present_bo(struct igl_runtime_state *runtime,
     ok = igl_backend_present_dma_buf(runtime->backend,
                                      window->backend_window,
                                      dma_buf_fd,
-                                     bo->handle,
+                                     token,
                                      (uint32_t)bo->size,
                                      window->host_color.width,
                                      window->host_color.height,
@@ -152,7 +186,7 @@ int igl_juniper_runtime_ensure_surface(struct igl_runtime_state *runtime,
         window->host_color.height == height &&
         window->host_color.stride == stride) {
         for (i = 0; i < wanted_count; ++i) {
-            if (!window->host_color.bo[i])
+            if (!window->host_color.bo[i] || !window->host_color.token[i])
                 break;
         }
         if (i == wanted_count)
@@ -177,6 +211,7 @@ int igl_juniper_runtime_ensure_surface(struct igl_runtime_state *runtime,
             return 0;
         }
         window->host_color.bo[i] = bo;
+        window->host_color.token[i] = igl_juniper_alloc_present_token();
     }
 
     window->host_color.width = width;
@@ -189,12 +224,14 @@ int igl_juniper_runtime_ensure_surface(struct igl_runtime_state *runtime,
 
     if (igl_juniper_debug_enabled())
         fprintf(stderr,
-                "IRISGL Juniper: surface %dx%d stride=%d size=%llu count=%d\n",
+                "IRISGL Juniper: surface %dx%d stride=%d size=%llu count=%d token0=%u token1=%u\n",
                 width,
                 height,
                 stride,
                 (unsigned long long)size,
-                wanted_count);
+                wanted_count,
+                window->host_color.token[0],
+                window->host_color.token[1]);
     return 1;
 }
 
@@ -246,6 +283,7 @@ int igl_juniper_runtime_swap(struct igl_runtime_state *runtime,
     struct igl_juniper_bo *bo;
     volatile uint32_t *words;
     size_t last_word;
+    uint32_t token;
     int presented;
 
     if (!runtime || !window || !window->committed.double_buffer)
@@ -257,13 +295,15 @@ int igl_juniper_runtime_swap(struct igl_runtime_state *runtime,
 
     presented = window->host_color.draw;
     bo = window->host_color.bo[presented];
+    token = window->host_color.token[presented];
 
     if (igl_juniper_debug_enabled() && bo && bo->map && bo->size >= 4) {
         words = (volatile uint32_t *)bo->map;
         last_word = (size_t)(bo->size / 4u) - 1u;
         fprintf(stderr,
-                "IRISGL Juniper: pre-present draw=%d token=%u first=0x%08x last=0x%08x stride=%d\n",
+                "IRISGL Juniper: pre-present draw=%d token=%u handle=%u first=0x%08x last=0x%08x stride=%d\n",
                 presented,
+                token,
                 bo->handle,
                 (uint32_t)words[0],
                 (uint32_t)words[last_word],
