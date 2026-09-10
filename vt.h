@@ -1,21 +1,30 @@
 
-/*	find_free_display - scan /tmp/.X*-lock to find the lowest
-	display number not currently held by a running X server.
+/*	find_free_display - scan both the traditional X lock file and
+	the X11 UNIX-domain socket to find the lowest unused display.
 	Returns the display number (>= 0) or -1 on failure.
 */
 static int find_free_display(void)
 {
 	int num;
 	char lockpath[64];
+	char socketpath[64];
 
 	for(num = 0; num < MAX_DISPLAY_SCAN; num++)
 	{
 		snprintf(lockpath, sizeof(lockpath), "/tmp/.X%d-lock", num);
+		snprintf(socketpath, sizeof(socketpath), "/tmp/.X11-unix/X%d", num);
 
-		/* no lock file means nobody owns this display */
+		/* An existing X11 socket is authoritative evidence that the
+		 * display number is already in use, even when no lock file is
+		 * present. This is common with Xwayland and some display managers. */
+		if(access(socketpath, F_OK) == 0) { continue; }
+
+		/* No socket and no lock file means the display is available. */
 		if(access(lockpath, F_OK) != 0) { return num; }
 
-		/* lock file exists, check if the owning PID is still alive */
+		/* A lock file can outlive its server. Only remove it when the
+		 * recorded PID no longer exists and there is no corresponding
+		 * X11 socket. */
 		FILE *fp = fopen(lockpath, "r");
 		if(fp != NULL)
 		{
@@ -24,7 +33,6 @@ static int find_free_display(void)
 			{
 				if(kill(pid, 0) != 0 && errno == ESRCH)
 				{
-					/* PID is dead - stale lock file */
 					fclose(fp);
 					unlink(lockpath);
 					return num;
