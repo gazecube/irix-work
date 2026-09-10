@@ -1,0 +1,48 @@
+name: Clogin binary-backed double click
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - '.github/scripts/binary_back_doubleclick.py'
+      - '.github/workflows/clogin-doubleclick-binary.yml'
+  workflow_dispatch:
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Export clogin branch
+        run: |
+          git worktree add export origin/clogin-export
+
+      - name: Apply binary-backed double-click state machine
+        run: python3 .github/scripts/binary_back_doubleclick.py
+
+      - name: Verify recovered branch anchors
+        run: |
+          grep -q 'copiedPasswd.empty()' export/reconstruction/PandoraViewKit.c++
+          grep -q '_passwordFieldEnabled' export/reconstruction/PandoraViewKit.c++
+          grep -q '_directLoginPending' export/reconstruction/PandoraViewKit.c++
+          grep -q 'self->doubleClicked(view)' export/reconstruction/PandoraViewKit.c++
+          ! grep -A25 'userViewCommandCB' export/reconstruction/PandoraViewKit.c++ | grep -q 'showPasswordPrompt'
+
+      - name: Compile standalone Imd subset
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ libmotif-dev libxt-dev libx11-dev
+          cd export/reconstruction/imd
+          g++ -std=c++11 -fPIC -I. -c ImdString.c++ ImdIconPanel.c++ ViewPanelAdopt.c++ InvertedTeeRenderer.c++
+
+      - name: Commit refinement
+        run: |
+          cd export
+          git config user.name db2k
+          git config user.email '33785843+gazecube@users.noreply.github.com'
+          git add reconstruction/PandoraViewKit.c++ reconstruction/PandoraViewKit.h
+          git commit -m 'clogin: binary-back double-click state machine'
+          git push origin HEAD:clogin-export
