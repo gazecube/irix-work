@@ -4,6 +4,10 @@
 #include <Vk/VkApp.h>
 #include <Xm/Xm.h>
 
+#include <X11/Xlib.h>
+#include <X11/Xcursor/Xcursor.h>
+#include <X11/cursorfont.h>
+
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -57,6 +61,41 @@ void prepareCloginAppDefaults()
         return;
 
     setenv("XAPPLRESDIR", resourceDir, 1);
+}
+
+/*
+ * Host-side cursor setup. The earlier portable Motif greeter explicitly
+ * installed left_ptr after realization; the ViewKit runtime did not, leaving
+ * the login VT with no visible pointer on some X servers. This is portability
+ * glue only and is not claimed as original SGI Clogin implementation detail.
+ */
+void installPandoraCursor(Widget widget)
+{
+    if (!widget || !XtIsRealized(widget))
+        return;
+
+    Display *display = XtDisplay(widget);
+    Window window = XtWindow(widget);
+    if (!display || !window)
+        return;
+
+    Cursor cursor = None;
+    XcursorImage *image = XcursorLibraryLoadImage("left_ptr", NULL, 24);
+    if (image)
+    {
+        cursor = XcursorImageLoadCursor(display, image);
+        XcursorImageDestroy(image);
+    }
+
+    if (cursor == None)
+        cursor = XCreateFontCursor(display, XC_left_ptr);
+
+    if (cursor != None)
+    {
+        XDefineCursor(display, window, cursor);
+        XFreeCursor(display, cursor);
+        XFlush(display);
+    }
 }
 
 void pandoraHostLoginHandoff(
@@ -123,6 +162,7 @@ extern "C" int run_pandora_gui(
 
     window.setTitle("Clogin");
     window.show();
+    installPandoraCursor(window.baseWidget());
     app.run();
 
     return context.authenticated ? 1 : 0;
