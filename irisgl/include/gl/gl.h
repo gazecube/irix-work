@@ -7,7 +7,7 @@ extern "C" {
 
 /*
  * Early IRIS GL public surface recovered for the original SGI graphics
- * stress programs.  Keep this header source-led and grow it only when an
+ * stress programs. Keep this header source-led and grow it only when an
  * original source/test requires another interface.
  */
 typedef unsigned short Colorindex;
@@ -39,6 +39,11 @@ void color(Colorindex index);
 void mapcolor(Colorindex index, RGBvalue red, RGBvalue green, RGBvalue blue);
 void clear(void);
 void swapbuffers(void);
+
+/* Source-documented IRIS GL polygon entry points. */
+void bgnpolygon(void);
+void v3f(const float v[3]);
+void endpolygon(void);
 
 long qtest(void);
 long qread(short *value);
