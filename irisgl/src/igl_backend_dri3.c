@@ -4,6 +4,7 @@
 #include <X11/Xlib-xcb.h>
 #include <X11/extensions/Xpresent.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <xcb/dri3.h>
@@ -54,6 +55,22 @@ struct igl_dri3_surface {
 };
 
 static struct igl_dri3_surface *igl_dri3_surfaces;
+static int igl_dri3_reported_success;
+static int igl_dri3_reported_failure;
+
+static int igl_dri3_debug_enabled(void)
+{
+    const char *value = getenv("IRISGL_DEBUG_DRI3");
+    return value && *value && *value != '0';
+}
+
+static void igl_dri3_report_failure(const char *reason)
+{
+    if (!igl_dri3_debug_enabled() || igl_dri3_reported_failure)
+        return;
+    fprintf(stderr, "IRISGL DRI3: fallback (%s)\n", reason);
+    igl_dri3_reported_failure = 1;
+}
 
 static struct igl_dri3_surface *igl_dri3_find(
     struct igl_backend_window *window)
@@ -103,19 +120,31 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
     unsigned int depth;
 
     if (!backend || !backend->display || !window || dma_buf_fd < 0 ||
-        width <= 0 || height <= 0 || stride <= 0 || !size)
+        width <= 0 || height <= 0 || stride <= 0 || !size) {
+        igl_dri3_report_failure("invalid presentation state");
         return 0;
+    }
 
-    if (window->doublebuffered || !backend->present_available)
+    if (window->doublebuffered) {
+        igl_dri3_report_failure("native double buffering not implemented yet");
         return 0;
+    }
+    if (!backend->present_available) {
+        igl_dri3_report_failure("X Present extension unavailable");
+        return 0;
+    }
 
     connection = XGetXCBConnection(backend->display);
-    if (!connection)
+    if (!connection) {
+        igl_dri3_report_failure("XGetXCBConnection failed");
         return 0;
+    }
 
     surface = igl_dri3_get(window);
-    if (!surface)
+    if (!surface) {
+        igl_dri3_report_failure("surface cache allocation failed");
         return 0;
+    }
 
     if (!surface->pixmap || surface->token != token ||
         surface->width != width || surface->height != height ||
@@ -138,8 +167,15 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
             dma_buf_fd);
         error = xcb_request_check(connection, cookie);
         if (error) {
+            if (igl_dri3_debug_enabled())
+                fprintf(stderr,
+                        "IRISGL DRI3: PixmapFromBuffer error=%u major=%u minor=%u\n",
+                        error->error_code,
+                        error->major_code,
+                        error->minor_code);
             free(error);
             surface->pixmap = None;
+            igl_dri3_report_failure("PixmapFromBuffer rejected");
             return 0;
         }
 
@@ -172,5 +208,11 @@ int igl_backend_present_dma_buf(struct igl_backend *backend,
                    NULL,
                    0);
     XFlush(backend->display);
+
+    if (igl_dri3_debug_enabled() && !igl_dri3_reported_success) {
+        fprintf(stderr,
+                "IRISGL DRI3: Juniper dma-buf is direct presentation source\n");
+        igl_dri3_reported_success = 1;
+    }
     return 1;
 }
