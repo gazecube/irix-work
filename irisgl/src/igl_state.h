@@ -111,8 +111,9 @@ struct igl_juniper_bo;
  * surface handed to Present. A front value of -1 means no Juniper surface
  * has been presented yet.
  *
- * stride is the actual host pixmap pitch in bytes. Juniper/Xorg shared
- * surfaces require an aligned pitch rather than assuming width * 4.
+ * native_present is reconstructed host bookkeeping. It becomes true only
+ * after a Juniper BO has actually completed the DRI3/Present path, allowing
+ * the compatibility X11 mirror to be suppressed on subsequent clears.
  */
 struct igl_host_color_surface {
     struct igl_juniper_bo *bo[2];
@@ -122,6 +123,7 @@ struct igl_host_color_surface {
     int count;
     int draw;
     int front;
+    int native_present;
 };
 
 struct igl_window_state {
