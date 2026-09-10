@@ -160,6 +160,24 @@ int igl_juniper_bo_wait(struct igl_juniper_device *dev,
     }
 }
 
+int igl_juniper_bo_export_prime(struct igl_juniper_device *dev,
+                                struct igl_juniper_bo *bo,
+                                int *dma_buf_fd)
+{
+    int fd;
+
+    if (!dev || !bo || !dma_buf_fd || dev->fd < 0 || !bo->handle)
+        return 0;
+
+    fd = -1;
+    if (drmPrimeHandleToFD(dev->fd, bo->handle,
+                           DRM_CLOEXEC | DRM_RDWR, &fd) != 0)
+        return 0;
+
+    *dma_buf_fd = fd;
+    return 1;
+}
+
 int igl_juniper_cp_dma_clear(struct igl_juniper_device *dev,
                              struct igl_juniper_bo *bo,
                              uint64_t offset,
@@ -206,7 +224,7 @@ int igl_juniper_cp_dma_clear(struct igl_juniper_device *dev,
         ib[p++] = (uint32_t)((dst_offset >> 32) & 0xffu);
         ib[p++] = byte_count;
         ib[p++] = IGL_PKT3(IGL_PKT3_NOP, 0);
-        ib[p++] = 0; /* relocation chunk dword 0 */
+        ib[p++] = 0;
 
         dst_offset += byte_count;
         remaining -= byte_count;
