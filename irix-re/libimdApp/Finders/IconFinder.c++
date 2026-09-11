@@ -4,9 +4,87 @@
 #include "ModelBasedIconPanel.h"
 #include <Sgm/Finder.h>
 
+#include <Vk/VkMenu.h>
+#include <Vk/VkMenuBar.h>
+
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
 #include <X11/StringDefs.h>
+
+/*
+ * Exact descriptor shape recovered from the original libimdApp.so data:
+ *
+ *   _menuBarDesc:
+ *     { SUBMENU, "finderSelectionMenu", 0, _popupMenuDesc, 0, 0 }
+ *     { END,     0,                     0, 0,              0, 0 }
+ *
+ *   _popupMenuDesc:
+ *     { END, 0, 0, 0, 0, 0 }
+ *
+ * The original addMenuItem() populates this submenu dynamically through
+ * VkMenu::addAction(). Keeping it empty here matches the constructor state.
+ */
+static VkMenuDesc iconFinderPopupMenuDesc[] = {
+    { END, 0, 0, 0, 0, 0 }
+};
+
+static VkMenuDesc iconFinderMenuBarDesc[] = {
+    { SUBMENU, (char *)"finderSelectionMenu", 0,
+      iconFinderPopupMenuDesc, 0, 0 },
+    { END, 0, 0, 0, 0, 0 }
+};
+
+/*
+ * Host layout seam.
+ *
+ * The original SgFinder accepts the Form-style constraints used by the
+ * ImdIconFinder constructor. Our current SgFinder host reconstruction is an
+ * XmManager with manual layout, so position the recovered VkMenuBar at the
+ * right edge after it has been built. This does not claim original private
+ * SgFinder geometry; it preserves the proven ownership/widget identity until
+ * that superclass layout is reconstructed.
+ */
+static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
+{
+    Dimension finderWidth = 1;
+    Dimension finderHeight = 1;
+    Dimension menuWidth = 1;
+    Dimension menuHeight = 1;
+    Position x = 0;
+
+    if (!finder || !menuBar)
+        return;
+
+    XtVaGetValues(finder,
+                  XmNwidth, &finderWidth,
+                  XmNheight, &finderHeight,
+                  NULL);
+    XtVaGetValues(menuBar,
+                  XmNwidth, &menuWidth,
+                  XmNheight, &menuHeight,
+                  NULL);
+
+    if (menuWidth > finderWidth)
+        menuWidth = finderWidth;
+    if (menuHeight < finderHeight)
+        menuHeight = finderHeight;
+    if (finderWidth > menuWidth)
+        x = (Position)(finderWidth - menuWidth);
+
+    XtConfigureWidget(menuBar, x, 0, menuWidth, menuHeight, 0);
+}
+
+static void iconFinderConfigureEH(Widget widget, XtPointer client,
+                                  XEvent *event, Boolean *)
+{
+    ImdIconFinder *finder = (ImdIconFinder *)client;
+    if (!finder || !event || event->type != ConfigureNotify)
+        return;
+
+    Widget menu = finder->portableSelectionMenuBarWidget();
+    if (menu)
+        placeIconFinderMenuBar(widget, menu);
+}
 
 ImdIconFinder::ImdIconFinder(
     const char *name,
@@ -16,6 +94,8 @@ ImdIconFinder::ImdIconFinder(
       _textWidget(0),
       _iconFinderFrame(0),
       _iconFinderPanel(0),
+      _menuBar(0),
+      _finderSelectionMenu(0),
       _changingContent(false),
       _constructorValue(constructorValue)
 {
@@ -35,13 +115,15 @@ ImdIconFinder::ImdIconFinder(
     if (!_baseWidget)
         return;
 
-    /* remember the text child. selector 1 and the SgFinder record offset
-     * are taken from the original binary.
+    /*
+     * Host access seam. The original IRIX 6.5.5 public Finder.h proves that
+     * SgFINDER_TEXT is selector 0. The original ImdIconFinder constructor's
+     * own completion-field plumbing is richer and will replace this seam as
+     * that class is reconstructed.
      */
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
 
-    /* make the frame
-     */
+    /* make the frame */
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
         xmFrameWidgetClass,
@@ -86,10 +168,50 @@ ImdIconFinder::ImdIconFinder(
 
     if (_iconFinderPanel && _iconFinderPanel->baseWidget())
         XtManageChild(_iconFinderPanel->baseWidget());
+
+    /*
+     * Original constructor sequence, recovered from libimdApp.so:
+     *
+     *   new VkMenuBar(_menuBarDesc, this, False)
+     *   menuBar->show(iconFinder)
+     *   attach menuBar top/bottom/right, left NONE
+     *   menuBar->findNamedItem("finderSelectionMenu", False)
+     *
+     * The app-defaults resource for finderSelectionMenu supplies the shipped
+     * iconFinderPrevious pixmap, so creating the original ViewKit item also
+     * restores the correct resource match instead of inventing an FM button.
+     */
+    _menuBar = new VkMenuBar(iconFinderMenuBarDesc, (XtPointer)this, False);
+    if (_menuBar) {
+        _menuBar->show(_baseWidget);
+        _finderSelectionMenu =
+            _menuBar->findNamedItem("finderSelectionMenu", False);
+
+        Widget menuWidget = _menuBar->baseWidget();
+        if (menuWidget) {
+            placeIconFinderMenuBar(_baseWidget, menuWidget);
+            XtAddEventHandler(_baseWidget,
+                              StructureNotifyMask,
+                              False,
+                              iconFinderConfigureEH,
+                              (XtPointer)this);
+        }
+    }
 }
 
 ImdIconFinder::~ImdIconFinder()
 {
+    if (_baseWidget)
+        XtRemoveEventHandler(_baseWidget,
+                             StructureNotifyMask,
+                             False,
+                             iconFinderConfigureEH,
+                             (XtPointer)this);
+
+    delete _menuBar;
+    _menuBar = 0;
+    _finderSelectionMenu = 0;
+
     delete _iconFinderPanel;
     _iconFinderPanel = 0;
     _iconFinderFrame = 0;
@@ -152,4 +274,9 @@ Widget ImdIconFinder::portableIconFinderFrame() const
 ImdIconPanel *ImdIconFinder::portableIconFinderPanel() const
 {
     return _iconFinderPanel;
+}
+
+Widget ImdIconFinder::portableSelectionMenuBarWidget() const
+{
+    return _menuBar ? _menuBar->baseWidget() : 0;
 }
