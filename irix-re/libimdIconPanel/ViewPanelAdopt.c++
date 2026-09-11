@@ -27,12 +27,6 @@ std::map<Widget, AdoptedViewList> gAdoptedViews;
 std::map<Widget, ImdRenderer *> gRenderers;
 std::map<Widget, bool> gExposeInstalled;
 
-/*
- * ImdIconLayout grid resources recovered from the original N32
- * libimdIconPanel.so constructor. The original resource table uses numeric
- * string defaults; retain that Xt conversion path rather than replacing it
- * with host-side magic constants.
- */
 struct BinaryGridResources
 {
     int gridWidth;
@@ -272,20 +266,60 @@ layoutPortableViews(Widget widget)
     resizePortablePanelToLayout(widget);
 }
 
+static bool
+viewIntersectsDamage(const ImdView &view, const XRectangle *damage)
+{
+    if (!damage)
+        return true;
+
+    const long left = view.portableX();
+    const long top = view.portableY();
+    const long right = left + view.portableWidth();
+    const long bottom = top + view.portableHeight();
+
+    const long damageLeft = damage->x;
+    const long damageTop = damage->y;
+    const long damageRight = damageLeft + damage->width;
+    const long damageBottom = damageTop + damage->height;
+
+    return right >= damageLeft &&
+           left <= damageRight &&
+           bottom >= damageTop &&
+           top <= damageBottom;
+}
+
+static void redrawPortableRegion(Widget widget, const XRectangle *damage);
+
 static void
 exposeHandler(Widget widget, XtPointer, XEvent *event, Boolean *)
 {
     if (!event || event->type != Expose)
         return;
-    if (event->xexpose.count != 0)
-        return;
-    ImdViewPanelRedraw(widget);
+
+    XRectangle damage;
+    damage.x = static_cast<short>(event->xexpose.x);
+    damage.y = static_cast<short>(event->xexpose.y);
+    damage.width = static_cast<unsigned short>(event->xexpose.width);
+    damage.height = static_cast<unsigned short>(event->xexpose.height);
+    redrawPortableRegion(widget, &damage);
 }
 
 static void
-drawingAreaExposeCB(Widget widget, XtPointer, XtPointer)
+drawingAreaExposeCB(Widget widget, XtPointer, XtPointer callData)
 {
-    ImdViewPanelRedraw(widget);
+    XmDrawingAreaCallbackStruct *cb =
+        static_cast<XmDrawingAreaCallbackStruct *>(callData);
+    if (!cb || !cb->event || cb->event->type != Expose) {
+        redrawPortableRegion(widget, 0);
+        return;
+    }
+
+    XRectangle damage;
+    damage.x = static_cast<short>(cb->event->xexpose.x);
+    damage.y = static_cast<short>(cb->event->xexpose.y);
+    damage.width = static_cast<unsigned short>(cb->event->xexpose.width);
+    damage.height = static_cast<unsigned short>(cb->event->xexpose.height);
+    redrawPortableRegion(widget, &damage);
 }
 }
 
@@ -321,8 +355,10 @@ ImdViewPanelPortableResetViews(Widget widget)
     gAdoptedViews.erase(widget);
 }
 
-void
-ImdViewPanelRedraw(Widget widget)
+namespace
+{
+static void
+redrawPortableRegion(Widget widget, const XRectangle *damage)
 {
     if (!widget || !XtIsRealized(widget))
         return;
@@ -335,23 +371,23 @@ ImdViewPanelRedraw(Widget widget)
     AdoptedViewList &views = gAdoptedViews[widget];
 
     /*
-     * Ordinary repaint must not invoke ImdIconLayout::doLayout(). The original
-     * moveView() path preserves the moved view geometry; re-running automatic
-     * layout on every Expose would immediately undo a drag. Draw at the current
-     * positions and only re-layout when the renderer discovers a new extent.
+     * Original ImdViewPanelDrawView() @ 0x0967bf44 computes the transformed
+     * view rectangle and gates renderer dispatch through a region-intersection
+     * test. ImdViewPanelWalkAllVisibleViews() @ 0x096a3214 is the corresponding
+     * visible-view traversal. Preserve that architecture for Expose handling:
+     * a scroll-damage strip must not redraw the complete adopted view set.
      */
     bool geometryChanged = false;
     for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
-        if (!it->view || !it->view->portableVisible())
+        ImdView *view = it->view;
+        if (!view || !view->portableVisible() || !viewIntersectsDamage(*view, damage))
             continue;
 
-        const long oldWidth = it->view->portableWidth();
-        const long oldHeight = it->view->portableHeight();
-        renderer->draw(*it->view,
-                       it->view->portableX(),
-                       it->view->portableY());
-        if (oldWidth != it->view->portableWidth() ||
-            oldHeight != it->view->portableHeight())
+        const long oldWidth = view->portableWidth();
+        const long oldHeight = view->portableHeight();
+        renderer->draw(*view, view->portableX(), view->portableY());
+        if (oldWidth != view->portableWidth() ||
+            oldHeight != view->portableHeight())
             geometryChanged = true;
     }
 
@@ -359,12 +395,18 @@ ImdViewPanelRedraw(Widget widget)
         layoutPortableViews(widget);
         XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
-            if (it->view && it->view->portableVisible())
-                renderer->draw(*it->view,
-                               it->view->portableX(),
-                               it->view->portableY());
+            ImdView *view = it->view;
+            if (view && view->portableVisible())
+                renderer->draw(*view, view->portableX(), view->portableY());
         }
     }
+}
+}
+
+void
+ImdViewPanelRedraw(Widget widget)
+{
+    redrawPortableRegion(widget, 0);
 }
 
 ImdView *
@@ -408,7 +450,6 @@ ImdViewPanelMoveView(Widget widget, ImdView &view, long x, long y)
     }
 
     if (moved && XtIsRealized(widget)) {
-        /* A manually moved icon can extend the work area just like laid-out rows. */
         resizePortablePanelToLayout(widget);
         XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         ImdViewPanelRedraw(widget);
