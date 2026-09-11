@@ -1,0 +1,140 @@
+name: ImdRefModel reference archaeology
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/imd-refmodel-archaeology.yml'
+
+jobs:
+  refmodel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+          lfs: true
+
+      - name: Install MIPS binutils and DWARF tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mips-linux-gnu python3-pyelftools
+
+      - name: Extract original N32 libimdModel
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-evidence
+          entry="$(tar -tf irix-re/evidence/shared_objects.tar | grep -E '/usr/lib32/(internal/)?libimdModel\.so(\.[0-9]+)*$' | head -1)"
+          test -n "$entry"
+          tar -xf irix-re/evidence/shared_objects.tar -C /tmp/imd-evidence "$entry"
+          image="/tmp/imd-evidence/$entry"
+          echo "IMDMODEL=$image" >> "$GITHUB_ENV"
+          file "$image"
+          sha256sum "$image"
+
+      - name: Inventory RefModel symbols and literals
+        run: |
+          set -eu
+          mips-linux-gnu-readelf -Ws "$IMDMODEL" > /tmp/imd-symbols.raw
+          mips-linux-gnu-readelf -Ws "$IMDMODEL" | c++filt > /tmp/imd-symbols.txt
+          strings -a -t x "$IMDMODEL" > /tmp/imd-strings.txt
+          {
+            echo '===== symbols ====='
+            grep -Ei 'ImdRefModel|createReference|desktopContainerDNA|overlayContainerDNA|reference|RefModel' /tmp/imd-symbols.txt || true
+            echo
+            echo '===== strings ====='
+            grep -Ei 'reference|desktop|overlay|SGI_DESKTOP|\.desktop|Icon|target|alias|shortcut|link|fn' /tmp/imd-strings.txt || true
+          } | tee /tmp/refmodel-inventory.txt
+
+      - name: Recover RefModel DWARF compile units
+        run: |
+          set -eu
+          cat > /tmp/dump-refmodel.py <<'PY'
+          import os
+          from elftools.elf.elffile import ELFFile
+          from elftools.dwarf.descriptions import describe_form_class
+
+          path = os.environ['IMDMODEL']
+
+          def txt(attr):
+              if not attr:
+                  return ''
+              value = attr.value
+              if isinstance(value, bytes):
+                  return value.decode('utf-8', 'replace')
+              return str(value)
+
+          with open(path, 'rb') as fp:
+              elf = ELFFile(fp)
+              dwarf = elf.get_dwarf_info()
+              for cu in dwarf.iter_CUs():
+                  top = cu.get_top_DIE()
+                  cu_name = txt(top.attributes.get('DW_AT_name'))
+                  if 'refmodel' not in cu_name.lower():
+                      continue
+                  print('CU\t%s' % cu_name)
+                  for die in cu.iter_DIEs():
+                      if die.tag != 'DW_TAG_subprogram':
+                          continue
+                      attrs = die.attributes
+                      name = txt(attrs.get('DW_AT_name')) or txt(attrs.get('DW_AT_linkage_name'))
+                      linkage = txt(attrs.get('DW_AT_linkage_name'))
+                      low = attrs.get('DW_AT_low_pc')
+                      high = attrs.get('DW_AT_high_pc')
+                      if not name or not low or not high:
+                          continue
+                      start = int(low.value)
+                      high_class = describe_form_class(high.form)
+                      stop = int(high.value) if high_class == 'address' else start + int(high.value)
+                      if stop <= start:
+                          continue
+                      print('FUNC\t%s\t%s\t0x%x\t0x%x\t%d' %
+                            (name, linkage, start, stop, stop - start))
+          PY
+          python3 /tmp/dump-refmodel.py | tee /tmp/refmodel-functions.tsv
+
+      - name: Disassemble RefModel compile unit functions
+        run: |
+          set -eu
+          : > /tmp/refmodel-disassembly.txt
+          while IFS=$'\t' read -r kind name linkage start stop size; do
+            [ "$kind" = FUNC ] || continue
+            printf '\n===== %s [%s] %s..%s size %s =====\n' "$name" "$linkage" "$start" "$stop" "$size" >> /tmp/refmodel-disassembly.txt
+            mips-linux-gnu-objdump -drC --start-address="$start" --stop-address="$stop" "$IMDMODEL" >> /tmp/refmodel-disassembly.txt
+          done < /tmp/refmodel-functions.tsv
+          cat /tmp/refmodel-disassembly.txt
+
+      - name: Inspect GOT relocations and dynamic calls
+        run: |
+          set -eu
+          {
+            echo '===== dynamic symbols ====='
+            mips-linux-gnu-objdump -TC "$IMDMODEL" | grep -Ei 'RefModel|Reference|FileModel|DirModel|DNA|Broker|open|write|read|unlink|rename|symlink|link|stat|fopen|fstream|ostream' || true
+            echo
+            echo '===== relocations ====='
+            mips-linux-gnu-readelf -r "$IMDMODEL" | c++filt
+            echo
+            echo '===== MIPS ABI/GOT ====='
+            mips-linux-gnu-readelf -A "$IMDMODEL" | c++filt || true
+          } > /tmp/refmodel-got.txt
+          cat /tmp/refmodel-got.txt
+
+      - name: Assemble archaeology report
+        run: |
+          set -eu
+          mkdir -p /tmp/imd-refmodel-report
+          report=/tmp/imd-refmodel-report/imd-refmodel-report.txt
+          {
+            echo '===== specimen ====='; file "$IMDMODEL"; sha256sum "$IMDMODEL"
+            echo; cat /tmp/refmodel-inventory.txt
+            echo; echo '===== compile-unit functions ====='; cat /tmp/refmodel-functions.tsv
+            echo; echo '===== disassembly ====='; cat /tmp/refmodel-disassembly.txt
+            echo; echo '===== GOT / imports ====='; cat /tmp/refmodel-got.txt
+          } > "$report"
+
+      - name: Upload ImdRefModel archaeology
+        uses: actions/upload-artifact@v4
+        with:
+          name: imd-refmodel-archaeology
+          path: /tmp/imd-refmodel-report/
+          if-no-files-found: error
