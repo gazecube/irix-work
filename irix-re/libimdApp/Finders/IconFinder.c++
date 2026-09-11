@@ -6,11 +6,13 @@
 
 #include <Vk/VkMenu.h>
 #include <Vk/VkMenuBar.h>
+#include <Vk/VkMenuItem.h>
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
+#include <string.h>
 
 /*
  * Exact descriptor shape recovered from the original libimdApp.so data:
@@ -50,16 +52,15 @@ static VkMenuDesc iconFinderMenuBarDesc[] = {
  * original right-edge compact layout. Size the bar from the actual recovered
  * finderSelectionMenu cascade instead.
  */
-static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
+static void placeIconFinderMenuBar(Widget finder, Widget menuBar,
+                                   Widget selection)
 {
     Dimension finderWidth = 1;
     Dimension finderHeight = 1;
     Dimension menuWidth = 1;
-    Dimension menuHeight = 1;
     Position x = 0;
-    Widget selection = 0;
 
-    if (!finder || !menuBar)
+    if (!finder || !menuBar || !selection)
         return;
 
     XtVaGetValues(finder,
@@ -67,8 +68,7 @@ static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
                   XmNheight, &finderHeight,
                   NULL);
 
-    selection = XtNameToWidget(menuBar, (char *)"*finderSelectionMenu");
-    if (selection) {
+    {
         XtWidgetGeometry preferred;
         memset(&preferred, 0, sizeof(preferred));
         XtQueryGeometry(selection, NULL, &preferred);
@@ -76,36 +76,65 @@ static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
             menuWidth = preferred.width;
         else
             XtVaGetValues(selection, XmNwidth, &menuWidth, NULL);
-
-        /* Leave a little room for the menu bar's own border/margins. */
-        if (menuWidth < 4)
-            menuWidth = 4;
-        else
-            menuWidth = (Dimension)(menuWidth + 4);
-    } else {
-        /* Fallback only if ViewKit has not built the cascade yet. */
-        XtVaGetValues(menuBar, XmNwidth, &menuWidth, NULL);
     }
 
-    menuHeight = finderHeight;
+    /* Leave room for the MenuBar border/margins around the cascade. */
+    if (menuWidth < 4)
+        menuWidth = 4;
+    else
+        menuWidth = (Dimension)(menuWidth + 4);
+
     if (menuWidth > finderWidth)
         menuWidth = finderWidth;
     if (finderWidth > menuWidth)
         x = (Position)(finderWidth - menuWidth);
 
-    XtConfigureWidget(menuBar, x, 0, menuWidth, menuHeight, 0);
+    XtConfigureWidget(menuBar, x, 0, menuWidth, finderHeight, 0);
 }
 
-static void iconFinderConfigureEH(Widget widget, XtPointer client,
+static void placeIconFinderMenu(ImdIconFinder *finder)
+{
+    Widget base;
+    Widget menu;
+    Widget selection;
+
+    if (!finder)
+        return;
+
+    base = finder->getWidget();
+    menu = finder->portableSelectionMenuBarWidget();
+    selection = finder->portableSelectionMenuWidget();
+
+    if (base && menu && selection)
+        placeIconFinderMenuBar(base, menu, selection);
+}
+
+static void iconFinderConfigureEH(Widget, XtPointer client,
                                   XEvent *event, Boolean *)
 {
     ImdIconFinder *finder = (ImdIconFinder *)client;
     if (!finder || !event || event->type != ConfigureNotify)
         return;
 
-    Widget menu = finder->portableSelectionMenuBarWidget();
-    if (menu)
-        placeIconFinderMenuBar(widget, menu);
+    placeIconFinderMenu(finder);
+}
+
+/*
+ * ViewKit is allowed to defer construction of menu item widgets. The
+ * finderSelectionMenu VkSubMenu object is available immediately from
+ * findNamedItem(), but its cascade widget may not exist until the MenuBar is
+ * actually mapped. MapNotify is therefore the first reliable host-side point
+ * at which to measure the pixmap-bearing cascade and collapse the MenuBar to
+ * the original compact right-edge control.
+ */
+static void iconFinderMenuMapEH(Widget, XtPointer client,
+                                XEvent *event, Boolean *)
+{
+    ImdIconFinder *finder = (ImdIconFinder *)client;
+    if (!finder || !event || event->type != MapNotify)
+        return;
+
+    placeIconFinderMenu(finder);
 }
 
 ImdIconFinder::ImdIconFinder(
@@ -211,12 +240,19 @@ ImdIconFinder::ImdIconFinder(
 
         Widget menuWidget = _menuBar->baseWidget();
         if (menuWidget) {
-            placeIconFinderMenuBar(_baseWidget, menuWidget);
+            XtAddEventHandler(menuWidget,
+                              StructureNotifyMask,
+                              False,
+                              iconFinderMenuMapEH,
+                              (XtPointer)this);
             XtAddEventHandler(_baseWidget,
                               StructureNotifyMask,
                               False,
                               iconFinderConfigureEH,
                               (XtPointer)this);
+
+            /* If ViewKit built the cascade synchronously, place it now too. */
+            placeIconFinderMenu(this);
         }
     }
 }
@@ -228,6 +264,13 @@ ImdIconFinder::~ImdIconFinder()
                              StructureNotifyMask,
                              False,
                              iconFinderConfigureEH,
+                             (XtPointer)this);
+
+    if (_menuBar && _menuBar->baseWidget())
+        XtRemoveEventHandler(_menuBar->baseWidget(),
+                             StructureNotifyMask,
+                             False,
+                             iconFinderMenuMapEH,
                              (XtPointer)this);
 
     delete _menuBar;
@@ -301,4 +344,9 @@ ImdIconPanel *ImdIconFinder::portableIconFinderPanel() const
 Widget ImdIconFinder::portableSelectionMenuBarWidget() const
 {
     return _menuBar ? _menuBar->baseWidget() : 0;
+}
+
+Widget ImdIconFinder::portableSelectionMenuWidget() const
+{
+    return _finderSelectionMenu ? _finderSelectionMenu->baseWidget() : 0;
 }
