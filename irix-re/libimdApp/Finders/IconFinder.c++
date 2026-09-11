@@ -9,6 +9,7 @@
 
 #include <Xm/Form.h>
 #include <Xm/Frame.h>
+#include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
 
 /*
