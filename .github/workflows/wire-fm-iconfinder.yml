@@ -1,0 +1,80 @@
+name: Wire FM ImdIconFinder
+
+on:
+  push:
+    branches: [irix-re]
+    paths:
+      - .github/workflows/wire-fm-iconfinder.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: irix-re
+      - name: Wire reconstructed ImdIconFinder into FM
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('irix-re/fm/FmMain.c++')
+          s = p.read_text()
+          s = s.replace('#include "Model.h"\n', '#include "Model.h"\n#include "IconFinder.h"\n', 1)
+          s = s.replace('    Widget scaleZoom;\n', '    Widget scaleZoom;\n    ImdIconFinder *iconFinder;\n', 1)
+          s = s.replace('    Widget up;\n    Widget refresh;\n', '', 1)
+          old = '''    up = XtVaCreateManagedWidget("Up", xmPushButtonWidgetClass, finderForm,
+                                 XmNtopAttachment, XmATTACH_FORM,
+                                 XmNleftAttachment, XmATTACH_FORM,
+                                 XmNbottomAttachment, XmATTACH_FORM,
+                                 NULL);
+    refresh = XtVaCreateManagedWidget("Refresh", xmPushButtonWidgetClass, finderForm,
+                                      XmNtopAttachment, XmATTACH_FORM,
+                                      XmNleftAttachment, XmATTACH_WIDGET,
+                                      XmNleftWidget, up,
+                                      XmNbottomAttachment, XmATTACH_FORM,
+                                      NULL);
+    state.location = XtVaCreateManagedWidget("iconFinder", xmTextFieldWidgetClass, finderForm,
+                                              XmNtopAttachment, XmATTACH_FORM,
+                                              XmNleftAttachment, XmATTACH_WIDGET,
+                                              XmNleftWidget, refresh,
+                                              XmNrightAttachment, XmATTACH_FORM,
+                                              XmNbottomAttachment, XmATTACH_FORM,
+                                              NULL);
+'''
+          new = '''    state.iconFinder = new ImdIconFinder("iconFinder", finderForm, 0);
+    Widget finderWidget = state.iconFinder ? state.iconFinder->getWidget() : 0;
+    if (finderWidget) {
+        XtVaSetValues(finderWidget,
+                      XmNtopAttachment, XmATTACH_FORM,
+                      XmNleftAttachment, XmATTACH_FORM,
+                      XmNrightAttachment, XmATTACH_FORM,
+                      XmNbottomAttachment, XmATTACH_FORM,
+                      NULL);
+        XtManageChild(finderWidget);
+        state.location = state.iconFinder->portableTextWidget();
+    }
+'''
+          if old not in s:
+              raise SystemExit('finder bootstrap block not found')
+          s = s.replace(old, new, 1)
+          s = s.replace('    state.scaleZoom = 0;\n', '    state.scaleZoom = 0;\n    state.iconFinder = 0;\n', 1)
+          s = s.replace('    XtAddCallback(up, XmNactivateCallback, upCB, &state);\n    XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);\n', '', 1)
+          p.write_text(s)
+
+          c = Path('irix-re/fm/CMakeLists.txt')
+          t = c.read_text()
+          t = t.replace('if(TARGET viewklass AND TARGET imdIconPanel)\n    add_executable(fm FmMain.c++ FmIconSurface.c++)\n    target_link_libraries(fm PRIVATE viewklass imdIconPanel)\n', 'if(TARGET viewklass AND TARGET imdIconPanel AND TARGET imdApp)\n    add_executable(fm FmMain.c++ FmIconSurface.c++)\n    target_link_libraries(fm PRIVATE viewklass imdIconPanel imdApp)\n', 1)
+          t = t.replace('       FM_XT_LIBRARY AND FM_X11_LIBRARY AND TARGET imdIconPanel)\n', '       FM_XT_LIBRARY AND FM_X11_LIBRARY AND TARGET imdIconPanel AND TARGET imdApp)\n', 1)
+          t = t.replace('            imdIconPanel\n            "${FM_MOTIF_LIBRARY}"\n', '            imdIconPanel\n            imdApp\n            "${FM_MOTIF_LIBRARY}"\n', 1)
+          c.write_text(t)
+          PY
+      - name: Commit finder integration
+        run: |
+          git config user.name "db2k"
+          git config user.email "33785843+gazecube@users.noreply.github.com"
+          git add irix-re/fm/FmMain.c++ irix-re/fm/CMakeLists.txt
+          git commit -m "fm: replace bootstrap nav buttons with ImdIconFinder"
+          git push origin HEAD:irix-re
