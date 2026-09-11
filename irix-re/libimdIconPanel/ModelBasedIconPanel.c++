@@ -8,6 +8,10 @@
 
 #include <X11/Xlib.h>
 
+extern "C" void ImdViewPanelPortableBeginBlockChanges(Widget);
+extern "C" void ImdViewPanelPortableEndBlockChanges(Widget);
+extern "C" bool ImdViewPanelPortableChangesBlocked(Widget);
+
 ImdModelBasedIconPanel::NotifyReceiver::NotifyReceiver(
     ImdModelBasedIconPanel *panel,
     ImdModelBasedIconView *view,
@@ -62,6 +66,7 @@ ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
         case 0xEFFF004B:
             receiver->_panel->beginExists();
             ImdViewPanelBeginBlockChanges(receiver->_panel->baseWidget());
+            ImdViewPanelPortableBeginBlockChanges(receiver->_panel->baseWidget());
             break;
 
         case 0xEFFF004C:
@@ -83,6 +88,7 @@ ImdModelBasedIconPanel::NotifyReceiver::receiveNotification(
 
         case 0xEFFF004D:
             ImdViewPanelEndBlockChanges(receiver->_panel->baseWidget());
+            ImdViewPanelPortableEndBlockChanges(receiver->_panel->baseWidget());
             receiver->_panel->endExists();
             break;
 
@@ -127,6 +133,7 @@ void
 ImdModelBasedIconPanel::changeModel(ImdModel *model)
 {
     ImdViewPanelBeginBlockChanges(baseWidget());
+    ImdViewPanelPortableBeginBlockChanges(baseWidget());
 
     destroyReceivers();
     portableResetViews(true);
@@ -139,6 +146,7 @@ ImdModelBasedIconPanel::changeModel(ImdModel *model)
     }
 
     ImdViewPanelEndBlockChanges(baseWidget());
+    ImdViewPanelPortableEndBlockChanges(baseWidget());
 }
 
 void
@@ -166,21 +174,21 @@ ImdModelBasedIconPanel::endExists()
 void
 ImdModelBasedIconPanel::addOrDelete()
 {
-    /*
-     * Binary-backed lifecycle boundary: addOrDelete() is an original
-     * ImdModelBasedIconPanel method and NotifyReceiver reaches it once after
-     * an existence batch has actually adopted/deleted views. The exact MIPS
-     * body is still pending recovery, so do not attribute this Xlib repaint
-     * transport to IRIX itself.
-     *
-     * Keep the portable invalidation here, below fm/iid-desktop, so both
-     * applications share the original model/panel layering. Clearing first is
-     * required when the replacement directory has fewer views than the old
-     * one; ImdViewPanelRedraw() then renders the current adopted set.
-     */
     Widget widget = baseWidget();
     if (!widget || !XtIsRealized(widget))
         return;
+
+    /*
+     * Existence notifications are explicitly bracketed by the original
+     * ViewPanel block-changes API. While that batch is open, queue one redraw
+     * instead of clearing the X window for every child. The portable ViewPanel
+     * block seam performs the consolidated clear/redraw when the outermost
+     * block closes.
+     */
+    if (ImdViewPanelPortableChangesBlocked(widget)) {
+        ImdViewPanelRedraw(widget);
+        return;
+    }
 
     XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
     ImdViewPanelRedraw(widget);
