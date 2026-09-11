@@ -10,12 +10,21 @@ namespace {
 static ImdString
 localHostName()
 {
-    char host[256];
-    host[0] = '\0';
-    if (gethostname(host, sizeof(host) - 1) != 0)
-        return ImdString();
-    host[sizeof(host) - 1] = '\0';
-    return ImdString(host);
+    /*
+     * Binary-backed behavior from ImdGlobalEnv::getLocalHostName()
+     * @ 0x09751c4c: the original returns a cached hostname object after the
+     * first successful lookup instead of calling gethostname() for every DNA.
+     */
+    static const std::string cached = []() -> std::string {
+        char host[256];
+        host[0] = '\0';
+        if (gethostname(host, sizeof(host) - 1) != 0)
+            return std::string();
+        host[sizeof(host) - 1] = '\0';
+        return std::string(host);
+    }();
+
+    return ImdString(cached);
 }
 
 } /* namespace */
