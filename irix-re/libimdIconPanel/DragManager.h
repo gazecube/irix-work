@@ -13,11 +13,11 @@ class ImdView;
  * Original N32 allocation size is 124 bytes. This host implementation does
  * not claim that ABI layout.
  *
- * The IRIX implementation transports drags through Motif DnD (XmDragStart,
- * dropProc, dragProc, transferProc, SgDragShell, etc.). Until that transport
- * is reconstructed completely, the host event handler below supplies local
- * same-panel motion while preserving the recovered panel/manager/ViewPanel
- * method boundaries.
+ * The original IRIX path owns a dedicated drag representation through
+ * setupDrag(), drawDraggedItems(), shapeDragWindow(), dragMotion(), and
+ * dragFinished(). The host implementation below mirrors that separation for
+ * same-panel movement: the real ImdView remains stationary during pointer
+ * motion and is committed once when the drag finishes.
  */
 class ImdDragManager
 {
@@ -36,11 +36,23 @@ private:
     void buttonMotion(XMotionEvent *event);
     void buttonRelease(XButtonEvent *event);
 
+    /* Binary-named drag phases recovered from the original N32 library. */
+    bool setupDrag(long x, long y);
+    bool drawDraggedItems();
+    void moveDragWindow(long x, long y);
+    void destroyDragWindow();
+
     ImdIconPanel *_panel;
     Widget _widget;
     ImdView *_dragView;
     long _pointerOffsetX;
     long _pointerOffsetY;
+    long _pendingX;
+    long _pendingY;
+    Window _dragWindow;
+    Pixmap _dragPixmap;
+    unsigned int _dragWidth;
+    unsigned int _dragHeight;
     bool _buttonDown;
     bool _dragging;
 };
