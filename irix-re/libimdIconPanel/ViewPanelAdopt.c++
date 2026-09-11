@@ -93,11 +93,9 @@ getBinaryGridResources(Widget widget)
                                   0);
     }
 
-    /* Original constructor clamps gridWidth to at least 25. */
     if (r.gridWidth < 25)
         r.gridWidth = 25;
 
-    /* Original constructor folds leftMargin into staggerOffset. */
     r.staggerOffset += r.leftMargin;
     return r;
 }
@@ -120,15 +118,12 @@ nearestGrid(long value, long origin, long step)
 
     const long quotient = delta / step;
     const long remainder = delta % step;
-
-    /* Original integer path leaves exact half-way cases on the lower point. */
     return origin + (quotient + ((remainder * 2 > step) ? 1 : 0)) * step;
 }
 
 static long
 binaryGridHeight(const ImdView &view, const BinaryGridResources &r)
 {
-    /* Original getGridHeight(): view.height + baseOfIconPadding, rounded even. */
     long height = view.portableHeight() + r.baseOfIconPadding;
     if (height & 1)
         ++height;
@@ -181,10 +176,6 @@ ensurePortableExtent(ImdView *view)
     if (!view)
         return;
 
-    /*
-     * Bootstrap extent only until ImdInvertedTeeRenderer::draw() performs the
-     * binary-backed setSize() calculation from icon and label geometry.
-     */
     if (view->portableWidth() <= 0 || view->portableHeight() <= 0)
         view->portableSetSize(84, 84);
     view->portableSetVisible(true);
@@ -215,13 +206,6 @@ resizePortablePanelToLayout(Widget widget)
             requiredHeight = bottom;
     }
 
-    /*
-     * Original ImdIconLayout::setPanelSize() @ 0x0968b508 derives the work
-     * area's vertical extent from the bottommost view's y + height plus the
-     * layout's bottom margin, then resizes the underlying panel. Keep at least
-     * the clip/viewport height so an empty remainder does not collapse the
-     * work area below its visible parent.
-     */
     Dimension currentHeight = 0;
     Dimension parentHeight = 0;
     XtVaGetValues(widget, XtNheight, &currentHeight, NULL);
@@ -273,10 +257,6 @@ layoutPortableViews(Widget widget)
         } else {
             x = binaryNextColumn(*view, *previous, r);
 
-            /*
-             * Original gridAlgorithm() wraps when candidate x plus the current
-             * view width crosses panelWidth - rightMargin.
-             */
             if (x + view->portableWidth() > usableRight) {
                 rowY += binaryGridHeight(*view, r);
                 const long row = (rowY - r.topMargin) /
@@ -305,13 +285,6 @@ exposeHandler(Widget widget, XtPointer, XEvent *event, Boolean *)
 static void
 drawingAreaExposeCB(Widget widget, XtPointer, XtPointer)
 {
-    /*
-     * The portable ViewPanel is backed by SgVisualDrawingArea, which is an
-     * XmDrawingArea-family widget. Render from its expose callback so drawing
-     * occurs after the widget has repaired its own background. This is a host
-     * event-lifecycle seam only; the original ImdViewPanel owns its renderer
-     * invalidation internally.
-     */
     ImdViewPanelRedraw(widget);
 }
 }
@@ -345,14 +318,6 @@ ImdViewPanelPortableResetViews(Widget widget)
 {
     if (!widget)
         return;
-
-    /*
-     * Host-side ownership bookkeeping for the reconstructed ViewPanel.
-     * Original ImdViewPanelDeleteAllViews() removes the panel's adopted view
-     * set before the owning ImdIconPanel releases the view objects. Keeping a
-     * parallel stale list here made fm continue rendering the first directory
-     * population after ImdModelBasedIconPanel::changeModel().
-     */
     gAdoptedViews.erase(widget);
 }
 
@@ -370,12 +335,11 @@ ImdViewPanelRedraw(Widget widget)
     AdoptedViewList &views = gAdoptedViews[widget];
 
     /*
-     * Layout first with the best geometry currently known. The renderer's
-     * binary-backed setSize() can refine width/height from icon + label metrics
-     * on this pass, so remember whether any extent changed.
+     * Ordinary repaint must not invoke ImdIconLayout::doLayout(). The original
+     * moveView() path preserves the moved view geometry; re-running automatic
+     * layout on every Expose would immediately undo a drag. Draw at the current
+     * positions and only re-layout when the renderer discovers a new extent.
      */
-    layoutPortableViews(widget);
-
     bool geometryChanged = false;
     for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
         if (!it->view || !it->view->portableVisible())
@@ -392,10 +356,6 @@ ImdViewPanelRedraw(Widget widget)
     }
 
     if (geometryChanged) {
-        /*
-         * Re-run the recovered SGI boundary/wrap math with the measured item
-         * extents, then repair the window once at the corrected positions.
-         */
         layoutPortableViews(widget);
         XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
@@ -413,13 +373,6 @@ ImdViewPanelFindViewByLocation(Widget widget, long x, long y)
     if (!widget)
         return 0;
 
-    /*
-     * Original ImdViewPanelFindViewByLocation() @ 0x09680470 tests:
-     *   visible bit 31 at +0x14
-     *   x/y at +0x04/+0x08
-     *   width/height at +0x0c/+0x10
-     * and returns the matching view.
-     */
     AdoptedViewList &views = gAdoptedViews[widget];
     for (AdoptedViewList::reverse_iterator it = views.rbegin();
          it != views.rend(); ++it) {
@@ -444,23 +397,19 @@ ImdViewPanelMoveView(Widget widget, ImdView &view, long x, long y)
     if (!widget)
         return false;
 
-    /*
-     * Original ImdViewPanelMoveView() @ 0x096a2f3c delegates to the adopted
-     * layout's moveView(view,x,y) virtual. Preserve that recovered boundary.
-     */
     ImdLayout *layout = ImdViewPanelGetLayout(widget);
     bool moved = false;
 
     if (layout)
         moved = layout->moveView(view, x, y);
     else {
-        /* Host fallback only for a ViewPanel without an adopted layout. */
         view.portableSetPosition(x, y);
         moved = true;
     }
 
     if (moved && XtIsRealized(widget)) {
-        /* Clear to the ViewPanel background without generating a new Expose. */
+        /* A manually moved icon can extend the work area just like laid-out rows. */
+        resizePortablePanelToLayout(widget);
         XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         ImdViewPanelRedraw(widget);
     }
