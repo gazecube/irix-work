@@ -73,21 +73,26 @@ static std::string basenameOf(const std::string &path)
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
-static bool readFile(const std::string &path, std::vector<unsigned char> &data)
+/*
+ * Original SGI fiIconTypeFromFileName() reads exactly 512 bytes for the
+ * normal file-content classification buffer. Keep the portable evaluator on
+ * that same bound: file typing must never allocate proportional to file size.
+ */
+static bool readFileHeader512(const std::string &path,
+                              std::vector<unsigned char> &data)
 {
     data.clear();
     std::ifstream in(path.c_str(), std::ios::in | std::ios::binary);
     if (!in.good())
         return false;
-    in.seekg(0, std::ios::end);
-    const std::streamoff end = in.tellg();
-    if (end < 0)
-        return false;
-    in.seekg(0, std::ios::beg);
-    data.resize(static_cast<std::size_t>(end));
-    if (!data.empty())
-        in.read(reinterpret_cast<char *>(&data[0]), data.size());
-    return in.good() || in.eof();
+
+    unsigned char buffer[512];
+    in.read(reinterpret_cast<char *>(buffer), sizeof(buffer));
+    const std::streamsize count = in.gcount();
+    if (count > 0)
+        data.assign(buffer, buffer + count);
+
+    return count >= 0;
 }
 
 static bool looksAscii512(const std::vector<unsigned char> &data)
@@ -944,7 +949,7 @@ ImdEvaluateFtrType(const std::string &filetypeRoot,
 
     std::vector<unsigned char> data;
     if (S_ISREG(st.st_mode))
-        readFile(path, data);
+        readFileHeader512(path, data);
 
     const std::vector<Rule> &rules = rulesForRoot(filetypeRoot);
     if (rules.empty())
