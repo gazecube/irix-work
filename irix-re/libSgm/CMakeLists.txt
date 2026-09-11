@@ -51,6 +51,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     add_library(Sgm SHARED
         SgmCompat.c
+        DropPocket.c
         Finder.c
         ZoomBar.c
         ThumbWheel.c
@@ -84,9 +85,9 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     endif()
 
     if(SGM_HAVE_PRIMITIVEP_H)
-        message(STATUS "private Motif Primitive header found; building native SgThumbWheel subclass")
+        message(STATUS "private Motif Primitive header found; building native SgDropPocket/SgThumbWheel subclasses")
     else()
-        message(FATAL_ERROR "Xm/PrimitiveP.h is required for the native SgThumbWheel reconstruction")
+        message(FATAL_ERROR "Xm/PrimitiveP.h is required for the native SgDropPocket/SgThumbWheel reconstruction")
     endif()
 
     target_link_libraries(Sgm
@@ -94,6 +95,8 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
             "${SGM_MOTIF_LIBRARY}"
             "${SGM_XT_LIBRARY}"
             "${SGM_X11_LIBRARY}"
+        PRIVATE
+            ${CMAKE_DL_LIBS}
     )
 
     set_target_properties(Sgm PROPERTIES
