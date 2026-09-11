@@ -195,6 +195,7 @@ resizePortablePanelToLayout(Widget widget)
         return;
 
     const BinaryGridResources r = getBinaryGridResources(widget);
+    long requiredWidth = r.leftMargin + r.rightMargin;
     long requiredHeight = r.topMargin + r.bottomMargin;
 
     for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
@@ -202,27 +203,48 @@ resizePortablePanelToLayout(Widget widget)
         if (!view || !view->portableVisible())
             continue;
 
+        const long right = view->portableX() +
+                           view->portableWidth() +
+                           r.rightMargin;
         const long bottom = view->portableY() +
                             view->portableHeight() +
                             r.bottomMargin;
+        if (right > requiredWidth)
+            requiredWidth = right;
         if (bottom > requiredHeight)
             requiredHeight = bottom;
     }
 
+    Dimension currentWidth = 0;
     Dimension currentHeight = 0;
+    Dimension parentWidth = 0;
     Dimension parentHeight = 0;
-    XtVaGetValues(widget, XtNheight, &currentHeight, NULL);
+    XtVaGetValues(widget,
+                  XtNwidth, &currentWidth,
+                  XtNheight, &currentHeight,
+                  NULL);
     if (XtParent(widget))
-        XtVaGetValues(XtParent(widget), XtNheight, &parentHeight, NULL);
+        XtVaGetValues(XtParent(widget),
+                      XtNwidth, &parentWidth,
+                      XtNheight, &parentHeight,
+                      NULL);
 
+    Dimension targetWidth = requiredWidth > 0
+        ? static_cast<Dimension>(requiredWidth)
+        : static_cast<Dimension>(1);
     Dimension targetHeight = requiredHeight > 0
         ? static_cast<Dimension>(requiredHeight)
         : static_cast<Dimension>(1);
+    if (parentWidth > targetWidth)
+        targetWidth = parentWidth;
     if (parentHeight > targetHeight)
         targetHeight = parentHeight;
 
-    if (targetHeight != currentHeight)
-        XtVaSetValues(widget, XtNheight, targetHeight, NULL);
+    if (targetWidth != currentWidth || targetHeight != currentHeight)
+        XtVaSetValues(widget,
+                      XtNwidth, targetWidth,
+                      XtNheight, targetHeight,
+                      NULL);
 }
 
 static void
