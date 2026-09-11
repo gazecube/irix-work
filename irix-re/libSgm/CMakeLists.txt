@@ -52,6 +52,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     add_library(Sgm SHARED
         SgmCompat.c
         Finder.c
+        ZoomBar.c
         ThumbWheel.c
         VisualDrawingA.c
         VisualDrawingAHost.c
@@ -77,9 +78,9 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     if(SGM_HAVE_MANAGERP_H)
         target_compile_definitions(Sgm PRIVATE SGM_HAVE_MANAGERP_H=1)
-        message(STATUS "private Motif Manager header found; building native SgFinder subclass")
+        message(STATUS "private Motif Manager header found; building native SgFinder/SgZoomBar subclasses")
     else()
-        message(STATUS "private Motif Manager header missing; SgFinder will use compatibility fallback")
+        message(STATUS "private Motif Manager header missing; SgFinder/SgZoomBar will use compatibility fallbacks")
     endif()
 
     if(SGM_HAVE_PRIMITIVEP_H)
