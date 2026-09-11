@@ -1,14 +1,21 @@
 diff --git a/irix-re/fm/FmMain.c++ b/irix-re/fm/FmMain.c++
 --- a/irix-re/fm/FmMain.c++
 +++ b/irix-re/fm/FmMain.c++
-@@
+@@ -544,7 +544,7 @@ static Widget createControlBoard(Widget parent, FmState *state)
+     makePush(rc2, "galleryMode", layoutButtonCB, state);
+     makePush(rc2, "shelf", unimplementedCB, state);
+ 
 -    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
 +    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,
-@@
-     controlBoard = createControlBoard(form, &state);
+                                                 XmNorientation, XmVERTICAL,
+                                                 XmNminimum, 60,
+                                                 XmNmaximum, 500,
+@@ -636,7 +636,5 @@ int main(int argc, char **argv)
      XtVaSetValues(controlBoard,
                    XmNtopAttachment, XmATTACH_WIDGET,
                    XmNtopWidget, finderForm,
 -                  XmNbottomAttachment, XmATTACH_WIDGET,
 -                  XmNbottomWidget, state.status,
                    NULL);
+ 
+     scroller = XtVaCreateManagedWidget("scrollW", xmScrolledWindowWidgetClass, form,
