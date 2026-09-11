@@ -191,6 +191,54 @@ ensurePortableExtent(ImdView *view)
 }
 
 static void
+resizePortablePanelToLayout(Widget widget)
+{
+    if (!widget)
+        return;
+
+    AdoptedViewList &views = gAdoptedViews[widget];
+    if (views.empty())
+        return;
+
+    const BinaryGridResources r = getBinaryGridResources(widget);
+    long requiredHeight = r.topMargin + r.bottomMargin;
+
+    for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
+        ImdView *view = it->view;
+        if (!view || !view->portableVisible())
+            continue;
+
+        const long bottom = view->portableY() +
+                            view->portableHeight() +
+                            r.bottomMargin;
+        if (bottom > requiredHeight)
+            requiredHeight = bottom;
+    }
+
+    /*
+     * Original ImdIconLayout::setPanelSize() @ 0x0968b508 derives the work
+     * area's vertical extent from the bottommost view's y + height plus the
+     * layout's bottom margin, then resizes the underlying panel. Keep at least
+     * the clip/viewport height so an empty remainder does not collapse the
+     * work area below its visible parent.
+     */
+    Dimension currentHeight = 0;
+    Dimension parentHeight = 0;
+    XtVaGetValues(widget, XtNheight, &currentHeight, NULL);
+    if (XtParent(widget))
+        XtVaGetValues(XtParent(widget), XtNheight, &parentHeight, NULL);
+
+    Dimension targetHeight = requiredHeight > 0
+        ? static_cast<Dimension>(requiredHeight)
+        : static_cast<Dimension>(1);
+    if (parentHeight > targetHeight)
+        targetHeight = parentHeight;
+
+    if (targetHeight != currentHeight)
+        XtVaSetValues(widget, XtNheight, targetHeight, NULL);
+}
+
+static void
 layoutPortableViews(Widget widget)
 {
     if (!widget)
@@ -240,6 +288,8 @@ layoutPortableViews(Widget widget)
         view->portableSetPosition(x, rowY);
         previous = view;
     }
+
+    resizePortablePanelToLayout(widget);
 }
 
 static void
