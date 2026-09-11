@@ -9,21 +9,20 @@ extern "C" {
 
 extern WidgetClass sgFinderWidgetClass;
 
-/*
- * Public Finder resource names documented by SGI.  The child-selector
- * numeric values below are reconstructed from the documented public order;
- * verify against the original IRIX Finder.h before treating them as frozen
- * binary ABI constants.
- */
+/* Original public Finder resource names. */
 #define SgNhistoryPixmap       "historyPixmap"
 #define SgNseparator           "separator"
 #define SgNsetTextSectionFunc  "setTextSectionFunc"
 #define SgNuseDropPocket       "useDropPocket"
 #define SgNuseHistoryMenu      "useHistoryMenu"
 
-#define SgFINDER_DROP_POCKET       0
-#define SgFINDER_TEXT              1
-#define SgFINDER_ZOOM_BAR          2
+/*
+ * Original IRIX 6.5.5 Sgm/Finder.h child selector ABI.
+ * These values are source-header confirmed, not reconstructed guesses.
+ */
+#define SgFINDER_TEXT              0
+#define SgFINDER_ZOOM_BAR          1
+#define SgFINDER_DROP_POCKET       2
 #define SgFINDER_HISTORY_MENUBAR   3
 
 typedef void (*SgSetTextFunc)(Widget finder, int section);
