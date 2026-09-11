@@ -26,6 +26,9 @@ typedef std::vector<AdoptedViewRecord> AdoptedViewList;
 std::map<Widget, AdoptedViewList> gAdoptedViews;
 std::map<Widget, ImdRenderer *> gRenderers;
 std::map<Widget, bool> gExposeInstalled;
+std::map<Widget, unsigned int> gPortableBlockDepth;
+std::map<Widget, bool> gPortableLayoutDirty;
+std::map<Widget, bool> gPortableRedrawDirty;
 
 /*
  * ImdIconLayout grid resources recovered from the original N32
@@ -314,11 +317,55 @@ ImdViewPanelPortableRendererChanged(Widget widget, ImdRenderer *renderer)
 }
 
 extern "C" void
+ImdViewPanelPortableBeginBlockChanges(Widget widget)
+{
+    if (!widget)
+        return;
+    ++gPortableBlockDepth[widget];
+}
+
+extern "C" bool
+ImdViewPanelPortableChangesBlocked(Widget widget)
+{
+    if (!widget)
+        return false;
+    return gPortableBlockDepth[widget] != 0;
+}
+
+extern "C" void
+ImdViewPanelPortableEndBlockChanges(Widget widget)
+{
+    if (!widget)
+        return;
+
+    unsigned int &depth = gPortableBlockDepth[widget];
+    if (depth != 0)
+        --depth;
+    if (depth != 0)
+        return;
+
+    if (gPortableLayoutDirty[widget]) {
+        gPortableLayoutDirty[widget] = false;
+        layoutPortableViews(widget);
+    }
+
+    if (gPortableRedrawDirty[widget]) {
+        gPortableRedrawDirty[widget] = false;
+        if (XtIsRealized(widget)) {
+            XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
+            ImdViewPanelRedraw(widget);
+        }
+    }
+}
+
+extern "C" void
 ImdViewPanelPortableResetViews(Widget widget)
 {
     if (!widget)
         return;
     gAdoptedViews.erase(widget);
+    gPortableLayoutDirty[widget] = true;
+    gPortableRedrawDirty[widget] = true;
 }
 
 void
@@ -326,6 +373,11 @@ ImdViewPanelRedraw(Widget widget)
 {
     if (!widget || !XtIsRealized(widget))
         return;
+
+    if (gPortableBlockDepth[widget] != 0) {
+        gPortableRedrawDirty[widget] = true;
+        return;
+    }
 
     std::map<Widget, ImdRenderer *>::iterator rendererIt = gRenderers.find(widget);
     if (rendererIt == gRenderers.end() || !rendererIt->second)
@@ -408,7 +460,6 @@ ImdViewPanelMoveView(Widget widget, ImdView &view, long x, long y)
     }
 
     if (moved && XtIsRealized(widget)) {
-        /* A manually moved icon can extend the work area just like laid-out rows. */
         resizePortablePanelToLayout(widget);
         XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
         ImdViewPanelRedraw(widget);
@@ -429,7 +480,11 @@ ImdViewPanelAdoptView(
     AdoptedViewList &views = gAdoptedViews[widget];
     ensurePortableExtent(view);
     views.push_back(AdoptedViewRecord(view, parentView, 0));
-    layoutPortableViews(widget);
+
+    if (gPortableBlockDepth[widget] != 0)
+        gPortableLayoutDirty[widget] = true;
+    else
+        layoutPortableViews(widget);
 }
 
 void
@@ -444,5 +499,9 @@ ImdViewPanelAdoptView(
     AdoptedViewList &views = gAdoptedViews[widget];
     ensurePortableExtent(view);
     views.push_back(AdoptedViewRecord(view, 0, panel));
-    layoutPortableViews(widget);
+
+    if (gPortableBlockDepth[widget] != 0)
+        gPortableLayoutDirty[widget] = true;
+    else
+        layoutPortableViews(widget);
 }
