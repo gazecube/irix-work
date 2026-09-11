@@ -1,6 +1,7 @@
 #include "Broker.h"
 
 #include "DirModel.h"
+#include "FileModel.h"
 #include "Model.h"
 
 namespace {
@@ -90,13 +91,31 @@ bool
 ImdBroker::normalizeDNA(ImdDNA &dna)
 {
     /*
-     * Original Broker::normalizeDNA() dispatches to the registered factory
-     * for dna.type() and writes the normalized DNA back into the argument.
-     * The ImdDirModel selector produced by desktopContainerDNA() is already in
-     * the proven canonical file://host/path form, so the first native factory
-     * path is identity normalization. Other model classes remain unresolved.
+     * Original ImdBroker::normalizeDNA() @ 0x09746f48 looks up the factory for
+     * dna.type() and delegates normalization through that factory. Directory
+     * population deliberately creates ImdUnknownFileModel DNA; the original
+     * ImdFileModelFactory::normalize() resolves that filesystem-backed DNA to
+     * its concrete model class later.
+     *
+     * Reconstruct the same boundary for the built-in host models. The selector
+     * remains unchanged; only the model type is resolved from the file path.
      */
-    return !dna.type().empty() && !dna.selector().empty();
+    if (dna.type().empty() || dna.selector().empty())
+        return false;
+
+    if (dna.type() == ImdFileModel::unknownTypeName()) {
+        const ImdString path = ImdFileModel::fileNameFromDNA(dna);
+        if (path.empty())
+            return false;
+
+        const ImdString resolvedType = ImdFileModel::dnaTypeFromPath(path);
+        if (resolvedType.empty() || resolvedType == ImdFileModel::unknownTypeName())
+            return false;
+
+        dna = ImdDNA(resolvedType, dna.selector());
+    }
+
+    return true;
 }
 
 ImdModel *
@@ -105,12 +124,6 @@ ImdBroker::createBuiltInModel(const ImdDNA &dna)
     /*
      * Binary-backed architecture: BuiltInFactories registers model factories
      * by DNA type and getModel() dispatches through that registry.
-     *
-     * Fresh local static-initialization disassembly proves
-     * ImdDirModel::kTypeName is initialized from
-     * name__9type_info(__T_11ImdDirModel), whose backing name string is
-     * exactly "ImdDirModel". Do not substitute the unrelated user-facing
-     * "Directory" string.
      */
     if (dna.type() == "ImdDirModel")
         return new ImdDirModel(dna);
