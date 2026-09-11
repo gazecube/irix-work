@@ -1,4 +1,4 @@
-if(TARGET Sgm AND TARGET imdIconPanel)
+if(TARGET Sgm AND TARGET imdIconPanel AND TARGET viewklass)
     add_library(imdApp SHARED
         Finders/IconFinder.c++
     )
@@ -13,6 +13,7 @@ if(TARGET Sgm AND TARGET imdIconPanel)
         PUBLIC
             Sgm
             imdIconPanel
+            viewklass
     )
 
     set_target_properties(imdApp PROPERTIES
@@ -39,7 +40,7 @@ if(TARGET Sgm AND TARGET imdIconPanel)
             "-Wl,--disable-new-dtags")
     endif()
 
-    message(STATUS "Building binary-backed libimdApp ImdIconFinder consumer")
+    message(STATUS "Building binary-backed libimdApp ImdIconFinder consumer with ViewKit menu path")
 else()
-    message(STATUS "Sgm/libimdIconPanel unavailable; skipping reconstructed libimdApp")
+    message(STATUS "Sgm/libimdIconPanel/ViewKit unavailable; skipping reconstructed libimdApp")
 endif()
