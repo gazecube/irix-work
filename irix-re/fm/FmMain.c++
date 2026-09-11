@@ -629,7 +629,6 @@ int main(int argc, char **argv)
                   XmNtopAttachment, XmATTACH_FORM,
                   XmNleftAttachment, XmATTACH_FORM,
                   XmNrightAttachment, XmATTACH_FORM,
-                  XmNbottomAttachment, XmATTACH_FORM,
                   NULL);
     XtManageChild(finderWidget);
 
