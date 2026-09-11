@@ -44,6 +44,11 @@ static VkMenuDesc iconFinderMenuBarDesc[] = {
  * right edge after it has been built. This does not claim original private
  * SgFinder geometry; it preserves the proven ownership/widget identity until
  * that superclass layout is reconstructed.
+ *
+ * Important: an XmMenuBar expands to its parent width when shown. Measuring
+ * the menu bar itself therefore reports the Finder width and defeats the
+ * original right-edge compact layout. Size the bar from the actual recovered
+ * finderSelectionMenu cascade instead.
  */
 static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
 {
@@ -52,6 +57,7 @@ static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
     Dimension menuWidth = 1;
     Dimension menuHeight = 1;
     Position x = 0;
+    Widget selection = 0;
 
     if (!finder || !menuBar)
         return;
@@ -60,15 +66,30 @@ static void placeIconFinderMenuBar(Widget finder, Widget menuBar)
                   XmNwidth, &finderWidth,
                   XmNheight, &finderHeight,
                   NULL);
-    XtVaGetValues(menuBar,
-                  XmNwidth, &menuWidth,
-                  XmNheight, &menuHeight,
-                  NULL);
 
+    selection = XtNameToWidget(menuBar, (char *)"*finderSelectionMenu");
+    if (selection) {
+        XtWidgetGeometry preferred;
+        memset(&preferred, 0, sizeof(preferred));
+        XtQueryGeometry(selection, NULL, &preferred);
+        if (preferred.request_mode & CWWidth)
+            menuWidth = preferred.width;
+        else
+            XtVaGetValues(selection, XmNwidth, &menuWidth, NULL);
+
+        /* Leave a little room for the menu bar's own border/margins. */
+        if (menuWidth < 4)
+            menuWidth = 4;
+        else
+            menuWidth = (Dimension)(menuWidth + 4);
+    } else {
+        /* Fallback only if ViewKit has not built the cascade yet. */
+        XtVaGetValues(menuBar, XmNwidth, &menuWidth, NULL);
+    }
+
+    menuHeight = finderHeight;
     if (menuWidth > finderWidth)
         menuWidth = finderWidth;
-    if (menuHeight < finderHeight)
-        menuHeight = finderHeight;
     if (finderWidth > menuWidth)
         x = (Position)(finderWidth - menuWidth);
 
