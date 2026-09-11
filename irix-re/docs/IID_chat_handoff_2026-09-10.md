@@ -136,3 +136,26 @@ After verifying the newly integrated `ImdIconFinder` visually and at runtime, co
 ## Important visual rule
 
 Do not modify the already validated ThumbWheel drawing/hit-testing path without new binary evidence. Current remaining visual fixes should generally be treated as FM composition/resource problems first.
+
+## Final message before chat lock
+
+Oh hell yes. That changes SgDropPocket from "ugh, another widget RE" into "probably a pretty clean extraction job." :D
+
+For this one I would lean hard on the N32 libSgm.so.1 and recover, in order:
+
+Original source-unit identity from .debug_line / DWARF, hopefully DropPocket.c.
+sgDropPocketWidgetClass, class/instance record sizes, resources, callbacks, and private fields from .debug_info.
+Exact exported/internal function names around SgCreateDropPocket.
+Constructor/initialize/realize/expose behavior from symbolized disassembly.
+Any raster/pixmap data or resource names used to draw the pocket.
+Finder interaction, especially whatever dropPocketCB is doing in the original SgFinder.
+
+Given how rich that library is, there is a decent chance we can recover enough of the private struct names and source line mapping that we barely have to invent anything at all. That is exactly the kind of binary where SGI accidentally left us a fucking blueprint. :D
+
+And this is confirmed to be the same rich-debug pattern we already found across the N32 IID stack: full .debug_info, .debug_line, .debug_pubnames, etc., with many libraries left unstripped.
+
+So yeah: next move is direct libSgm.so.1 archaeology for DropPocket, then replace this:
+
+sgDropPocketWidgetClass = xmDrawingAreaWidgetClass;
+
+with the real reconstructed widget. No hiding the teal rectangle, no fake button, no guessing.
