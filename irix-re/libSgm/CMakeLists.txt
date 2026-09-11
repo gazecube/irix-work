@@ -52,6 +52,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     add_library(Sgm SHARED
         SgmCompat.c
         DropPocket.c
+        DropPocketRaster.c
         Finder.c
         ZoomBar.c
         ThumbWheel.c
@@ -59,16 +60,6 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         VisualDrawingAHost.c
         AbiObjects.c
         AbiStubs.c
-    )
-
-    # DropPocket.c now owns these reconstructed ABI symbols. Keep the old
-    # broad bring-up placeholders available under private names so the
-    # generated scaffolding no longer collides at link time.
-    set_source_files_properties(AbiObjects.c PROPERTIES
-        COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec_abi_placeholder"
-    )
-    set_source_files_properties(AbiStubs.c PROPERTIES
-        COMPILE_DEFINITIONS "SgHasFileIconLibrary=SgHasFileIconLibrary_abi_placeholder"
     )
 
     target_include_directories(Sgm
@@ -99,6 +90,14 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     else()
         message(FATAL_ERROR "Xm/PrimitiveP.h is required for the native SgDropPocket/SgThumbWheel reconstruction")
     endif()
+
+    target_compile_definitions(Sgm PRIVATE
+        sgDropPocketClassRec=sgDropPocketClassRec_abi_placeholder
+        SgHasFileIconLibrary=SgHasFileIconLibrary_abi_placeholder
+    )
+    set_source_files_properties(DropPocket.c PROPERTIES
+        COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec;SgHasFileIconLibrary=SgHasFileIconLibrary"
+    )
 
     target_link_libraries(Sgm
         PUBLIC
