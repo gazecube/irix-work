@@ -91,6 +91,34 @@ Whether this was delayed tool execution, an already-started action completing, o
 
 Lesson: always check the branch tip after a chat lock. Apparently the repo may know things the chat does not.
 
+## The French Audiofanzine SgZoomBar Oracle
+
+While tracing why the reconstructed SGI File Manager finder still had a strange gray strip, the investigation correctly narrowed the problem to `SgFinder` / `SgZoomBar`.
+
+Then, during an attempt to find original SGI `SgZoomBar` documentation, the AI produced this wonderfully irrelevant reference:
+
+```text
+https://fr.audiofanzine.com/plan-convexe/adb/C101/petites-annonces/i.3596414.html
+```
+
+At first this looked plausibly like an obscure forum or technical archive.
+
+It was not.
+
+It was just a random French Audiofanzine classifieds page for audio equipment.
+
+The effective reasoning path was therefore:
+
+```text
+Task: reconstruct SGI File Manager
+Question: what does SgZoomBar actually do?
+AI: perhaps the answer is hidden in this French used-audio classified ad
+```
+
+No SGI widget internals were recovered from the classified ad.
+
+Lesson: when web search suddenly produces an oddly specific foreign marketplace page during binary archaeology, check whether the oracle is actually selling audio gear before citing it as technical evidence.
+
 ## Museum Policy
 
 If a future AI-assisted archaeology session produces a sufficiently funny, harmless, and memorable mixup, add it here.
