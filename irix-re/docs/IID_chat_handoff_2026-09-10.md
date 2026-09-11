@@ -137,7 +137,13 @@ After verifying the newly integrated `ImdIconFinder` visually and at runtime, co
 
 Do not modify the already validated ThumbWheel drawing/hit-testing path without new binary evidence. Current remaining visual fixes should generally be treated as FM composition/resource problems first.
 
-## Final message before chat lock
+## Final exchange before chat lock
+
+### User
+
+Sounds good, thankfully that lib is N32 and has **rich debug information**, and is **unstripped!**
+
+### Assistant
 
 Oh hell yes. That changes SgDropPocket from "ugh, another widget RE" into "probably a pretty clean extraction job." :D
 
