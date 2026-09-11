@@ -1,6 +1,6 @@
 # IID / File Manager continuity handoff - 2026-09-10
 
-This is a project continuity summary, not a byte-for-byte transcript.
+This is a project continuity summary, plus a preserved continuation log for the later FM work in this chat.
 
 ## Canonical repository state
 
@@ -58,7 +58,7 @@ That constructor recreates the original path using `sgFinderWidgetClass`, the re
 
 FM now uses `ImdIconFinder("iconFinder", finderForm, 0)` in place of the fake Up/Refresh/text-field row. The finder text child remains wired to Enter-to-navigate, and directory changes update the finder through `ImdIconFinder::setContent()`.
 
-`fm/CMakeLists.txt` now links `imdApp` so the reconstructed finder is part of the runnable FM target. Top-level CMake already orders `libimdApp` before `fm`.
+`fm/CMakeLists.txt` now links `imdApp` so the reconstructed finder is part of the runnable FM target.
 
 ## Selection state
 
@@ -137,7 +137,466 @@ After verifying the newly integrated `ImdIconFinder` visually and at runtime, co
 
 Do not modify the already validated ThumbWheel drawing/hit-testing path without new binary evidence. Current remaining visual fixes should generally be treated as FM composition/resource problems first.
 
-## Final exchange before chat lock
+# Missing chat continuation after the initial handoff
+
+The following section preserves the later FM conversation that happened after the first version of this handoff was written.
+
+### User
+
+`error: patch with only garbage at irix-re/fm/patches/thumbwheel-sidebar-placement.patch:4`
+
+### User
+
+`...continue`
+
+### User
+
+`YAY! it's infinitely better. now the up and refresh buttons.`
+
+### Assistant
+
+The next obvious bootstrap-looking controls were identified as Up and Refresh. The preserved original `FileManager` app-defaults were checked first rather than reskinning them blindly.
+
+The important result was that the original FileManager resources do not define `Up` or `Refresh` controls at all. There was no `Refresh` resource match and the only `Up` occurrences were keyboard actions in the icon panel.
+
+Conclusion: those controls were bootstrap inventions and should be removed rather than cosmetically improved.
+
+The real finder path was already reconstructed as `ImdIconFinder`, which builds the actual `sgFinderWidgetClass`, gets the finder text child, creates `iconFinderFrame`, and embeds an `ImdModelBasedIconPanel`.
+
+### User
+
+`why not just wire it manually and push?`
+
+### User
+
+`(that's what we used to do)`
+
+### User
+
+`(also please push another update to the chat log)`
+
+### Assistant
+
+Agreed to return to the old direct workflow: edit the real branch, commit, and push directly.
+
+The ThumbWheel placement correction was folded into canonical source, and `ImdIconFinder` was wired directly into FM. The fake Up/Refresh pair was removed.
+
+Direct commits included:
+
+```text
+1779d4d9  fm: replace bootstrap path buttons with ImdIconFinder
+b14fb608  fm: link reconstructed ImdIconFinder
+```
+
+The project handoff log was also updated, and temporary one-shot FM workflows/patch helpers were removed.
+
+### User
+
+Screenshot showed the reconstructed Finder row with a visible path field and an awkward empty gray area beneath/around it.
+
+User: `so uhh, what-`
+
+### Assistant
+
+Explained that the real `ImdIconFinder` was now instantiated, but its internal geometry was only partially reconstructed. The plain path field was the real `SgFinder` text child, while the awkward gray area was coming from incomplete internal layout/chrome rather than the old bootstrap row.
+
+The first suspected mismatch was the outer Finder bottom attachment. Original resources prove:
+
+```text
+*FileManager*iconFinder.leftAttachment:   XmATTACH_FORM
+*FileManager*iconFinder.rightAttachment:  XmATTACH_FORM
+*FileManager*iconFinder.topAttachment:    XmATTACH_FORM
+*FileManager*iconFinder.bottomAttachment: XmATTACH_NONE
+```
+
+The FM-side host seam had forced a bottom attachment, so that was removed.
+
+### User
+
+`sounds good!`
+
+### Assistant
+
+Pushed the narrow correction:
+
+```text
+6e35a4f8  fm: honor original ImdIconFinder form attachment
+```
+
+### User
+
+`it's the same`
+
+### Assistant
+
+That ruled out the outer Form attachment as the source of the visible gray region.
+
+Attention moved inside `ImdIconFinder`/`SgFinder`. The preserved FileManager database includes an absolute IRIX include of `ImdFinders`, so the next hypothesis was that finder-specific resources were not being loaded on Linux.
+
+CMake was extended to extract and stage the original `ImdFinders` resource database from `desktop_eoe(1).tar`, inline it into the staged FileManager resources, and stage `iconFinderPrevious` as well.
+
+Commit:
+
+```text
+76fb30427324c91f5814a1d64f165b52ae8c8c95
+fm: stage original ImdFinders resources
+```
+
+### User
+
+`finder database got added it looks like.`
+
+### Assistant
+
+That ruled out missing finder resources. The remaining mismatch was now confirmed to be inside reconstructed Finder behavior/layout rather than app-default loading.
+
+Inspection found the real source of the gray strip: reconstructed `SgFinder` intentionally reserves a bottom child called `zoomBar`, but `sgZoomBarWidgetClass` was still only a compatibility alias to `XmScale`. The layout reserved the right slot, but the widget was wrong.
+
+The original SGI Finder documentation describes ZoomBar as a segmented path-navigation bar, one section per pathname component.
+
+A reconstructed `SgZoomBar` was added instead of hiding the strip.
+
+### User
+
+`bro why are you looking at generators lmfao`
+
+User pasted:
+
+```text
+https://fr.audiofanzine.com/plan-convexe/adb/C101/petites-annonces/i.3596414.html
+```
+
+### Assistant
+
+Admitted the web search had wandered completely off course into a French Audiofanzine classifieds page while trying to find SGI Finder/ZoomBar documentation.
+
+The likely reason was the overloaded abbreviation `FM`, which the search path seems to have interpreted as frequency modulation rather than File Manager.
+
+This became an official Funny AI Mishaps entry.
+
+### User
+
+`lmaoooo! this one definitely goes into the "AI Mishaps" pile.`
+
+### User
+
+`lmaoooo! this one definitely goes into the "funny AI Mishaps" pile.`
+
+### Assistant
+
+Added the incident to the Funny AI Mishaps log. The joke summary was effectively:
+
+`Task: reconstruct SGI File Manager. AI: perhaps this French audio classifieds listing contains the secrets of SgZoomBar.`
+
+### User
+
+`lmfaooooo`
+
+### User
+
+Explained that the result was especially funny because it looked at first like it might be a useful forum link, but it was just a random classifieds listing.
+
+### Assistant
+
+Agreed and called it bizarrely specific.
+
+### User
+
+`yeye, add that, then let's get back to fm`
+
+### Assistant
+
+Pushed the mishap entry:
+
+```text
+54c4e7d1  docs: add Audiofanzine SGI finder mishap
+```
+
+Then returned to FM and reconstructed `SgZoomBar` instead of the `XmScale` placeholder.
+
+Relevant commits:
+
+```text
+9f25b421  libSgm: reconstruct SgZoomBar path segments
+990739ff  libSgm: stop aliasing SgZoomBar to XmScale
+f452042e  libSgm: build reconstructed SgZoomBar
+2801fa6c  libSgm: fix SgZoomBar build include
+```
+
+The reconstructed bar produced path sections such as:
+
+```text
+[ / ][ home ][ nekron ]
+```
+
+and routed clicks through the existing `SgNsetTextSectionFunc` path.
+
+### User
+
+`it worked!`
+
+### Assistant
+
+Confirmed that the dead gray strip had indeed been the bogus `XmScale` stand-in.
+
+The Finder structure was now visibly closer to SGI:
+
+```text
+SgFinder
++-- text field
++-- ZoomBar path segments
++-- history/menu side
+`-- ImdIconFinder panel/frame plumbing
+```
+
+### User
+
+`there's a visible path name though, is that intended?`
+
+Then clarified the Audiofanzine likely came from confusing FM with frequency modulation, the audio synthesis technique best known from the Yamaha DX7.
+
+### Assistant
+
+Explained that the visible path labels in the ZoomBar are intended. The text field is editable path text, while the ZoomBar is a clickable hierarchical path representation.
+
+Example:
+
+```text
+/home/nekron              <- editable Finder text field
+[ / ][ home ][ nekron ]   <- ZoomBar navigation sections
+```
+
+Also agreed that the FM -> frequency modulation -> synthesizers -> Yamaha DX7 -> audio equipment -> French classifieds chain was almost certainly why the search went insane.
+
+### User
+
+`ahhhhh ok i was just wondering lol`
+
+### Assistant
+
+Confirmed that the duplication is expected and the path labels should stay.
+
+### User
+
+`let's get this going.`
+
+### Assistant
+
+Moved to the next Finder chrome and daily usability work.
+
+The original `FileManager` resources proved a control named `finderSelectionMenu` using the shipped `iconFinderPrevious` pixmap.
+
+Initial speculation that this might be an internal SgFinder child was rejected after checking binary evidence.
+
+Original N32 `libSgm.so.1` turned out to be rich with symbols/debug information and revealed internal Finder names including:
+
+```text
+dropPocketCB
+zoomBarPushCB
+updateZoomBar
+historyPushCB
+makeHistoryMenu
+SgZoomBar
+_SgZoomBarGetSectionInfo
+ZoomBar.c
+```
+
+and original Finder child names:
+
+```text
+dropPocket
+historyBar
+zoomBar
+```
+
+The original public `Finder.h` also proved the child selector ABI:
+
+```c
+#define SgFINDER_TEXT            0
+#define SgFINDER_ZOOM_BAR        1
+#define SgFINDER_DROP_POCKET     2
+#define SgFINDER_HISTORY_MENUBAR 3
+```
+
+This corrected an ABI mistake in the reconstruction.
+
+Further disassembly of `ImdIconFinder` proved that `finderSelectionMenu` is not the internal SgFinder history child. The original constructor allocates a `VkMenuBar`, uses `_menuBarDesc`, then calls:
+
+```text
+VkMenu::findNamedItem("finderSelectionMenu", ...)
+```
+
+The recovered descriptor is essentially:
+
+```cpp
+{
+    SUBMENU,
+    "finderSelectionMenu",
+    NULL,
+    _popupMenuDesc,
+    NULL,
+    NULL
+}
+```
+
+with an END terminator. `_popupMenuDesc` initially contains only END and is populated dynamically by `addMenuItem()` through `VkMenu::addAction()`.
+
+Relevant commits included:
+
+```text
+474f0086  libSgm: restore original SgFinder child selectors
+7b9426a0  libimdApp: restore IconFinder selection menu bar
+49ad2df0  libimdApp: expose host IconFinder menu widget seam
+e5172711  libimdApp: link ViewKit for original IconFinder menu path
+8ff466da  libimdApp: declare XtConfigureWidget for finder menu seam
+```
+
+### User
+
+`hmmm`
+
+### Assistant
+
+Asked for a screenshot/runtime result to see whether the ViewKit control actually appeared.
+
+### User
+
+Screenshot showed FM with the Finder still looking wrong. The new history/previous control had not visibly appeared as intended.
+
+### Assistant
+
+Initially suspected the host placement seam for the ViewKit menu bar was wrong and noticed a runtime warning beginning with:
+
+```text
+Warning: Cannot find callback list in XtAddCallback
+```
+
+A correction was pushed to size the ViewKit menu bar from the actual `finderSelectionMenu` cascade rather than from the already-expanded XmMenuBar.
+
+Commit:
+
+```text
+0be0c607  libimdApp: size finder menu from selection cascade
+```
+
+### User
+
+Screenshot again. User: `Hmmm`
+
+### Assistant
+
+The menu still did not appear correctly. Further investigation found a likely deferred-build issue: ViewKit can create the `VkSubMenu` object before its underlying cascade widget exists.
+
+The host seam was changed to place the menu after mapping, when the actual cascade widget should exist.
+
+At the same time, the callback warning was traced to the new ZoomBar subscribing to the parent Finder with `XmNvalueChangedCallback`. The original binary contains an internal `updateZoomBar`, suggesting the reconstruction's callback ownership was wrong.
+
+A first cleanup bound ZoomBar updates to the Finder text child instead of the Finder manager.
+
+Relevant commits:
+
+```text
+e977c8e9  libimdApp: expose finder selection menu widget
+c7e5f038  libimdApp: place finder menu after ViewKit maps it
+92ad2c8b  libSgm: bind ZoomBar updates to Finder text child
+```
+
+### User
+
+`uhhh it isnt building?`
+
+### Assistant
+
+Initially expected a compile error and began checking latest source.
+
+### User
+
+`There isn't any compiler error line, fm just isn't even being built at all.`
+
+### User
+
+`check the cmakefile, that's likely the culprit.`
+
+### Assistant
+
+That changed the diagnosis completely. `fm/CMakeLists.txt` only creates `fm` when `imdApp` exists, and `libimdApp/CMakeLists.txt` had recently been changed to require `TARGET viewklass`.
+
+Top-level CMake order was still:
+
+```text
+libSgm
+libimdUtil
+libimdModel
+libimdIconPanel
+libimdApp
+viewkit
+fm
+```
+
+Therefore `viewklass` did not exist yet when `libimdApp` was evaluated, so `imdApp` was silently skipped, and then FM was silently skipped because `TARGET imdApp` was false.
+
+The top-level ordering was fixed so ViewKit is configured before libimdApp.
+
+Commit:
+
+```text
+64930f10  build: configure ViewKit before libimdApp
+```
+
+New order:
+
+```text
+libSgm
+libimdUtil
+libimdModel
+libimdIconPanel
+viewkit
+libimdApp
+fm
+```
+
+### User
+
+`Yep, it worked, i've been reconfiguring it every run.`
+
+### Assistant
+
+Confirmed the CMake ordering bug was genuinely fixed rather than hidden by a stale configure.
+
+### User
+
+Screenshot showed freshly rebuilt FM. User said:
+
+`Callback warning is gone, but it's still teal.`
+
+### Assistant
+
+With the callback warning gone, the teal block could finally be identified cleanly.
+
+The teal block is almost certainly the Finder's `dropPocket`, not the ViewKit previous/history control.
+
+The reconstructed `SgFinder` creates `dropPocket` by default whenever `SgNuseDropPocket` is true and places it at the far left of the text row. That matches the screenshot.
+
+The real problem is rendering: `SgmCompat.c` still contains:
+
+```c
+sgDropPocketWidgetClass = xmDrawingAreaWidgetClass;
+```
+
+So the Finder has the correct logical slot, but the actual SGI widget is still a plain Motif DrawingArea placeholder. That is why it appears as a featureless teal rectangle.
+
+The original SGI Finder API/documentation confirms `SgNuseDropPocket` is a real resource and that the drop-pocket feature is part of the Finder unless explicitly disabled. Therefore the correct fix is to reconstruct SgDropPocket rather than hide it.
+
+The next archaeology target was identified as original N32 `libSgm.so.1` symbols/DWARF/disassembly for:
+
+```text
+SgDropPocket
+SgCreateDropPocket
+sgDropPocketWidgetClass
+DropPocket.c
+```
+
+# Final exchange before chat lock
 
 ### User
 
