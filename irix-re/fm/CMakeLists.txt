@@ -79,9 +79,12 @@ if(TARGET fm)
     set_property(TARGET fm PROPERTY CXX_STANDARD_REQUIRED ON)
 
     # Stage the preserved SGI FileManager app-default database beside the
-    # executable.  The current FM bootstrap already uses the original widget
+    # executable. The current FM bootstrap already uses the original widget
     # names; loading this database restores the original pixmap-labeled sidebar
     # controls, spacing, accelerators, panel geometry and ThumbWheel resources.
+    # FileManager includes ImdFinders by an absolute IRIX path, so inline the
+    # shipped ImdFinders database here rather than depending on IRIX cpp/Xrm
+    # include behavior on the Linux host.
     set(FM_RUNTIME_APP_DEFAULTS_DIR "${CMAKE_CURRENT_BINARY_DIR}/app-defaults")
     set(FM_RUNTIME_BITMAP_DIR "${CMAKE_CURRENT_BINARY_DIR}/sgidesktop")
     file(MAKE_DIRECTORY "${FM_RUNTIME_APP_DEFAULTS_DIR}")
@@ -91,11 +94,11 @@ if(TARGET fm)
     set(_fm_staged_app_defaults "${FM_RUNTIME_APP_DEFAULTS_DIR}/FileManager")
     if(EXISTS "${_fm_preserved_app_defaults}")
         file(READ "${_fm_preserved_app_defaults}" _fm_app_defaults_text)
+        set(_fm_imd_finders_text "")
 
-        # The preserved resources use the original IRIX absolute bitmap path.
-        # Extract the matching shipped bitmap payload from desktop_eoe when it
-        # is present, then retarget the resource database to the build-local
-        # copy so Linux hosts do not need an SGI /usr/include tree installed.
+        # The preserved resources use original IRIX absolute paths. Extract the
+        # matching shipped resources from desktop_eoe, then retarget them to
+        # build-local copies so Linux hosts do not require an SGI /usr tree.
         set(_fm_desktop_eoe_tar "${CMAKE_SOURCE_DIR}/evidence/desktop_eoe(1).tar")
         if(EXISTS "${_fm_desktop_eoe_tar}")
             find_program(FM_TAR_EXECUTABLE tar)
@@ -115,7 +118,8 @@ if(TARGET fm)
                             treeDirView.bm
                             columnDirView.bm
                             galleryDirView.bm
-                            shelf.bm)
+                            shelf.bm
+                            iconFinderPrevious)
                         file(GLOB_RECURSE _fm_bitmap_candidates
                             "${_fm_extract_dir}/*/${_fm_bitmap}"
                             "${_fm_extract_dir}/${_fm_bitmap}")
@@ -127,8 +131,19 @@ if(TARGET fm)
                                            COPYONLY)
                         endif()
                     endforeach()
+
+                    file(GLOB_RECURSE _fm_imd_finders_candidates
+                        "${_fm_extract_dir}/*/ImdFinders"
+                        "${_fm_extract_dir}/ImdFinders")
+                    list(LENGTH _fm_imd_finders_candidates _fm_imd_finders_count)
+                    if(_fm_imd_finders_count GREATER 0)
+                        list(GET _fm_imd_finders_candidates 0 _fm_imd_finders_source)
+                        file(READ "${_fm_imd_finders_source}" _fm_imd_finders_text)
+                    else()
+                        message(WARNING "Could not locate ImdFinders in desktop_eoe; finder will use generic SgFinder resources")
+                    endif()
                 else()
-                    message(WARNING "Could not extract desktop_eoe bitmap evidence; FM will use host SGI bitmap paths")
+                    message(WARNING "Could not extract desktop_eoe resource evidence; FM will use host SGI resource paths")
                 endif()
             endif()
         endif()
@@ -139,13 +154,29 @@ if(TARGET fm)
             "${_fm_bitmap_resource_dir}"
             _fm_app_defaults_text
             "${_fm_app_defaults_text}")
+
+        if(NOT _fm_imd_finders_text STREQUAL "")
+            string(REPLACE
+                "/usr/include/X11/bitmaps/sgidesktop"
+                "${_fm_bitmap_resource_dir}"
+                _fm_imd_finders_text
+                "${_fm_imd_finders_text}")
+            file(WRITE "${FM_RUNTIME_APP_DEFAULTS_DIR}/ImdFinders"
+                       "${_fm_imd_finders_text}")
+            string(REPLACE
+                "#include \"/usr/lib/X11/app-defaults/ImdFinders\""
+                "${_fm_imd_finders_text}"
+                _fm_app_defaults_text
+                "${_fm_app_defaults_text}")
+        endif()
+
         file(WRITE "${_fm_staged_app_defaults}" "${_fm_app_defaults_text}")
     else()
         message(WARNING "Preserved FileManager app-defaults unavailable; FM will use fallback resources")
     endif()
 
     # Keep the actual ELF as fm.bin and make ./build/fm/fm the normal launcher
-    # that supplies XAPPLRESDIR.  This makes a local build behave like the IRIX
+    # that supplies XAPPLRESDIR. This makes a local build behave like the IRIX
     # installation without touching the user's global X resource setup.
     set_property(TARGET fm PROPERTY OUTPUT_NAME "fm.bin")
     set(FM_RUNTIME_BINARY "${CMAKE_CURRENT_BINARY_DIR}/fm.bin")
@@ -167,7 +198,7 @@ if(TARGET fm)
     endif()
 endif()
 
-# Runnable background/desktop host.  This keeps the binary-proven
+# Runnable background/desktop host. This keeps the binary-proven
 # ImdBackWindow -> ImdViewPanel -> BackLayout path executable while the
 # remaining desktop model constructor path is recovered.
 if(TARGET imdIconPanel)
@@ -188,9 +219,9 @@ if(TARGET imdIconPanel)
     endif()
 
     # RE: libimdIconPanel directly references the historical
-    # sgVisualDrawingAreaWidgetClass data symbol.  MaXX also ships a
+    # sgVisualDrawingAreaWidgetClass data symbol. MaXX also ships a
     # libSgm.so.1, but that compatibility library does not provide this
-    # reconstructed symbol.  Keep our sibling libSgm first here exactly as fm
+    # reconstructed symbol. Keep our sibling libSgm first here exactly as fm
     # already does, otherwise the dynamic loader can bind libimdIconPanel to
     # MaXX's libSgm and fail before main().
     if(TARGET Sgm)
@@ -209,7 +240,7 @@ if(TARGET imdIconPanel)
 endif()
 
 # Exact original DefaultIconList captured from desktop_eoe plus a clearly
-# marked Linux host transport helper.  The helper is temporary until the
+# marked Linux host transport helper. The helper is temporary until the
 # ImdRefModel::createReference() persistent reference format is reconstructed.
 install(FILES DefaultIconList.irix-6.5
         DESTINATION share/irix-re/fm)
