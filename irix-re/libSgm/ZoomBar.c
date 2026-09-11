@@ -3,13 +3,14 @@
  *
  * SGI documents the Finder ZoomBar as the path-navigation bar: it contains
  * one button for each section of the finder text, and selecting a button asks
- * the Finder's SgNsetTextSectionFunc to select that section.  The exact IRIX
+ * the Finder's SgNsetTextSectionFunc to select that section. The exact IRIX
  * private widget record and rendering code have not yet been recovered, so
  * this file implements only that documented surface on the host ABI.
  */
 #include <Sgm/Finder.h>
 
 #include <Xm/PushB.h>
+#include <Xm/TextF.h>
 #include <X11/Intrinsic.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
@@ -33,6 +34,7 @@ typedef struct
 {
     /* Host reconstruction state; not claimed to match IRIX n32 offsets. */
     Widget finder;
+    Widget text;
     Widget buttons[ZOOMBAR_MAX_SECTIONS];
     Cardinal button_count;
 } SgZoomBarPartCompat;
@@ -64,7 +66,7 @@ static void zoomBarInitialize(Widget, Widget, ArgList, Cardinal *);
 static void zoomBarDestroy(Widget);
 static void zoomBarResize(Widget);
 static void zoomBarChangeManaged(Widget);
-static void zoomBarFinderChangedCB(Widget, XtPointer, XtPointer);
+static void zoomBarTextChangedCB(Widget, XtPointer, XtPointer);
 static void zoomBarButtonCB(Widget, XtPointer, XtPointer);
 static void zoomBarRebuild(SgZoomBarRecCompat *);
 static void zoomBarLayout(SgZoomBarRecCompat *);
@@ -222,7 +224,7 @@ static void zoomBarRebuild(SgZoomBarRecCompat *rec)
     p = value;
     section = 0;
 
-    /* Absolute path: SGI numbers ZoomBar sections from left to right.  The
+    /* Absolute path: SGI numbers ZoomBar sections from left to right. The
      * leading separator is therefore section zero, representing the root. */
     if (*p == separator)
     {
@@ -300,14 +302,27 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
     (void)num_args;
 
     rec->zoom_bar.finder = XtParent(new_widget);
+    rec->zoom_bar.text = NULL;
     rec->zoom_bar.button_count = 0;
     for (i = 0; i < ZOOMBAR_MAX_SECTIONS; ++i)
         rec->zoom_bar.buttons[i] = NULL;
 
+    /*
+     * Host notification seam. The previous reconstruction registered an
+     * XmNvalueChangedCallback directly on SgFinder, which is not the widget
+     * that owns Motif's text value callback and produced an Xt warning at
+     * runtime. Observe the actual Finder text child instead. The original
+     * libSgm contains an internal updateZoomBar() path; that ownership will
+     * replace this seam when Finder internals are recovered fully.
+     */
     if (rec->zoom_bar.finder)
-        XtAddCallback(rec->zoom_bar.finder,
+        rec->zoom_bar.text =
+            SgFinderGetChild(rec->zoom_bar.finder, SgFINDER_TEXT);
+
+    if (rec->zoom_bar.text)
+        XtAddCallback(rec->zoom_bar.text,
                       XmNvalueChangedCallback,
-                      zoomBarFinderChangedCB,
+                      zoomBarTextChangedCB,
                       (XtPointer)new_widget);
 
     zoomBarRebuild(rec);
@@ -317,13 +332,14 @@ static void zoomBarDestroy(Widget widget)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
 
-    if (rec->zoom_bar.finder)
-        XtRemoveCallback(rec->zoom_bar.finder,
+    if (rec->zoom_bar.text)
+        XtRemoveCallback(rec->zoom_bar.text,
                          XmNvalueChangedCallback,
-                         zoomBarFinderChangedCB,
+                         zoomBarTextChangedCB,
                          (XtPointer)widget);
 
     /* Xt owns and destroys child widgets recursively. */
+    rec->zoom_bar.text = NULL;
     rec->zoom_bar.finder = NULL;
     rec->zoom_bar.button_count = 0;
 }
@@ -338,12 +354,12 @@ static void zoomBarChangeManaged(Widget widget)
     zoomBarLayout((SgZoomBarRecCompat *)widget);
 }
 
-static void zoomBarFinderChangedCB(Widget finder,
-                                   XtPointer client_data,
-                                   XtPointer call_data)
+static void zoomBarTextChangedCB(Widget text,
+                                 XtPointer client_data,
+                                 XtPointer call_data)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)client_data;
-    (void)finder;
+    (void)text;
     (void)call_data;
     zoomBarRebuild(rec);
 }
