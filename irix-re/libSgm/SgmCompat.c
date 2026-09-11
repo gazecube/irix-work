@@ -31,7 +31,7 @@ WidgetClass glxMDrawWidgetClass = (WidgetClass)0;
 WidgetClass sgDropPocketWidgetClass = (WidgetClass)0;
 WidgetClass sgDynaMenuWidgetClass = (WidgetClass)0;
 WidgetClass sgZbTextWidgetClass = (WidgetClass)0;
-WidgetClass sgZoomBarWidgetClass = (WidgetClass)0;
+extern WidgetClass sgZoomBarWidgetClass;
 WidgetClass sgColumnWidgetClass = (WidgetClass)0;
 WidgetClass sgOglColorChooserWidgetClass = (WidgetClass)0;
 WidgetClass sgArcWidgetClass = (WidgetClass)0;
@@ -60,7 +60,6 @@ static void SgmCompatInitClasses(void)
     sgDropPocketWidgetClass = xmDrawingAreaWidgetClass;
     sgDynaMenuWidgetClass = xmRowColumnWidgetClass;
     sgZbTextWidgetClass = xmFormWidgetClass;
-    sgZoomBarWidgetClass = xmScaleWidgetClass;
     sgColumnWidgetClass = xmFormWidgetClass;
     sgOglColorChooserWidgetClass = xmFormWidgetClass;
     sgArcWidgetClass = xmDrawingAreaWidgetClass;
@@ -96,7 +95,6 @@ SGM_CREATOR(SgCreateColorChooser, sgColorChooserWidgetClass)
 SGM_CREATOR(SgCreateDropPocket, sgDropPocketWidgetClass)
 SGM_CREATOR(SgCreateDynaMenu, sgDynaMenuWidgetClass)
 SGM_CREATOR(SgCreateZbText, sgZbTextWidgetClass)
-SGM_CREATOR(SgCreateZoomBar, sgZoomBarWidgetClass)
 SGM_CREATOR(SgCreateColumn, sgColumnWidgetClass)
 SGM_CREATOR(SgOglCreateColorChooser, sgOglColorChooserWidgetClass)
 SGM_CREATOR(SgCreateDial, sgDialWidgetClass)
