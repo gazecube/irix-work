@@ -37,6 +37,7 @@ public:
     Widget portableTextWidget() const;
     Widget portableIconFinderFrame() const;
     ImdIconPanel *portableIconFinderPanel() const;
+    Widget portableSelectionMenuBarWidget() const;
 
 private:
     ImdIconFinder(const ImdIconFinder &);
