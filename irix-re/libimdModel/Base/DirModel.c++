@@ -5,29 +5,7 @@
 
 #include <dirent.h>
 #include <string>
-#include <sys/stat.h>
 #include <vector>
-
-namespace {
-
-static bool
-isDirectoryPath(const std::string &path)
-{
-    struct stat st;
-
-    /*
-     * The runnable Linux default-desktop population seam currently represents
-     * original ImdRefModel references with POSIX symlinks. Follow those links
-     * here so references to existing directory targets ($HOME and dumpster)
-     * are presented with the same directory-facing model type instead of
-     * being misclassified as generic files. This is explicitly a host seam,
-     * not a claim about original IRIX symlink handling; it disappears when
-     * ImdRefModel::createReference() is reconstructed.
-     */
-    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-}
-
-} /* namespace */
 
 ImdDirModel::ImdDirModel(const ImdDNA &dna)
     : ImdModel(dna)
@@ -56,16 +34,6 @@ ImdDirModel::addClientCallback(Callback callback,
     /*
      * Binary-backed initial-child notification grammar from
      * ImdDirModel::addClientCallback() @ 0x09747a84.
-     *
-     * The original temporarily makes the newly registered CallbackInfo the
-     * batch client, emits:
-     *   ImdAttrBool(0xEFFF004B, true)
-     *   ImdAttrDNA (0xEFFF004C, child DNA) for every current child
-     *   ImdAttrBool(0xEFFF004D, true)
-     * then sends that batch only to the registering client.
-     *
-     * The original symbolic names for these three attribute IDs have not yet
-     * been recovered; keep the numeric IDs literal.
      */
     ImdAttrBool beginExists(0xEFFF004B, true);
     ImdAttrBool endExists(0xEFFF004D, true);
@@ -101,11 +69,6 @@ ImdDirModel::removeClientCallback(Callback callback,
                                   void *clientData,
                                   bool childCallback)
 {
-    /*
-     * Original ImdDirModel::removeClientCallback() delegates removal to the
-     * base model and also owns first/last-child-client monitor transitions.
-     * Monitoring is not part of the initial desktop population checkpoint.
-     */
     return ImdModel::removeClientCallback(callback, clientData, childCallback);
 }
 
@@ -164,13 +127,27 @@ ImdDirModel::rebuildChildren()
     if (!dir)
         return;
 
+    /*
+     * Binary-backed ImdDirModel::_loadChildren() @ 0x0975b928 uses the
+     * OpenDir()/ReadDir() wrappers, skips dot and dot-dot, then passes
+     * ImdFileModel::kUnknownType into _addChild(). The directory scan itself
+     * does not classify every entry with stat/lstat.
+     *
+     * Preserve that separation here: enumerate names and construct unknown
+     * filesystem DNA. ImdBroker::normalizeDNA() owns the later resolution to
+     * ImdFileModel/ImdDirModel/ImdRefModel, matching the original factory
+     * boundary and avoiding an eager classification pass during readdir().
+     */
+    const ImdString unknownType(ImdFileModel::unknownTypeName());
+    const std::string base(path.stdString());
+
     for (struct dirent *entry = readdir(dir); entry; entry = readdir(dir)) {
         if (entry->d_name[0] == '.' &&
             (entry->d_name[1] == '\0' ||
              (entry->d_name[1] == '.' && entry->d_name[2] == '\0')))
             continue;
 
-        std::string childPath(path.stdString());
+        std::string childPath(base);
         if (childPath.empty() || childPath[childPath.size() - 1] != '/')
             childPath += '/';
         childPath += entry->d_name;
@@ -178,18 +155,7 @@ ImdDirModel::rebuildChildren()
         const ImdString selector =
             ImdFileModel::dnaSelectorFromPath(ImdString(childPath), ImdString());
 
-        /*
-         * dnaTypeFromPath() maps directories to ImdDirModel::kTypeName and
-         * ordinary filesystem objects to ImdFileModel::kTypeName. Local
-         * static-initialization disassembly proves those two kTypeName values
-         * are "ImdDirModel" and "ImdFileModel" respectively: each is built
-         * from the corresponding SGI type_info name. RefModel/symlink child
-         * creation is still deferred until that path is restored natively.
-         */
-        const ImdString type(isDirectoryPath(childPath)
-                                 ? "ImdDirModel"
-                                 : "ImdFileModel");
-        _children.push_back(new ImdModel(ImdDNA(type, selector)));
+        _children.push_back(new ImdModel(ImdDNA(unknownType, selector)));
     }
 
     closedir(dir);
