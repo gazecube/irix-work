@@ -14,6 +14,7 @@
 #include "Broker.h"
 #include "FileModel.h"
 #include "Model.h"
+#include "IconFinder.h"
 #include <Sgm/ThumbWheel.h>
 
 #include <Xm/Xm.h>
@@ -56,6 +57,7 @@ struct FmState {
     Widget status;
     Widget panelWidget;
     Widget scaleZoom;
+    ImdIconFinder *finder;
     ImdBroker *broker;
     ImdModel *directoryModel;
     ImdModelBasedIconPanel *dirPanel;
@@ -220,7 +222,10 @@ static void populateDirectory(FmState *state, const std::string &directory)
     state->haveSelectedDNA = false;
     state->lastClickTime = 0;
     state->lastClickView = 0;
-    XmTextFieldSetString(state->location, (char *)state->directory.c_str());
+    if (state->finder)
+        state->finder->setContent(state->directory.c_str(), false);
+    else if (state->location)
+        XmTextFieldSetString(state->location, (char *)state->directory.c_str());
 
     {
         char title[PATH_MAX + 64];
@@ -318,23 +323,20 @@ static void panelEventHandler(Widget widget, XtPointer client, XEvent *event, Bo
 static void locationActivateCB(Widget widget, XtPointer client, XtPointer call)
 {
     FmState *state = (FmState *)client;
-    char *text = XmTextFieldGetString(widget);
+    (void)widget;
     (void)call;
-    if (text) {
-        changeDirectory(state, text);
-        XtFree(text);
+    if (state->finder) {
+        const std::string text = state->finder->getContent();
+        changeDirectory(state, text.c_str());
+        return;
     }
-}
-
-static void upCB(Widget, XtPointer client, XtPointer)
-{
-    FmState *state = (FmState *)client;
-    std::string parent;
-    std::string::size_type slash;
-    if (state->directory == "/") return;
-    slash = state->directory.rfind('/');
-    parent = (slash == 0) ? "/" : state->directory.substr(0, slash);
-    changeDirectory(state, parent.c_str());
+    if (state->location) {
+        char *text = XmTextFieldGetString(state->location);
+        if (text) {
+            changeDirectory(state, text);
+            XtFree(text);
+        }
+    }
 }
 
 static void refreshCB(Widget, XtPointer client, XtPointer)
@@ -544,7 +546,10 @@ static Widget createControlBoard(Widget parent, FmState *state)
     makePush(rc2, "galleryMode", layoutButtonCB, state);
     makePush(rc2, "shelf", unimplementedCB, state);
 
-    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc1,
+    /* FM composition: the original control strip places scaleZoom directly
+     * beneath the mode buttons. The ThumbWheel widget implementation itself
+     * remains the binary-backed reconstruction in libSgm. */
+    state->scaleZoom = XtVaCreateManagedWidget("scaleZoom", sgThumbWheelWidgetClass, rc2,
                                                 XmNorientation, XmVERTICAL,
                                                 XmNminimum, 60,
                                                 XmNmaximum, 500,
@@ -573,9 +578,8 @@ int main(int argc, char **argv)
     Widget menuBar;
     Widget form;
     Widget finderForm;
+    Widget finderWidget;
     Widget controlBoard;
-    Widget up;
-    Widget refresh;
     Widget scroller;
     ImdInvertedTeeRenderer *renderer;
     const char *initial = (argc > 1) ? argv[1] : ".";
@@ -585,6 +589,7 @@ int main(int argc, char **argv)
     state.status = 0;
     state.panelWidget = 0;
     state.scaleZoom = 0;
+    state.finder = 0;
     state.broker = ImdBroker::contextBroker();
     state.directoryModel = 0;
     state.dirPanel = 0;
@@ -607,24 +612,26 @@ int main(int argc, char **argv)
                                          XmNleftAttachment, XmATTACH_FORM,
                                          XmNrightAttachment, XmATTACH_FORM,
                                          NULL);
-    up = XtVaCreateManagedWidget("Up", xmPushButtonWidgetClass, finderForm,
-                                 XmNtopAttachment, XmATTACH_FORM,
-                                 XmNleftAttachment, XmATTACH_FORM,
-                                 XmNbottomAttachment, XmATTACH_FORM,
-                                 NULL);
-    refresh = XtVaCreateManagedWidget("Refresh", xmPushButtonWidgetClass, finderForm,
-                                      XmNtopAttachment, XmATTACH_FORM,
-                                      XmNleftAttachment, XmATTACH_WIDGET,
-                                      XmNleftWidget, up,
-                                      XmNbottomAttachment, XmATTACH_FORM,
-                                      NULL);
-    state.location = XtVaCreateManagedWidget("iconFinder", xmTextFieldWidgetClass, finderForm,
-                                              XmNtopAttachment, XmATTACH_FORM,
-                                              XmNleftAttachment, XmATTACH_WIDGET,
-                                              XmNleftWidget, refresh,
-                                              XmNrightAttachment, XmATTACH_FORM,
-                                              XmNbottomAttachment, XmATTACH_FORM,
-                                              NULL);
+
+    /*
+     * Original FileManager resources define finderForm.iconFinder, not the
+     * temporary Up/Refresh pair that the portable bootstrap used. Wire the
+     * binary-backed ImdIconFinder reconstruction into that original slot.
+     */
+    state.finder = new ImdIconFinder("iconFinder", finderForm, 0);
+    finderWidget = state.finder->getWidget();
+    state.location = state.finder->portableTextWidget();
+    if (!finderWidget || !state.location) {
+        fprintf(stderr, "fm: failed to construct ImdIconFinder\n");
+        return 1;
+    }
+    XtVaSetValues(finderWidget,
+                  XmNtopAttachment, XmATTACH_FORM,
+                  XmNleftAttachment, XmATTACH_FORM,
+                  XmNrightAttachment, XmATTACH_FORM,
+                  XmNbottomAttachment, XmATTACH_FORM,
+                  NULL);
+    XtManageChild(finderWidget);
 
     state.status = XtVaCreateManagedWidget("status", xmLabelWidgetClass, form,
                                            XmNleftAttachment, XmATTACH_FORM,
@@ -637,8 +644,6 @@ int main(int argc, char **argv)
     XtVaSetValues(controlBoard,
                   XmNtopAttachment, XmATTACH_WIDGET,
                   XmNtopWidget, finderForm,
-                  XmNbottomAttachment, XmATTACH_WIDGET,
-                  XmNbottomWidget, state.status,
                   NULL);
 
     scroller = XtVaCreateManagedWidget("scrollW", xmScrolledWindowWidgetClass, form,
@@ -691,8 +696,6 @@ int main(int argc, char **argv)
                       panelEventHandler,
                       &state);
 
-    XtAddCallback(up, XmNactivateCallback, upCB, &state);
-    XtAddCallback(refresh, XmNactivateCallback, refreshCB, &state);
     XtAddCallback(state.location, XmNactivateCallback, locationActivateCB, &state);
 
     XmMainWindowSetAreas(mainWindow, menuBar, NULL, NULL, NULL, form);
