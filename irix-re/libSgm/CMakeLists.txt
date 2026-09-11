@@ -61,6 +61,16 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         AbiStubs.c
     )
 
+    # DropPocket.c now owns these reconstructed ABI symbols. Keep the old
+    # broad bring-up placeholders available under private names so the
+    # generated scaffolding no longer collides at link time.
+    set_source_files_properties(AbiObjects.c PROPERTIES
+        COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec_abi_placeholder"
+    )
+    set_source_files_properties(AbiStubs.c PROPERTIES
+        COMPILE_DEFINITIONS "SgHasFileIconLibrary=SgHasFileIconLibrary_abi_placeholder"
+    )
+
     target_include_directories(Sgm
         PUBLIC
             "${CMAKE_CURRENT_SOURCE_DIR}/include"
