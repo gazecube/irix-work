@@ -24,6 +24,7 @@ extern WidgetClass sgDynaMenuWidgetClass;
 extern WidgetClass sgZoomBarWidgetClass;
 
 #define FINDER_HISTORY_CAPACITY 6
+#define FINDER_ZOOM_STRIP_HEIGHT 20
 
 #if defined(SGM_HAVE_MANAGERP_H)
 #include <Xm/ManagerP.h>
@@ -85,6 +86,20 @@ static void historyItemActivateCB(Widget, XtPointer, XtPointer);
 static void rebuildHistoryMenu(SgFinderRecCompat *);
 static void clearHistoryStorage(SgFinderRecCompat *, Boolean);
 
+static void activateTextChild(SgFinderRecCompat *rec)
+{
+    XmAnyCallbackStruct callback;
+
+    if (!rec || !rec->finder.text)
+        return;
+
+    callback.reason = XmCR_ACTIVATE;
+    callback.event = NULL;
+    XtCallCallbacks(rec->finder.text,
+                    XmNactivateCallback,
+                    (XtPointer)&callback);
+}
+
 static void defaultSetTextSection(Widget finder, int section)
 {
     SgFinderRecCompat *rec = (SgFinderRecCompat *)finder;
@@ -116,6 +131,14 @@ static void defaultSetTextSection(Widget finder, int section)
     }
 
     SgFinderSetTextString(finder, value);
+
+    /*
+     * Selecting a Finder path section is navigation, not merely an edit.
+     * Deliver the same text activation used by Return so clients attached to
+     * the public text child (as original FM does through ImdIconFinder) run
+     * their directory-change path and repopulate the model-backed panel.
+     */
+    activateTextChild(rec);
     XtFree(value);
 }
 
@@ -290,10 +313,32 @@ static void finderInitialize(Widget request, Widget new_widget,
 
     if (rec->finder.text)
     {
+        XtWidgetGeometry preferred;
+        Dimension text_height = 0;
+        Dimension required_height;
+
         XtAddCallback(rec->finder.text, XmNactivateCallback,
                       textActivateCB, (XtPointer)new_widget);
         XtAddCallback(rec->finder.text, XmNvalueChangedCallback,
                       textValueChangedCB, (XtPointer)new_widget);
+
+        memset(&preferred, 0, sizeof(preferred));
+        XtQueryGeometry(rec->finder.text, NULL, &preferred);
+        if (preferred.request_mode & CWHeight)
+            text_height = preferred.height;
+        else
+            XtVaGetValues(rec->finder.text, XmNheight, &text_height, NULL);
+
+        /*
+         * The host Finder layout reserves a 20-pixel strip for SgZoomBar.
+         * Do not make the XmTextField live in whatever height happened to be
+         * inherited by the manager: Motif computes the field height from its
+         * font ascent/descent, margins and shadows. Giving it less than that
+         * preferred height clips descenders at the bottom.
+         */
+        required_height = (Dimension)(text_height + FINDER_ZOOM_STRIP_HEIGHT);
+        if (text_height != 0 && rec->core.height < required_height)
+            rec->core.height = required_height;
     }
 }
 
@@ -354,7 +399,8 @@ static void finderLayout(SgFinderRecCompat *rec)
 
     width = rec->core.width ? rec->core.width : 1;
     height = rec->core.height ? rec->core.height : 1;
-    top_height = height > 28 ? (Dimension)(height - 20) : height;
+    top_height = height > (Dimension)(FINDER_ZOOM_STRIP_HEIGHT + 8)
+        ? (Dimension)(height - FINDER_ZOOM_STRIP_HEIGHT) : height;
     side = top_height;
     if (side > 32)
         side = 32;
@@ -463,6 +509,7 @@ static void historyItemActivateCB(Widget item, XtPointer client_data,
         return;
 
     SgFinderSetTextString((Widget)rec, text);
+    activateTextChild(rec);
     XtFree(text);
 }
 
