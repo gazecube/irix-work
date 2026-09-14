@@ -204,6 +204,7 @@ ImdDragManager::drawDraggedItems()
      * only its icon and title can appear in the representation.
      */
     ImdInvertedTeeRenderer dragRenderer;
+    dragRenderer.setScale(ImdViewPanelGetScale(_widget));
     dragRenderer.realize(_widget);
     if (!dragRenderer.portableDrawToDrawable(*_dragView,
                                              _dragPixmap,
