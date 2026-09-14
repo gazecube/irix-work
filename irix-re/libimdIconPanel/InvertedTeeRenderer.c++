@@ -26,20 +26,21 @@ enum DrawMode {
 /*
  * Original ImdInvertedTeeRenderer binary anchors:
  *   ctor         0x09684198
+ *   setScale     0x0968421c
  *   setSize      0x096842f0
  *   getIconX     0x096b5b70
  *   getTextX     0x096b5bbc
  *   getTextY     0x096b5c08
  *
- * The ctor stores iconScale = scale * 0.5. The coordinate helpers prove
- * that both icon and text are horizontally centered in the ImdView width:
+ * setScale() calls ImdRenderer::setScale(float) and stores:
  *
- *   iconX = x + (scale * view.width - iconScale * 100) / 2
- *   textX = x + (scale * view.width - textWidth) / 2
+ *   iconScale = scale * 0.5
  *
- * At the default scale this makes the nominal 100x100 FTI geometry 50x50.
+ * The portable ImdView currently stores rendered pixel geometry rather than
+ * the original renderer's logical geometry, so host centering below operates
+ * on the resulting pixel extents once. The FTI geometry itself uses the exact
+ * binary-proven iconScale relationship.
  */
-static const double kDefaultScale = 1.0;
 static const double kDefaultIconScale = 0.5;
 static const double kFtiNominalExtent = 100.0;
 
@@ -138,12 +139,12 @@ static unsigned long allocRgb(Widget w,
     return color.pixel;
 }
 
-static XPoint toXPoint(long x, long y, const FtiPoint &p)
+static XPoint toXPoint(long x, long y, const FtiPoint &p, double iconScale)
 {
     XPoint out;
-    out.x = static_cast<short>(x + p.x * kDefaultIconScale);
+    out.x = static_cast<short>(x + p.x * iconScale);
     out.y = static_cast<short>(y +
-        (kFtiNominalExtent - p.y) * kDefaultIconScale);
+        (kFtiNominalExtent - p.y) * iconScale);
     return out;
 }
 
@@ -160,13 +161,14 @@ static void drawPrimitive(Widget w, GC gc, Drawable drawable, DrawMode mode,
                           const std::vector<FtiPoint> &points,
                           long x, long y,
                           unsigned long fillPixel,
-                          unsigned long outlinePixel)
+                          unsigned long outlinePixel,
+                          double iconScale)
 {
     if (points.empty()) return;
 
     std::vector<XPoint> xp(points.size());
     for (std::size_t i = 0; i < points.size(); ++i)
-        xp[i] = toXPoint(x, y, points[i]);
+        xp[i] = toXPoint(x, y, points[i], iconScale);
 
     Display *dpy = XtDisplay(w);
 
@@ -195,7 +197,8 @@ static void drawPrimitive(Widget w, GC gc, Drawable drawable, DrawMode mode,
 }
 
 static bool drawFti(Widget w, Drawable drawable,
-                    const std::string &relative, long x, long y)
+                    const std::string &relative, long x, long y,
+                    double iconScale)
 {
     static bool reportedMissingRoot = false;
     static bool reportedRoot = false;
@@ -254,14 +257,16 @@ static bool drawFti(Widget w, Drawable drawable,
             const std::string border = argument(line);
             outlinePixel = border.empty() ? colorFor(w, "outlinecolor")
                                           : colorFor(w, border);
-            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel, outlinePixel);
+            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel,
+                          outlinePixel, iconScale);
             mode = kNone;
             points.clear();
         } else if (starts(line, "endpolygon(") ||
                    starts(line, "endclosedline(") ||
                    starts(line, "endline(") ||
                    starts(line, "endpoint(")) {
-            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel, outlinePixel);
+            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel,
+                          outlinePixel, iconScale);
             mode = kNone;
             points.clear();
         } else if (starts(line, "move(")) {
@@ -273,7 +278,8 @@ static bool drawFti(Widget w, Drawable drawable,
             double px = 0.0, py = 0.0;
             if (havePen && std::sscanf(line.c_str(), "draw(%lf, %lf)", &px, &py) == 2) {
                 const FtiPoint next = { px, py };
-                XPoint seg[2] = { toXPoint(x, y, pen), toXPoint(x, y, next) };
+                XPoint seg[2] = { toXPoint(x, y, pen, iconScale),
+                                  toXPoint(x, y, next, iconScale) };
                 XSetForeground(dpy, gc, pixel);
                 XDrawLines(dpy, drawable, gc, seg, 2, CoordModeOrigin);
                 pen = next;
@@ -291,7 +297,7 @@ static bool drawFti(Widget w, Drawable drawable,
                 points.push_back(FtiPoint{px, py});
         } else if (starts(line, "pclos(")) {
             drawPrimitive(w, gc, drawable, kPolygon, points, x, y,
-                          pixel, outlinePixel);
+                          pixel, outlinePixel, iconScale);
             mode = kNone;
             points.clear();
         } else if (starts(line, "bclos(")) {
@@ -299,7 +305,7 @@ static bool drawFti(Widget w, Drawable drawable,
             const unsigned long borderPixel = border.empty()
                 ? colorFor(w, "outlinecolor") : colorFor(w, border);
             drawPrimitive(w, gc, drawable, kOutlinePolygon, points, x, y,
-                          pixel, borderPixel);
+                          pixel, borderPixel, iconScale);
             mode = kNone;
             points.clear();
         }
@@ -423,11 +429,27 @@ ImdIconRenderer::ImdIconRenderer() : _portableWidget(0) {}
 ImdIconRenderer::~ImdIconRenderer() {}
 void ImdIconRenderer::realize(Widget widget) { _portableWidget = widget; }
 
-ImdInvertedTeeRenderer::ImdInvertedTeeRenderer() : ImdIconRenderer() {}
+ImdInvertedTeeRenderer::ImdInvertedTeeRenderer()
+    : ImdIconRenderer(), _portableIconScale(kDefaultIconScale)
+{
+}
+
 ImdInvertedTeeRenderer::~ImdInvertedTeeRenderer() {}
+
 void ImdInvertedTeeRenderer::realize(Widget widget)
 {
     ImdIconRenderer::realize(widget);
+}
+
+void ImdInvertedTeeRenderer::setScale(float scale)
+{
+    /*
+     * Original setScale__22ImdInvertedTeeRendererGf @ 0x0968421c calls the
+     * base renderer setScale() and, unless a private lock flag blocks it,
+     * stores scale * 0.5 as the icon scale at original +0x80.
+     */
+    ImdIconRenderer::setScale(scale);
+    _portableIconScale = static_cast<double>(scale) * 0.5;
 }
 
 bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
@@ -449,8 +471,8 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
     const ImdString label = iconView->getLabel();
     const LabelMetrics metrics = measureLabel(dpy, gc, label);
 
-    const long iconExtent = static_cast<long>(
-        kFtiNominalExtent * kDefaultIconScale);
+    const long iconExtent = std::max<long>(1, static_cast<long>(
+        kFtiNominalExtent * _portableIconScale));
     const long viewWidth = std::max(iconExtent,
                                     static_cast<long>(metrics.width));
     const long viewHeight = iconExtent +
@@ -458,17 +480,21 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
 
     view.portableSetSize(viewWidth, viewHeight);
 
-    const long iconX = x + static_cast<long>(
-        (kDefaultScale * viewWidth - iconExtent) * 0.5);
-    const long textX = x + static_cast<long>(
-        (kDefaultScale * viewWidth - metrics.width) * 0.5);
+    /*
+     * Host geometry stores pixel extents already. Center the scaled FTI and
+     * unscaled Motif label in that pixel box once; multiplying viewWidth by
+     * _portableScale here would double-scale the host representation.
+     */
+    const long iconX = x + (viewWidth - iconExtent) / 2;
+    const long textX = x + (viewWidth - metrics.width) / 2;
     const long textBaselineY = y + iconExtent + metrics.ascent;
 
     const std::vector<ImdString> &resources = iconView->portableIconResources();
     for (std::size_t i = 0; i < resources.size(); ++i) {
         const std::string resource = resources[i].stdString();
         if (!resource.empty())
-            drawFti(_portableWidget, drawable, resource, iconX, y);
+            drawFti(_portableWidget, drawable, resource, iconX, y,
+                    _portableIconScale);
     }
 
     /*
