@@ -456,12 +456,30 @@ redrawPortableRegion(Widget widget, const XRectangle *damage)
      * test. ImdViewPanelWalkAllVisibleViews() @ 0x096a3214 is the corresponding
      * visible-view traversal. Preserve that architecture for Expose handling:
      * a scroll-damage strip must not redraw the complete adopted view set.
+     *
+     * The original library also imports XClearArea/XClearWindow. On the host
+     * renderer, redraw of a damaged view must begin from a clean view-sized
+     * backing area: otherwise retained scroll pixels can survive beneath a
+     * newly replayed FTI command stream and make overlapping polygons appear
+     * to swap paint order between Expose events. This clear is deliberately
+     * limited to damage-driven redraws; ordinary full redraws already begin
+     * from the ViewPanel clear path.
      */
     bool geometryChanged = false;
     for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
         ImdView *view = it->view;
         if (!view || !view->portableVisible() || !viewIntersectsDamage(*view, damage))
             continue;
+
+        if (damage) {
+            XClearArea(XtDisplay(widget),
+                       XtWindow(widget),
+                       static_cast<int>(view->portableX()),
+                       static_cast<int>(view->portableY()),
+                       static_cast<unsigned int>(view->portableWidth()),
+                       static_cast<unsigned int>(view->portableHeight()),
+                       False);
+        }
 
         const long oldWidth = view->portableWidth();
         const long oldHeight = view->portableHeight();
