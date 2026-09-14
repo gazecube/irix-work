@@ -4,6 +4,85 @@
 
 #include <X11/Xlib.h>
 
+namespace
+{
+static void
+setPortableDragSourceState(ImdIconPanel *panel,
+                           Widget widget,
+                           ImdView *fallbackView,
+                           bool active)
+{
+    if (!panel || !widget)
+        return;
+
+    const std::vector<ImdIconView *> &selected = panel->portableSelectedViews();
+    bool changedAny = false;
+
+    for (std::vector<ImdIconView *>::const_iterator it = selected.begin();
+         it != selected.end(); ++it) {
+        ImdIconView *view = *it;
+        if (!view)
+            continue;
+
+        /*
+         * Binary-proven IRIX drag state:
+         *   ImdDragManager::dragStart()
+         *     view->setFlag(2, true)
+         *     ImdViewPanelDrawView(...)
+         * and drop/finish performs the inverse with false.
+         *
+         * The original enum spelling for state value 2 has not been recovered,
+         * so keep the numeric value rather than inventing a name.
+         */
+        view->setFlag(2u, active);
+
+        /*
+         * Host renderer seam only. The original ImdFtrIcon renderer consumes
+         * icon state 2 directly. Our portable FTR renderer does not yet do so,
+         * therefore suppress normal Expose redraw participation while the drag
+         * is active. Remove this once ImdFtrIcon::setIconState() semantics are
+         * reconstructed in the host renderer.
+         */
+        view->portableSetVisible(!active);
+
+        if (active && XtIsRealized(widget)) {
+            XClearArea(XtDisplay(widget), XtWindow(widget),
+                       static_cast<int>(view->portableX()),
+                       static_cast<int>(view->portableY()),
+                       static_cast<unsigned int>(view->portableWidth()),
+                       static_cast<unsigned int>(view->portableHeight()),
+                       False);
+        }
+        changedAny = true;
+    }
+
+    /*
+     * Normal IRIX dragging operates on the selected-view collection. Keep a
+     * defensive host fallback for input-order cases where the drag callback
+     * reaches us before the selection callback has populated that collection.
+     */
+    if (!changedAny && fallbackView) {
+        ImdIconView *view = dynamic_cast<ImdIconView *>(fallbackView);
+        if (view) {
+            view->setFlag(2u, active);
+            view->portableSetVisible(!active);
+            if (active && XtIsRealized(widget)) {
+                XClearArea(XtDisplay(widget), XtWindow(widget),
+                           static_cast<int>(view->portableX()),
+                           static_cast<int>(view->portableY()),
+                           static_cast<unsigned int>(view->portableWidth()),
+                           static_cast<unsigned int>(view->portableHeight()),
+                           False);
+            }
+            changedAny = true;
+        }
+    }
+
+    if (!active && changedAny)
+        ImdViewPanelRedraw(widget);
+}
+}
+
 ImdDragManager::ImdDragManager(ImdIconPanel *panel)
     : _panel(panel),
       _widget(0),
@@ -28,6 +107,9 @@ ImdDragManager::ImdDragManager(ImdIconPanel *panel)
 
 ImdDragManager::~ImdDragManager()
 {
+    if (_dragging)
+        setPortableDragSourceState(_panel, _widget, _dragView, false);
+
     destroyDragWindow();
 
     if (_widget)
@@ -262,12 +344,23 @@ ImdDragManager::dragStart(int item, long x, long y, XEvent *event)
         return;
     }
 
+    /*
+     * Original IRIX dragStart() performs this only after XmDragStart succeeds:
+     * every selected ImdIconView gets icon state 2 enabled and the source view
+     * is redrawn. The portable visibility suppression inside the helper is a
+     * temporary host-renderer seam; the state transition itself is binary
+     * proven.
+     */
+    setPortableDragSourceState(_panel, _widget, _dragView, true);
     _dragging = true;
 }
 
 void
 ImdDragManager::dragFinished()
 {
+    if (_dragging)
+        setPortableDragSourceState(_panel, _widget, _dragView, false);
+
     destroyDragWindow();
 
     _dragView = 0;
@@ -358,9 +451,9 @@ ImdDragManager::buttonRelease(XButtonEvent *event)
     destroyDragWindow();
 
     /*
-     * Commit the real layout move once at drag completion. This preserves the
-     * original separation between drag-window motion and ViewPanel movement
-     * while the full Motif dropProc/transferProc path is reconstructed.
+     * Commit the real layout move once at drag completion. Keep the source
+     * suppressed while the layout changes; dragFinished() then clears the
+     * binary-proven state-2 flag and redraws the source at its final position.
      */
     if (hadDrag && dragView)
         ImdViewPanelMoveView(_widget, *dragView, finalX, finalY);
