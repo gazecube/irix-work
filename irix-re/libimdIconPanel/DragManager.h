@@ -5,6 +5,7 @@
 
 class ImdIconPanel;
 class ImdView;
+class ImdIconView;
 
 /*
  * ImdDragManager
@@ -33,8 +34,12 @@ private:
     static void inputHandler(Widget, XtPointer, XEvent *, Boolean *);
 
     void buttonPress(XButtonEvent *event);
+    void pointerMotion(XMotionEvent *event);
     void buttonMotion(XMotionEvent *event);
     void buttonRelease(XButtonEvent *event);
+    void panelEnter(XCrossingEvent *event);
+    void panelLeave(XCrossingEvent *event);
+    void setDropTarget(ImdIconView *view);
 
     /* Binary-named drag phases recovered from the original N32 library. */
     bool setupDrag(long x, long y);
@@ -45,6 +50,8 @@ private:
     ImdIconPanel *_panel;
     Widget _widget;
     ImdView *_dragView;
+    ImdIconView *_hoverView;
+    ImdIconView *_dropTargetView;
     long _pointerOffsetX;
     long _pointerOffsetY;
     long _pendingX;
