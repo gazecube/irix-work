@@ -151,8 +151,12 @@ extern "C" Widget ImdCreateViewPanel(Widget parent, char *name, Arg *args, Cardi
 
 extern "C" void ImdViewPanelAdoptRenderer(Widget widget, ImdRenderer *renderer)
 {
-    gViewPanelState[widget].renderer = renderer;
-    if (renderer) renderer->realize(widget);
+    ViewPanelState &state = gViewPanelState[widget];
+    state.renderer = renderer;
+    if (renderer) {
+        renderer->setScale(state.scale);
+        renderer->realize(widget);
+    }
     ImdViewPanelPortableRendererChanged(widget, renderer);
 }
 
@@ -171,9 +175,42 @@ extern "C" ImdLayout *ImdViewPanelGetLayout(Widget widget)
 
 extern "C" void ImdViewPanelSetScale(Widget widget, float scale, long arg0, long arg1)
 {
+    if (!widget)
+        return;
+
     ViewPanelState &state = gViewPanelState[widget];
-    state.scale = scale; state.scaleArg0 = arg0; state.scaleArg1 = arg1;
+    if (state.scale == scale && state.scaleArg0 == arg0 && state.scaleArg1 == arg1)
+        return;
+
+    state.scale = scale;
+    state.scaleArg0 = arg0;
+    state.scaleArg1 = arg1;
+
+    /*
+     * Original ImdIconPanel::setScale(float) first dispatches setScale() to
+     * the owned renderer, then calls ImdViewPanelSetScale(widget, scale,
+     * centerX, centerY). The host ViewPanel owns the renderer pointer already,
+     * so preserve the same propagation here until the complete panel method is
+     * restored. The renderer resize is observed by the existing ViewPanel
+     * redraw path and triggers one relayout when view geometry changes.
+     */
+    if (state.renderer)
+        state.renderer->setScale(scale);
+
+    if (XtIsRealized(widget)) {
+        XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
+        ImdViewPanelRedraw(widget);
+    }
 }
+
+extern "C" float ImdViewPanelGetScale(Widget widget)
+{
+    std::map<Widget, ViewPanelState>::iterator it = gViewPanelState.find(widget);
+    if (it == gViewPanelState.end())
+        return 1.0f;
+    return it->second.scale;
+}
+
 extern "C" void ImdViewPanelBeginBlockChanges(Widget widget) { ++gViewPanelState[widget].blockDepth; }
 extern "C" void ImdViewPanelEndBlockChanges(Widget widget)
 {
