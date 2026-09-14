@@ -14,9 +14,22 @@ class ImdDragManager;
 class ImdRenderer
 {
 public:
+    ImdRenderer() : _portableScale(1.0f) {}
     virtual ~ImdRenderer() {}
     virtual void realize(Widget) {}
     virtual void draw(ImdView &, long, long) {}
+
+    /*
+     * Original ImdRenderer::setScale(float) @ 0x09680024 simply stores the
+     * supplied float at renderer +0x20. Keep that behavior explicit in the
+     * host renderer hierarchy so ViewPanel scaling reaches the concrete icon
+     * renderer instead of being a dead state variable.
+     */
+    virtual void setScale(float scale) { _portableScale = scale; }
+    float scale() const { return _portableScale; }
+
+protected:
+    float _portableScale;
 };
 
 class ImdIconRenderer : public ImdRenderer
@@ -38,6 +51,7 @@ public:
     virtual ~ImdInvertedTeeRenderer();
     virtual void realize(Widget widget);
     virtual void draw(ImdView &view, long x, long y);
+    virtual void setScale(float scale);
 
     /*
      * Host drag-composition seam. Original ImdDragManager::drawDraggedItems()
@@ -48,6 +62,9 @@ public:
      */
     bool portableDrawToDrawable(ImdView &view, Drawable drawable,
                                 long x, long y);
+
+private:
+    double _portableIconScale;
 };
 
 class ImdLayout
@@ -161,6 +178,7 @@ extern "C" Widget ImdCreateViewPanel(Widget, char *, Arg *, Cardinal);
 extern "C" void ImdViewPanelAdoptRenderer(Widget, ImdRenderer *);
 extern "C" void ImdViewPanelAdoptLayout(Widget, ImdLayout *);
 extern "C" void ImdViewPanelSetScale(Widget, float, long, long);
+extern "C" float ImdViewPanelGetScale(Widget);
 extern "C" void ImdViewPanelBeginBlockChanges(Widget);
 extern "C" void ImdViewPanelEndBlockChanges(Widget);
 extern "C" ImdLayout *ImdViewPanelGetLayout(Widget);
