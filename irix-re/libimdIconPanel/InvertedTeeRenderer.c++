@@ -100,12 +100,6 @@ static unsigned long colorFor(Widget w, const std::string &name)
     Pixel bg = 0;
     XtVaGetValues(w, XtNbackground, &bg, NULL);
 
-    /*
-     * IRIX fftr(1) documents these as the desktop's standard dynamic icon
-     * colors. In the normal state iconcolor is white, outlinecolor is black,
-     * and shadowcolor is dark gray. Selection/located/opened state remapping
-     * stays pending until the corresponding ImdIconView state bits are wired.
-     */
     if (name == "outlinecolor")
         return allocNamed(w, "black", BlackPixelOfScreen(XtScreen(w)));
     if (name == "shadowcolor")
@@ -133,7 +127,7 @@ static std::string argument(const std::string &line)
     return trim(line.substr(a + 1, b - a - 1));
 }
 
-static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
+static void drawPrimitive(Widget w, GC gc, Drawable drawable, DrawMode mode,
                           const std::vector<FtiPoint> &points,
                           long x, long y,
                           unsigned long fillPixel,
@@ -149,29 +143,30 @@ static void drawPrimitive(Widget w, GC gc, Window win, DrawMode mode,
 
     if (mode == kPolygon || mode == kOutlinePolygon) {
         XSetForeground(dpy, gc, fillPixel);
-        XFillPolygon(dpy, win, gc, &xp[0],
+        XFillPolygon(dpy, drawable, gc, &xp[0],
                      static_cast<int>(xp.size()), Complex, CoordModeOrigin);
     }
 
     if (mode == kLine) {
         XSetForeground(dpy, gc, fillPixel);
-        XDrawLines(dpy, win, gc, &xp[0],
+        XDrawLines(dpy, drawable, gc, &xp[0],
                    static_cast<int>(xp.size()), CoordModeOrigin);
     } else if (mode == kClosedLine || mode == kOutlinePolygon) {
         std::vector<XPoint> closed(xp);
         closed.push_back(xp.front());
         XSetForeground(dpy, gc,
                        mode == kOutlinePolygon ? outlinePixel : fillPixel);
-        XDrawLines(dpy, win, gc, &closed[0],
+        XDrawLines(dpy, drawable, gc, &closed[0],
                    static_cast<int>(closed.size()), CoordModeOrigin);
     } else if (mode == kPoint) {
         XSetForeground(dpy, gc, fillPixel);
-        XDrawPoints(dpy, win, gc, &xp[0],
+        XDrawPoints(dpy, drawable, gc, &xp[0],
                     static_cast<int>(xp.size()), CoordModeOrigin);
     }
 }
 
-static bool drawFti(Widget w, const std::string &relative, long x, long y)
+static bool drawFti(Widget w, Drawable drawable,
+                    const std::string &relative, long x, long y)
 {
     static bool reportedMissingRoot = false;
     static bool reportedRoot = false;
@@ -193,12 +188,10 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
 
     const std::string path = root + "/" + relative;
     std::ifstream in(path.c_str());
-    if (!in.good()) return false;
+    if (!in.good() || drawable == None) return false;
 
     Display *dpy = XtDisplay(w);
-    Window win = XtWindow(w);
-    if (win == None) return false;
-    GC gc = XCreateGC(dpy, win, 0, 0);
+    GC gc = XCreateGC(dpy, drawable, 0, 0);
 
     DrawMode mode = kNone;
     std::vector<FtiPoint> points;
@@ -232,14 +225,14 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
             const std::string border = argument(line);
             outlinePixel = border.empty() ? colorFor(w, "outlinecolor")
                                           : colorFor(w, border);
-            drawPrimitive(w, gc, win, mode, points, x, y, pixel, outlinePixel);
+            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel, outlinePixel);
             mode = kNone;
             points.clear();
         } else if (starts(line, "endpolygon(") ||
                    starts(line, "endclosedline(") ||
                    starts(line, "endline(") ||
                    starts(line, "endpoint(")) {
-            drawPrimitive(w, gc, win, mode, points, x, y, pixel, outlinePixel);
+            drawPrimitive(w, gc, drawable, mode, points, x, y, pixel, outlinePixel);
             mode = kNone;
             points.clear();
         } else if (starts(line, "move(")) {
@@ -253,7 +246,7 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
                 const FtiPoint next = { px, py };
                 XPoint seg[2] = { toXPoint(x, y, pen), toXPoint(x, y, next) };
                 XSetForeground(dpy, gc, pixel);
-                XDrawLines(dpy, win, gc, seg, 2, CoordModeOrigin);
+                XDrawLines(dpy, drawable, gc, seg, 2, CoordModeOrigin);
                 pen = next;
             }
         } else if (starts(line, "pmv(")) {
@@ -268,7 +261,7 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
             if (std::sscanf(line.c_str(), "pdr(%lf, %lf)", &px, &py) == 2)
                 points.push_back(FtiPoint{px, py});
         } else if (starts(line, "pclos(")) {
-            drawPrimitive(w, gc, win, kPolygon, points, x, y,
+            drawPrimitive(w, gc, drawable, kPolygon, points, x, y,
                           pixel, outlinePixel);
             mode = kNone;
             points.clear();
@@ -276,7 +269,7 @@ static bool drawFti(Widget w, const std::string &relative, long x, long y)
             const std::string border = argument(line);
             const unsigned long borderPixel = border.empty()
                 ? colorFor(w, "outlinecolor") : colorFor(w, border);
-            drawPrimitive(w, gc, win, kOutlinePolygon, points, x, y,
+            drawPrimitive(w, gc, drawable, kOutlinePolygon, points, x, y,
                           pixel, borderPixel);
             mode = kNone;
             points.clear();
@@ -324,18 +317,22 @@ void ImdInvertedTeeRenderer::realize(Widget widget)
     ImdIconRenderer::realize(widget);
 }
 
-void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
+bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
+                                                     Drawable drawable,
+                                                     long x, long y)
 {
-    if (!_portableWidget || !XtIsRealized(_portableWidget)) return;
+    if (!_portableWidget || !XtIsRealized(_portableWidget) || drawable == None)
+        return false;
 
     ImdIconView *iconView = dynamic_cast<ImdIconView *>(&view);
-    if (!iconView) return;
+    if (!iconView) return false;
 
     Display *dpy = XtDisplay(_portableWidget);
-    Window win = XtWindow(_portableWidget);
-    if (!dpy || win == None) return;
+    if (!dpy) return false;
 
-    GC gc = XCreateGC(dpy, win, 0, 0);
+    GC gc = XCreateGC(dpy, drawable, 0, 0);
+    if (!gc) return false;
+
     const ImdString label = iconView->getLabel();
     const LabelMetrics metrics = measureLabel(dpy, gc, label);
 
@@ -346,12 +343,6 @@ void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
     const long viewHeight = iconExtent +
         static_cast<long>(metrics.ascent + metrics.descent);
 
-    /*
-     * Original setSize() writes the computed dimensions back to ImdView
-     * +0x0c/+0x10. Use the same source-level geometry fields in the portable
-     * view so hit-testing and dragging follow the renderer instead of the old
-     * fixed 84x84 host box.
-     */
     view.portableSetSize(viewWidth, viewHeight);
 
     const long iconX = x + static_cast<long>(
@@ -360,23 +351,16 @@ void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
         (kDefaultScale * viewWidth - metrics.width) * 0.5);
     const long textBaselineY = y + iconExtent + metrics.ascent;
 
-    /*
-     * FTR ICON definitions are ordered compositions, not necessarily a single
-     * FTI. For example the shipped AsciiTextFile type draws generic.doc.fti
-     * followed by its text overlay, while Script layers a script glyph over
-     * generic.exec.closed.fti. The original ImdFtrGalleryX performs this
-     * composition internally; the portable renderer mirrors that order here.
-     */
     const std::vector<ImdString> &resources = iconView->portableIconResources();
     for (std::size_t i = 0; i < resources.size(); ++i) {
         const std::string resource = resources[i].stdString();
         if (!resource.empty())
-            drawFti(_portableWidget, resource, iconX, y);
+            drawFti(_portableWidget, drawable, resource, iconX, y);
     }
 
     if (!label.empty()) {
         XSetForeground(dpy, gc, BlackPixelOfScreen(XtScreen(_portableWidget)));
-        XDrawString(dpy, win, gc,
+        XDrawString(dpy, drawable, gc,
                     static_cast<int>(textX),
                     static_cast<int>(textBaselineY),
                     label.c_str(),
@@ -384,4 +368,13 @@ void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
     }
 
     XFreeGC(dpy, gc);
+    return true;
+}
+
+void ImdInvertedTeeRenderer::draw(ImdView &view, long x, long y)
+{
+    if (!_portableWidget || !XtIsRealized(_portableWidget)) return;
+    const Window win = XtWindow(_portableWidget);
+    if (win == None) return;
+    (void)portableDrawToDrawable(view, win, x, y);
 }
