@@ -88,6 +88,8 @@ ImdDragManager::ImdDragManager(ImdIconPanel *panel)
     : _panel(panel),
       _widget(0),
       _dragView(0),
+      _hoverView(0),
+      _dropTargetView(0),
       _pointerOffsetX(0),
       _pointerOffsetY(0),
       _pendingX(0),
@@ -108,6 +110,11 @@ ImdDragManager::ImdDragManager(ImdIconPanel *panel)
 
 ImdDragManager::~ImdDragManager()
 {
+    if (_dropTargetView)
+        _dropTargetView->setFlag(0x20u, false);
+    if (_hoverView)
+        _hoverView->setFlag(0x04u, false);
+
     if (_dragging)
         setPortableDragSourceState(_panel, _widget, _dragView, false);
 
@@ -116,7 +123,8 @@ ImdDragManager::~ImdDragManager()
     if (_widget)
         XtRemoveEventHandler(_widget,
                              ButtonPressMask | ButtonReleaseMask |
-                             Button1MotionMask,
+                             PointerMotionMask | EnterWindowMask |
+                             LeaveWindowMask,
                              False,
                              inputHandler,
                              this);
@@ -131,20 +139,25 @@ ImdDragManager::init(Widget widget)
     if (_widget)
         XtRemoveEventHandler(_widget,
                              ButtonPressMask | ButtonReleaseMask |
-                             Button1MotionMask,
+                             PointerMotionMask | EnterWindowMask |
+                             LeaveWindowMask,
                              False,
                              inputHandler,
                              this);
 
     _widget = widget;
+    _hoverView = 0;
+    _dropTargetView = 0;
 
     /*
-     * Original init() @ 0x09681034 installs the Motif drop-site and drag-shell
-     * machinery. Until the complete XmDragStart/dropProc transfer path is
-     * restored, Xt still transports local input events at this boundary.
+     * Original ViewPanel routes pointer entry/exit to ImdIconPanel::enter(),
+     * leave(), enterPanel(), and leavePanel(), while Motif DnD callbacks own
+     * drop-target transitions. Until that complete callback-object layer is
+     * restored, one Xt handler transports those same binary-proven states.
      */
     XtAddEventHandler(_widget,
-                      ButtonPressMask | ButtonReleaseMask | Button1MotionMask,
+                      ButtonPressMask | ButtonReleaseMask |
+                      PointerMotionMask | EnterWindowMask | LeaveWindowMask,
                       False,
                       inputHandler,
                       this);
@@ -198,10 +211,7 @@ ImdDragManager::drawDraggedItems()
     /*
      * Original drawDraggedItems(Widget,XRectangle&) @ 0x0969577c walks the
      * selected views and renders them through the drag renderer. It does not
-     * screenshot a rectangular area of the live ViewPanel. The old host
-     * XCopyArea shortcut could therefore capture pixels from overlapping
-     * neighbor labels. Render the dragged view itself into the drag pixmap so
-     * only its icon and title can appear in the representation.
+     * screenshot a rectangular area of the live ViewPanel.
      */
     ImdInvertedTeeRenderer dragRenderer;
     dragRenderer.setScale(ImdViewPanelGetScale(_widget));
@@ -330,6 +340,28 @@ ImdDragManager::destroyDragWindow()
 }
 
 void
+ImdDragManager::setDropTarget(ImdIconView *view)
+{
+    if (_dropTargetView == view)
+        return;
+
+    /*
+     * Binary-proven DnD target state: dropSiteEnter()/dragMotion() set icon
+     * state 0x20 on the accepted target, while dropSiteLeave()/dropProc() clear
+     * it from the previous target. State 0x20 is part of FTR's 0x2e special
+     * border mask.
+     */
+    if (_dropTargetView)
+        _dropTargetView->setFlag(0x20u, false);
+    _dropTargetView = view;
+    if (_dropTargetView)
+        _dropTargetView->setFlag(0x20u, true);
+
+    if (_widget)
+        ImdViewPanelRedraw(_widget);
+}
+
+void
 ImdDragManager::dragStart(int item, long x, long y, XEvent *event)
 {
     (void)item;
@@ -356,13 +388,6 @@ ImdDragManager::dragStart(int item, long x, long y, XEvent *event)
         return;
     }
 
-    /*
-     * Original IRIX dragStart() performs this only after XmDragStart succeeds:
-     * every selected ImdIconView gets icon state 2 enabled and the source view
-     * is redrawn. The portable visibility suppression inside the helper is a
-     * temporary host-renderer seam; the state transition itself is binary
-     * proven.
-     */
     setPortableDragSourceState(_panel, _widget, _dragView, true);
     _dragging = true;
 }
@@ -370,6 +395,8 @@ ImdDragManager::dragStart(int item, long x, long y, XEvent *event)
 void
 ImdDragManager::dragFinished()
 {
+    setDropTarget(0);
+
     if (_dragging)
         setPortableDragSourceState(_panel, _widget, _dragView, false);
 
@@ -398,14 +425,59 @@ ImdDragManager::inputHandler(Widget,
         manager->buttonPress(&event->xbutton);
         break;
     case MotionNotify:
+        manager->pointerMotion(&event->xmotion);
         manager->buttonMotion(&event->xmotion);
         break;
     case ButtonRelease:
         manager->buttonRelease(&event->xbutton);
         break;
+    case EnterNotify:
+        manager->panelEnter(&event->xcrossing);
+        break;
+    case LeaveNotify:
+        manager->panelLeave(&event->xcrossing);
+        break;
     default:
         break;
     }
+}
+
+void
+ImdDragManager::panelEnter(XCrossingEvent *event)
+{
+    (void)event;
+    if (_panel)
+        _panel->enterPanel();
+}
+
+void
+ImdDragManager::panelLeave(XCrossingEvent *event)
+{
+    (void)event;
+    if (_hoverView && _panel)
+        _panel->leave(_hoverView);
+    _hoverView = 0;
+    setDropTarget(0);
+    if (_panel)
+        _panel->leavePanel();
+}
+
+void
+ImdDragManager::pointerMotion(XMotionEvent *event)
+{
+    if (!event || !_widget || !_panel || _dragging)
+        return;
+
+    ImdIconView *hit = dynamic_cast<ImdIconView *>(
+        ImdViewPanelFindViewByLocation(_widget, event->x, event->y));
+    if (hit == _hoverView)
+        return;
+
+    if (_hoverView)
+        _panel->leave(_hoverView);
+    _hoverView = hit;
+    if (_hoverView)
+        _panel->enter(_hoverView);
 }
 
 void
@@ -423,9 +495,7 @@ ImdDragManager::buttonPress(XButtonEvent *event)
      *   <Btn1Motion>: ... DragStart(Move)
      *
      * MouseClick() stores the press coordinates, and DragStart() reuses those
-     * coordinates when motion begins. Reuse _pendingX/_pendingY as the host
-     * equivalent of that saved press point until dragStart() takes ownership
-     * of them for drag-window position state.
+     * coordinates when motion begins.
      */
     _pendingX = static_cast<long>(event->x);
     _pendingY = static_cast<long>(event->y);
@@ -465,6 +535,11 @@ ImdDragManager::buttonMotion(XMotionEvent *event)
             return;
     }
 
+    /* Track the binary-proven state-0x20 target independently from the source. */
+    ImdIconView *target = dynamic_cast<ImdIconView *>(
+        ImdViewPanelFindViewByLocation(_widget, event->x, event->y));
+    setDropTarget(target);
+
     /*
      * ImdIconPanel::dragMotion(ImdView *) is the original panel virtual hook.
      * Keep it in the motion path, but move only the dedicated drag window.
@@ -489,6 +564,7 @@ ImdDragManager::buttonRelease(XButtonEvent *event)
     const long finalY = static_cast<long>(event->y) - _pointerOffsetY;
 
     _buttonDown = false;
+    setDropTarget(0);
 
     /* Remove the transient representation before the real ViewPanel redraw. */
     destroyDragWindow();
