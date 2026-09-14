@@ -109,6 +109,35 @@ static unsigned long colorFor(Widget w, const std::string &name)
     return bg;
 }
 
+static unsigned long allocRgb(Widget w,
+                              unsigned short red,
+                              unsigned short green,
+                              unsigned short blue,
+                              unsigned long fallback)
+{
+    if (!w)
+        return fallback;
+
+    Display *dpy = XtDisplay(w);
+    if (!dpy)
+        return fallback;
+
+    Colormap cmap = None;
+    XtVaGetValues(w, XtNcolormap, &cmap, NULL);
+    if (cmap == None)
+        cmap = DefaultColormapOfScreen(XtScreen(w));
+
+    XColor color;
+    std::memset(&color, 0, sizeof(color));
+    color.red = red;
+    color.green = green;
+    color.blue = blue;
+    color.flags = DoRed | DoGreen | DoBlue;
+    if (!XAllocColor(dpy, cmap, &color))
+        return fallback;
+    return color.pixel;
+}
+
 static XPoint toXPoint(long x, long y, const FtiPoint &p)
 {
     XPoint out;
@@ -304,6 +333,90 @@ static LabelMetrics measureLabel(Display *dpy, GC gc, const ImdString &label)
     XFreeFontInfo(0, font, 1);
     return result;
 }
+
+static void drawSgiSelectedBorder(Widget widget,
+                                  Drawable drawable,
+                                  GC gc,
+                                  long x,
+                                  long y,
+                                  long width,
+                                  long height,
+                                  unsigned int iconState)
+{
+    /*
+     * Original libimdFtrGallery.so drawIcon__16ImdFtrImageXImpl... checks:
+     *
+     *     iconState & 0x2e
+     *
+     * and selects ImdFtrImageParams::selectedBorderWidth when any of those
+     * state bits are present. ImdIconPanel::select() uses state bit 0x08.
+     *
+     * __ct__17ImdFtrImageParamsGv proves the defaults:
+     *     borderWidth         = 1
+     *     selectedBorderWidth = 2
+     *
+     * The same draw routine then emits selectedBorderWidth concentric
+     * XDrawRectangle calls, moving x/y inward one pixel and shrinking width/
+     * height by two after each rectangle.
+     */
+    if (!widget || drawable == None || !gc || (iconState & 0x2eu) == 0u)
+        return;
+
+    Display *dpy = XtDisplay(widget);
+    if (!dpy || width <= 0 || height <= 0)
+        return;
+
+    /*
+     * ImdFtrIconXParams::setFillStyle(-127), used by the selected/special
+     * border path, is binary-proven to select:
+     *
+     *   foreground colormap entry 15 = #AAAAAA
+     *   background colormap entry  7 = #FFFFFF
+     *   8x8 stipple bytes           = 55 aa 55 aa 55 aa 55 aa
+     *   fill style                  = FillOpaqueStippled
+     */
+    static const char stippleBits[8] = {
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa),
+        static_cast<char>(0x55), static_cast<char>(0xaa)
+    };
+
+    const unsigned long gray = allocRgb(widget, 0xaaaa, 0xaaaa, 0xaaaa,
+                                         BlackPixelOfScreen(XtScreen(widget)));
+    const unsigned long white = allocRgb(widget, 0xffff, 0xffff, 0xffff,
+                                          WhitePixelOfScreen(XtScreen(widget)));
+    Pixmap stipple = XCreateBitmapFromData(dpy,
+                                            drawable,
+                                            stippleBits,
+                                            8,
+                                            8);
+    if (stipple == None)
+        return;
+
+    XSetForeground(dpy, gc, gray);
+    XSetBackground(dpy, gc, white);
+    XSetStipple(dpy, gc, stipple);
+    XSetFillStyle(dpy, gc, FillOpaqueStippled);
+
+    const int borderWidth = 2;
+    for (int i = 0; i < borderWidth; ++i) {
+        const long rectWidth = width - 1 - (2 * i);
+        const long rectHeight = height - 1 - (2 * i);
+        if (rectWidth < 0 || rectHeight < 0)
+            break;
+        XDrawRectangle(dpy,
+                       drawable,
+                       gc,
+                       static_cast<int>(x + i),
+                       static_cast<int>(y + i),
+                       static_cast<unsigned int>(rectWidth),
+                       static_cast<unsigned int>(rectHeight));
+    }
+
+    XSetFillStyle(dpy, gc, FillSolid);
+    XFreePixmap(dpy, stipple);
+}
 }
 
 ImdIconRenderer::ImdIconRenderer() : _portableWidget(0) {}
@@ -358,7 +471,22 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
             drawFti(_portableWidget, drawable, resource, iconX, y);
     }
 
+    /*
+     * Preserve the original FTR selected-state border semantics around the
+     * icon raster itself. The source binary applies the same special border to
+     * state mask 0x2e; ordinary selected icons enter here through state 0x08.
+     */
+    drawSgiSelectedBorder(_portableWidget,
+                          drawable,
+                          gc,
+                          iconX,
+                          y,
+                          iconExtent,
+                          iconExtent,
+                          iconView->portableFlags());
+
     if (!label.empty()) {
+        XSetFillStyle(dpy, gc, FillSolid);
         XSetForeground(dpy, gc, BlackPixelOfScreen(XtScreen(_portableWidget)));
         XDrawString(dpy, drawable, gc,
                     static_cast<int>(textX),
