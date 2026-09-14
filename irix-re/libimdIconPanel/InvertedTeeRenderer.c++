@@ -224,6 +224,7 @@ static bool drawFti(Widget w, Drawable drawable,
 
     Display *dpy = XtDisplay(w);
     GC gc = XCreateGC(dpy, drawable, 0, 0);
+    if (!gc) return false;
 
     DrawMode mode = kNone;
     std::vector<FtiPoint> points;
@@ -490,26 +491,111 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
     const long textBaselineY = y + iconExtent + metrics.ascent;
 
     const std::vector<ImdString> &resources = iconView->portableIconResources();
-    for (std::size_t i = 0; i < resources.size(); ++i) {
-        const std::string resource = resources[i].stdString();
-        if (!resource.empty())
-            drawFti(_portableWidget, drawable, resource, iconX, y,
-                    _portableIconScale);
-    }
 
     /*
-     * Preserve the original FTR selected-state border semantics around the
-     * icon raster itself. The source binary applies the same special border to
-     * state mask 0x2e; ordinary selected icons enter here through state 0x08.
+     * Original libimdFtrIcon.so does not replay the individual FTI layers
+     * directly into the destination window. Its X implementation exposes the
+     * binary-named setupPixmap(), drawWithCache(), getCachePixmap(), getPixmap()
+     * and mask/cache machinery. Preserve that architecture here: build the
+     * complete icon in an offscreen pixmap, including all ordered FTI includes
+     * and the state border, then copy the finished raster to the destination
+     * once. This also prevents scroll/Expose from presenting intermediate
+     * layers of composite icons such as the C++ and header artwork.
      */
-    drawSgiSelectedBorder(_portableWidget,
-                          drawable,
-                          gc,
-                          iconX,
-                          y,
-                          iconExtent,
-                          iconExtent,
-                          iconView->portableFlags());
+    Window root = None;
+    int drawableX = 0;
+    int drawableY = 0;
+    unsigned int drawableWidth = 0;
+    unsigned int drawableHeight = 0;
+    unsigned int drawableBorder = 0;
+    unsigned int drawableDepth = 0;
+    const bool haveGeometry = XGetGeometry(dpy,
+                                            drawable,
+                                            &root,
+                                            &drawableX,
+                                            &drawableY,
+                                            &drawableWidth,
+                                            &drawableHeight,
+                                            &drawableBorder,
+                                            &drawableDepth) != 0;
+
+    Pixmap iconPixmap = None;
+    if (haveGeometry && drawableDepth != 0)
+        iconPixmap = XCreatePixmap(dpy,
+                                   drawable,
+                                   static_cast<unsigned int>(iconExtent),
+                                   static_cast<unsigned int>(iconExtent),
+                                   drawableDepth);
+
+    if (iconPixmap != None) {
+        GC iconGC = XCreateGC(dpy, iconPixmap, 0, 0);
+        if (iconGC) {
+            Pixel background = WhitePixelOfScreen(XtScreen(_portableWidget));
+            XtVaGetValues(_portableWidget, XtNbackground, &background, NULL);
+            XSetForeground(dpy, iconGC, background);
+            XFillRectangle(dpy,
+                           iconPixmap,
+                           iconGC,
+                           0,
+                           0,
+                           static_cast<unsigned int>(iconExtent),
+                           static_cast<unsigned int>(iconExtent));
+
+            for (std::size_t i = 0; i < resources.size(); ++i) {
+                const std::string resource = resources[i].stdString();
+                if (!resource.empty())
+                    drawFti(_portableWidget,
+                            iconPixmap,
+                            resource,
+                            0,
+                            0,
+                            _portableIconScale);
+            }
+
+            drawSgiSelectedBorder(_portableWidget,
+                                  iconPixmap,
+                                  iconGC,
+                                  0,
+                                  0,
+                                  iconExtent,
+                                  iconExtent,
+                                  iconView->portableFlags());
+
+            XCopyArea(dpy,
+                      iconPixmap,
+                      drawable,
+                      gc,
+                      0,
+                      0,
+                      static_cast<unsigned int>(iconExtent),
+                      static_cast<unsigned int>(iconExtent),
+                      static_cast<int>(iconX),
+                      static_cast<int>(y));
+            XFreeGC(dpy, iconGC);
+        }
+        XFreePixmap(dpy, iconPixmap);
+    } else {
+        /* Defensive fallback for an unusual drawable with no usable depth. */
+        for (std::size_t i = 0; i < resources.size(); ++i) {
+            const std::string resource = resources[i].stdString();
+            if (!resource.empty())
+                drawFti(_portableWidget,
+                        drawable,
+                        resource,
+                        iconX,
+                        y,
+                        _portableIconScale);
+        }
+
+        drawSgiSelectedBorder(_portableWidget,
+                              drawable,
+                              gc,
+                              iconX,
+                              y,
+                              iconExtent,
+                              iconExtent,
+                              iconView->portableFlags());
+    }
 
     if (!label.empty()) {
         XSetFillStyle(dpy, gc, FillSolid);
