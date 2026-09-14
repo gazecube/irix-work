@@ -217,6 +217,18 @@ public:
     void endSelectBlock();
 
     /*
+     * Original icon-state transitions recovered from libimdIconPanel.so:
+     * enter()/leave() toggle state 0x04 for the pointer-located view, while
+     * enterPanel()/leavePanel() clear/set state 0x40 on every selected view.
+     * Numeric values remain until the original EIconState enum spellings are
+     * recovered.
+     */
+    virtual void enter(ImdIconView *view);
+    virtual void leave(ImdIconView *view);
+    virtual void enterPanel();
+    virtual void leavePanel();
+
+    /*
      * Host-only inspection seam. The original N32 getSelected()/
      * getSelectedViewList() return the SGI collection at panel +0x20; this
      * vector does not claim ABI equivalence.
@@ -245,6 +257,7 @@ private:
     bool _portableMultipleSelect;
     unsigned int _portableSelectBlockDepth;
     bool _portableSelectionDirty;
+    bool _portablePanelEntered;
 };
 
 #endif /* IRIX_RE_LIBIMDICONPANEL_IMDICONPANEL_H */
