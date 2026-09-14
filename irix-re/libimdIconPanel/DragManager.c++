@@ -2,6 +2,7 @@
 
 #include "ImdIconPanel.h"
 
+#include <X11/StringDefs.h>
 #include <X11/Xlib.h>
 
 namespace
@@ -187,23 +188,33 @@ ImdDragManager::drawDraggedItems()
         return false;
     }
 
-    /*
-     * Original drawDraggedItems(Widget,XRectangle&) @ 0x0969577c renders the
-     * selected drag items into the dedicated drag representation. This host
-     * seam snapshots the already-rendered ImdView rectangle once; importantly,
-     * pointer motion no longer redraws or moves the real ViewPanel contents.
-     */
-    XCopyArea(display,
-              source,
-              _dragPixmap,
-              gc,
-              static_cast<int>(_dragView->portableX()),
-              static_cast<int>(_dragView->portableY()),
-              _dragWidth,
-              _dragHeight,
-              0,
-              0);
+    Pixel background = WhitePixelOfScreen(XtScreen(_widget));
+    XtVaGetValues(_widget, XtNbackground, &background, NULL);
+    XSetForeground(display, gc, background);
+    XFillRectangle(display, _dragPixmap, gc,
+                   0, 0, _dragWidth, _dragHeight);
     XFreeGC(display, gc);
+
+    /*
+     * Original drawDraggedItems(Widget,XRectangle&) @ 0x0969577c walks the
+     * selected views and renders them through the drag renderer. It does not
+     * screenshot a rectangular area of the live ViewPanel. The old host
+     * XCopyArea shortcut could therefore capture pixels from overlapping
+     * neighbor labels. Render the dragged view itself into the drag pixmap so
+     * only its icon and title can appear in the representation.
+     */
+    ImdInvertedTeeRenderer dragRenderer;
+    dragRenderer.realize(_widget);
+    if (!dragRenderer.portableDrawToDrawable(*_dragView,
+                                             _dragPixmap,
+                                             0,
+                                             0)) {
+        XFreePixmap(display, _dragPixmap);
+        _dragPixmap = None;
+        _dragWidth = 0;
+        _dragHeight = 0;
+        return false;
+    }
 
     return true;
 }
@@ -264,8 +275,8 @@ ImdDragManager::setupDrag(long x, long y)
     /*
      * Original setupDrag() @ 0x09695984 builds the SGI/Motif drag shell and
      * then shapeDragWindow() applies the item mask. The exact N32 mask path is
-     * still pending, so this first host implementation intentionally leaves the
-     * snapshot rectangular rather than inventing a shape algorithm.
+     * still pending, so this host implementation intentionally leaves the
+     * renderer-composed representation rectangular for now.
      */
     XMapRaised(display, _dragWindow);
     XFlush(display);
