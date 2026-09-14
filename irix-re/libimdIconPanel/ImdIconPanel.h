@@ -38,6 +38,16 @@ public:
     virtual ~ImdInvertedTeeRenderer();
     virtual void realize(Widget widget);
     virtual void draw(ImdView &view, long x, long y);
+
+    /*
+     * Host drag-composition seam. Original ImdDragManager::drawDraggedItems()
+     * renders the selected view through a drag renderer rather than copying a
+     * rectangle out of the live ViewPanel. This helper keeps the portable
+     * renderer on that architecture by allowing the same view renderer to
+     * target the drag pixmap directly.
+     */
+    bool portableDrawToDrawable(ImdView &view, Drawable drawable,
+                                long x, long y);
 };
 
 class ImdLayout
