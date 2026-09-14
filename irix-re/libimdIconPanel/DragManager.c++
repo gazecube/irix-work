@@ -410,28 +410,59 @@ ImdDragManager::inputHandler(Widget,
 void
 ImdDragManager::buttonPress(XButtonEvent *event)
 {
-    if (!event || event->button != Button1 || !_panel)
+    if (!event || event->button != Button1 || !_panel || !_widget)
         return;
 
     _buttonDown = true;
 
     /*
-     * Preserve the original panel callback boundary. The IRIX ViewPanel's
-     * dragStartCallback eventually enters ImdIconPanel::dragStart(int,long,
-     * long,XEvent *), which delegates to ImdDragManager::dragStart().
+     * Binary-backed ViewPanel translations:
+     *
+     *   <Btn1Down>: ... Select() ... MouseClick() ...
+     *   <Btn1Motion>: ... DragStart(Move)
+     *
+     * MouseClick() stores the press coordinates, and DragStart() reuses those
+     * coordinates when motion begins. Reuse _pendingX/_pendingY as the host
+     * equivalent of that saved press point until dragStart() takes ownership
+     * of them for drag-window position state.
      */
-    _panel->dragStart(1, event->x, event->y,
-                      reinterpret_cast<XEvent *>(event));
+    _pendingX = static_cast<long>(event->x);
+    _pendingY = static_cast<long>(event->y);
+
+    ImdView *hit = ImdViewPanelFindViewByLocation(_widget,
+                                                  _pendingX,
+                                                  _pendingY);
+    ImdIconView *iconView = dynamic_cast<ImdIconView *>(hit);
+    if (iconView)
+        _panel->select(iconView);
+    else
+        _panel->deselect();
 }
 
 void
 ImdDragManager::buttonMotion(XMotionEvent *event)
 {
-    if (!event || !_buttonDown || !_dragging || !_dragView || !_panel)
+    if (!event || !_buttonDown || !_panel)
         return;
 
     if ((event->state & Button1Mask) == 0)
         return;
+
+    /*
+     * IRIX does not begin a Button1 drag on ButtonPress. The ViewPanel invokes
+     * DragStart(Move) from its <Btn1Motion> translation and seeds it with the
+     * coordinates previously captured by MouseClick().
+     */
+    if (!_dragging) {
+        const long pressX = _pendingX;
+        const long pressY = _pendingY;
+        _panel->dragStart(1,
+                          pressX,
+                          pressY,
+                          reinterpret_cast<XEvent *>(event));
+        if (!_dragging || !_dragView)
+            return;
+    }
 
     /*
      * ImdIconPanel::dragMotion(ImdView *) is the original panel virtual hook.
