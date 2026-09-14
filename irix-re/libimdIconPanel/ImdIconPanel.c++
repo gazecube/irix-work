@@ -231,7 +231,8 @@ ImdIconPanel::ImdIconPanel(const char *name, Widget parent, Arg *args, int count
       _portableSelectedViews(),
       _portableMultipleSelect(false),
       _portableSelectBlockDepth(0),
-      _portableSelectionDirty(false)
+      _portableSelectionDirty(false),
+      _portablePanelEntered(false)
 {
     _baseWidget = ImdCreateViewPanel(parent, const_cast<char *>(name), args, static_cast<Cardinal>(count));
 
@@ -300,7 +301,6 @@ void ImdIconPanel::deselect()
          it != _portableSelectedViews.end(); ++it) {
         if (!*it) continue;
         (*it)->setFlag(8u, false);
-        /* Binary proves deselect also clears flag 64; meaning still unnamed. */
         (*it)->setFlag(64u, false);
     }
     _portableSelectedViews.clear();
@@ -320,6 +320,13 @@ void ImdIconPanel::toggleSelection(ImdIconView *view)
             _portableSelectedViews.end());
     } else {
         view->setFlag(8u, true);
+        /*
+         * Original toggleSelection() checks panel byte +0x61 immediately
+         * after setting state 0x08. If the panel is not entered it also sets
+         * state 0x40 on the newly selected view.
+         */
+        if (!_portablePanelEntered)
+            view->setFlag(64u, true);
         if (std::find(_portableSelectedViews.begin(), _portableSelectedViews.end(), view) ==
             _portableSelectedViews.end())
             _portableSelectedViews.push_back(view);
@@ -341,6 +348,7 @@ void ImdIconPanel::select(ImdIconView *view)
         }
         _portableSelectedViews.clear();
         view->setFlag(8u, true);
+        view->setFlag(64u, !_portablePanelEntered);
         _portableSelectedViews.push_back(view);
         _portableSelectionDirty = true;
     }
@@ -357,6 +365,60 @@ void ImdIconPanel::extendSelect(ImdIconView *view)
     } else {
         select(view);
     }
+}
+
+void ImdIconPanel::enter(ImdIconView *view)
+{
+    if (!view || view->getFlag(4u))
+        return;
+
+    /* enter() @ 0x0967d118: state 0x04 on, redraw only if not selected. */
+    view->setFlag(4u, true);
+    if (!view->getFlag(8u) && _baseWidget)
+        ImdViewPanelRedraw(_baseWidget);
+}
+
+void ImdIconPanel::leave(ImdIconView *view)
+{
+    if (!view || !view->getFlag(4u))
+        return;
+
+    /* leave() @ 0x0967d208: state 0x04 off, redraw only if not selected. */
+    view->setFlag(4u, false);
+    if (!view->getFlag(8u) && _baseWidget)
+        ImdViewPanelRedraw(_baseWidget);
+}
+
+void ImdIconPanel::leavePanel()
+{
+    /*
+     * Original leavePanel() @ 0x0967bab4 stores zero at panel +0x61, then
+     * walks the selected collection, sets state 0x40 true, and redraws each.
+     */
+    _portablePanelEntered = false;
+    for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();
+         it != _portableSelectedViews.end(); ++it) {
+        if (*it)
+            (*it)->setFlag(64u, true);
+    }
+    if (_baseWidget && !_portableSelectedViews.empty())
+        ImdViewPanelRedraw(_baseWidget);
+}
+
+void ImdIconPanel::enterPanel()
+{
+    /*
+     * Original enterPanel() @ 0x0967bbbc stores one at panel +0x61, then
+     * walks the selected collection, clears state 0x40, and redraws each.
+     */
+    _portablePanelEntered = true;
+    for (std::vector<ImdIconView *>::iterator it = _portableSelectedViews.begin();
+         it != _portableSelectedViews.end(); ++it) {
+        if (*it)
+            (*it)->setFlag(64u, false);
+    }
+    if (_baseWidget && !_portableSelectedViews.empty())
+        ImdViewPanelRedraw(_baseWidget);
 }
 
 void
@@ -401,6 +463,7 @@ void ImdIconPanel::portableResetViews(bool destroyViews)
     _portableSelectedViews.clear();
     _portableSelectBlockDepth = 0;
     _portableSelectionDirty = false;
+    _portablePanelEntered = false;
 }
 
 ImdIconPanel::~ImdIconPanel()
