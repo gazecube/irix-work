@@ -76,4 +76,4 @@ void *__lptrfiRenderX;
 void *__lptrfiFreeDB;
 
 int _sg_redraw_mode;
-int first__7SgColor;
+/* first__7SgColor is now a real cache head owned by SgColor.c. */
