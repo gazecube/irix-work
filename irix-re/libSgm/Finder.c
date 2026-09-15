@@ -249,7 +249,16 @@ static void zoomBarPushCB(Widget child, XtPointer client_data, XtPointer call_da
     if (!ft || !cb || cb->section < 0 || !ft->finder.setTextSectionFunc)
         return;
 
+    /*
+     * Selecting a breadcrumb is a user activation, not merely a text update.
+     * Route it through the text field's activate callback list so both the
+     * Finder's own activateCB and clients currently attached to the exposed
+     * text child observe the same action. Programmatic SgFinderSetTextString()
+     * below deliberately does not synthesize activation.
+     */
     ft->finder.setTextSectionFunc((Widget)ft, cb->section);
+    if (ft->finder.text)
+        XtCallCallbacks(ft->finder.text, XmNactivateCallback, call_data);
 }
 
 static void updateZoomBar(SgFinderWidget ft)
@@ -702,18 +711,15 @@ char *SgFinderGetTextString(Widget w)
 void SgFinderSetTextString(Widget w, char *value)
 {
     SgFinderWidget ft = (SgFinderWidget)w;
-    XmAnyCallbackStruct cb;
 
     if (!ft || !ft->finder.text || !value)
         return;
 
+    /* Programmatic setter: update content/geometry without user activation. */
     XmTextFieldSetString(ft->finder.text, value);
     XmTextFieldSetInsertionPosition(ft->finder.text,
                                     (XmTextPosition)strlen(value));
-
-    cb.reason = XmCR_ACTIVATE;
-    cb.event = NULL;
-    activateCB(ft->finder.text, ft, &cb);
+    textChangeCB(ft->finder.text, ft, NULL);
 }
 
 Widget SgFinderGetChild(Widget w, int child)
