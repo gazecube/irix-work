@@ -6,6 +6,8 @@
  *   - IRIX N32 libXm.a(Sgi.o)
  *       _sgFindGC     @ 0x0f80
  *       _sgFindShader @ 0x1688
+ *   - IRIX N32 libXm.a(Manager.o) _sgManagerData
+ *   - IRIX N32 libXm.a(Draw.o) _RenderShadowsDefault
  *
  * SgiP.h names the original cache record fields:
  *   dpy, cmap, depth, pixel, r/g/b, faceShade, GCarray[9], next.
@@ -24,6 +26,8 @@
 
 #define SG_SHADER_LEVELS 8
 #define SG_SHADER_GC_SLOTS 9
+#define SG_MANAGER_VISUAL_STATES 5
+#define SG_MANAGER_STATE_SLOTS 10
 
 /* Exact integer tables from libXm.a(Sgi.o) .data. */
 static const int sgLightRamp[SG_SHADER_LEVELS] =
@@ -34,6 +38,19 @@ static const int sgLightRamp[SG_SHADER_LEVELS] =
 static const int sgDarkRamp[SG_SHADER_LEVELS] =
 {
     0, 32, 64, 96, 128, 160, 190, 255
+};
+
+/*
+ * Exact 200-byte _sgManagerData object from libXm.a(Manager.o): five visual
+ * states, each containing five top/bottom shader-index pairs.
+ */
+static const int sgManagerStateArray[SG_MANAGER_VISUAL_STATES][SG_MANAGER_STATE_SLOTS] =
+{
+    { 3, 6, 2, 4, 1, 1, 5, 3, 4, 4 },
+    { 2, 1, 6, 2, 5, 3, 5, 3, 4, 4 },
+    { 2, 1, 6, 2, 6, 3, 6, 3, 5, 4 },
+    { 0, 0, 6, 2, 6, 3, 5, 3, 4, 4 },
+    { 1, 6, 2, 6, 4, 0, 6, 3, 5, 4 }
 };
 
 typedef struct SgShaderRec
@@ -49,6 +66,11 @@ typedef struct SgShaderRec
     GC gc_array[SG_SHADER_GC_SLOTS];
     struct SgShaderRec *next;
 } SgShaderRec;
+
+typedef void (*XmDrawShadowsProc)(Display *, Drawable, GC, GC,
+                                  Position, Position,
+                                  Dimension, Dimension,
+                                  Dimension, unsigned int);
 
 static SgShaderRec *shader_cache;
 
@@ -223,4 +245,79 @@ GC SgShaderGetGC(Widget widget, Pixel background, int shader_index)
 
     rec->gc_array[shader_index] = normalShaderGC(widget, rec, shader_index);
     return rec->gc_array[shader_index];
+}
+
+void SgRenderManagerShadows(Widget widget,
+                            Drawable drawable,
+                            Position x,
+                            Position y,
+                            Dimension width,
+                            Dimension height,
+                            int visual_state,
+                            Dimension shadow_thickness,
+                            unsigned int shadow_style)
+{
+    static XmDrawShadowsProc draw_shadows;
+    static Boolean looked_up;
+    const int *state;
+    Pixel background = 0;
+    Dimension layers;
+    Dimension i;
+
+    if (!widget || !drawable || !shadow_thickness || !width || !height)
+        return;
+
+    if (visual_state < 0 || visual_state >= SG_MANAGER_VISUAL_STATES)
+        visual_state = 0;
+
+    if (!looked_up)
+    {
+        draw_shadows = (XmDrawShadowsProc)dlsym(RTLD_DEFAULT, "_XmDrawShadows");
+        looked_up = True;
+    }
+    if (!draw_shadows)
+        return;
+
+    XtVaGetValues(widget, XtNbackground, &background, NULL);
+    state = sgManagerStateArray[visual_state];
+
+    /*
+     * _RenderShadowsDefault clamps this loop to at most three one-pixel
+     * layers.  For each layer it deliberately starts at state pair #1
+     * (offsets +8/+12), then advances by one pair while shrinking the frame.
+     */
+    layers = shadow_thickness;
+    if (layers > 3)
+        layers = 3;
+
+    for (i = 0; i < layers; ++i)
+    {
+        unsigned int pair = (unsigned int)i + 1U;
+        GC top_gc;
+        GC bottom_gc;
+        Position dx;
+        Position dy;
+        Dimension dw;
+        Dimension dh;
+
+        if (pair >= 5U)
+            break;
+        if (width <= (Dimension)(2 * i) || height <= (Dimension)(2 * i))
+            break;
+
+        top_gc = SgShaderGetGC(widget, background, state[pair * 2U]);
+        bottom_gc = SgShaderGetGC(widget, background, state[pair * 2U + 1U]);
+        if (!top_gc || !bottom_gc)
+            continue;
+
+        dx = (Position)(x + (Position)i);
+        dy = (Position)(y + (Position)i);
+        dw = (Dimension)(width - 2 * i);
+        dh = (Dimension)(height - 2 * i);
+
+        draw_shadows(XtDisplay(widget), drawable,
+                     top_gc, bottom_gc,
+                     dx, dy, dw, dh,
+                     1, shadow_style);
+    }
 }
