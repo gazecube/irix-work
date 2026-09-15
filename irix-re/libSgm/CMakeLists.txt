@@ -105,11 +105,16 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     )
 
     # SgmCompat.c still owns the broad compatibility constructor for ZbText;
-    # keep only that legacy creator/class-handle pair out of the public
-    # namespace. Implemented ABI functions are removed from AbiStubs.c rather
-    # than renamed here.
+    # keep only that legacy creator/class-handle pair out of the public namespace.
     set_source_files_properties(SgmCompat.c PROPERTIES
         COMPILE_DEFINITIONS "sgZbTextWidgetClass=sgZbTextWidgetClass_compat_placeholder;SgCreateZbText=SgCreateZbText_compat_placeholder"
+    )
+
+    # Native Grid.c owns these exports now. Keep the old generated ABI entries
+    # private for this compile checkpoint; they are removed from AbiStubs.c in
+    # the subsequent graveyard-cleanup commit.
+    set_source_files_properties(AbiStubs.c PROPERTIES COMPILE_DEFINITIONS
+        "SgGridHighlightCell=SgGridHighlightCell_abi_placeholder;SgGridSetRowMargin=SgGridSetRowMargin_abi_placeholder;SgGridRowToYPosition=SgGridRowToYPosition_abi_placeholder;SgGridSetColumnMargin=SgGridSetColumnMargin_abi_placeholder;SgGridSetRowResizability=SgGridSetRowResizability_abi_placeholder;SgGridSetColumnResizability=SgGridSetColumnResizability_abi_placeholder;SgGridPositionToRowSeparator=SgGridPositionToRowSeparator_abi_placeholder;SgGridPositionToColumnSeparator=SgGridPositionToColumnSeparator_abi_placeholder;SgGridPositionToRow=SgGridPositionToRow_abi_placeholder;SgGridPositionToColumn=SgGridPositionToColumn_abi_placeholder"
     )
 
     target_link_libraries(Sgm
@@ -130,16 +135,12 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     set_property(TARGET Sgm PROPERTY C_STANDARD 99)
     set_property(TARGET Sgm PROPERTY C_STANDARD_REQUIRED ON)
 
-    add_executable(sgm_visual_drawing_area_smoke
-        SgVisualDrawingAreaSmoke.c
-    )
+    add_executable(sgm_visual_drawing_area_smoke SgVisualDrawingAreaSmoke.c)
     target_link_libraries(sgm_visual_drawing_area_smoke PRIVATE Sgm)
     set_property(TARGET sgm_visual_drawing_area_smoke PROPERTY C_STANDARD 99)
     set_property(TARGET sgm_visual_drawing_area_smoke PROPERTY C_STANDARD_REQUIRED ON)
 
-    add_executable(sgm_finder_smoke
-        SgFinderSmoke.c
-    )
+    add_executable(sgm_finder_smoke SgFinderSmoke.c)
     target_link_libraries(sgm_finder_smoke PRIVATE Sgm)
     set_property(TARGET sgm_finder_smoke PROPERTY C_STANDARD 99)
     set_property(TARGET sgm_finder_smoke PROPERTY C_STANDARD_REQUIRED ON)
