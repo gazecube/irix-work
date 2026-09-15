@@ -38,7 +38,7 @@ WidgetClass sgArcWidgetClass = (WidgetClass)0;
 WidgetClass sgDialWidgetClass = (WidgetClass)0;
 WidgetClass sgGraphWidgetClass = (WidgetClass)0;
 WidgetClass sgHorzPanedWindowWidgetClass = (WidgetClass)0;
-WidgetClass sgGridWidgetClass = (WidgetClass)0;
+extern WidgetClass sgGridWidgetClass;
 WidgetClass sgIconGadgetClass = (WidgetClass)0;
 WidgetClass sgListWidgetClass = (WidgetClass)0;
 WidgetClass sgRubberBoardWidgetClass = (WidgetClass)0;
@@ -65,7 +65,6 @@ static void SgmCompatInitClasses(void)
     sgDialWidgetClass = xmScaleWidgetClass;
     sgGraphWidgetClass = xmBulletinBoardWidgetClass;
     sgHorzPanedWindowWidgetClass = xmPanedWindowWidgetClass;
-    sgGridWidgetClass = xmBulletinBoardWidgetClass;
     sgIconGadgetClass = xmLabelGadgetClass;
     sgListWidgetClass = xmListWidgetClass;
     sgRubberBoardWidgetClass = xmBulletinBoardWidgetClass;
@@ -98,7 +97,6 @@ SGM_CREATOR(SgOglCreateColorChooser, sgOglColorChooserWidgetClass)
 SGM_CREATOR(SgCreateDial, sgDialWidgetClass)
 SGM_CREATOR(SgCreateGraph, sgGraphWidgetClass)
 SGM_CREATOR(SgCreateArc, sgArcWidgetClass)
-SGM_CREATOR(SgCreateGrid, sgGridWidgetClass)
 SGM_CREATOR(SgCreateIconGadget, sgIconGadgetClass)
 SGM_CREATOR(SgCreateList, sgListWidgetClass)
 SGM_CREATOR(SgCreateRubberBoard, sgRubberBoardWidgetClass)
@@ -128,12 +126,6 @@ Widget SgOglCreateColorChooserDialog(Widget parent, char *name, ArgList args,
 
 Widget SgCreateColumnDialog(Widget parent, char *name, ArgList args,
                             Cardinal count)
-{
-    return XmCreateFormDialog(parent, name, args, count);
-}
-
-Widget SgCreateGridDialog(Widget parent, char *name, ArgList args,
-                          Cardinal count)
 {
     return XmCreateFormDialog(parent, name, args, count);
 }
