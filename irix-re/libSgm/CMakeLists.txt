@@ -52,6 +52,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     add_library(Sgm SHARED
         SgmCompat.c
         SgiShader.c
+        SgList.c
         DropPocket.c
         DropPocketRaster.c
         DynaMenu.c
@@ -107,13 +108,6 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     # than renamed here.
     set_source_files_properties(SgmCompat.c PROPERTIES
         COMPILE_DEFINITIONS "sgZbTextWidgetClass=sgZbTextWidgetClass_compat_placeholder;SgCreateZbText=SgCreateZbText_compat_placeholder"
-    )
-
-    # Temporary until the generated stub file is physically pruned: keep its
-    # two obsolete DynaMenu entries out of the public namespace. The native
-    # implementations are in DynaMenu.c.
-    set_source_files_properties(AbiStubs.c PROPERTIES
-        COMPILE_DEFINITIONS "SgDynaMenuAddHistoryItem=SgDynaMenuAddHistoryItem_abi_obsolete;SgDynaMenuClearHistory=SgDynaMenuClearHistory_abi_obsolete"
     )
 
     target_link_libraries(Sgm
