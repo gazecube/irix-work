@@ -100,6 +100,16 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec;SgHasFileIconLibrary=SgHasFileIconLibrary"
     )
 
+    # These symbols used to be supplied by the broad compatibility/stub
+    # translation units. ZbText.c now owns the real binary-backed versions,
+    # so rename only the legacy definitions out of the public namespace.
+    set_source_files_properties(SgmCompat.c PROPERTIES
+        COMPILE_DEFINITIONS "sgZbTextWidgetClass=sgZbTextWidgetClass_compat_placeholder;SgCreateZbText=SgCreateZbText_compat_placeholder"
+    )
+    set_source_files_properties(AbiStubs.c PROPERTIES
+        COMPILE_DEFINITIONS "SgZbTextGetChild=SgZbTextGetChild_abi_placeholder"
+    )
+
     target_link_libraries(Sgm
         PUBLIC
             "${SGM_MOTIF_LIBRARY}"
