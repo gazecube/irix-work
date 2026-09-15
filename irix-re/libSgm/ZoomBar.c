@@ -2,7 +2,7 @@
  * SgZoomBar reconstruction.
  *
  * Source structure and private record names are taken from the original SGI
- * ZoomBar.h/ZoomBarP.h.  Function behavior is reconstructed from the N32
+ * ZoomBar.h/ZoomBarP.h. Function behavior is reconstructed from the N32
  * libSgm.a(ZoomBar.o) object and debug libSgm.so.1.
  */
 
@@ -10,6 +10,7 @@
 #include "SgiShader.h"
 
 #include <Xm/Xm.h>
+#include <Xm/XmP.h>
 #include <X11/Intrinsic.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
@@ -108,7 +109,6 @@ static XtActionsRec actions[] =
     { "Motion", Motion }
 };
 
-/* Exact exported translation object, including its 108-byte allocation. */
 char _SgZoomBar_defaultTranslations[108] =
     "<Btn1Down>:Arm()\n"
     "<Btn1Up>:Activate() Disarm()\n"
@@ -199,7 +199,6 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
         DrawButtons((SgZoomBarWidget)widget);
 }
 
-/* Original SetValues resets interaction state and returns True. */
 static Boolean SetValues(Widget old_widget, Widget request_widget,
                          Widget new_widget, ArgList args, Cardinal *num_args)
 {
@@ -229,12 +228,7 @@ static XtGeometryResult QueryGeometry(Widget widget,
     return XtGeometryAlmost;
 }
 
-/*
- * Exact GetOneButtonW() geometry from ZoomBar.o.
- *
- * First compute the untrimmed span, then every section goes through the same
- * one-pixel inset on each side: x += 1, width -= 2.
- */
+/* Exact GetOneButtonW() geometry from ZoomBar.o. */
 static Boolean GetOneButtonW(SgZoomBarWidget w, int section,
                              Position *x_return, Dimension *width_return)
 {
@@ -248,8 +242,14 @@ static Boolean GetOneButtonW(SgZoomBarWidget w, int section,
     {
         if (section != 0)
             return False;
-        x = 0;
-        width = (int)w->core.width - 1;
+        /*
+         * DrawButtons() has a special unsectioned path in the original:
+         * x=0,width=core.width-1,state=1. GetOneButtonW() normally applies
+         * the one-pixel section inset, so choose the pre-inset values which
+         * yield that exact final rectangle when called for section zero.
+         */
+        x = -1;
+        width = (int)w->core.width + 1;
     }
     else if (section == 0)
     {
@@ -280,7 +280,6 @@ static Boolean GetOneButtonW(SgZoomBarWidget w, int section,
     return True;
 }
 
-/* Exact GetOneButtonH() helper from ZoomBar.o. */
 static void GetOneButtonH(SgZoomBarWidget w,
                           Position *y_return, Dimension *height_return)
 {
@@ -308,7 +307,6 @@ static Boolean GetOneButtonRect(SgZoomBarWidget w, int section,
     return True;
 }
 
-/* FindSection() recovered from the original object. */
 static int FindSection(SgZoomBarWidget w, Position x)
 {
     int i;
@@ -330,12 +328,6 @@ static int FindSection(SgZoomBarWidget w, Position x)
     return -1;
 }
 
-/*
- * DrawButton() line/fill geometry is transcribed from ZoomBar.o.  SGI's
- * attached primitive shader and _sgFindShader(core.background_pixel) resolve
- * from the same background pixel, so the host shader layer supplies the same
- * normal-depth color family without depending on host-private libXm symbols.
- */
 static void DrawButton(SgZoomBarWidget w, int section, int state)
 {
     XRectangle r;
@@ -407,13 +399,18 @@ static void DrawButton(SgZoomBarWidget w, int section, int state)
 static void DrawButtons(SgZoomBarWidget w)
 {
     int i;
-    int last;
 
     if (!w || !XtIsRealized((Widget)w))
         return;
 
-    last = w->zoomBar.section_count > 0 ? w->zoomBar.section_count : 0;
-    for (i = 0; i <= last; ++i)
+    /* Exact special path: one full-width state-1 button, no section inset. */
+    if (w->zoomBar.section_count <= 0 || !w->zoomBar.section_widths)
+    {
+        DrawButton(w, 0, 1);
+        return;
+    }
+
+    for (i = 0; i <= w->zoomBar.section_count; ++i)
     {
         int state = 0;
         if (i == w->zoomBar.located_section)
@@ -542,11 +539,13 @@ static void Enter(Widget widget, XEvent *event,
                   String *params, Cardinal *num_params)
 {
     SgZoomBarWidget w = (SgZoomBarWidget)widget;
-    int old_section = w->zoomBar.located_section;
-    int new_section = FindSection(w, EventX(event));
-    (void)params;
-    (void)num_params;
+    int old_section;
+    int new_section;
 
+    _XmPrimitiveEnter(widget, event, params, num_params);
+
+    old_section = w->zoomBar.located_section;
+    new_section = FindSection(w, EventX(event));
     w->zoomBar.located_section = new_section;
 
     if (old_section != new_section)
@@ -562,9 +561,8 @@ static void Leave(Widget widget, XEvent *event,
                   String *params, Cardinal *num_params)
 {
     SgZoomBarWidget w = (SgZoomBarWidget)widget;
-    (void)event;
-    (void)params;
-    (void)num_params;
+
+    _XmPrimitiveLeave(widget, event, params, num_params);
 
     w->zoomBar.armed = False;
     w->zoomBar.pushed_section = -1;
