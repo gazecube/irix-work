@@ -22,7 +22,7 @@ unsigned char sgArcClassRec[124];
 unsigned char SgdialClassRec[152];
 unsigned char sgGraphClassRec[204];
 unsigned char sgHorzPanedWindowClassRec[204];
-unsigned char sgGridClassRec[224];
+/* sgGridClassRec is now a real native class record owned by Grid.c. */
 unsigned char sgIconGCacheObjClassRec[140];
 unsigned char sgIconGadgetClassRec[172];
 unsigned char sgListClassRec[156];
