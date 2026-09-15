@@ -163,6 +163,31 @@ ImdDragManager::init(Widget widget)
                       this);
 }
 
+void
+ImdDragManager::purgeDeleted(ImdView *view)
+{
+    if (!view)
+        return;
+
+    /*
+     * Binary anchor: purgeDeleted__14ImdDragManagerSGP10_WidgetRecPvT2
+     * @ 0x09680b9c examines the manager's two retained view pointers at
+     * original N32 +0x28 and +0x3c. If the referenced view carries the
+     * deleted-state bits in ImdView +0x14, the corresponding manager slot is
+     * written to zero.
+     *
+     * The host transport does not claim the original object layout, but its
+     * equivalent retained non-owning view references are _hoverView and
+     * _dropTargetView. Purge them while the view is still alive, before the
+     * panel releases the object. This preserves the SGI lifetime rule and
+     * prevents a later MotionNotify from passing a freed view to leave().
+     */
+    if (_hoverView == view)
+        _hoverView = 0;
+    if (_dropTargetView == view)
+        _dropTargetView = 0;
+}
+
 bool
 ImdDragManager::drawDraggedItems()
 {
