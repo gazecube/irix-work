@@ -141,7 +141,7 @@ SgGridClassRec sgGridClassRec =
         XmInheritParentProcess,
         NULL
     },
-    { NULL, NULL, NULL, NULL },
+    { False, NULL, NULL, NULL },
     { 0 }
 };
 
