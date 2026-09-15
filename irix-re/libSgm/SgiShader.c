@@ -10,13 +10,6 @@
  *   - IRIX N32 libXm.a(Draw.o) _RenderShadowsDefault
  *   - IRIX N32 libXm.a(Display.o), which initializes SGImode and darkScheme
  *     from Xt resources during XmDisplay initialization.
- *
- * SgiP.h names the original cache record fields:
- *   dpy, cmap, depth, pixel, r/g/b, faceShade, GCarray[9], next.
- *
- * The normal-depth color arithmetic below is instruction-for-instruction
- * equivalent to the path in Sgi.o.  The original depth-2 tiled path is kept
- * separate and is not approximated here.
  */
 
 #include "SgiShader.h"
@@ -24,6 +17,7 @@
 #include <X11/Intrinsic.h>
 #include <X11/StringDefs.h>
 #include <dlfcn.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #define SG_SHADER_LEVELS 8
@@ -90,16 +84,16 @@ static Boolean readBooleanResource(Widget widget,
     resource.default_type = XtRImmediate;
     resource.default_addr = (XtPointer)(long)default_value;
 
-    /*
-     * Display.o uses XtGetSubresources() with NULL name/class and a single
-     * Boolean resource record.  Doing the same here preserves wildcard
-     * application resources such as "FileManager*sgiMode: True" even though
-     * host OpenMotif has no SGImode global or SGI private XmDisplay fields.
-     */
     XtGetSubresources(widget, (XtPointer)&value,
                       NULL, NULL,
                       &resource, 1,
                       NULL, 0);
+
+    fprintf(stderr,
+            "[SgiShader][TEMP] resource widget=%s name=%s class=%s value=%d default=%d\n",
+            XtName(widget) ? XtName(widget) : "?",
+            name, class_name, value != False, default_value != False);
+
     return value;
 }
 
@@ -107,17 +101,29 @@ int SgSgiModeEnabled(Widget widget)
 {
     static int *sgi_mode;
     static Boolean looked_up;
+    int result;
 
     if (!looked_up)
     {
         sgi_mode = (int *)dlsym(RTLD_DEFAULT, "SGImode");
         looked_up = True;
+        fprintf(stderr,
+                "[SgiShader][TEMP] dlsym SGImode=%p\n",
+                (void *)sgi_mode);
     }
 
     if (sgi_mode)
-        return *sgi_mode != 0;
+        result = (*sgi_mode != 0);
+    else
+        result = readBooleanResource(widget, "sgiMode", "SgiMode", False) != False;
 
-    return readBooleanResource(widget, "sgiMode", "SgiMode", False) != False;
+    fprintf(stderr,
+            "[SgiShader][TEMP] SgSgiModeEnabled widget=%s result=%d source=%s\n",
+            widget && XtName(widget) ? XtName(widget) : "?",
+            result,
+            sgi_mode ? "global" : "resource");
+
+    return result;
 }
 
 static int currentDarkScheme(Widget widget)
@@ -314,6 +320,15 @@ void SgRenderManagerShadows(Widget widget,
     layers = shadow_thickness;
     if (layers > 3)
         layers = 3;
+
+    fprintf(stderr,
+            "[SgiShader][TEMP] RenderManagerShadows widget=%s state=%d thickness=%u layers=%u rect=%dx%d+%d+%d draw=%p\n",
+            XtName(widget) ? XtName(widget) : "?",
+            visual_state,
+            (unsigned)shadow_thickness,
+            (unsigned)layers,
+            (int)width, (int)height, (int)x, (int)y,
+            (void *)draw_shadows);
 
     for (i = 0; i < layers; ++i)
     {
