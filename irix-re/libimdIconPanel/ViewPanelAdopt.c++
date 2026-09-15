@@ -483,12 +483,6 @@ ImdViewPanelPortableScaleChanged(Widget widget)
 
     layoutPortableViews(widget);
 
-    /*
-     * Repaint only the clip-window viewport. The original SetScale path walks
-     * and moves only participating views; our host renderer already has the
-     * binary-backed damage-region culling seam, so feed it the visible region
-     * instead of calling ImdViewPanelRedraw(widget) for the full work area.
-     */
     Position widgetX = 0;
     Position widgetY = 0;
     Dimension widgetWidth = 0;
@@ -527,7 +521,77 @@ ImdViewPanelPortableScaleChanged(Widget widget)
     damage.width = static_cast<unsigned short>(std::min<long>(visibleWidth, 65535));
     damage.height = static_cast<unsigned short>(std::min<long>(visibleHeight, 65535));
 
-    XClearArea(XtDisplay(widget), XtWindow(widget),
+    /*
+     * Keep the binary-backed geometry/damage architecture, but do not expose
+     * the host's erase-and-repaint sequence while the ThumbWheel is moving.
+     * The original library imports XCopyArea and its FTR renderer is pixmap/
+     * cache based; the exact SetScale presentation callsite is not claimed
+     * here. This is the portable presentation seam: compose the complete
+     * visible frame offscreen and publish it with one copy.
+     */
+    ImdInvertedTeeRenderer *tee =
+        dynamic_cast<ImdInvertedTeeRenderer *>(renderer);
+    Display *dpy = XtDisplay(widget);
+    Window window = XtWindow(widget);
+    int depth = 0;
+    Pixel background = 0;
+    XtVaGetValues(widget,
+                  XtNdepth, &depth,
+                  XtNbackground, &background,
+                  NULL);
+
+    Pixmap frame = None;
+    if (tee && depth > 0)
+        frame = XCreatePixmap(dpy,
+                              window,
+                              damage.width,
+                              damage.height,
+                              static_cast<unsigned int>(depth));
+
+    if (frame != None) {
+        GC frameGC = XCreateGC(dpy, frame, 0, 0);
+        if (frameGC) {
+            XSetForeground(dpy, frameGC, background);
+            XFillRectangle(dpy,
+                           frame,
+                           frameGC,
+                           0,
+                           0,
+                           damage.width,
+                           damage.height);
+
+            for (AdoptedViewList::iterator it = views.begin();
+                 it != views.end(); ++it) {
+                ImdView *view = it->view;
+                if (!view || !view->portableVisible() ||
+                    !viewIntersectsDamage(*view, &damage))
+                    continue;
+
+                tee->portableDrawToDrawable(*view,
+                                            frame,
+                                            view->portableX() - damage.x,
+                                            view->portableY() - damage.y);
+            }
+
+            XCopyArea(dpy,
+                      frame,
+                      window,
+                      frameGC,
+                      0,
+                      0,
+                      damage.width,
+                      damage.height,
+                      damage.x,
+                      damage.y);
+            XFreeGC(dpy, frameGC);
+            XFreePixmap(dpy, frame);
+            return;
+        }
+        XFreePixmap(dpy, frame);
+    }
+
+    /* Generic/low-resource fallback retains the established damage path. */
+    XClearArea(dpy, window,
                damage.x, damage.y, damage.width, damage.height, False);
     redrawPortableRegion(widget, &damage);
 }
