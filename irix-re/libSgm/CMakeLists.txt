@@ -53,6 +53,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         SgmCompat.c
         SgiShader.c
         SgList.c
+        SgColor.c
         DropPocket.c
         DropPocketRaster.c
         DynaMenu.c
