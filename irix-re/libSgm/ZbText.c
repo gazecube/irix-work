@@ -8,6 +8,7 @@
 
 #include <Sgm/ZbTextP.h>
 #include <Sgm/ZoomBar.h>
+#include "SgiShader.h"
 
 #include <Xm/TextF.h>
 #include <X11/Intrinsic.h>
@@ -117,10 +118,10 @@ static void Initialize(Widget request, Widget new_widget,
 
     /*
      * ZbText.o creates both children with XtVaCreateWidget() and manages them
-     * together.  The object passes zero border/shadow values to the ZoomBar,
+     * together. The object passes zero border/shadow values to the ZoomBar,
      * and zero internal decoration values to the text field; these are the
      * host spellings of the FAST_QUARK resource arguments recovered from the
-     * call sites.  postMotionCall is the literal third text-field resource in
+     * call sites. postMotionCall is the literal third text-field resource in
      * the original object.
      */
     zb->zbtext.zoomBar = XtVaCreateWidget(
@@ -310,6 +311,20 @@ static void ChangeManaged(Widget w)
     DoLayout(zb);
 }
 
+static int SgiModeEnabled(void)
+{
+    static int *sgi_mode;
+    static Boolean looked_up;
+
+    if (!looked_up)
+    {
+        sgi_mode = (int *)dlsym(RTLD_DEFAULT, "SGImode");
+        looked_up = True;
+    }
+
+    return sgi_mode ? (*sgi_mode != 0) : 0;
+}
+
 static void Redisplay(Widget widget, XEvent *event, Region region)
 {
     SgZbTextWidget zb = (SgZbTextWidget)widget;
@@ -347,6 +362,28 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
 
     if (!zb->manager.shadow_thickness)
         return;
+
+    if (SgiModeEnabled())
+    {
+        /*
+         * Exact ZbText.o SGI-mode call shape:
+         *   state array = _SG_ManagerPtr(zb)->instance_state_array
+         *   visual state = _SG_ManagerPtr(zb)->visual_state
+         *   style = 8
+         *
+         * Manager.o Initialize seeds visual_state to zero and points the
+         * instance state array at its class default, _sgManagerData. On the
+         * host ABI the private manager extension does not exist, so reproduce
+         * that proven default state through the reconstructed renderer.
+         */
+        SgRenderManagerShadows(widget, XtWindow(widget),
+                               0, 0,
+                               draw_w, draw_h,
+                               0,
+                               zb->manager.shadow_thickness,
+                               8U);
+        return;
+    }
 
     if (!looked_up)
     {
