@@ -519,31 +519,49 @@ static void DoLayout(SgFinderWidget ft)
     Dimension text_width = MIN_TEXT_WIDTH;
     Dimension drop_width = 0;
     Dimension history_width = 0;
+    Dimension shadow = 0;
     Position x = 0;
 
     if (!ft || !ft->finder.zbText)
         return;
 
-    if (ft->finder.zbText->core.height)
-        row_height = ft->finder.zbText->core.height;
+    /*
+     * Finder.o derives the row height from the two children owned by ZbText,
+     * not from the ZbText manager's current core.height. This is important
+     * because that manager can temporarily retain a larger negotiated height.
+     */
+    if (ft->finder.zoomBar && ft->finder.text)
+    {
+        XtVaGetValues(ft->finder.zbText,
+                      XmNshadowThickness, &shadow,
+                      NULL);
+        row_height = (Dimension)(ft->finder.zoomBar->core.height +
+                                 ft->finder.text->core.height +
+                                 2 * shadow);
+        if (row_height == 0)
+            row_height = 1;
+    }
 
-    if (ft->finder.dropPocket)
-        drop_width = ft->finder.dropPocket->core.height;
+    if (childManaged(ft->finder.dropPocket))
+        drop_width = row_height;
 
-    if (ft->finder.historyBar)
+    if (childManaged(ft->finder.historyBar))
         history_width = (Dimension)(row_height / 2 + 4);
 
-    if (ft->core.width > drop_width + history_width + 4)
-        text_width = (Dimension)(ft->core.width - drop_width - history_width - 4);
+    if (ft->core.width > drop_width + history_width +
+                         2 * DESIRED_SEPARATOR)
+        text_width = (Dimension)(ft->core.width -
+                                 drop_width - history_width -
+                                 2 * DESIRED_SEPARATOR);
     if (text_width < MIN_TEXT_WIDTH)
         text_width = MIN_TEXT_WIDTH;
 
     if (childManaged(ft->finder.dropPocket))
     {
-        Dimension size = row_height;
         XtConfigureWidget(ft->finder.dropPocket, 0, 0,
-                          size, size, ft->finder.dropPocket->core.border_width);
-        x = (Position)(size + DESIRED_SEPARATOR);
+                          row_height, row_height,
+                          ft->finder.dropPocket->core.border_width);
+        x = (Position)(row_height + DESIRED_SEPARATOR);
     }
 
     if (childManaged(ft->finder.zbText))
