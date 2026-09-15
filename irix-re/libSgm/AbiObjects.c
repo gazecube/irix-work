@@ -14,8 +14,8 @@ unsigned char glxMDrawClassRec[152];
 unsigned char sgDropPocketClassRec[156];
 unsigned char sgDynaMenuClassRec[204];
 /* sgFinderClassRec is now a real native class record. */
-unsigned char sgZbTextClassRec[204];
-unsigned char sgZoomBarClassRec[156];
+/* sgZbTextClassRec is now a real native class record. */
+/* sgZoomBarClassRec is now a real native class record. */
 unsigned char sgColumnClassRec[224];
 unsigned char sgOglColorChooserClassRec[224];
 unsigned char sgArcClassRec[124];
@@ -38,7 +38,7 @@ unsigned char _SgDropPocketPrimClassExtRec[28];
 unsigned char _SgZoomBPrimClassExtRec[28];
 unsigned char _SgIconGadClassExtRec[24];
 unsigned char _SgDynaMenu_pushBTranslations[218];
-unsigned char _SgZoomBar_defaultTranslations[108];
+/* _SgZoomBar_defaultTranslations is now owned by ZoomBar.c. */
 
 unsigned char __vtbl__19GLColorSliderGadget[48];
 unsigned char __T_19GLColorSliderGadget[20];
