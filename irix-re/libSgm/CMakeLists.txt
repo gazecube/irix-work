@@ -54,6 +54,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         SgiShader.c
         SgList.c
         SgColor.c
+        Grid.c
         DropPocket.c
         DropPocketRaster.c
         DynaMenu.c
@@ -85,9 +86,9 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     if(SGM_HAVE_MANAGERP_H)
         target_compile_definitions(Sgm PRIVATE SGM_HAVE_MANAGERP_H=1)
-        message(STATUS "private Motif Manager header found; building native SgFinder/SgZbText/SgDynaMenu subclasses")
+        message(STATUS "private Motif Manager header found; building native SgFinder/SgZbText/SgDynaMenu/SgGrid subclasses")
     else()
-        message(FATAL_ERROR "Xm/ManagerP.h is required for reconstructed SgFinder/SgZbText/SgDynaMenu")
+        message(FATAL_ERROR "Xm/ManagerP.h is required for reconstructed SgFinder/SgZbText/SgDynaMenu/SgGrid")
     endif()
 
     if(SGM_HAVE_PRIMITIVEP_H)
