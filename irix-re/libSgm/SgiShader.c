@@ -1,24 +1,18 @@
 /*
  * SGI Motif shader reconstruction.
  *
- * Binary source of truth:
- *   IRIX N32 libXm.so.1
- *     _sgFindShader @ 0x0b2947f0
- *     _sgFindGC     @ 0x0b2a8be0
+ * Sources of truth:
+ *   - IRIX Motif private header Xm/SgiP.h
+ *   - IRIX N32 libXm.a(Sgi.o)
+ *       _sgFindGC     @ 0x0f80
+ *       _sgFindShader @ 0x1688
  *
- * Recovered normal-depth behavior:
- *   - shader records are keyed by display/colormap/depth/background pixel
- *   - XQueryColor() supplies the background RGB
- *   - shader slot 4 is the reference/background level
- *   - darker slots scale RGB toward black
- *   - lighter slots interpolate RGB toward white
- *   - resulting 8-bit channels are shifted left by 8 into XColor
- *   - foreground and background of the returned Xt GC use the same pixel
+ * SgiP.h names the original cache record fields:
+ *   dpy, cmap, depth, pixel, r/g/b, faceShade, GCarray[9], next.
  *
- * The original depth-2 path has additional SGI stipple handling using the
- * named pixmaps "50_foreground" and "75_foreground".  That path remains a
- * separate RE item; modern TrueColor/PseudoColor operation uses the fully
- * recovered path below.
+ * The normal-depth color arithmetic below is instruction-for-instruction
+ * equivalent to the path in Sgi.o.  The original depth-2 tiled path is kept
+ * separate and is not approximated here.
  */
 
 #include "SgiShader.h"
@@ -26,34 +20,33 @@
 #include <X11/Intrinsic.h>
 #include <X11/StringDefs.h>
 #include <dlfcn.h>
-#include <limits.h>
 #include <stdlib.h>
 
-#define SG_SHADER_COUNT 8
+#define SG_SHADER_LEVELS 8
+#define SG_SHADER_GC_SLOTS 9
 
-/* Tables recovered from the original libXm data referenced by _sgFindGC. */
-static const unsigned short sgLightRamp[SG_SHADER_COUNT] =
+/* Exact integer tables from libXm.a(Sgi.o) .data. */
+static const int sgLightRamp[SG_SHADER_LEVELS] =
 {
     0, 42, 85, 128, 170, 213, 230, 255
 };
 
-static const unsigned short sgDarkRamp[SG_SHADER_COUNT] =
+static const int sgDarkRamp[SG_SHADER_LEVELS] =
 {
     0, 32, 64, 96, 128, 160, 190, 255
 };
 
 typedef struct SgShaderRec
 {
-    Display *display;
-    Colormap colormap;
-    int depth;
-    Pixel background;
-    int dark_scheme;
-    unsigned short red;
-    unsigned short green;
-    unsigned short blue;
-    unsigned short reference;
-    GC gc[SG_SHADER_COUNT];
+    Display *dpy;
+    Colormap cmap;
+    Cardinal depth;
+    Pixel pixel;
+    short r;
+    short g;
+    short b;
+    int face_shade;
+    GC gc_array[SG_SHADER_GC_SLOTS];
     struct SgShaderRec *next;
 } SgShaderRec;
 
@@ -69,41 +62,44 @@ static int currentDarkScheme(void)
         dark_scheme = (int *)dlsym(RTLD_DEFAULT, "darkScheme");
         looked_up = True;
     }
+
     return dark_scheme ? (*dark_scheme != 0) : 0;
 }
 
-static const unsigned short *shaderRamp(int dark_scheme)
+static const int *shaderRamp(void)
 {
-    return dark_scheme ? sgDarkRamp : sgLightRamp;
+    return currentDarkScheme() ? sgDarkRamp : sgLightRamp;
 }
 
 static SgShaderRec *findShaderRecord(Widget widget, Pixel background)
 {
     SgShaderRec *rec;
-    Display *display;
-    Colormap colormap = None;
-    int depth = 0;
-    int dark_scheme;
+    Display *dpy;
+    Colormap cmap = None;
+    Cardinal depth = 0;
     XColor color;
-    const unsigned short *ramp;
+    const int *ramp;
 
     if (!widget)
         return NULL;
 
-    display = XtDisplay(widget);
+    dpy = XtDisplay(widget);
     XtVaGetValues(widget,
-                  XtNcolormap, &colormap,
+                  XtNcolormap, &cmap,
                   XtNdepth, &depth,
                   NULL);
-    dark_scheme = currentDarkScheme();
 
+    /*
+     * Exact original lookup key from _sgFindShader:
+     * dpy, cmap, depth, background pixel.  darkScheme is deliberately NOT
+     * part of the cache key in IRIX libXm.
+     */
     for (rec = shader_cache; rec; rec = rec->next)
     {
-        if (rec->display == display &&
-            rec->colormap == colormap &&
+        if (rec->dpy == dpy &&
+            rec->cmap == cmap &&
             rec->depth == depth &&
-            rec->background == background &&
-            rec->dark_scheme == dark_scheme)
+            rec->pixel == background)
             return rec;
     }
 
@@ -112,154 +108,119 @@ static SgShaderRec *findShaderRecord(Widget widget, Pixel background)
         return NULL;
 
     color.pixel = background;
-    XQueryColor(display, colormap, &color);
-    ramp = shaderRamp(dark_scheme);
+    XQueryColor(dpy, cmap, &color);
+    ramp = shaderRamp();
 
-    rec->display = display;
-    rec->colormap = colormap;
+    rec->dpy = dpy;
+    rec->cmap = cmap;
     rec->depth = depth;
-    rec->background = background;
-    rec->dark_scheme = dark_scheme;
+    rec->pixel = background;
 
-    /* Original n32 code stores the high 8 bits in 16-bit fields. */
-    rec->red = (unsigned short)(color.red >> 8);
-    rec->green = (unsigned short)(color.green >> 8);
-    rec->blue = (unsigned short)(color.blue >> 8);
-    rec->reference = ramp[4];
+    /* _sgFindShader stores the high eight bits in signed-short fields. */
+    rec->r = (short)(color.red >> 8);
+    rec->g = (short)(color.green >> 8);
+    rec->b = (short)(color.blue >> 8);
+    rec->face_shade = ramp[4];
 
     rec->next = shader_cache;
     shader_cache = rec;
     return rec;
 }
 
-static Boolean allocClosestColor(Widget widget, SgShaderRec *rec, XColor *color)
+static short shadeChannel(short channel, int target, int face_shade, int maximum)
 {
-    int cells;
-    int i;
-    unsigned long best_distance = ULONG_MAX;
-    Pixel best_pixel = rec->background;
-    XColor *colors;
+    int value;
 
-    if (XAllocColor(rec->display, rec->colormap, color))
-        return True;
+    if (target == face_shade)
+        return channel;
 
-    /*
-     * The IRIX fallback is _sgAllocClosestColor().  For indexed visuals the
-     * behavior we need is nearest available RGB.  Restrict enumeration to
-     * small indexed maps; TrueColor normally succeeds in XAllocColor above.
-     */
-    if (rec->depth <= 0 || rec->depth > 8)
-        return False;
-
-    cells = 1 << rec->depth;
-    colors = (XColor *)calloc((size_t)cells, sizeof(*colors));
-    if (!colors)
-        return False;
-
-    for (i = 0; i < cells; ++i)
-        colors[i].pixel = (Pixel)i;
-    XQueryColors(rec->display, rec->colormap, colors, cells);
-
-    for (i = 0; i < cells; ++i)
+    if (target < face_shade)
     {
-        long dr = (long)colors[i].red - (long)color->red;
-        long dg = (long)colors[i].green - (long)color->green;
-        long db = (long)colors[i].blue - (long)color->blue;
-        unsigned long distance =
-            (unsigned long)(dr * dr) +
-            (unsigned long)(dg * dg) +
-            (unsigned long)(db * db);
-
-        if (distance < best_distance)
-        {
-            best_distance = distance;
-            best_pixel = colors[i].pixel;
-        }
+        if (!face_shade)
+            return 0;
+        value = ((int)channel * target) / face_shade;
+        return (short)value;
     }
 
-    free(colors);
-    color->pixel = best_pixel;
-    (void)widget;
-    return True;
+    if (maximum == face_shade)
+        return channel;
+
+    value = (int)channel +
+            (((maximum - (int)channel) * (target - face_shade)) /
+             (maximum - face_shade));
+    return (short)value;
 }
 
-static unsigned short shadeChannel(unsigned short channel,
-                                   unsigned short target,
-                                   unsigned short reference,
-                                   unsigned short maximum)
+static GC normalShaderGC(Widget widget, SgShaderRec *rec, int shader_index)
 {
-    if (target == reference)
-        return channel;
+    const int *ramp;
+    int target;
+    int maximum;
+    XColor color;
+    XGCValues values;
 
-    if (target < reference)
+    ramp = shaderRamp();
+    target = ramp[shader_index];
+    maximum = ramp[SG_SHADER_LEVELS - 1];
+
+    if (target == rec->face_shade)
     {
-        if (!reference)
-            return 0;
-        return (unsigned short)(((unsigned int)channel * target) / reference);
+        color.pixel = rec->pixel;
+    }
+    else
+    {
+        short r = shadeChannel(rec->r, target, rec->face_shade, maximum);
+        short g = shadeChannel(rec->g, target, rec->face_shade, maximum);
+        short b = shadeChannel(rec->b, target, rec->face_shade, maximum);
+
+        /* Exact Sgi.o conversion: eight-bit shader component << 8. */
+        color.red = (unsigned short)((unsigned short)r << 8);
+        color.green = (unsigned short)((unsigned short)g << 8);
+        color.blue = (unsigned short)((unsigned short)b << 8);
+        color.flags = DoRed | DoGreen | DoBlue;
+        color.pixel = rec->pixel;
+
+        /*
+         * Exact normal-path failure behavior: if XAllocColor fails, SGI uses
+         * the original background pixel. _sgAllocClosestColor is NOT called
+         * here; it belongs to the depth-2 support-color path.
+         */
+        if (!XAllocColor(rec->dpy, rec->cmap, &color))
+            color.pixel = rec->pixel;
     }
 
-    if (maximum == reference)
-        return channel;
-
-    return (unsigned short)(channel +
-        (((unsigned int)(maximum - channel) * (target - reference)) /
-         (maximum - reference)));
+    values.foreground = color.pixel;
+    values.background = color.pixel;
+    return XtGetGC(widget, GCForeground | GCBackground, &values);
 }
 
 GC SgShaderGetGC(Widget widget, Pixel background, int shader_index)
 {
     SgShaderRec *rec;
-    const unsigned short *ramp;
-    unsigned short target;
-    unsigned short maximum;
-    XColor color;
-    XGCValues values;
 
     if (!widget)
         return NULL;
 
-    if (shader_index < 0 || shader_index >= SG_SHADER_COUNT)
+    if (shader_index < 0 || shader_index >= SG_SHADER_LEVELS)
         shader_index = 4;
 
     rec = findShaderRecord(widget, background);
     if (!rec)
         return NULL;
 
-    if (rec->gc[shader_index])
-        return rec->gc[shader_index];
+    if (rec->gc_array[shader_index])
+        return rec->gc_array[shader_index];
 
-    ramp = shaderRamp(rec->dark_scheme);
-    target = ramp[shader_index];
-    maximum = ramp[SG_SHADER_COUNT - 1];
+    /*
+     * In Sgi.o, depth == 2 selects a separate jump-table implementation for
+     * levels 1,2,3,5,6 using the 50_foreground/75_foreground tiled pixmaps.
+     * Levels 0,4,7 still use the normal arithmetic path.  Until that branch
+     * is reproduced exactly, do not substitute an invented approximation.
+     */
+    if (rec->depth == 2 &&
+        shader_index != 0 && shader_index != 4 && shader_index != 7)
+        return NULL;
 
-    if (target == rec->reference)
-    {
-        color.pixel = rec->background;
-    }
-    else
-    {
-        unsigned short red = shadeChannel(rec->red, target,
-                                          rec->reference, maximum);
-        unsigned short green = shadeChannel(rec->green, target,
-                                            rec->reference, maximum);
-        unsigned short blue = shadeChannel(rec->blue, target,
-                                           rec->reference, maximum);
-
-        /* Exact IRIX conversion: 8-bit shader channel << 8. */
-        color.red = (unsigned short)(red << 8);
-        color.green = (unsigned short)(green << 8);
-        color.blue = (unsigned short)(blue << 8);
-        color.flags = DoRed | DoGreen | DoBlue;
-        color.pixel = rec->background;
-
-        if (!allocClosestColor(widget, rec, &color))
-            color.pixel = rec->background;
-    }
-
-    values.foreground = color.pixel;
-    values.background = color.pixel;
-    rec->gc[shader_index] = XtGetGC(widget,
-                                    GCForeground | GCBackground,
-                                    &values);
-    return rec->gc[shader_index];
+    rec->gc_array[shader_index] = normalShaderGC(widget, rec, shader_index);
+    return rec->gc_array[shader_index];
 }
