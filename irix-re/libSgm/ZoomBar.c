@@ -11,6 +11,7 @@
 
 #include <Xm/Xm.h>
 #include <Xm/XmP.h>
+#include <Xm/BaseClassP.h>
 #include <X11/Intrinsic.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
@@ -32,6 +33,8 @@ typedef struct
     int section;
 } SgZoomBarCallbackStruct;
 
+static void ClassInitialize(void);
+static void InitializePrehook(Widget, Widget, ArgList, Cardinal *);
 static void Initialize(Widget, Widget, ArgList, Cardinal *);
 static void Resize(Widget);
 static void Redisplay(Widget, XEvent *, Region);
@@ -116,13 +119,29 @@ char _SgZoomBar_defaultTranslations[108] =
     "<LeaveWindow>:Leave()\n"
     "<Motion>:Motion()";
 
+/*
+ * ZoomBar.o keeps the parsed translations separately and installs them from
+ * an XmBaseClass initialize prehook. This is important: the drawing code can
+ * work perfectly while the actions remain dead if this hook is omitted.
+ */
+static XtTranslations parsedTranslations = NULL;
+
+static XmBaseClassExtRec baseClassExtRec =
+{
+    .next_extension = NULL,
+    .record_type = NULLQUARK,
+    .version = XmBaseClassExtVersion,
+    .record_size = sizeof(XmBaseClassExtRec),
+    .initializePrehook = InitializePrehook
+};
+
 SgZoomBarClassRec sgZoomBarClassRec =
 {
     {
         (WidgetClass)&xmPrimitiveClassRec,
         "SgZoomBar",
         sizeof(SgZoomBarRec),
-        NULL,
+        ClassInitialize,
         NULL,
         False,
         Initialize,
@@ -150,7 +169,7 @@ SgZoomBarClassRec sgZoomBarClassRec =
         _SgZoomBar_defaultTranslations,
         QueryGeometry,
         NULL,
-        NULL
+        (XtPointer)&baseClassExtRec
     },
     {
         XmInheritBorderHighlight,
@@ -165,6 +184,28 @@ SgZoomBarClassRec sgZoomBarClassRec =
 };
 
 WidgetClass sgZoomBarWidgetClass = (WidgetClass)&sgZoomBarClassRec;
+
+static void ClassInitialize(void)
+{
+    parsedTranslations = XtParseTranslationTable(_SgZoomBar_defaultTranslations);
+    baseClassExtRec.record_type = XmQmotif;
+}
+
+static void InitializePrehook(Widget request, Widget new_widget,
+                              ArgList args, Cardinal *num_args)
+{
+    WidgetClass wc;
+    (void)request;
+    (void)args;
+    (void)num_args;
+
+    if (!new_widget || !parsedTranslations)
+        return;
+
+    wc = XtClass(new_widget);
+    if (wc)
+        wc->core_class.tm_table = (String)parsedTranslations;
+}
 
 static void Initialize(Widget request, Widget new_widget,
                        ArgList args, Cardinal *num_args)
