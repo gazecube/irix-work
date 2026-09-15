@@ -8,6 +8,8 @@
  *       _sgFindShader @ 0x1688
  *   - IRIX N32 libXm.a(Manager.o) _sgManagerData
  *   - IRIX N32 libXm.a(Draw.o) _RenderShadowsDefault
+ *   - IRIX N32 libXm.a(Display.o), which initializes SGImode and darkScheme
+ *     from Xt resources during XmDisplay initialization.
  *
  * SgiP.h names the original cache record fields:
  *   dpy, cmap, depth, pixel, r/g/b, faceShade, GCarray[9], next.
@@ -29,7 +31,6 @@
 #define SG_MANAGER_VISUAL_STATES 5
 #define SG_MANAGER_STATE_SLOTS 10
 
-/* Exact integer tables from libXm.a(Sgi.o) .data. */
 static const int sgLightRamp[SG_SHADER_LEVELS] =
 {
     0, 42, 85, 128, 170, 213, 230, 255
@@ -40,10 +41,6 @@ static const int sgDarkRamp[SG_SHADER_LEVELS] =
     0, 32, 64, 96, 128, 160, 190, 255
 };
 
-/*
- * Exact 200-byte _sgManagerData object from libXm.a(Manager.o): five visual
- * states, each containing five top/bottom shader-index pairs.
- */
 static const int sgManagerStateArray[SG_MANAGER_VISUAL_STATES][SG_MANAGER_STATE_SLOTS] =
 {
     { 3, 6, 2, 4, 1, 1, 5, 3, 4, 4 },
@@ -74,7 +71,56 @@ typedef void (*XmDrawShadowsProc)(Display *, Drawable, GC, GC,
 
 static SgShaderRec *shader_cache;
 
-static int currentDarkScheme(void)
+static Boolean readBooleanResource(Widget widget,
+                                   const char *name,
+                                   const char *class_name,
+                                   Boolean default_value)
+{
+    XtResource resource;
+    Boolean value = default_value;
+
+    if (!widget)
+        return default_value;
+
+    resource.resource_name = (String)name;
+    resource.resource_class = (String)class_name;
+    resource.resource_type = XtRBoolean;
+    resource.resource_size = sizeof(Boolean);
+    resource.resource_offset = 0;
+    resource.default_type = XtRImmediate;
+    resource.default_addr = (XtPointer)(long)default_value;
+
+    /*
+     * Display.o uses XtGetSubresources() with NULL name/class and a single
+     * Boolean resource record.  Doing the same here preserves wildcard
+     * application resources such as "FileManager*sgiMode: True" even though
+     * host OpenMotif has no SGImode global or SGI private XmDisplay fields.
+     */
+    XtGetSubresources(widget, (XtPointer)&value,
+                      NULL, NULL,
+                      &resource, 1,
+                      NULL, 0);
+    return value;
+}
+
+int SgSgiModeEnabled(Widget widget)
+{
+    static int *sgi_mode;
+    static Boolean looked_up;
+
+    if (!looked_up)
+    {
+        sgi_mode = (int *)dlsym(RTLD_DEFAULT, "SGImode");
+        looked_up = True;
+    }
+
+    if (sgi_mode)
+        return *sgi_mode != 0;
+
+    return readBooleanResource(widget, "sgiMode", "SgiMode", False) != False;
+}
+
+static int currentDarkScheme(Widget widget)
 {
     static int *dark_scheme;
     static Boolean looked_up;
@@ -85,12 +131,15 @@ static int currentDarkScheme(void)
         looked_up = True;
     }
 
-    return dark_scheme ? (*dark_scheme != 0) : 0;
+    if (dark_scheme)
+        return *dark_scheme != 0;
+
+    return readBooleanResource(widget, "darkScheme", "DarkScheme", False) != False;
 }
 
-static const int *shaderRamp(void)
+static const int *shaderRamp(Widget widget)
 {
-    return currentDarkScheme() ? sgDarkRamp : sgLightRamp;
+    return currentDarkScheme(widget) ? sgDarkRamp : sgLightRamp;
 }
 
 static SgShaderRec *findShaderRecord(Widget widget, Pixel background)
@@ -111,11 +160,6 @@ static SgShaderRec *findShaderRecord(Widget widget, Pixel background)
                   XtNdepth, &depth,
                   NULL);
 
-    /*
-     * Exact original lookup key from _sgFindShader:
-     * dpy, cmap, depth, background pixel.  darkScheme is deliberately NOT
-     * part of the cache key in IRIX libXm.
-     */
     for (rec = shader_cache; rec; rec = rec->next)
     {
         if (rec->dpy == dpy &&
@@ -131,14 +175,12 @@ static SgShaderRec *findShaderRecord(Widget widget, Pixel background)
 
     color.pixel = background;
     XQueryColor(dpy, cmap, &color);
-    ramp = shaderRamp();
+    ramp = shaderRamp(widget);
 
     rec->dpy = dpy;
     rec->cmap = cmap;
     rec->depth = depth;
     rec->pixel = background;
-
-    /* _sgFindShader stores the high eight bits in signed-short fields. */
     rec->r = (short)(color.red >> 8);
     rec->g = (short)(color.green >> 8);
     rec->b = (short)(color.blue >> 8);
@@ -181,7 +223,7 @@ static GC normalShaderGC(Widget widget, SgShaderRec *rec, int shader_index)
     XColor color;
     XGCValues values;
 
-    ramp = shaderRamp();
+    ramp = shaderRamp(widget);
     target = ramp[shader_index];
     maximum = ramp[SG_SHADER_LEVELS - 1];
 
@@ -195,18 +237,12 @@ static GC normalShaderGC(Widget widget, SgShaderRec *rec, int shader_index)
         short g = shadeChannel(rec->g, target, rec->face_shade, maximum);
         short b = shadeChannel(rec->b, target, rec->face_shade, maximum);
 
-        /* Exact Sgi.o conversion: eight-bit shader component << 8. */
         color.red = (unsigned short)((unsigned short)r << 8);
         color.green = (unsigned short)((unsigned short)g << 8);
         color.blue = (unsigned short)((unsigned short)b << 8);
         color.flags = DoRed | DoGreen | DoBlue;
         color.pixel = rec->pixel;
 
-        /*
-         * Exact normal-path failure behavior: if XAllocColor fails, SGI uses
-         * the original background pixel. _sgAllocClosestColor is NOT called
-         * here; it belongs to the depth-2 support-color path.
-         */
         if (!XAllocColor(rec->dpy, rec->cmap, &color))
             color.pixel = rec->pixel;
     }
@@ -233,12 +269,6 @@ GC SgShaderGetGC(Widget widget, Pixel background, int shader_index)
     if (rec->gc_array[shader_index])
         return rec->gc_array[shader_index];
 
-    /*
-     * In Sgi.o, depth == 2 selects a separate jump-table implementation for
-     * levels 1,2,3,5,6 using the 50_foreground/75_foreground tiled pixmaps.
-     * Levels 0,4,7 still use the normal arithmetic path.  Until that branch
-     * is reproduced exactly, do not substitute an invented approximation.
-     */
     if (rec->depth == 2 &&
         shader_index != 0 && shader_index != 4 && shader_index != 7)
         return NULL;
@@ -281,11 +311,6 @@ void SgRenderManagerShadows(Widget widget,
     XtVaGetValues(widget, XtNbackground, &background, NULL);
     state = sgManagerStateArray[visual_state];
 
-    /*
-     * _RenderShadowsDefault clamps this loop to at most three one-pixel
-     * layers.  For each layer it deliberately starts at state pair #1
-     * (offsets +8/+12), then advances by one pair while shrinking the frame.
-     */
     layers = shadow_thickness;
     if (layers > 3)
         layers = 3;
