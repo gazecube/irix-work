@@ -9,8 +9,10 @@
  * ImdIconOnlyRenderer
  *
  * Binary anchor: libimdIconPanel.so
- *   ctor     0x0968245c, 0x4c bytes
- *   realize  0x096824a8, 0x58 bytes
+ *   ctor        0x0968245c, 0x4c bytes
+ *   realize     0x096824a8, 0x58 bytes
+ *   setSize     0x0968b8a0, 0x10 bytes
+ *   intersects  0x09690f08, 0x54 bytes
  *
  * The original class derives directly from ImdRenderer.  The constructor
  * calls ImdRenderer::ImdRenderer(), installs its vtable, and clears the GC
@@ -24,6 +26,9 @@ public:
     virtual ~ImdIconOnlyRenderer();
     virtual void realize(Widget widget);
     virtual void draw(ImdView &view, long x, long y);
+
+    void setSize(ImdView &view);
+    bool intersects(ImdView &view, long x, long y);
 
     GC portableGC() const { return _gc; }
 
