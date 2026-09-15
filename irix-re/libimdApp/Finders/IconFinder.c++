@@ -1,7 +1,9 @@
 #include "IconFinder.h"
 
 #include "ArgList.h"
+#include "IconOnlyRenderer.h"
 #include "ModelBasedIconPanel.h"
+#include "SingleViewLayout.h"
 #include <Sgm/Finder.h>
 
 #include <Vk/VkMenu.h>
@@ -44,12 +46,8 @@ static Dimension preferredWidth(Widget widget)
     return width ? width : 1;
 }
 
-/*
- * Temporary diagnostic while reconstructing the SGI XmManager constraint
- * behaviour used by ImdIconFinder.  Finder.o itself only lays out its three
- * internal children; libimdApp adds iconFinderFrame and the ViewKit menu as
- * additional direct children.
- */
+/* Temporary runtime geometry probe. Remove once the remaining SGI manager
+ * constraint behavior has been recovered. */
 static void dumpFinderChildren(Widget finder, const char *where)
 {
     CompositeWidget composite;
@@ -88,16 +86,10 @@ static void dumpFinderChildren(Widget finder, const char *where)
 }
 
 /*
- * Keep only the part of the host seam that is proven useful: collapse the
- * ViewKit MenuBar to the width of its single recovered cascade and pin it to
- * the right edge.  Do NOT force either external child to the Finder's full
- * height.  That was a host-only approximation and visibly compressed the
- * original Finder row.
- *
- * The original libimdApp constructor sets top/bottom/right attachment
- * resources on this MenuBar.  IRIX XmManager carries SGI-private constraint
- * behaviour that host OpenMotif lacks; until that is reconstructed, preserve
- * ViewKit's natural y/height and change only x/width.
+ * Host-only ViewKit seam. The original constructor sets Form-style
+ * top/bottom/right attachments on the VkMenuBar. Host OpenMotif does not
+ * implement the SGI manager behavior observed by the original desktop, so
+ * retain only the compact right-edge placement until that lower layer lands.
  */
 static void placeIconFinderMenu(ImdIconFinder *finder)
 {
@@ -178,6 +170,8 @@ ImdIconFinder::ImdIconFinder(
 {
     ImdArgList args;
 
+    /* Original libimdApp.so @ 0x0963edc8: XtCreateWidget(name,
+     * sgFinderWidgetClass,parent,args,count). */
     _baseWidget = XtCreateWidget(
         const_cast<char *>(name ? name : "iconFinder"),
         sgFinderWidgetClass,
@@ -189,16 +183,17 @@ ImdIconFinder::ImdIconFinder(
         return;
 
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
-
     dumpFinderChildren(_baseWidget, "after-finder-create");
 
+    /* Original @ 0x0963ee18: XmFrame named iconFinderFrame. */
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
         xmFrameWidgetClass,
         _baseWidget,
         NULL);
 
-    /* Exact attachment values recovered from libimdApp.so. */
+    /* Exact FAST_QUARK-decoded attachment values from the constructor:
+     * top=FORM, bottom=FORM, left=FORM, right=NONE. */
     args.setArg(XmNtopAttachment, XmATTACH_FORM);
     args.setArg(XmNbottomAttachment, XmATTACH_FORM);
     args.setArg(XmNleftAttachment, XmATTACH_FORM);
@@ -208,7 +203,10 @@ ImdIconFinder::ImdIconFinder(
     dumpFinderChildren(_baseWidget, "after-frame-create");
 
     args.clear();
+
+    /* Exact original panel args at 0x0963eeb4..0x0963eedc. */
     args.setArg(XmNtraversalOn, False);
+    args.setArg("dragOverEnabled", False);
 
     _iconFinderPanel = new ImdModelBasedIconPanel(
         "iconFinderPanel",
@@ -218,16 +216,48 @@ ImdIconFinder::ImdIconFinder(
         args.getNumArgs());
 
     if (_iconFinderPanel && _iconFinderPanel->baseWidget())
-        XtManageChild(_iconFinderPanel->baseWidget());
+    {
+        Widget panelWidget = _iconFinderPanel->baseWidget();
 
+        /* Exact original constructor sequence recovered from
+         * 0x0963ef9c..0x0963f04c:
+         *   panel->baseWidget()
+         *   new ImdIconOnlyRenderer
+         *   ImdViewPanelAdoptRenderer
+         *   panel->baseWidget()
+         *   new ImdSingleViewLayout(panelWidget)
+         *   ImdViewPanelAdoptLayout
+         *
+         * This was previously missing entirely and left iconFinderFrame with
+         * only a tiny natural size on the host. */
+        ImdViewPanelAdoptRenderer(panelWidget, new ImdIconOnlyRenderer());
+        ImdViewPanelAdoptLayout(panelWidget, new ImdSingleViewLayout(panelWidget));
+
+        XtManageChild(panelWidget);
+    }
+
+    /* Original @ 0x0963f170: new VkMenuBar(_menuBarDesc,this,False). */
     _menuBar = new VkMenuBar(iconFinderMenuBarDesc, (XtPointer)this, False);
     if (_menuBar)
     {
         _menuBar->show(_baseWidget);
+
+        /* Exact menu attachments at 0x0963f1ec..0x0963f264:
+         * top=FORM, bottom=FORM, left=NONE, right=FORM. */
+        Widget menuWidget = _menuBar->baseWidget();
+        if (menuWidget)
+        {
+            args.clear();
+            args.setArg(XmNtopAttachment, XmATTACH_FORM);
+            args.setArg(XmNbottomAttachment, XmATTACH_FORM);
+            args.setArg(XmNleftAttachment, XmATTACH_NONE);
+            args.setArg(XmNrightAttachment, XmATTACH_FORM);
+            args.setValues(menuWidget);
+        }
+
         _finderSelectionMenu =
             _menuBar->findNamedItem("finderSelectionMenu", False);
 
-        Widget menuWidget = _menuBar->baseWidget();
         if (menuWidget)
         {
             XtAddEventHandler(menuWidget,
