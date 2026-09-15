@@ -447,6 +447,20 @@ ImdIconPanel::dragEnd()
 void ImdIconPanel::portableResetViews(bool destroyViews)
 {
     /*
+     * SGI keeps non-owning drag-manager view references synchronized with view
+     * deletion through ImdDragManager::purgeDeleted() @ 0x09680b9c. The host
+     * reset path destroys a whole directory's views at once, so deliver that
+     * same purge event for each outgoing view before any object is released.
+     */
+    if (destroyViews && _dragManager) {
+        for (std::vector<ImdView *>::iterator it = _views.begin();
+             it != _views.end(); ++it) {
+            if (*it)
+                _dragManager->purgeDeleted(*it);
+        }
+    }
+
+    /*
      * Keep the temporary ViewPanel adoption table in the same lifecycle as
      * the panel-owned views. Original ImdViewPanelDeleteAllViews() removes the
      * adopted set before ImdIconPanel releases the view objects.
