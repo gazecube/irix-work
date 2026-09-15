@@ -51,6 +51,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     add_library(Sgm SHARED
         SgmCompat.c
+        SgiShader.c
         DropPocket.c
         DropPocketRaster.c
         Finder.c
