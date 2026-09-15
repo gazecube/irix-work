@@ -110,20 +110,11 @@ static void Initialize(Widget request, Widget new_widget,
     (void)args;
     (void)num_args;
 
-    /* Exact ZbText.o constructor geometry: unspecified dimensions become 5. */
     if (request->core.width == 0)
         zb->core.width = 5;
     if (request->core.height == 0)
         zb->core.height = 5;
 
-    /*
-     * ZbText.o creates both children with XtVaCreateWidget() and manages them
-     * together. The object passes zero border/shadow values to the ZoomBar,
-     * and zero internal decoration values to the text field; these are the
-     * host spellings of the FAST_QUARK resource arguments recovered from the
-     * call sites. postMotionCall is the literal third text-field resource in
-     * the original object.
-     */
     zb->zbtext.zoomBar = XtVaCreateWidget(
         "zoomBar", sgZoomBarWidgetClass, new_widget,
         XtNborderWidth, 0,
@@ -157,12 +148,6 @@ static void DoLayout(SgZbTextWidget zb)
     if (!zb || !zb->zbtext.zoomBar || !zb->zbtext.text)
         return;
 
-    /*
-     * Exact ZbText.o DoLayout math:
-     *   inset = manager.shadow_thickness + core.border_width
-     *   child width = core.width - 2*shadow - 2*border
-     *   ZoomBar height is clamped to at least six pixels.
-     */
     zoom_h = zb->zbtext.zoomBar->core.height;
     if (zoom_h < 6)
         zoom_h = 6;
@@ -211,7 +196,6 @@ static void PreferredSize(SgZbTextWidget zb,
     if (!zb)
         return;
 
-    /* Exact object structure: maximum child width, sum of child heights. */
     for (i = 0; i < zb->composite.num_children; ++i)
     {
         Widget child = zb->composite.children[i];
@@ -222,7 +206,6 @@ static void PreferredSize(SgZbTextWidget zb,
         height = (Dimension)(height + child->core.height);
     }
 
-    /* ZbText.o reads one vertical text-field margin before adding the frame. */
     if (zb->zbtext.text)
         XtVaGetValues(zb->zbtext.text, XmNmarginHeight, &margin_h, NULL);
 
@@ -274,7 +257,6 @@ static XtGeometryResult GeometryManager(Widget child,
 
     zb = (SgZbTextWidget)XtParent(child);
 
-    /* Original rejects child x/y moves outright. */
     if (request->request_mode & (CWX | CWY))
         return XtGeometryNo;
 
@@ -311,20 +293,6 @@ static void ChangeManaged(Widget w)
     DoLayout(zb);
 }
 
-static int SgiModeEnabled(void)
-{
-    static int *sgi_mode;
-    static Boolean looked_up;
-
-    if (!looked_up)
-    {
-        sgi_mode = (int *)dlsym(RTLD_DEFAULT, "SGImode");
-        looked_up = True;
-    }
-
-    return sgi_mode ? (*sgi_mode != 0) : 0;
-}
-
 static void Redisplay(Widget widget, XEvent *event, Region region)
 {
     SgZbTextWidget zb = (SgZbTextWidget)widget;
@@ -342,7 +310,6 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
     if (!zb || !XtIsRealized(widget) || !XtWindow(widget))
         return;
 
-    /* Redisplay computes its frame from the children, not core.width/height. */
     for (i = 0; i < zb->composite.num_children; ++i)
     {
         Widget child = zb->composite.children[i];
@@ -363,19 +330,8 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
     if (!zb->manager.shadow_thickness)
         return;
 
-    if (SgiModeEnabled())
+    if (SgSgiModeEnabled(widget))
     {
-        /*
-         * Exact ZbText.o SGI-mode call shape:
-         *   state array = _SG_ManagerPtr(zb)->instance_state_array
-         *   visual state = _SG_ManagerPtr(zb)->visual_state
-         *   style = 8
-         *
-         * Manager.o Initialize seeds visual_state to zero and points the
-         * instance state array at its class default, _sgManagerData. On the
-         * host ABI the private manager extension does not exist, so reproduce
-         * that proven default state through the reconstructed renderer.
-         */
         SgRenderManagerShadows(widget, XtWindow(widget),
                                0, 0,
                                draw_w, draw_h,
@@ -393,10 +349,6 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
 
     if (draw_shadows)
     {
-        /*
-         * Exact non-SGImode call shape from ZbText.o: the two manager shadow
-         * GCs are intentionally reversed and shadow style 8 is passed.
-         */
         draw_shadows(XtDisplay(widget), XtWindow(widget),
                      zb->manager.bottom_shadow_GC,
                      zb->manager.top_shadow_GC,
