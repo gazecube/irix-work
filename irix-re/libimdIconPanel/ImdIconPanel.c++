@@ -19,6 +19,7 @@ extern "C" WidgetClass sgVisualDrawingAreaWidgetClass;
 
 extern "C" void ImdViewPanelPortableRendererChanged(Widget, ImdRenderer *);
 extern "C" void ImdViewPanelPortableResetViews(Widget);
+extern "C" void ImdViewPanelPortableScaleChanged(Widget);
 
 namespace
 {
@@ -187,20 +188,17 @@ extern "C" void ImdViewPanelSetScale(Widget widget, float scale, long arg0, long
     state.scaleArg1 = arg1;
 
     /*
-     * Original ImdIconPanel::setScale(float) first dispatches setScale() to
-     * the owned renderer, then calls ImdViewPanelSetScale(widget, scale,
-     * centerX, centerY). The host ViewPanel owns the renderer pointer already,
-     * so preserve the same propagation here until the complete panel method is
-     * restored. The renderer resize is observed by the existing ViewPanel
-     * redraw path and triggers one relayout when view geometry changes.
+     * Original ImdViewPanelSetScale() @ 0x09687afc updates scale state and
+     * propagates it into the participating renderer/layout objects before it
+     * walks existing views to adjust geometry. It does not perform the host's
+     * former unconditional full draw followed by a second full draw after
+     * geometry discovery.
      */
     if (state.renderer)
         state.renderer->setScale(scale);
 
-    if (XtIsRealized(widget)) {
-        XClearArea(XtDisplay(widget), XtWindow(widget), 0, 0, 0, 0, False);
-        ImdViewPanelRedraw(widget);
-    }
+    if (XtIsRealized(widget))
+        ImdViewPanelPortableScaleChanged(widget);
 }
 
 extern "C" float ImdViewPanelGetScale(Widget widget)
