@@ -12,7 +12,7 @@ unsigned char sgColorChooserClassRec[224];
 unsigned char glxDrawClassRec[120];
 unsigned char glxMDrawClassRec[152];
 unsigned char sgDropPocketClassRec[156];
-unsigned char sgDynaMenuClassRec[204];
+/* sgDynaMenuClassRec is now a real native class record. */
 /* sgFinderClassRec is now a real native class record. */
 /* sgZbTextClassRec is now a real native class record. */
 /* sgZoomBarClassRec is now a real native class record. */
