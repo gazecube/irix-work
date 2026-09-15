@@ -54,6 +54,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         SgiShader.c
         DropPocket.c
         DropPocketRaster.c
+        DynaMenu.c
         Finder.c
         ZbText.c
         ZoomBar.c
@@ -82,15 +83,15 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     if(SGM_HAVE_MANAGERP_H)
         target_compile_definitions(Sgm PRIVATE SGM_HAVE_MANAGERP_H=1)
-        message(STATUS "private Motif Manager header found; building native SgFinder/SgZbText/SgZoomBar subclasses")
+        message(STATUS "private Motif Manager header found; building native SgFinder/SgZbText/SgDynaMenu subclasses")
     else()
-        message(STATUS "private Motif Manager header missing; SgFinder/SgZbText/SgZoomBar will use compatibility fallbacks")
+        message(FATAL_ERROR "Xm/ManagerP.h is required for reconstructed SgFinder/SgZbText/SgDynaMenu")
     endif()
 
     if(SGM_HAVE_PRIMITIVEP_H)
-        message(STATUS "private Motif Primitive header found; building native SgDropPocket/SgThumbWheel subclasses")
+        message(STATUS "private Motif Primitive header found; building native SgDropPocket/SgThumbWheel/SgZoomBar subclasses")
     else()
-        message(FATAL_ERROR "Xm/PrimitiveP.h is required for the native SgDropPocket/SgThumbWheel reconstruction")
+        message(FATAL_ERROR "Xm/PrimitiveP.h is required for the native SgDropPocket/SgThumbWheel/SgZoomBar reconstruction")
     endif()
 
     target_compile_definitions(Sgm PRIVATE
@@ -106,6 +107,13 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
     # than renamed here.
     set_source_files_properties(SgmCompat.c PROPERTIES
         COMPILE_DEFINITIONS "sgZbTextWidgetClass=sgZbTextWidgetClass_compat_placeholder;SgCreateZbText=SgCreateZbText_compat_placeholder"
+    )
+
+    # Temporary until the generated stub file is physically pruned: keep its
+    # two obsolete DynaMenu entries out of the public namespace. The native
+    # implementations are in DynaMenu.c.
+    set_source_files_properties(AbiStubs.c PROPERTIES
+        COMPILE_DEFINITIONS "SgDynaMenuAddHistoryItem=SgDynaMenuAddHistoryItem_abi_obsolete;SgDynaMenuClearHistory=SgDynaMenuClearHistory_abi_obsolete"
     )
 
     target_link_libraries(Sgm
