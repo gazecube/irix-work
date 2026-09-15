@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,28 @@ enum DrawMode {
  */
 static const double kDefaultIconScale = 0.5;
 static const double kFtiNominalExtent = 100.0;
+
+struct FtrPixmapCacheEntry
+{
+    Pixmap pixmap;
+    Display *display;
+    unsigned long lastUse;
+
+    FtrPixmapCacheEntry()
+        : pixmap(None), display(0), lastUse(0)
+    {
+    }
+
+    FtrPixmapCacheEntry(Pixmap p, Display *dpy, unsigned long use)
+        : pixmap(p), display(dpy), lastUse(use)
+    {
+    }
+};
+
+typedef std::map<std::string, FtrPixmapCacheEntry> FtrPixmapCache;
+FtrPixmapCache gFtrPixmapCache;
+unsigned long gFtrPixmapCacheSerial = 0;
+static const std::size_t kFtrPixmapCacheLimit = 96;
 
 static std::string trim(const std::string &s)
 {
@@ -424,6 +447,56 @@ static void drawSgiSelectedBorder(Widget widget,
     XSetFillStyle(dpy, gc, FillSolid);
     XFreePixmap(dpy, stipple);
 }
+
+static std::string makeFtrPixmapCacheKey(Widget widget,
+                                         const std::vector<ImdString> &resources,
+                                         long iconExtent,
+                                         unsigned int depth,
+                                         unsigned long background,
+                                         unsigned int iconState)
+{
+    Colormap cmap = None;
+    XtVaGetValues(widget, XtNcolormap, &cmap, NULL);
+    if (cmap == None)
+        cmap = DefaultColormapOfScreen(XtScreen(widget));
+
+    char header[160];
+    std::snprintf(header,
+                  sizeof(header),
+                  "%p:%lu:%u:%ld:%lu:%u:",
+                  static_cast<void *>(XtDisplay(widget)),
+                  static_cast<unsigned long>(cmap),
+                  depth,
+                  iconExtent,
+                  background,
+                  iconState & 0x7fu);
+
+    std::string key(header);
+    for (std::size_t i = 0; i < resources.size(); ++i) {
+        key += resources[i].stdString();
+        key += '\x1f';
+    }
+    return key;
+}
+
+static void trimFtrPixmapCache()
+{
+    while (gFtrPixmapCache.size() > kFtrPixmapCacheLimit) {
+        FtrPixmapCache::iterator oldest = gFtrPixmapCache.end();
+        for (FtrPixmapCache::iterator it = gFtrPixmapCache.begin();
+             it != gFtrPixmapCache.end(); ++it) {
+            if (oldest == gFtrPixmapCache.end() ||
+                it->second.lastUse < oldest->second.lastUse)
+                oldest = it;
+        }
+
+        if (oldest == gFtrPixmapCache.end())
+            break;
+        if (oldest->second.pixmap != None && oldest->second.display)
+            XFreePixmap(oldest->second.display, oldest->second.pixmap);
+        gFtrPixmapCache.erase(oldest);
+    }
+}
 }
 
 ImdIconRenderer::ImdIconRenderer() : _portableWidget(0) {}
@@ -493,14 +566,13 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
     const std::vector<ImdString> &resources = iconView->portableIconResources();
 
     /*
-     * Original libimdFtrIcon.so does not replay the individual FTI layers
-     * directly into the destination window. Its X implementation exposes the
-     * binary-named setupPixmap(), drawWithCache(), getCachePixmap(), getPixmap()
-     * and mask/cache machinery. Preserve that architecture here: build the
-     * complete icon in an offscreen pixmap, including all ordered FTI includes
-     * and the state border, then copy the finished raster to the destination
-     * once. This also prevents scroll/Expose from presenting intermediate
-     * layers of composite icons such as the C++ and header artwork.
+     * Original libimdFtrIcon.so exposes setupPixmap(), drawWithCache(),
+     * getCachePixmap(), getPixmap() and mask/cache machinery. The previous
+     * host path matched the offscreen composition architecture but rebuilt the
+     * same completed FTR raster separately for every visible view. Cache the
+     * completed raster by resource stack, rendered extent, icon state,
+     * colormap/background and drawable depth so repeated icons at the same
+     * scale become XCopyArea() operations, as the original cache names imply.
      */
     Window root = None;
     int drawableX = 0;
@@ -519,61 +591,87 @@ bool ImdInvertedTeeRenderer::portableDrawToDrawable(ImdView &view,
                                             &drawableBorder,
                                             &drawableDepth) != 0;
 
+    Pixel background = WhitePixelOfScreen(XtScreen(_portableWidget));
+    XtVaGetValues(_portableWidget, XtNbackground, &background, NULL);
+
     Pixmap iconPixmap = None;
-    if (haveGeometry && drawableDepth != 0)
+    std::string cacheKey;
+    if (haveGeometry && drawableDepth != 0) {
+        cacheKey = makeFtrPixmapCacheKey(_portableWidget,
+                                         resources,
+                                         iconExtent,
+                                         drawableDepth,
+                                         background,
+                                         iconView->portableFlags());
+        FtrPixmapCache::iterator cached = gFtrPixmapCache.find(cacheKey);
+        if (cached != gFtrPixmapCache.end()) {
+            cached->second.lastUse = ++gFtrPixmapCacheSerial;
+            iconPixmap = cached->second.pixmap;
+        }
+    }
+
+    if (iconPixmap == None && haveGeometry && drawableDepth != 0) {
         iconPixmap = XCreatePixmap(dpy,
                                    drawable,
                                    static_cast<unsigned int>(iconExtent),
                                    static_cast<unsigned int>(iconExtent),
                                    drawableDepth);
+        if (iconPixmap != None) {
+            GC iconGC = XCreateGC(dpy, iconPixmap, 0, 0);
+            if (iconGC) {
+                XSetForeground(dpy, iconGC, background);
+                XFillRectangle(dpy,
+                               iconPixmap,
+                               iconGC,
+                               0,
+                               0,
+                               static_cast<unsigned int>(iconExtent),
+                               static_cast<unsigned int>(iconExtent));
+
+                for (std::size_t i = 0; i < resources.size(); ++i) {
+                    const std::string resource = resources[i].stdString();
+                    if (!resource.empty())
+                        drawFti(_portableWidget,
+                                iconPixmap,
+                                resource,
+                                0,
+                                0,
+                                _portableIconScale);
+                }
+
+                drawSgiSelectedBorder(_portableWidget,
+                                      iconPixmap,
+                                      iconGC,
+                                      0,
+                                      0,
+                                      iconExtent,
+                                      iconExtent,
+                                      iconView->portableFlags());
+                XFreeGC(dpy, iconGC);
+
+                FtrPixmapCacheEntry entry(iconPixmap,
+                                          dpy,
+                                          ++gFtrPixmapCacheSerial);
+                gFtrPixmapCache[cacheKey] = entry;
+                trimFtrPixmapCache();
+            } else {
+                XFreePixmap(dpy, iconPixmap);
+                iconPixmap = None;
+            }
+        }
+    }
 
     if (iconPixmap != None) {
-        GC iconGC = XCreateGC(dpy, iconPixmap, 0, 0);
-        if (iconGC) {
-            Pixel background = WhitePixelOfScreen(XtScreen(_portableWidget));
-            XtVaGetValues(_portableWidget, XtNbackground, &background, NULL);
-            XSetForeground(dpy, iconGC, background);
-            XFillRectangle(dpy,
-                           iconPixmap,
-                           iconGC,
-                           0,
-                           0,
-                           static_cast<unsigned int>(iconExtent),
-                           static_cast<unsigned int>(iconExtent));
-
-            for (std::size_t i = 0; i < resources.size(); ++i) {
-                const std::string resource = resources[i].stdString();
-                if (!resource.empty())
-                    drawFti(_portableWidget,
-                            iconPixmap,
-                            resource,
-                            0,
-                            0,
-                            _portableIconScale);
-            }
-
-            drawSgiSelectedBorder(_portableWidget,
-                                  iconPixmap,
-                                  iconGC,
-                                  0,
-                                  0,
-                                  iconExtent,
-                                  iconExtent,
-                                  iconView->portableFlags());
-
-            XCopyArea(dpy,
-                      iconPixmap,
-                      drawable,
-                      gc,
-                      0,
-                      0,
-                      static_cast<unsigned int>(iconExtent),
-                      static_cast<unsigned int>(iconExtent),
-                      static_cast<int>(iconX),
-                      static_cast<int>(y));
-            XFreeGC(dpy, iconGC);
-        }
-        XFreePixmap(dpy, iconPixmap);
+        XCopyArea(dpy,
+                  iconPixmap,
+                  drawable,
+                  gc,
+                  0,
+                  0,
+                  static_cast<unsigned int>(iconExtent),
+                  static_cast<unsigned int>(iconExtent),
+                  static_cast<int>(iconX),
+                  static_cast<int>(y));
     } else {
         /* Defensive fallback for an unusual drawable with no usable depth. */
         for (std::size_t i = 0; i < resources.size(); ++i) {
