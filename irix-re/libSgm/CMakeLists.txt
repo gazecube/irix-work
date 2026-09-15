@@ -94,20 +94,17 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     target_compile_definitions(Sgm PRIVATE
         sgDropPocketClassRec=sgDropPocketClassRec_abi_placeholder
-        SgHasFileIconLibrary=SgHasFileIconLibrary_abi_placeholder
     )
     set_source_files_properties(DropPocket.c PROPERTIES
-        COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec;SgHasFileIconLibrary=SgHasFileIconLibrary"
+        COMPILE_DEFINITIONS "sgDropPocketClassRec=sgDropPocketClassRec"
     )
 
-    # These symbols used to be supplied by the broad compatibility/stub
-    # translation units. ZbText.c now owns the real binary-backed versions,
-    # so rename only the legacy definitions out of the public namespace.
+    # SgmCompat.c still owns the broad compatibility constructor for ZbText;
+    # keep only that legacy creator/class-handle pair out of the public
+    # namespace. Implemented ABI functions are removed from AbiStubs.c rather
+    # than renamed here.
     set_source_files_properties(SgmCompat.c PROPERTIES
         COMPILE_DEFINITIONS "sgZbTextWidgetClass=sgZbTextWidgetClass_compat_placeholder;SgCreateZbText=SgCreateZbText_compat_placeholder"
-    )
-    set_source_files_properties(AbiStubs.c PROPERTIES
-        COMPILE_DEFINITIONS "SgZbTextGetChild=SgZbTextGetChild_abi_placeholder"
     )
 
     target_link_libraries(Sgm
