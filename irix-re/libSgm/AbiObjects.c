@@ -37,7 +37,7 @@ unsigned char SgFileSelectionBoxClassRec[236];
 unsigned char _SgDropPocketPrimClassExtRec[28];
 unsigned char _SgZoomBPrimClassExtRec[28];
 unsigned char _SgIconGadClassExtRec[24];
-unsigned char _SgDynaMenu_pushBTranslations[218];
+/* _SgDynaMenu_pushBTranslations is now owned by DynaMenu.c. */
 /* _SgZoomBar_defaultTranslations is now owned by ZoomBar.c. */
 
 unsigned char __vtbl__19GLColorSliderGadget[48];
