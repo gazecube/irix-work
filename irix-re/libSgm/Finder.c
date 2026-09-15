@@ -31,6 +31,12 @@ extern WidgetClass sgDynaMenuWidgetClass;
 #endif
 
 typedef struct {
+    int reason;
+    XEvent *event;
+    int section;
+} SgZoomBarCallbackStructCompat;
+
+typedef struct {
     XtCallbackList activate_callback;
     XtCallbackList value_changed_callback;
     Pixmap history_pixmap;
@@ -73,6 +79,7 @@ static void finderResize(Widget);
 static void finderChangeManaged(Widget);
 static void finderLayout(SgFinderRecCompat *);
 static void updateZoomBarSections(SgFinderRecCompat *);
+static void zoomBarPushCB(Widget, XtPointer, XtPointer);
 static void textActivateCB(Widget, XtPointer, XtPointer);
 static void textValueChangedCB(Widget, XtPointer, XtPointer);
 static void historyItemActivateCB(Widget, XtPointer, XtPointer);
@@ -159,6 +166,7 @@ static void finderInitialize(Widget request, Widget new_widget,
         rec->finder.history[i] = NULL;
         rec->finder.history_item[i] = NULL;
     }
+
     if (rec->finder.use_drop_pocket)
         rec->finder.drop_pocket = XtCreateManagedWidget(
             "dropPocket", childClass(sgDropPocketWidgetClass, xmDrawingAreaWidgetClass),
@@ -170,14 +178,20 @@ static void finderInitialize(Widget request, Widget new_widget,
         rec->finder.text = SgZbTextGetChild(rec->finder.zb_text, SgZBTEXT_TEXT);
         rec->finder.zoom_bar = SgZbTextGetChild(rec->finder.zb_text, SgZBTEXT_ZOOM_BAR);
     }
+
     if (rec->finder.use_history_menu)
         rec->finder.history_menubar = XtCreateManagedWidget(
             "historyBar", childClass(sgDynaMenuWidgetClass, xmDrawingAreaWidgetClass),
             new_widget, NULL, 0);
+
+    if (rec->finder.zoom_bar)
+        XtAddCallback(rec->finder.zoom_bar, XmNactivateCallback,
+                      zoomBarPushCB, new_widget);
     if (rec->finder.text) {
         XtAddCallback(rec->finder.text, XmNactivateCallback, textActivateCB, new_widget);
         XtAddCallback(rec->finder.text, XmNvalueChangedCallback, textValueChangedCB, new_widget);
     }
+
     finderLayout(rec);
     updateZoomBarSections(rec);
 }
@@ -191,7 +205,10 @@ static void clearHistoryStorage(SgFinderRecCompat *rec, Boolean destroy_widgets)
             if (destroy_widgets) XtDestroyWidget(rec->finder.history_item[i]);
             rec->finder.history_item[i] = NULL;
         }
-        if (rec->finder.history[i]) { XtFree(rec->finder.history[i]); rec->finder.history[i] = NULL; }
+        if (rec->finder.history[i]) {
+            XtFree(rec->finder.history[i]);
+            rec->finder.history[i] = NULL;
+        }
     }
     rec->finder.history_count = 0;
 }
@@ -275,6 +292,21 @@ static void finderResize(Widget w)
 { SgFinderRecCompat *r=(SgFinderRecCompat *)w; finderLayout(r); updateZoomBarSections(r); }
 static void finderChangeManaged(Widget w)
 { SgFinderRecCompat *r=(SgFinderRecCompat *)w; finderLayout(r); updateZoomBarSections(r); }
+
+/* Original Finder.c zoomBarPushCB path. */
+static void zoomBarPushCB(Widget child, XtPointer client_data, XtPointer call_data)
+{
+    SgFinderRecCompat *rec = (SgFinderRecCompat *)client_data;
+    SgZoomBarCallbackStructCompat *cb = (SgZoomBarCallbackStructCompat *)call_data;
+    SgSetTextFunc set_section;
+    (void)child;
+
+    if (!rec || !cb || cb->section < 0)
+        return;
+    set_section = (SgSetTextFunc)rec->finder.set_text_section_func;
+    if (set_section)
+        set_section((Widget)rec, cb->section);
+}
 
 static void textActivateCB(Widget child, XtPointer client_data, XtPointer call_data)
 {
