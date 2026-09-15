@@ -6,12 +6,14 @@
  * cumulative X boundaries and sectionCount is the number of boundaries,
  * yielding sectionCount + 1 rendered spans.
  *
- * The section renderer uses the SGI Motif shader helpers _sgFindShader()
- * and _sgFindGC() when they are available. The five-state shader matrix and
- * line geometry below are recovered directly from the original N32 code.
+ * The five-state shader matrix and rail geometry below are recovered directly
+ * from the original N32 code. Shader GCs are supplied by SgiShader.c, which
+ * reconstructs the normal-depth _sgFindShader/_sgFindGC behavior from IRIX
+ * libXm.so.1 instead of depending on host Motif private symbols.
  */
 
 #include <Sgm/Finder.h>
+#include "SgiShader.h"
 
 #include <Xm/PrimitiveP.h>
 #include <Xm/Xm.h>
@@ -19,7 +21,6 @@
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
-#include <dlfcn.h>
 #include <string.h>
 
 #ifndef XmInheritBorderHighlight
@@ -37,9 +38,6 @@ typedef struct
     int section;
 } SgZoomBarCallbackStruct;
 
-typedef void (*SgFindShaderProc)(Widget, XtPointer *, Pixel);
-typedef GC (*SgFindGCProc)(Widget, XtPointer, int);
-
 typedef struct
 {
     XtCallbackList activate_callback;
@@ -50,9 +48,6 @@ typedef struct
     int section_count;
     int armed_section;
     int pointer_section;
-
-    /* Host-only fallback state, outside the recovered n32 layout claim. */
-    GC background_gc;
 } SgZoomBarPartCompat;
 
 typedef struct _SgZoomBarRec
@@ -75,7 +70,6 @@ typedef struct _SgZoomBarClassRec
 } SgZoomBarClassRecCompat;
 
 static void zoomBarInitialize(Widget, Widget, ArgList, Cardinal *);
-static void zoomBarDestroy(Widget);
 static void zoomBarResize(Widget);
 static void zoomBarRedisplay(Widget, XEvent *, Region);
 static Boolean zoomBarSetValues(Widget, Widget, Widget, ArgList, Cardinal *);
@@ -95,8 +89,6 @@ static void zoomBarDrawAll(SgZoomBarRecCompat *);
 static Position eventX(const XEvent *);
 static Boolean eventInside(const SgZoomBarRecCompat *, const XEvent *);
 static void callZoomCallback(Widget, XtCallbackList, int, XEvent *, int);
-static GC shaderGC(SgZoomBarRecCompat *, XtPointer, int);
-static XtPointer findShader(SgZoomBarRecCompat *);
 
 /*
  * State table at original N32 address 0x0b250488.
@@ -185,7 +177,7 @@ SgZoomBarClassRecCompat sgZoomBarClassRec =
         XtExposeCompressMultiple,
         True,
         False,
-        zoomBarDestroy,
+        NULL,
         zoomBarResize,
         zoomBarRedisplay,
         zoomBarSetValues,
@@ -220,7 +212,6 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
                               ArgList args, Cardinal *num_args)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)new_widget;
-    XGCValues values;
     (void)request;
     (void)args;
     (void)num_args;
@@ -233,19 +224,6 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
         rec->core.width = 1;
     if (rec->core.height == 0)
         rec->core.height = 6;
-
-    values.foreground = rec->core.background_pixel;
-    rec->zoom_bar.background_gc = XtGetGC(new_widget, GCForeground, &values);
-}
-
-static void zoomBarDestroy(Widget widget)
-{
-    SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
-    if (rec->zoom_bar.background_gc)
-    {
-        XtReleaseGC(widget, rec->zoom_bar.background_gc);
-        rec->zoom_bar.background_gc = NULL;
-    }
 }
 
 static void zoomBarResize(Widget widget)
@@ -367,62 +345,16 @@ static int zoomBarHitSection(SgZoomBarRecCompat *rec, Position x)
     return -1;
 }
 
-static XtPointer findShader(SgZoomBarRecCompat *rec)
-{
-    static SgFindShaderProc proc;
-    static Boolean looked_up;
-    XtPointer shader = NULL;
-
-    if (!looked_up)
-    {
-        proc = (SgFindShaderProc)dlsym(RTLD_DEFAULT, "_sgFindShader");
-        looked_up = True;
-    }
-    if (proc)
-        proc((Widget)rec, &shader, rec->core.background_pixel);
-    return shader;
-}
-
-static GC shaderGC(SgZoomBarRecCompat *rec, XtPointer shader, int shader_index)
-{
-    static SgFindGCProc proc;
-    static Boolean looked_up;
-
-    if (!looked_up)
-    {
-        proc = (SgFindGCProc)dlsym(RTLD_DEFAULT, "_sgFindGC");
-        looked_up = True;
-    }
-    if (proc && shader)
-    {
-        GC gc = proc((Widget)rec, shader, shader_index);
-        if (gc)
-            return gc;
-    }
-
-    /* Host fallback when SGI Motif private shaders are unavailable. */
-    switch (shader_index)
-    {
-        case 1: return rec->primitive.bottom_shadow_GC;
-        case 2: return rec->primitive.top_shadow_GC;
-        case 3: return rec->primitive.highlight_GC;
-        case 4: return rec->zoom_bar.background_gc;
-        case 6: return rec->primitive.top_shadow_GC;
-        default:return rec->zoom_bar.background_gc;
-    }
-}
-
 /*
  * Section renderer recovered from 0x0b1dc450. The original requires at least
- * five horizontal pixels, resolves eight shader slots, draws three nested
- * top/left rails, fills the center, then draws the bottom/right rails.
+ * five pixels, resolves eight SGI shader slots, draws three nested top/left
+ * rails, fills the center, then draws the bottom/right rails.
  */
 static void zoomBarDrawSection(SgZoomBarRecCompat *rec, int section, int state)
 {
     XRectangle r;
     Display *dpy;
     Window win;
-    XtPointer shader;
     GC g0, g1, g2, g3, g4, g5, g6, g7;
     int x, y, w, h;
 
@@ -440,16 +372,26 @@ static void zoomBarDrawSection(SgZoomBarRecCompat *rec, int section, int state)
 
     dpy = XtDisplay((Widget)rec);
     win = XtWindow((Widget)rec);
-    shader = findShader(rec);
 
-    g0 = shaderGC(rec, shader, zoomBarShaderTable[state][0]);
-    g1 = shaderGC(rec, shader, zoomBarShaderTable[state][1]);
-    g2 = shaderGC(rec, shader, zoomBarShaderTable[state][2]);
-    g3 = shaderGC(rec, shader, zoomBarShaderTable[state][3]);
-    g4 = shaderGC(rec, shader, zoomBarShaderTable[state][4]);
-    g5 = shaderGC(rec, shader, zoomBarShaderTable[state][5]);
-    g6 = shaderGC(rec, shader, zoomBarShaderTable[state][6]);
-    g7 = shaderGC(rec, shader, zoomBarShaderTable[state][7]);
+    g0 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][0]);
+    g1 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][1]);
+    g2 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][2]);
+    g3 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][3]);
+    g4 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][4]);
+    g5 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][5]);
+    g6 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][6]);
+    g7 = SgShaderGetGC((Widget)rec, rec->core.background_pixel,
+                       zoomBarShaderTable[state][7]);
+
+    if (!g0 || !g1 || !g2 || !g3 || !g4 || !g5 || !g6 || !g7)
+        return;
 
     XDrawLine(dpy, win, g4, x,     y,     x + w,     y);
     XDrawLine(dpy, win, g4, x,     y + 1, x,         y + h);
