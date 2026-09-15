@@ -15,12 +15,12 @@
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
 #include <dlfcn.h>
+#include <stdio.h>
 
 #ifndef XmInheritParentProcess
 #define XmInheritParentProcess ((XmParentProcessProc)_XtInherit)
 #endif
 
-/* Motif-private entry point used by the original ZbText.o fallback path. */
 typedef void (*XmDrawShadowsProc)(Display *, Drawable, GC, GC,
                                   Position, Position,
                                   Dimension, Dimension,
@@ -137,6 +137,17 @@ static void Initialize(Widget request, Widget new_widget,
         if (children[0]) XtManageChild(children[0]);
         if (children[1]) XtManageChild(children[1]);
     }
+
+    fprintf(stderr,
+            "[SgZbText][TEMP] Initialize name=%s core=%ux%u shadow=%u border=%u zoom=%ux%u text=%ux%u\n",
+            XtName(new_widget) ? XtName(new_widget) : "?",
+            (unsigned)zb->core.width, (unsigned)zb->core.height,
+            (unsigned)zb->manager.shadow_thickness,
+            (unsigned)zb->core.border_width,
+            zb->zbtext.zoomBar ? (unsigned)zb->zbtext.zoomBar->core.width : 0,
+            zb->zbtext.zoomBar ? (unsigned)zb->zbtext.zoomBar->core.height : 0,
+            zb->zbtext.text ? (unsigned)zb->zbtext.text->core.width : 0,
+            zb->zbtext.text ? (unsigned)zb->zbtext.text->core.height : 0);
 }
 
 static void DoLayout(SgZbTextWidget zb)
@@ -161,6 +172,15 @@ static void DoLayout(SgZbTextWidget zb)
                             2 * zb->core.border_width);
     else
         width = 1;
+
+    fprintf(stderr,
+            "[SgZbText][TEMP] DoLayout name=%s core=%ux%u shadow=%u border=%u inset=%u width=%u zoom_h=%u text_h=%u\n",
+            XtName((Widget)zb) ? XtName((Widget)zb) : "?",
+            (unsigned)zb->core.width, (unsigned)zb->core.height,
+            (unsigned)zb->manager.shadow_thickness,
+            (unsigned)zb->core.border_width,
+            (unsigned)inset, (unsigned)width, (unsigned)zoom_h,
+            (unsigned)zb->zbtext.text->core.height);
 
     XtConfigureWidget(zb->zbtext.zoomBar,
                       (Position)inset,
@@ -301,6 +321,7 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
     Dimension draw_w;
     Dimension draw_h;
     Cardinal i;
+    int sgi_mode;
     static XmDrawShadowsProc draw_shadows;
     static Boolean looked_up;
 
@@ -327,10 +348,21 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
                          2 * zb->manager.shadow_thickness +
                          2 * zb->core.border_width);
 
+    sgi_mode = SgSgiModeEnabled(widget);
+    fprintf(stderr,
+            "[SgZbText][TEMP] Redisplay name=%s core=%ux%u child=%ux%u draw=%ux%u shadow=%u border=%u sgiMode=%d\n",
+            XtName(widget) ? XtName(widget) : "?",
+            (unsigned)zb->core.width, (unsigned)zb->core.height,
+            (unsigned)child_w, (unsigned)child_h,
+            (unsigned)draw_w, (unsigned)draw_h,
+            (unsigned)zb->manager.shadow_thickness,
+            (unsigned)zb->core.border_width,
+            sgi_mode);
+
     if (!zb->manager.shadow_thickness)
         return;
 
-    if (SgSgiModeEnabled(widget))
+    if (sgi_mode)
     {
         SgRenderManagerShadows(widget, XtWindow(widget),
                                0, 0,
