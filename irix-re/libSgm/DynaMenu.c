@@ -4,11 +4,6 @@
  * Source of truth:
  *   - IRIX Sgm/DynaMenu.h and DynaMenuP.h
  *   - IRIX N32 libSgm.a(DynaMenu.o)
- *
- * The original widget is an XmManager containing one visible history button
- * and a popup menu.  It owns copied XmStrings, keeps at most
- * maxHistoryCount entries (default 6), and reports popup selections through
- * SgNdynaPushCallback with reason SgCR_DYNA_PUSH.
  */
 
 #include <Sgm/DynaMenuP.h>
@@ -26,6 +21,18 @@
 #ifndef XmInheritParentProcess
 #define XmInheritParentProcess ((XmParentProcessProc)_XtInherit)
 #endif
+
+/* Exact exported 218-byte translation object from DynaMenu.o .data. */
+char _SgDynaMenu_pushBTranslations[218] =
+    "<Btn2Down>:ProcessDrag()\n"
+    "~s ~m ~a <Key>Return:PrimitiveParentActivate()\n"
+    "<Key>osfActivate:PrimitiveParentActivate()\n"
+    "<Key>osfCancel:PrimitiveParentCancel()\n"
+    "<Key>osfHelp:Help()\n"
+    "<EnterWindow>:Enter()\n"
+    "<LeaveWindow>:Leave()";
+
+static XtTranslations pushBTranslations;
 
 static void ClassInitialize(void);
 static void Initialize(Widget, Widget, ArgList, Cardinal *);
@@ -137,16 +144,14 @@ SgDynaMenuClassRec sgDynaMenuClassRec =
         XmInheritParentProcess,
         NULL
     },
-    {
-        0
-    }
+    { 0 }
 };
 
 WidgetClass sgDynaMenuWidgetClass = (WidgetClass)&sgDynaMenuClassRec;
 
 static void ClassInitialize(void)
 {
-    /* The original only parses the private PushButton translation table. */
+    pushBTranslations = XtParseTranslationTable(_SgDynaMenu_pushBTranslations);
 }
 
 static void clearItemList(SgDynaMenuWidget ft)
@@ -247,6 +252,8 @@ static void createMenuItems(SgDynaMenuWidget ft)
                                 ft->dynaMenu.historyPopup,
                                 XmNuserData, (XtPointer)(XtArgVal)i,
                                 NULL);
+        if (pushBTranslations)
+            XtOverrideTranslations(item, pushBTranslations);
         XtAddCallback(item, XmNactivateCallback, historyPushCB, ft);
     }
 }
@@ -265,8 +272,8 @@ static void updateMenuItems(SgDynaMenuWidget ft)
                   XmNnumChildren, &child_count,
                   NULL);
 
-    for (i = 0; i < child_count; ++i)
-        XtUnmanageChild(children[i]);
+    if (child_count)
+        XtUnmanageChildren(children, child_count);
 
     for (i = 0; i < child_count && (int)i < ft->dynaMenu.historyItemCount; ++i)
     {
@@ -287,6 +294,7 @@ static void makeHistoryMenu(SgDynaMenuWidget ft)
         XtVaCreateManagedWidget("historyButton",
                                 xmPushButtonWidgetClass,
                                 (Widget)ft,
+                                XmNtranslations, pushBTranslations,
                                 NULL);
 
     ft->dynaMenu.historyPopup =
