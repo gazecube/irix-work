@@ -138,7 +138,14 @@ static void DoLayout(SgZbTextWidget zb)
         return;
 
     XtVaGetValues((Widget)zb, XmNshadowThickness, &shadow, NULL);
-    inset = (Dimension)(shadow + zb->core.border_width);
+
+    /*
+     * core.border_width is outside the widget's window. Counting it again as
+     * an internal inset shifts both children inward and narrows them twice.
+     * The reconstructed Initialize() height calculation already uses only the
+     * manager shadow as the internal frame, so keep Resize consistent with it.
+     */
+    inset = shadow;
 
     if (zb->core.width > (Dimension)(2 * inset))
         inner_w = (Dimension)(zb->core.width - 2 * inset);
