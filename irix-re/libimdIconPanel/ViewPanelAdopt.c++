@@ -3,6 +3,7 @@
 #include <Xm/DrawingA.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -428,6 +429,107 @@ ImdViewPanelPortableResetViews(Widget widget)
     gAdoptedViews.erase(widget);
     gPortableLayoutDirty[widget] = true;
     gPortableRedrawDirty[widget] = true;
+}
+
+extern "C" void
+ImdViewPanelPortableScaleChanged(Widget widget)
+{
+    if (!widget || !XtIsRealized(widget))
+        return;
+
+    std::map<Widget, ImdRenderer *>::iterator rendererIt = gRenderers.find(widget);
+    if (rendererIt == gRenderers.end() || !rendererIt->second)
+        return;
+
+    ImdRenderer *renderer = rendererIt->second;
+    AdoptedViewList &views = gAdoptedViews[widget];
+
+    /*
+     * Binary anchor: ImdViewPanelSetScale() @ 0x09687afc propagates the new
+     * scale to its renderer/layout objects first, then walks extant views and
+     * adjusts geometry/placement. It does not perform the host's old
+     * paint-everything -> discover-size-change -> relayout -> paint-everything
+     * sequence. Stage the same information here without rendering FTI data.
+     */
+    GC gc = XCreateGC(XtDisplay(widget), XtWindow(widget), 0, 0);
+    XFontStruct *font = gc
+        ? XQueryFont(XtDisplay(widget), XGContextFromGC(gc))
+        : 0;
+    const long iconExtent = std::max<long>(1, static_cast<long>(
+        100.0 * static_cast<double>(renderer->scale()) * 0.5));
+
+    for (AdoptedViewList::iterator it = views.begin(); it != views.end(); ++it) {
+        ImdIconView *view = dynamic_cast<ImdIconView *>(it->view);
+        if (!view || !view->portableVisible())
+            continue;
+
+        const ImdString label = view->getLabel();
+        long textWidth = 0;
+        long textHeight = 0;
+        if (font && !label.empty()) {
+            textWidth = XTextWidth(font,
+                                   label.c_str(),
+                                   static_cast<int>(label.stdString().size()));
+            textHeight = font->ascent + font->descent;
+        }
+        view->portableSetSize(std::max(iconExtent, textWidth),
+                              iconExtent + textHeight);
+    }
+
+    if (font)
+        XFreeFontInfo(0, font, 1);
+    if (gc)
+        XFreeGC(XtDisplay(widget), gc);
+
+    layoutPortableViews(widget);
+
+    /*
+     * Repaint only the clip-window viewport. The original SetScale path walks
+     * and moves only participating views; our host renderer already has the
+     * binary-backed damage-region culling seam, so feed it the visible region
+     * instead of calling ImdViewPanelRedraw(widget) for the full work area.
+     */
+    Position widgetX = 0;
+    Position widgetY = 0;
+    Dimension widgetWidth = 0;
+    Dimension widgetHeight = 0;
+    Dimension parentWidth = 0;
+    Dimension parentHeight = 0;
+    XtVaGetValues(widget,
+                  XtNx, &widgetX,
+                  XtNy, &widgetY,
+                  XtNwidth, &widgetWidth,
+                  XtNheight, &widgetHeight,
+                  NULL);
+    if (XtParent(widget))
+        XtVaGetValues(XtParent(widget),
+                      XtNwidth, &parentWidth,
+                      XtNheight, &parentHeight,
+                      NULL);
+
+    const long visibleX = widgetX < 0 ? -static_cast<long>(widgetX) : 0;
+    const long visibleY = widgetY < 0 ? -static_cast<long>(widgetY) : 0;
+    const long availableWidth = static_cast<long>(widgetWidth) - visibleX;
+    const long availableHeight = static_cast<long>(widgetHeight) - visibleY;
+    const long visibleWidth = std::max<long>(0, std::min<long>(
+        availableWidth,
+        parentWidth ? static_cast<long>(parentWidth) : availableWidth));
+    const long visibleHeight = std::max<long>(0, std::min<long>(
+        availableHeight,
+        parentHeight ? static_cast<long>(parentHeight) : availableHeight));
+
+    if (visibleWidth <= 0 || visibleHeight <= 0)
+        return;
+
+    XRectangle damage;
+    damage.x = static_cast<short>(visibleX);
+    damage.y = static_cast<short>(visibleY);
+    damage.width = static_cast<unsigned short>(std::min<long>(visibleWidth, 65535));
+    damage.height = static_cast<unsigned short>(std::min<long>(visibleHeight, 65535));
+
+    XClearArea(XtDisplay(widget), XtWindow(widget),
+               damage.x, damage.y, damage.width, damage.height, False);
+    redrawPortableRegion(widget, &damage);
 }
 
 namespace
