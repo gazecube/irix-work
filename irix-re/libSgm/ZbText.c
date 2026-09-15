@@ -61,7 +61,7 @@ static void zbTextResize(Widget);
 static void zbTextChangeManaged(Widget);
 static void zbTextLayout(SgZbTextRecCompat *);
 
-static SgZbTextClassRecCompat sgZbTextClassRec =
+SgZbTextClassRecCompat sgZbTextClassRec =
 {
     {
         (WidgetClass)&xmManagerClassRec,
