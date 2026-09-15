@@ -14,6 +14,14 @@
 GC SgShaderGetGC(Widget widget, Pixel background, int shader_index);
 
 /*
+ * IRIX Display.o initializes the process-global SGImode from the Xt resource
+ * named "sgiMode".  Host OpenMotif normally has no SGImode symbol, so this
+ * helper falls back to the same resource-database lookup when that symbol is
+ * absent.
+ */
+int SgSgiModeEnabled(Widget widget);
+
+/*
  * Reproduce the default SGI XmManager shadow renderer for one visual state.
  * The state table comes from libXm.a(Manager.o) _sgManagerData and the layer
  * loop comes from libXm.a(Draw.o) _RenderShadowsDefault.
