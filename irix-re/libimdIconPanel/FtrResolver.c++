@@ -134,11 +134,6 @@ static bool elfHasProgramHeaders(const std::vector<unsigned char> &d)
 
 static std::string classifyCore(const ImdDNA &dna, const std::string &path)
 {
-    /*
-     * Compatibility fallback only. The primary path executes the shipped FTR
-     * source rules. Directory model identity remains useful when a reference
-     * path cannot be stat()ed locally.
-     */
     if (dna.type() == "ImdDirModel") {
         if (containsEntry(path, ".dumpster"))
             return "Dumpster";
@@ -221,26 +216,253 @@ static std::string normalizeRelative(const std::string &base,
     return out;
 }
 
-static std::string quotedInclude(const std::string &line)
-{
-    const std::string::size_type call = line.find("include(");
-    if (call == std::string::npos)
-        return std::string();
-    const std::string::size_type q1 = line.find('"', call);
-    if (q1 == std::string::npos)
-        return std::string();
-    const std::string::size_type q2 = line.find('"', q1 + 1);
-    if (q2 == std::string::npos)
-        return std::string();
-    return line.substr(q1 + 1, q2 - q1 - 1);
-}
-
 struct TypeIcons
 {
     std::vector<ImdString> resources;
 };
 
 typedef std::map<std::string, TypeIcons> TypeIconMap;
+
+/*
+ * The ICON rule is a small C/GL-like program. The old host resolver flattened
+ * every include() it found in the rule, which incorrectly combined mutually
+ * exclusive opened/selected/located branches. SGI documents inclusion order as
+ * painter order: each later included picture is superimposed on the previous
+ * one. Evaluate the branch structure for the normal closed/inactive icon state
+ * so the ordered include stream matches what the Desktop would execute.
+ *
+ * Dynamic state-specific ICON re-evaluation is still a later seam; the renderer
+ * currently expresses selected/located state through the FTR color/state path.
+ */
+class IconProgramParser
+{
+public:
+    IconProgramParser(const std::string &program,
+                      std::vector<std::string> &includes)
+        : _program(program), _pos(0), _includes(includes)
+    {
+    }
+
+    void run()
+    {
+        skipSpace();
+        if (peek() == '{')
+            parseBlock(true);
+        else
+            parseSequence(true, false);
+    }
+
+private:
+    char peek() const
+    {
+        return _pos < _program.size() ? _program[_pos] : '\0';
+    }
+
+    void skipSpace()
+    {
+        while (_pos < _program.size() &&
+               std::isspace(static_cast<unsigned char>(_program[_pos])))
+            ++_pos;
+    }
+
+    bool wordAt(const char *word) const
+    {
+        const std::size_t n = std::strlen(word);
+        if (_program.compare(_pos, n, word) != 0)
+            return false;
+        if (_pos + n < _program.size()) {
+            const unsigned char c = static_cast<unsigned char>(_program[_pos + n]);
+            if (std::isalnum(c) || c == '_')
+                return false;
+        }
+        return true;
+    }
+
+    std::string parenthesized()
+    {
+        skipSpace();
+        if (peek() != '(')
+            return std::string();
+        ++_pos;
+        const std::size_t start = _pos;
+        int depth = 1;
+        while (_pos < _program.size() && depth > 0) {
+            if (_program[_pos] == '(')
+                ++depth;
+            else if (_program[_pos] == ')')
+                --depth;
+            if (depth > 0)
+                ++_pos;
+        }
+        const std::size_t end = _pos;
+        if (peek() == ')')
+            ++_pos;
+        return _program.substr(start, end - start);
+    }
+
+    static std::string compact(const std::string &s)
+    {
+        std::string out;
+        for (std::size_t i = 0; i < s.size(); ++i)
+            if (!std::isspace(static_cast<unsigned char>(s[i])))
+                out += s[i];
+        return out;
+    }
+
+    static bool baselineVariable(const std::string &name)
+    {
+        if (name == "true")
+            return true;
+        if (name == "false")
+            return false;
+        if (name == "current" || name == "disabled" ||
+            name == "opened" || name == "located" || name == "selected")
+            return false;
+        return false;
+    }
+
+    static std::size_t findTopLevel(const std::string &s, const char *op)
+    {
+        const std::size_t n = std::strlen(op);
+        int depth = 0;
+        for (std::size_t i = 0; i + n <= s.size(); ++i) {
+            if (s[i] == '(')
+                ++depth;
+            else if (s[i] == ')')
+                --depth;
+            if (depth == 0 && s.compare(i, n, op) == 0)
+                return i;
+        }
+        return std::string::npos;
+    }
+
+    static bool evalCondition(std::string expr)
+    {
+        expr = compact(expr);
+        while (expr.size() >= 2 && expr[0] == '(' && expr[expr.size() - 1] == ')')
+            expr = expr.substr(1, expr.size() - 2);
+
+        std::size_t p = findTopLevel(expr, "||");
+        if (p != std::string::npos)
+            return evalCondition(expr.substr(0, p)) || evalCondition(expr.substr(p + 2));
+        p = findTopLevel(expr, "&&");
+        if (p != std::string::npos)
+            return evalCondition(expr.substr(0, p)) && evalCondition(expr.substr(p + 2));
+        p = findTopLevel(expr, "==");
+        if (p != std::string::npos)
+            return evalCondition(expr.substr(0, p)) == evalCondition(expr.substr(p + 2));
+        p = findTopLevel(expr, "!=");
+        if (p != std::string::npos)
+            return evalCondition(expr.substr(0, p)) != evalCondition(expr.substr(p + 2));
+        if (!expr.empty() && expr[0] == '!')
+            return !evalCondition(expr.substr(1));
+        return baselineVariable(expr);
+    }
+
+    void parseInclude(bool active)
+    {
+        _pos += 7;
+        skipSpace();
+        if (peek() != '(') {
+            skipStatement();
+            return;
+        }
+        ++_pos;
+        skipSpace();
+        if (peek() != '"') {
+            skipStatement();
+            return;
+        }
+        ++_pos;
+        const std::size_t start = _pos;
+        while (_pos < _program.size() && _program[_pos] != '"')
+            ++_pos;
+        const std::string path = _program.substr(start, _pos - start);
+        if (peek() == '"')
+            ++_pos;
+        while (_pos < _program.size() && _program[_pos] != ';' && _program[_pos] != '}')
+            ++_pos;
+        if (peek() == ';')
+            ++_pos;
+        if (active && !path.empty())
+            _includes.push_back(path);
+    }
+
+    void skipStatement()
+    {
+        int parenDepth = 0;
+        while (_pos < _program.size()) {
+            const char c = _program[_pos];
+            if (c == '(')
+                ++parenDepth;
+            else if (c == ')' && parenDepth > 0)
+                --parenDepth;
+            else if (c == ';' && parenDepth == 0) {
+                ++_pos;
+                return;
+            } else if ((c == '{' || c == '}') && parenDepth == 0)
+                return;
+            ++_pos;
+        }
+    }
+
+    void parseIf(bool active)
+    {
+        _pos += 2;
+        const bool condition = evalCondition(parenthesized());
+        parseStatement(active && condition);
+        skipSpace();
+        if (wordAt("else")) {
+            _pos += 4;
+            parseStatement(active && !condition);
+        }
+    }
+
+    void parseStatement(bool active)
+    {
+        skipSpace();
+        if (_pos >= _program.size())
+            return;
+        if (peek() == '{') {
+            parseBlock(active);
+            return;
+        }
+        if (wordAt("if")) {
+            parseIf(active);
+            return;
+        }
+        if (wordAt("include")) {
+            parseInclude(active);
+            return;
+        }
+        skipStatement();
+    }
+
+    void parseBlock(bool active)
+    {
+        if (peek() == '{')
+            ++_pos;
+        parseSequence(active, true);
+    }
+
+    void parseSequence(bool active, bool stopAtBrace)
+    {
+        while (_pos < _program.size()) {
+            skipSpace();
+            if (_pos >= _program.size())
+                return;
+            if (stopAtBrace && peek() == '}') {
+                ++_pos;
+                return;
+            }
+            parseStatement(active);
+        }
+    }
+
+    const std::string &_program;
+    std::size_t _pos;
+    std::vector<std::string> &_includes;
+};
 
 static void parseFtrFile(const std::string &root,
                          const std::string &relative,
@@ -253,7 +475,7 @@ static void parseFtrFile(const std::string &root,
     std::string currentType;
     bool inIcon = false;
     int braceDepth = 0;
-    std::vector<std::string> includes;
+    std::string iconProgram;
     std::string line;
 
     while (std::getline(in, line)) {
@@ -265,7 +487,7 @@ static void parseFtrFile(const std::string &root,
             currentType = trim(t.substr(5));
             inIcon = false;
             braceDepth = 0;
-            includes.clear();
+            iconProgram.clear();
             continue;
         }
 
@@ -273,45 +495,55 @@ static void parseFtrFile(const std::string &root,
             continue;
 
         if (!inIcon) {
-            if (t.compare(0, 4, "ICON") == 0 && t.find('{') != std::string::npos) {
-                inIcon = true;
-                braceDepth = 1;
-                includes.clear();
-            }
-            continue;
-        }
-
-        const std::string inc = quotedInclude(t);
-        if (!inc.empty())
-            includes.push_back(inc);
-
-        for (std::size_t i = 0; i < t.size(); ++i) {
-            if (t[i] == '{')
-                ++braceDepth;
-            else if (t[i] == '}')
-                --braceDepth;
-        }
-
-        if (braceDepth <= 0) {
-            if (map.find(currentType) == map.end()) {
-                TypeIcons ti;
-                const std::string base = dirnameOf(relative);
-                std::set<std::string> seen;
-                for (std::size_t i = 0; i < includes.size(); ++i) {
-                    if (includes[i].find(".open.fti") != std::string::npos)
-                        continue;
-                    const std::string normalized = normalizeRelative(base, includes[i]);
-                    if (normalized.empty() || !seen.insert(normalized).second)
-                        continue;
-                    if (exists(root + "/" + normalized))
-                        ti.resources.push_back(ImdString(normalized));
+            if (t.compare(0, 4, "ICON") == 0) {
+                const std::string::size_type open = t.find('{');
+                if (open != std::string::npos) {
+                    inIcon = true;
+                    braceDepth = 0;
+                    iconProgram = t.substr(open);
+                    for (std::size_t i = open; i < t.size(); ++i) {
+                        if (t[i] == '{')
+                            ++braceDepth;
+                        else if (t[i] == '}')
+                            --braceDepth;
+                    }
                 }
-                map[currentType] = ti;
             }
-            inIcon = false;
-            braceDepth = 0;
-            includes.clear();
+            if (!inIcon || braceDepth > 0)
+                continue;
+        } else {
+            iconProgram += '\n';
+            iconProgram += t;
+            for (std::size_t i = 0; i < t.size(); ++i) {
+                if (t[i] == '{')
+                    ++braceDepth;
+                else if (t[i] == '}')
+                    --braceDepth;
+            }
+            if (braceDepth > 0)
+                continue;
         }
+
+        if (map.find(currentType) == map.end()) {
+            std::vector<std::string> includes;
+            IconProgramParser(iconProgram, includes).run();
+
+            TypeIcons ti;
+            const std::string base = dirnameOf(relative);
+            std::set<std::string> seen;
+            for (std::size_t i = 0; i < includes.size(); ++i) {
+                const std::string normalized = normalizeRelative(base, includes[i]);
+                if (normalized.empty() || !seen.insert(normalized).second)
+                    continue;
+                if (exists(root + "/" + normalized))
+                    ti.resources.push_back(ImdString(normalized));
+            }
+            map[currentType] = ti;
+        }
+
+        inIcon = false;
+        braceDepth = 0;
+        iconProgram.clear();
     }
 }
 
