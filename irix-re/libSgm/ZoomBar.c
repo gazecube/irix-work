@@ -1,11 +1,12 @@
 /*
- * SgZoomBar behavioral reconstruction for SgFinder.
+ * SgZoomBar reconstruction for SgFinder.
  *
- * SGI documents the Finder ZoomBar as the path-navigation bar: it contains
- * one button for each section of the finder text, and selecting a button asks
- * the Finder's SgNsetTextSectionFunc to select that section. The exact IRIX
- * private widget record and rendering code have not yet been recovered, so
- * this file implements only that documented surface on the host ABI.
+ * IRIX libSgm.so.1 exposes sectionCount and sectionWidths resources on
+ * SgZoomBar. Finder computes cumulative pixel positions from the real text
+ * field and pushes those resources into the bar. This host implementation
+ * keeps Motif push buttons for interaction, but their geometry is driven by
+ * the binary-confirmed section positions instead of independent preferred
+ * button widths.
  */
 #include <Sgm/Finder.h>
 
@@ -28,14 +29,15 @@ WidgetClass sgZoomBarWidgetClass = NULL;
 #define XmInheritParentProcess ((XmParentProcessProc)_XtInherit)
 #endif
 
-#define ZOOMBAR_MAX_SECTIONS 64
+#define ZOOMBAR_MAX_SECTIONS 255
 
 typedef struct
 {
-    /* Host reconstruction state; not claimed to match IRIX n32 offsets. */
+    int section_count;
+    XtPointer section_widths;
     Widget finder;
     Widget text;
-    Widget buttons[ZOOMBAR_MAX_SECTIONS];
+    Widget buttons[ZOOMBAR_MAX_SECTIONS + 1];
     Cardinal button_count;
 } SgZoomBarPartCompat;
 
@@ -65,11 +67,27 @@ typedef struct
 static void zoomBarInitialize(Widget, Widget, ArgList, Cardinal *);
 static void zoomBarDestroy(Widget);
 static void zoomBarResize(Widget);
+static Boolean zoomBarSetValues(Widget, Widget, Widget, ArgList, Cardinal *);
 static void zoomBarChangeManaged(Widget);
-static void zoomBarTextChangedCB(Widget, XtPointer, XtPointer);
 static void zoomBarButtonCB(Widget, XtPointer, XtPointer);
 static void zoomBarRebuild(SgZoomBarRecCompat *);
 static void zoomBarLayout(SgZoomBarRecCompat *);
+
+static XtResource zoomBarResources[] =
+{
+    {
+        SgNsectionWidths, "SectionWidths", XtRPointer,
+        sizeof(XtPointer),
+        XtOffsetOf(SgZoomBarRecCompat, zoom_bar.section_widths),
+        XtRImmediate, (XtPointer)NULL
+    },
+    {
+        SgNsectionCount, "SectionCount", XtRInt,
+        sizeof(int),
+        XtOffsetOf(SgZoomBarRecCompat, zoom_bar.section_count),
+        XtRImmediate, (XtPointer)0
+    }
+};
 
 static SgZoomBarClassRecCompat sgZoomBarClassRec =
 {
@@ -85,8 +103,8 @@ static SgZoomBarClassRecCompat sgZoomBarClassRec =
         XtInheritRealize,
         NULL,
         0,
-        NULL,
-        0,
+        zoomBarResources,
+        XtNumber(zoomBarResources),
         NULLQUARK,
         True,
         XtExposeCompressMultiple,
@@ -95,7 +113,7 @@ static SgZoomBarClassRecCompat sgZoomBarClassRec =
         zoomBarDestroy,
         zoomBarResize,
         XtInheritExpose,
-        NULL,
+        zoomBarSetValues,
         NULL,
         XtInheritSetValuesAlmost,
         NULL,
@@ -137,13 +155,23 @@ static SgZoomBarClassRecCompat sgZoomBarClassRec =
     }
 };
 
+static Widget findFinderAncestor(Widget w)
+{
+    Widget p = w;
+    while (p)
+    {
+        if (sgFinderWidgetClass && XtIsSubclass(p, sgFinderWidgetClass))
+            return p;
+        p = XtParent(p);
+    }
+    return NULL;
+}
+
 static void zoomBarClear(SgZoomBarRecCompat *rec)
 {
     Cardinal i;
-
     if (!rec)
         return;
-
     for (i = 0; i < rec->zoom_bar.button_count; ++i)
     {
         if (rec->zoom_bar.buttons[i])
@@ -163,7 +191,8 @@ static void zoomBarAddButton(SgZoomBarRecCompat *rec,
     XmString label;
     Widget button;
 
-    if (!rec || !text || rec->zoom_bar.button_count >= ZOOMBAR_MAX_SECTIONS)
+    if (!rec || !text ||
+        rec->zoom_bar.button_count >= ZOOMBAR_MAX_SECTIONS + 1)
         return;
 
     label_text = (char *)XtMalloc((Cardinal)length + 1);
@@ -181,7 +210,7 @@ static void zoomBarAddButton(SgZoomBarRecCompat *rec,
         xmPushButtonWidgetClass,
         (Widget)rec,
         XmNlabelString, label,
-        XmNmarginWidth, 3,
+        XmNmarginWidth, 0,
         XmNmarginHeight, 0,
         XmNshadowThickness, 1,
         XmNhighlightThickness, 0,
@@ -203,8 +232,20 @@ static void zoomBarRebuild(SgZoomBarRecCompat *rec)
     const char *start;
     Cardinal section;
 
-    if (!rec || !rec->zoom_bar.finder)
+    if (!rec)
         return;
+
+    if (!rec->zoom_bar.finder)
+        rec->zoom_bar.finder = findFinderAncestor((Widget)rec);
+    if (rec->zoom_bar.finder && !rec->zoom_bar.text)
+        rec->zoom_bar.text =
+            SgFinderGetChild(rec->zoom_bar.finder, SgFINDER_TEXT);
+
+    if (!rec->zoom_bar.finder || !rec->zoom_bar.text)
+    {
+        zoomBarClear(rec);
+        return;
+    }
 
     value = SgFinderGetTextString(rec->zoom_bar.finder);
     zoomBarClear(rec);
@@ -223,9 +264,6 @@ static void zoomBarRebuild(SgZoomBarRecCompat *rec)
 
     p = value;
     section = 0;
-
-    /* Absolute path: SGI numbers ZoomBar sections from left to right. The
-     * leading separator is therefore section zero, representing the root. */
     if (*p == separator)
     {
         root_label[0] = separator;
@@ -234,17 +272,15 @@ static void zoomBarRebuild(SgZoomBarRecCompat *rec)
         ++p;
     }
 
-    while (*p && section < ZOOMBAR_MAX_SECTIONS)
+    while (*p && section < ZOOMBAR_MAX_SECTIONS + 1)
     {
         while (*p == separator)
             ++p;
         if (!*p)
             break;
-
         start = p;
         while (*p && *p != separator)
             ++p;
-
         if (p > start)
             zoomBarAddButton(rec, start, (size_t)(p - start), section++);
     }
@@ -253,12 +289,28 @@ static void zoomBarRebuild(SgZoomBarRecCompat *rec)
     zoomBarLayout(rec);
 }
 
+static Dimension fallbackButtonWidth(Widget child)
+{
+    XtWidgetGeometry preferred;
+    Dimension width = 1;
+    memset(&preferred, 0, sizeof(preferred));
+    XtQueryGeometry(child, NULL, &preferred);
+    if (preferred.request_mode & CWWidth)
+        width = preferred.width;
+    else
+        XtVaGetValues(child, XmNwidth, &width, NULL);
+    return width ? width : 1;
+}
+
 static void zoomBarLayout(SgZoomBarRecCompat *rec)
 {
     Cardinal i;
     Position x;
     Dimension available;
     Dimension height;
+    unsigned short *bounds;
+    int bound_count;
+    Position last_text_x = -1;
 
     if (!rec)
         return;
@@ -266,23 +318,43 @@ static void zoomBarLayout(SgZoomBarRecCompat *rec)
     x = 0;
     available = rec->core.width ? rec->core.width : 1;
     height = rec->core.height ? rec->core.height : 1;
+    bounds = (unsigned short *)rec->zoom_bar.section_widths;
+    bound_count = rec->zoom_bar.section_count;
+
+    if (rec->zoom_bar.text && rec->zoom_bar.button_count)
+    {
+        char *value = XmTextFieldGetString(rec->zoom_bar.text);
+        if (value)
+        {
+            Position y;
+            (void)XmTextFieldPosToXY(rec->zoom_bar.text,
+                                     (XmTextPosition)strlen(value),
+                                     &last_text_x, &y);
+            XtFree(value);
+        }
+    }
 
     for (i = 0; i < rec->zoom_bar.button_count; ++i)
     {
         Widget child = rec->zoom_bar.buttons[i];
-        XtWidgetGeometry preferred;
         Dimension width;
+        Position endpoint = -1;
 
         if (!child || !XtIsManaged(child) || (Dimension)x >= available)
             continue;
 
-        memset(&preferred, 0, sizeof(preferred));
-        XtQueryGeometry(child, NULL, &preferred);
-        width = (preferred.request_mode & CWWidth) ? preferred.width : 24;
-        if (width < 12)
-            width = 12;
+        if (bounds && (int)i < bound_count)
+            endpoint = (Position)bounds[i];
+        else if (i + 1 == rec->zoom_bar.button_count && last_text_x >= 0)
+            endpoint = last_text_x;
+
+        if (endpoint > x)
+            width = (Dimension)(endpoint - x);
+        else
+            width = fallbackButtonWidth(child);
+
         if ((Dimension)x + width > available)
-            width = available - (Dimension)x;
+            width = (Dimension)(available - (Dimension)x);
         if (width < 1)
             width = 1;
 
@@ -296,49 +368,24 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)new_widget;
     Cardinal i;
-
     (void)request;
     (void)args;
     (void)num_args;
 
-    rec->zoom_bar.finder = XtParent(new_widget);
+    rec->zoom_bar.finder = findFinderAncestor(new_widget);
     rec->zoom_bar.text = NULL;
     rec->zoom_bar.button_count = 0;
-    for (i = 0; i < ZOOMBAR_MAX_SECTIONS; ++i)
+    for (i = 0; i < ZOOMBAR_MAX_SECTIONS + 1; ++i)
         rec->zoom_bar.buttons[i] = NULL;
 
-    /*
-     * Host notification seam. The previous reconstruction registered an
-     * XmNvalueChangedCallback directly on SgFinder, which is not the widget
-     * that owns Motif's text value callback and produced an Xt warning at
-     * runtime. Observe the actual Finder text child instead. The original
-     * libSgm contains an internal updateZoomBar() path; that ownership will
-     * replace this seam when Finder internals are recovered fully.
-     */
     if (rec->zoom_bar.finder)
         rec->zoom_bar.text =
             SgFinderGetChild(rec->zoom_bar.finder, SgFINDER_TEXT);
-
-    if (rec->zoom_bar.text)
-        XtAddCallback(rec->zoom_bar.text,
-                      XmNvalueChangedCallback,
-                      zoomBarTextChangedCB,
-                      (XtPointer)new_widget);
-
-    zoomBarRebuild(rec);
 }
 
 static void zoomBarDestroy(Widget widget)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
-
-    if (rec->zoom_bar.text)
-        XtRemoveCallback(rec->zoom_bar.text,
-                         XmNvalueChangedCallback,
-                         zoomBarTextChangedCB,
-                         (XtPointer)widget);
-
-    /* Xt owns and destroys child widgets recursively. */
     rec->zoom_bar.text = NULL;
     rec->zoom_bar.finder = NULL;
     rec->zoom_bar.button_count = 0;
@@ -349,19 +396,26 @@ static void zoomBarResize(Widget widget)
     zoomBarLayout((SgZoomBarRecCompat *)widget);
 }
 
+static Boolean zoomBarSetValues(Widget old_widget,
+                                Widget request_widget,
+                                Widget new_widget,
+                                ArgList args,
+                                Cardinal *num_args)
+{
+    SgZoomBarRecCompat *newrec = (SgZoomBarRecCompat *)new_widget;
+    (void)old_widget;
+    (void)request_widget;
+    (void)args;
+    (void)num_args;
+
+    /* Finder rewrites the same sectionWidths array in place. */
+    zoomBarRebuild(newrec);
+    return True;
+}
+
 static void zoomBarChangeManaged(Widget widget)
 {
     zoomBarLayout((SgZoomBarRecCompat *)widget);
-}
-
-static void zoomBarTextChangedCB(Widget text,
-                                 XtPointer client_data,
-                                 XtPointer call_data)
-{
-    SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)client_data;
-    (void)text;
-    (void)call_data;
-    zoomBarRebuild(rec);
 }
 
 static void zoomBarButtonCB(Widget button,
@@ -374,13 +428,11 @@ static void zoomBarButtonCB(Widget button,
     int section;
 
     (void)call_data;
-
     if (!rec || !rec->zoom_bar.finder)
         return;
 
     XtVaGetValues(button, XmNuserData, &user_data, NULL);
     section = (int)(uintptr_t)user_data;
-
     XtVaGetValues(rec->zoom_bar.finder,
                   SgNsetTextSectionFunc, &set_section,
                   NULL);
@@ -405,7 +457,6 @@ static void initializeZoomBarClass(void)
 
 #else
 
-/* Build-only fallback when private Motif Manager headers are unavailable. */
 #include <Xm/RowColumn.h>
 
 Widget SgCreateZoomBar(Widget parent, char *name,
