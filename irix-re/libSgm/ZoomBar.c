@@ -3,10 +3,14 @@
  *
  * IRIX libSgm.so.1 exposes sectionCount and sectionWidths resources on
  * SgZoomBar. Finder computes cumulative pixel positions from the real text
- * field and pushes those resources into the bar. This host implementation
- * keeps Motif push buttons for interaction, but their geometry is driven by
- * the binary-confirmed section positions instead of independent preferred
- * button widths.
+ * field and pushes those resources into the bar.
+ *
+ * Binary evidence also shows that the original SgZoomBar is an XmPrimitive
+ * subclass, not a Manager containing labelled button children. The host
+ * implementation still uses Motif push buttons temporarily for interaction,
+ * but they are intentionally label-less and their geometry is driven by the
+ * binary-confirmed section positions. The visible path text belongs only to
+ * the text field below the bar.
  */
 #include <Sgm/Finder.h>
 
@@ -187,7 +191,6 @@ static void zoomBarAddButton(SgZoomBarRecCompat *rec,
                              Cardinal section)
 {
     char name[32];
-    char *label_text;
     XmString label;
     Widget button;
 
@@ -195,15 +198,20 @@ static void zoomBarAddButton(SgZoomBarRecCompat *rec,
         rec->zoom_bar.button_count >= ZOOMBAR_MAX_SECTIONS + 1)
         return;
 
-    label_text = (char *)XtMalloc((Cardinal)length + 1);
-    if (!label_text)
-        return;
-    memcpy(label_text, text, length);
-    label_text[length] = '\0';
+    (void)length;
 
     sprintf(name, "section%u", (unsigned)section);
-    label = XmStringCreateLocalized(label_text);
-    XtFree(label_text);
+
+    /*
+     * The original SgZoomBar is a single XmPrimitive. It therefore cannot
+     * contain per-section labelled widgets. Path text is used by Finder only
+     * to calculate section widths; the ZoomBar itself renders the section
+     * controls without duplicating those labels.
+     *
+     * Until the primitive renderer/action code is restored exactly, keep the
+     * current host push-button interaction seam but make the children blank.
+     */
+    label = XmStringCreateLocalized("");
 
     button = XtVaCreateManagedWidget(
         name,
