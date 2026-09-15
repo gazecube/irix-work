@@ -1,10 +1,11 @@
 /*
- * IRIX Toolchest parser byte scanners.
+ * IRIX Toolchest parser byte scanners and parser-local comparators.
  *
  * Recovered directly from /usr/bin/X11/toolchest (IRIX 6.5 N32):
  *   ToLower          @ 0x1000e29c, size 0x88
  *   ScanWhitespace   @ 0x1000e324, size 0x7c
  *   ScanAlphanumeric @ 0x100135d0, size 0x74
+ *   mystrcmp         @ 0x1000f5c0, size 0x38
  *
  * These are Toolchest bodies, not copied Motif source. The Motif 1.2.4
  * WmResParse.c routines are used only as a comparison baseline. In
@@ -13,6 +14,7 @@
  */
 
 #include <ctype.h>
+#include <string.h>
 
 void
 ToLower(unsigned char *string)
@@ -38,4 +40,12 @@ ScanAlphanumeric(unsigned char **linePP)
 {
     while (*linePP && isalnum((int)**linePP))
         ++(*linePP);
+}
+
+int
+mystrcmp(const void *left, const void *right)
+{
+    const char *const *lhs = (const char *const *)left;
+    const char *const *rhs = (const char *const *)right;
+    return strcmp(*lhs, *rhs);
 }

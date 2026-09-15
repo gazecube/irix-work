@@ -1,5 +1,6 @@
 add_library(toolchest_recovered OBJECT
     recovered/MenuParser.c
+    recovered/Actions.c
 )
 
 # This target intentionally contains only binary-recovered Toolchest bodies.
