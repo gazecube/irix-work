@@ -1,3 +1,6 @@
 [submodule "irix-re/evidence/irix-657m-src"]
 	path = irix-re/evidence/irix-657m-src
 	url = https://github.com/calmsacibis995/irix-657m-src.git
+[submodule "irix-re/4Dwm/upstream-motif"]
+	path = irix-re/4Dwm/upstream-motif
+	url = https://github.com/thentenaar/motif.git
