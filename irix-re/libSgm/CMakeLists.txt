@@ -54,6 +54,7 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
         DropPocket.c
         DropPocketRaster.c
         Finder.c
+        ZbText.c
         ZoomBar.c
         ThumbWheel.c
         VisualDrawingA.c
@@ -80,9 +81,9 @@ if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LI
 
     if(SGM_HAVE_MANAGERP_H)
         target_compile_definitions(Sgm PRIVATE SGM_HAVE_MANAGERP_H=1)
-        message(STATUS "private Motif Manager header found; building native SgFinder/SgZoomBar subclasses")
+        message(STATUS "private Motif Manager header found; building native SgFinder/SgZbText/SgZoomBar subclasses")
     else()
-        message(STATUS "private Motif Manager header missing; SgFinder/SgZoomBar will use compatibility fallbacks")
+        message(STATUS "private Motif Manager header missing; SgFinder/SgZbText/SgZoomBar will use compatibility fallbacks")
     endif()
 
     if(SGM_HAVE_PRIMITIVEP_H)
