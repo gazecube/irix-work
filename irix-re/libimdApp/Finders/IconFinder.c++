@@ -12,11 +12,10 @@
 #include <Xm/Frame.h>
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
+#include <stdio.h>
 #include <string.h>
 
-/*
- * Exact descriptor shape recovered from the original libimdApp.so data.
- */
+/* Exact descriptor shape recovered from the original libimdApp.so data. */
 static VkMenuDesc iconFinderPopupMenuDesc[] = {
     { END, 0, 0, 0, 0, 0 }
 };
@@ -46,77 +45,101 @@ static Dimension preferredWidth(Widget widget)
 }
 
 /*
- * The original constructor attaches iconFinderFrame to top/bottom/left with
- * right NONE, and the ViewKit menu bar to top/bottom/right with left NONE.
- * Host SgFinder is currently an XmManager and therefore does not interpret
- * those Form-style constraint resources. Reproduce only the proven attachment
- * semantics here: preserve each child's preferred width, stretch vertically,
- * and anchor it to the recovered edge. The center Finder children remain under
- * SgFinder's own layout.
+ * Temporary diagnostic while reconstructing the SGI XmManager constraint
+ * behaviour used by ImdIconFinder.  Finder.o itself only lays out its three
+ * internal children; libimdApp adds iconFinderFrame and the ViewKit menu as
+ * additional direct children.
  */
-static void layoutIconFinderChrome(ImdIconFinder *finder)
+static void dumpFinderChildren(Widget finder, const char *where)
+{
+    CompositeWidget composite;
+    Cardinal i;
+
+    if (!finder || !XtIsComposite(finder))
+        return;
+
+    composite = (CompositeWidget)finder;
+    fprintf(stderr,
+            "[ImdIconFinder][TEMP] %s finder=%s core=%ux%u children=%u\n",
+            where ? where : "?",
+            XtName(finder),
+            (unsigned)finder->core.width,
+            (unsigned)finder->core.height,
+            (unsigned)composite->composite.num_children);
+
+    for (i = 0; i < composite->composite.num_children; ++i)
+    {
+        Widget child = composite->composite.children[i];
+        if (!child)
+            continue;
+
+        fprintf(stderr,
+                "[ImdIconFinder][TEMP]   child[%u] name=%s class=%s managed=%d geom=%d,%d %ux%u border=%u\n",
+                (unsigned)i,
+                XtName(child),
+                XtClass(child) ? XtClass(child)->core_class.class_name : "?",
+                XtIsManaged(child) ? 1 : 0,
+                (int)child->core.x,
+                (int)child->core.y,
+                (unsigned)child->core.width,
+                (unsigned)child->core.height,
+                (unsigned)child->core.border_width);
+    }
+}
+
+/*
+ * Keep only the part of the host seam that is proven useful: collapse the
+ * ViewKit MenuBar to the width of its single recovered cascade and pin it to
+ * the right edge.  Do NOT force either external child to the Finder's full
+ * height.  That was a host-only approximation and visibly compressed the
+ * original Finder row.
+ *
+ * The original libimdApp constructor sets top/bottom/right attachment
+ * resources on this MenuBar.  IRIX XmManager carries SGI-private constraint
+ * behaviour that host OpenMotif lacks; until that is reconstructed, preserve
+ * ViewKit's natural y/height and change only x/width.
+ */
+static void placeIconFinderMenu(ImdIconFinder *finder)
 {
     Widget base;
-    Widget frame;
     Widget menu;
     Widget selection;
     Dimension finderWidth = 1;
-    Dimension finderHeight = 1;
-    Dimension frameWidth = 1;
     Dimension menuWidth = 1;
-    Dimension frameBorder = 0;
+    Dimension menuHeight = 1;
     Dimension menuBorder = 0;
+    Position menuY = 0;
     Position menuX = 0;
 
     if (!finder)
         return;
 
     base = finder->getWidget();
-    frame = finder->portableIconFinderFrame();
     menu = finder->portableSelectionMenuBarWidget();
     selection = finder->portableSelectionMenuWidget();
 
-    if (!base)
+    if (!base || !menu || !selection)
         return;
 
-    XtVaGetValues(base,
-                  XmNwidth, &finderWidth,
-                  XmNheight, &finderHeight,
+    XtVaGetValues(base, XmNwidth, &finderWidth, NULL);
+
+    menuWidth = preferredWidth(selection);
+    menuWidth = (menuWidth < 4) ? 4 : (Dimension)(menuWidth + 4);
+    if (menuWidth > finderWidth)
+        menuWidth = finderWidth;
+
+    if (finderWidth > menuWidth)
+        menuX = (Position)(finderWidth - menuWidth);
+
+    XtVaGetValues(menu,
+                  XmNy, &menuY,
+                  XmNheight, &menuHeight,
+                  XmNborderWidth, &menuBorder,
                   NULL);
 
-    if (frame)
-    {
-        frameWidth = preferredWidth(frame);
-        XtVaGetValues(frame, XmNborderWidth, &frameBorder, NULL);
-        if (frameWidth > finderWidth)
-            frameWidth = finderWidth;
-
-        XtConfigureWidget(frame, 0, 0,
-                          frameWidth, finderHeight,
-                          frameBorder);
-    }
-
-    if (menu && selection)
-    {
-        /*
-         * VkMenuBar expands to its parent width once shown, so its own
-         * geometry is not a useful preferred-width source. The original
-         * menu contains one recovered cascade; size from that cascade and
-         * retain the small MenuBar margin that wraps it.
-         */
-        menuWidth = preferredWidth(selection);
-        menuWidth = (menuWidth < 4) ? 4 : (Dimension)(menuWidth + 4);
-        if (menuWidth > finderWidth)
-            menuWidth = finderWidth;
-
-        if (finderWidth > menuWidth)
-            menuX = (Position)(finderWidth - menuWidth);
-
-        XtVaGetValues(menu, XmNborderWidth, &menuBorder, NULL);
-        XtConfigureWidget(menu, menuX, 0,
-                          menuWidth, finderHeight,
-                          menuBorder);
-    }
+    XtConfigureWidget(menu, menuX, menuY,
+                      menuWidth, menuHeight ? menuHeight : 1,
+                      menuBorder);
 }
 
 static void iconFinderConfigureEH(Widget, XtPointer client,
@@ -126,7 +149,7 @@ static void iconFinderConfigureEH(Widget, XtPointer client,
     if (!finder || !event || event->type != ConfigureNotify)
         return;
 
-    layoutIconFinderChrome(finder);
+    placeIconFinderMenu(finder);
 }
 
 static void iconFinderMenuMapEH(Widget, XtPointer client,
@@ -136,7 +159,8 @@ static void iconFinderMenuMapEH(Widget, XtPointer client,
     if (!finder || !event || event->type != MapNotify)
         return;
 
-    layoutIconFinderChrome(finder);
+    placeIconFinderMenu(finder);
+    dumpFinderChildren(finder->getWidget(), "menu-map");
 }
 
 ImdIconFinder::ImdIconFinder(
@@ -166,6 +190,8 @@ ImdIconFinder::ImdIconFinder(
 
     _textWidget = SgFinderGetChild(_baseWidget, SgFINDER_TEXT);
 
+    dumpFinderChildren(_baseWidget, "after-finder-create");
+
     _iconFinderFrame = XtVaCreateManagedWidget(
         "iconFinderFrame",
         xmFrameWidgetClass,
@@ -178,6 +204,8 @@ ImdIconFinder::ImdIconFinder(
     args.setArg(XmNleftAttachment, XmATTACH_FORM);
     args.setArg(XmNrightAttachment, XmATTACH_NONE);
     args.setValues(_iconFinderFrame);
+
+    dumpFinderChildren(_baseWidget, "after-frame-create");
 
     args.clear();
     args.setArg(XmNtraversalOn, False);
@@ -213,7 +241,8 @@ ImdIconFinder::ImdIconFinder(
                               iconFinderConfigureEH,
                               (XtPointer)this);
 
-            layoutIconFinderChrome(this);
+            placeIconFinderMenu(this);
+            dumpFinderChildren(_baseWidget, "after-menu-create");
         }
     }
 }
