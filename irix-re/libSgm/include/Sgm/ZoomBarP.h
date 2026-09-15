@@ -8,6 +8,14 @@
 extern "C" {
 #endif
 
+/*
+ * Original SGI ZoomBar.o chains its Enter/Leave actions through these
+ * private XmPrimitive action procedures. Some host Motif headers do not
+ * publish prototypes for them even when the symbols are available.
+ */
+extern void _XmPrimitiveEnter(Widget, XEvent *, String *, Cardinal *);
+extern void _XmPrimitiveLeave(Widget, XEvent *, String *, Cardinal *);
+
 typedef struct _SgZoomBarClassPart
 {
     int foo;
