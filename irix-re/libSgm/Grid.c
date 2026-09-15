@@ -36,6 +36,7 @@ static void RefreshGrid(SgGridWidget);
 static void RebuildMatrix(SgGridWidget);
 static Position RowOrigin(SgGridWidget, int);
 static Position ColumnOrigin(SgGridWidget, int);
+static GC GetForegroundGC(SgGridWidget);
 
 static XtResource resources[] =
 {
@@ -145,6 +146,16 @@ SgGridClassRec sgGridClassRec =
 };
 
 WidgetClass sgGridWidgetClass = (WidgetClass)&sgGridClassRec;
+
+static GC GetForegroundGC(SgGridWidget g)
+{
+    XGCValues values;
+    XtGCMask mask = GCForeground | GCBackground;
+
+    values.foreground = g->manager.foreground;
+    values.background = g->core.background_pixel;
+    return XtGetGC((Widget)g, mask, &values);
+}
 
 static void Initialize(Widget request, Widget new_widget,
                        ArgList args, Cardinal *num_args)
@@ -372,6 +383,7 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
     SgGridWidget g = (SgGridWidget)widget;
     Display *dpy;
     Window win;
+    GC gc = NULL;
     int row, col;
     (void)event; (void)region;
 
@@ -379,21 +391,23 @@ static void Redisplay(Widget widget, XEvent *event, Region region)
     dpy = XtDisplay(widget);
     win = XtWindow(widget);
 
-    if (g->grid.show_grid && g->manager.foreground_GC) {
+    if (g->grid.show_grid) {
         Position y = 0;
         Position x = 0;
+        gc = GetForegroundGC(g);
         for (row = 0; row < g->grid.num_rows - 1; ++row) {
             y = (Position)(y + g->grid.row_info[row].size +
                            2 * g->grid.row_info[row].margin);
-            XDrawLine(dpy, win, g->manager.foreground_GC,
+            XDrawLine(dpy, win, gc,
                       0, y, (int)g->core.width, y);
         }
         for (col = 0; col < g->grid.num_columns - 1; ++col) {
             x = (Position)(x + g->grid.col_info[col].size +
                            2 * g->grid.col_info[col].margin);
-            XDrawLine(dpy, win, g->manager.foreground_GC,
+            XDrawLine(dpy, win, gc,
                       x, 0, x, (int)g->core.height);
         }
+        XtReleaseGC(widget, gc);
     }
 }
 
@@ -577,6 +591,7 @@ void SgGridHighlightCell(Widget widget, int row, int col)
     SgGridWidget g = (SgGridWidget)widget;
     Position x, y;
     Dimension w, h;
+    GC gc;
     if (!g || !XtIsRealized(widget) || row < 0 || col < 0 ||
         row >= g->grid.num_rows || col >= g->grid.num_columns)
         return;
@@ -584,6 +599,7 @@ void SgGridHighlightCell(Widget widget, int row, int col)
     y = RowOrigin(g, row);
     w = g->grid.col_info[col].size;
     h = g->grid.row_info[row].size;
-    XDrawRectangle(XtDisplay(widget), XtWindow(widget), g->manager.foreground_GC,
-                   x, y, w, h);
+    gc = GetForegroundGC(g);
+    XDrawRectangle(XtDisplay(widget), XtWindow(widget), gc, x, y, w, h);
+    XtReleaseGC(widget, gc);
 }
