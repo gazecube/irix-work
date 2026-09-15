@@ -6,16 +6,9 @@
  * cumulative X boundaries and sectionCount is the number of boundaries,
  * yielding sectionCount + 1 rendered spans.
  *
- * Binary-backed interaction model:
- *   <Btn1Down>:   Arm()
- *   <Btn1Up>:     Activate() Disarm()
- *   <EnterWindow>:Enter()
- *   <LeaveWindow>:Leave()
- *   <Motion>:     Motion()
- *
- * The old host reconstruction used one blank XmPushButton per section.
- * That architecture was only a temporary compatibility scaffold and is
- * intentionally gone from this implementation.
+ * The section renderer uses the SGI Motif shader helpers _sgFindShader()
+ * and _sgFindGC() when they are available. The five-state shader matrix and
+ * line geometry below are recovered directly from the original N32 code.
  */
 
 #include <Sgm/Finder.h>
@@ -26,6 +19,7 @@
 #include <X11/IntrinsicP.h>
 #include <X11/StringDefs.h>
 #include <X11/Xlib.h>
+#include <dlfcn.h>
 #include <string.h>
 
 #ifndef XmInheritBorderHighlight
@@ -35,13 +29,16 @@
 #define XmInheritBorderUnhighlight ((XtWidgetProc)_XtInherit)
 #endif
 
-/* Original callback payload is reason, event, section. */
+/* Original callback payload: reason, event, section. */
 typedef struct
 {
     int reason;
     XEvent *event;
     int section;
 } SgZoomBarCallbackStruct;
+
+typedef void (*SgFindShaderProc)(Widget, XtPointer *, Pixel);
+typedef GC (*SgFindGCProc)(Widget, XtPointer, int);
 
 typedef struct
 {
@@ -53,6 +50,9 @@ typedef struct
     int section_count;
     int armed_section;
     int pointer_section;
+
+    /* Host-only fallback state, outside the recovered n32 layout claim. */
+    GC background_gc;
 } SgZoomBarPartCompat;
 
 typedef struct _SgZoomBarRec
@@ -75,6 +75,7 @@ typedef struct _SgZoomBarClassRec
 } SgZoomBarClassRecCompat;
 
 static void zoomBarInitialize(Widget, Widget, ArgList, Cardinal *);
+static void zoomBarDestroy(Widget);
 static void zoomBarResize(Widget);
 static void zoomBarRedisplay(Widget, XEvent *, Region);
 static Boolean zoomBarSetValues(Widget, Widget, Widget, ArgList, Cardinal *);
@@ -93,8 +94,23 @@ static void zoomBarDrawSection(SgZoomBarRecCompat *, int, int);
 static void zoomBarDrawAll(SgZoomBarRecCompat *);
 static Position eventX(const XEvent *);
 static Boolean eventInside(const SgZoomBarRecCompat *, const XEvent *);
-static Widget findFinderAncestor(Widget);
-static void activateFinderSectionFallback(Widget, int);
+static void callZoomCallback(Widget, XtCallbackList, int, XEvent *, int);
+static GC shaderGC(SgZoomBarRecCompat *, XtPointer, int);
+static XtPointer findShader(SgZoomBarRecCompat *);
+
+/*
+ * State table at original N32 address 0x0b250488.
+ * Entries 8 and 9 exist in the original table but the recovered renderer
+ * does not reference them.
+ */
+static const unsigned char zoomBarShaderTable[5][10] =
+{
+    { 1, 2, 3, 4, 6, 6, 4, 4, 4, 0 },
+    { 1, 4, 4, 4, 4, 4, 4, 4, 4, 0 },
+    { 1, 2, 3, 6, 6, 6, 6, 6, 6, 0 },
+    { 1, 6, 2, 3, 3, 6, 6, 6, 6, 0 },
+    { 1, 6, 2, 3, 3, 6, 6, 4, 4, 0 }
+};
 
 static XtResource zoomBarResources[] =
 {
@@ -140,15 +156,15 @@ static XtActionsRec zoomBarActions[] =
     { "Motion", Motion }
 };
 
-/* Recovered verbatim from the original libSgm string table. */
-static char zoomBarTranslations[] =
+/* Exported by the original library as a 108-byte data object. */
+char _SgZoomBar_defaultTranslations[108] =
     "<Btn1Down>:Arm()\n"
     "<Btn1Up>:Activate() Disarm()\n"
     "<EnterWindow>:Enter()\n"
     "<LeaveWindow>:Leave()\n"
     "<Motion>:Motion()";
 
-static SgZoomBarClassRecCompat sgZoomBarClassRec =
+SgZoomBarClassRecCompat sgZoomBarClassRec =
 {
     {
         (WidgetClass)&xmPrimitiveClassRec,
@@ -169,7 +185,7 @@ static SgZoomBarClassRecCompat sgZoomBarClassRec =
         XtExposeCompressMultiple,
         True,
         False,
-        NULL,
+        zoomBarDestroy,
         zoomBarResize,
         zoomBarRedisplay,
         zoomBarSetValues,
@@ -179,7 +195,7 @@ static SgZoomBarClassRecCompat sgZoomBarClassRec =
         NULL,
         XtVersion,
         NULL,
-        zoomBarTranslations,
+        _SgZoomBar_defaultTranslations,
         zoomBarQueryGeometry,
         NULL,
         NULL
@@ -204,6 +220,7 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
                               ArgList args, Cardinal *num_args)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)new_widget;
+    XGCValues values;
     (void)request;
     (void)args;
     (void)num_args;
@@ -216,48 +233,52 @@ static void zoomBarInitialize(Widget request, Widget new_widget,
         rec->core.width = 1;
     if (rec->core.height == 0)
         rec->core.height = 6;
+
+    values.foreground = rec->core.background_pixel;
+    rec->zoom_bar.background_gc = XtGetGC(new_widget, GCForeground, &values);
+}
+
+static void zoomBarDestroy(Widget widget)
+{
+    SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
+    if (rec->zoom_bar.background_gc)
+    {
+        XtReleaseGC(widget, rec->zoom_bar.background_gc);
+        rec->zoom_bar.background_gc = NULL;
+    }
 }
 
 static void zoomBarResize(Widget widget)
 {
-    SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
     if (XtIsRealized(widget))
-        zoomBarDrawAll(rec);
+        zoomBarDrawAll((SgZoomBarRecCompat *)widget);
 }
 
 static void zoomBarRedisplay(Widget widget, XEvent *event, Region region)
 {
     (void)event;
     (void)region;
-    if (!XtIsRealized(widget))
-        return;
-    zoomBarDrawAll((SgZoomBarRecCompat *)widget);
+    if (XtIsRealized(widget))
+        zoomBarDrawAll((SgZoomBarRecCompat *)widget);
 }
 
+/* Original SetValues resets all interaction state and returns True. */
 static Boolean zoomBarSetValues(Widget old_widget,
                                 Widget request_widget,
                                 Widget new_widget,
                                 ArgList args,
                                 Cardinal *num_args)
 {
-    SgZoomBarRecCompat *oldrec = (SgZoomBarRecCompat *)old_widget;
-    SgZoomBarRecCompat *newrec = (SgZoomBarRecCompat *)new_widget;
-    Boolean changed;
+    SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)new_widget;
+    (void)old_widget;
     (void)request_widget;
     (void)args;
     (void)num_args;
 
-    changed = (oldrec->zoom_bar.section_count != newrec->zoom_bar.section_count ||
-               oldrec->zoom_bar.section_widths != newrec->zoom_bar.section_widths);
-
-    /* Finder may mutate the same width array in place before XtSetValues. */
-    if (!changed && newrec->zoom_bar.section_widths)
-        changed = True;
-
-    newrec->zoom_bar.armed = False;
-    newrec->zoom_bar.armed_section = -1;
-    newrec->zoom_bar.pointer_section = -1;
-    return changed;
+    rec->zoom_bar.armed = False;
+    rec->zoom_bar.armed_section = -1;
+    rec->zoom_bar.pointer_section = -1;
+    return True;
 }
 
 static XtGeometryResult zoomBarQueryGeometry(Widget widget,
@@ -274,13 +295,7 @@ static XtGeometryResult zoomBarQueryGeometry(Widget widget,
     return XtGeometryAlmost;
 }
 
-/*
- * Original geometry helper at 0x0b1dcb30:
- *   section 0: x=0, width=boundary[0]
- *   middle:    x=boundary[n-1]+1, width=boundary[n]-x
- *   final:     x=boundary[n-1]+1, width=widgetWidth-x-2
- * Vertical geometry is y=0, height=widgetHeight-1.
- */
+/* Horizontal geometry helper recovered at 0x0b1dcb30. */
 static Boolean zoomBarSectionGeometry(SgZoomBarRecCompat *rec,
                                       int section,
                                       XRectangle *rect)
@@ -292,7 +307,6 @@ static Boolean zoomBarSectionGeometry(SgZoomBarRecCompat *rec,
         return False;
 
     bounds = (unsigned short *)rec->zoom_bar.section_widths;
-
     if (rec->zoom_bar.section_count <= 0 || !bounds)
     {
         if (section != 0)
@@ -316,9 +330,7 @@ static Boolean zoomBarSectionGeometry(SgZoomBarRecCompat *rec,
         width = (int)rec->core.width - x - 2;
     }
     else
-    {
         return False;
-    }
 
     if (x < 0)
         x = 0;
@@ -333,7 +345,7 @@ static Boolean zoomBarSectionGeometry(SgZoomBarRecCompat *rec,
     return True;
 }
 
-/* Exact binary hit-test at 0x0b1dcd7c. */
+/* Exact hit-test recovered at 0x0b1dcd7c. */
 static int zoomBarHitSection(SgZoomBarRecCompat *rec, Position x)
 {
     unsigned short *bounds;
@@ -346,80 +358,142 @@ static int zoomBarHitSection(SgZoomBarRecCompat *rec, Position x)
     bounds = (unsigned short *)rec->zoom_bar.section_widths;
     if (x < (Position)bounds[0])
         return 0;
-
     if (x >= (Position)bounds[rec->zoom_bar.section_count - 1])
         return rec->zoom_bar.section_count;
 
     for (i = 1; i < rec->zoom_bar.section_count; ++i)
         if (x <= (Position)bounds[i])
             return i;
-
     return -1;
 }
 
+static XtPointer findShader(SgZoomBarRecCompat *rec)
+{
+    static SgFindShaderProc proc;
+    static Boolean looked_up;
+    XtPointer shader = NULL;
+
+    if (!looked_up)
+    {
+        proc = (SgFindShaderProc)dlsym(RTLD_DEFAULT, "_sgFindShader");
+        looked_up = True;
+    }
+    if (proc)
+        proc((Widget)rec, &shader, rec->core.background_pixel);
+    return shader;
+}
+
+static GC shaderGC(SgZoomBarRecCompat *rec, XtPointer shader, int shader_index)
+{
+    static SgFindGCProc proc;
+    static Boolean looked_up;
+
+    if (!looked_up)
+    {
+        proc = (SgFindGCProc)dlsym(RTLD_DEFAULT, "_sgFindGC");
+        looked_up = True;
+    }
+    if (proc && shader)
+    {
+        GC gc = proc((Widget)rec, shader, shader_index);
+        if (gc)
+            return gc;
+    }
+
+    /* Host fallback when SGI Motif private shaders are unavailable. */
+    switch (shader_index)
+    {
+        case 1: return rec->primitive.bottom_shadow_GC;
+        case 2: return rec->primitive.top_shadow_GC;
+        case 3: return rec->primitive.highlight_GC;
+        case 4: return rec->zoom_bar.background_gc;
+        case 6: return rec->primitive.top_shadow_GC;
+        default:return rec->zoom_bar.background_gc;
+    }
+}
+
+/*
+ * Section renderer recovered from 0x0b1dc450. The original requires at least
+ * five horizontal pixels, resolves eight shader slots, draws three nested
+ * top/left rails, fills the center, then draws the bottom/right rails.
+ */
 static void zoomBarDrawSection(SgZoomBarRecCompat *rec, int section, int state)
 {
     XRectangle r;
-    Display *display;
-    Window window;
-    GC top, bottom;
+    Display *dpy;
+    Window win;
+    XtPointer shader;
+    GC g0, g1, g2, g3, g4, g5, g6, g7;
+    int x, y, w, h;
 
     if (!rec || !XtIsRealized((Widget)rec) ||
+        state < 0 || state > 4 ||
         !zoomBarSectionGeometry(rec, section, &r))
         return;
 
-    display = XtDisplay((Widget)rec);
-    window = XtWindow((Widget)rec);
-    XClearArea(display, window, r.x, r.y, r.width, r.height, False);
+    x = r.x;
+    y = r.y;
+    w = r.width;
+    h = r.height;
+    if (w < 5 || h < 5)
+        return;
 
-    top = rec->primitive.top_shadow_GC;
-    bottom = rec->primitive.bottom_shadow_GC;
+    dpy = XtDisplay((Widget)rec);
+    win = XtWindow((Widget)rec);
+    shader = findShader(rec);
 
-    /*
-     * The original renderer has several Motif state variants. The binary
-     * uses state 0 for normal, 2 for pointer/hover and 4 for armed. Keep
-     * those state numbers here so later pixel-level recovery does not alter
-     * the action/state model.
-     */
-    if (r.width > 1 && r.height > 1)
-    {
-        GC upper = (state == 4) ? bottom : top;
-        GC lower = (state == 4) ? top : bottom;
-        int x1 = r.x;
-        int y1 = r.y;
-        int x2 = r.x + (int)r.width - 1;
-        int y2 = r.y + (int)r.height - 1;
+    g0 = shaderGC(rec, shader, zoomBarShaderTable[state][0]);
+    g1 = shaderGC(rec, shader, zoomBarShaderTable[state][1]);
+    g2 = shaderGC(rec, shader, zoomBarShaderTable[state][2]);
+    g3 = shaderGC(rec, shader, zoomBarShaderTable[state][3]);
+    g4 = shaderGC(rec, shader, zoomBarShaderTable[state][4]);
+    g5 = shaderGC(rec, shader, zoomBarShaderTable[state][5]);
+    g6 = shaderGC(rec, shader, zoomBarShaderTable[state][6]);
+    g7 = shaderGC(rec, shader, zoomBarShaderTable[state][7]);
 
-        XDrawLine(display, window, upper, x1, y1, x2, y1);
-        XDrawLine(display, window, upper, x1, y1, x1, y2);
-        XDrawLine(display, window, lower, x1, y2, x2, y2);
-        XDrawLine(display, window, lower, x2, y1, x2, y2);
-    }
+    XDrawLine(dpy, win, g4, x,     y,     x + w,     y);
+    XDrawLine(dpy, win, g4, x,     y + 1, x,         y + h);
 
-    if (state == 2 && r.width > 3 && r.height > 3)
-        XDrawRectangle(display, window, top,
-                       r.x + 1, r.y + 1,
-                       (unsigned int)(r.width - 3),
-                       (unsigned int)(r.height - 3));
+    XDrawLine(dpy, win, g5, x + 1, y + 1, x + w - 1, y + 1);
+    XDrawLine(dpy, win, g5, x + 1, y + 2, x + 1,     y + h - 1);
+
+    XDrawLine(dpy, win, g6, x + 2, y + 2, x + w - 2, y + 2);
+    XDrawLine(dpy, win, g6, x + 2, y + 3, x + 2,     y + h - 2);
+
+    XFillRectangle(dpy, win, g7,
+                   x + 3, y + 3,
+                   (unsigned int)(w - 5), (unsigned int)(h - 5));
+
+    XDrawLine(dpy, win, g3, x + 3,     y + h - 2,
+                            x + w - 2, y + h - 2);
+    XDrawLine(dpy, win, g3, x + w - 2, y + 3,
+                            x + w - 2, y + h - 3);
+
+    XDrawLine(dpy, win, g2, x + 2,     y + h - 1,
+                            x + w - 1, y + h - 1);
+    XDrawLine(dpy, win, g2, x + w - 1, y + 2,
+                            x + w - 1, y + h - 2);
+
+    XDrawLine(dpy, win, g1, x + 1, y + h, x + w, y + h);
+    XDrawLine(dpy, win, g1, x + w, y + 1, x + w, y + 2);
+
+    XDrawLine(dpy, win, g0, x + w + 1, y, x + w + 1, y + h);
 }
 
 static void zoomBarDrawAll(SgZoomBarRecCompat *rec)
 {
-    int i, state;
+    int i;
     int last;
 
     if (!rec || !XtIsRealized((Widget)rec))
         return;
 
-    last = rec->zoom_bar.section_count > 0 ?
-           rec->zoom_bar.section_count : 0;
+    last = rec->zoom_bar.section_count > 0 ? rec->zoom_bar.section_count : 0;
     for (i = 0; i <= last; ++i)
     {
-        state = 0;
-        if (rec->zoom_bar.armed && i == rec->zoom_bar.pointer_section)
-            state = 4;
-        else if (!rec->zoom_bar.armed && i == rec->zoom_bar.pointer_section)
-            state = 2;
+        int state = 0;
+        if (i == rec->zoom_bar.pointer_section)
+            state = rec->zoom_bar.armed ? 4 : 2;
         zoomBarDrawSection(rec, i, state);
     }
 }
@@ -431,21 +505,19 @@ static Position eventX(const XEvent *event)
     switch (event->type)
     {
         case ButtonPress:
-        case ButtonRelease:
-            return (Position)event->xbutton.x;
-        case MotionNotify:
-            return (Position)event->xmotion.x;
+        case ButtonRelease: return (Position)event->xbutton.x;
+        case MotionNotify:  return (Position)event->xmotion.x;
         case EnterNotify:
-        case LeaveNotify:
-            return (Position)event->xcrossing.x;
-        default:
-            return -1;
+        case LeaveNotify:   return (Position)event->xcrossing.x;
+        default:            return -1;
     }
 }
 
 static Boolean eventInside(const SgZoomBarRecCompat *rec, const XEvent *event)
 {
     int x, y;
+    int bw;
+
     if (!rec || !event)
         return False;
 
@@ -469,43 +541,10 @@ static Boolean eventInside(const SgZoomBarRecCompat *rec, const XEvent *event)
             return False;
     }
 
-    return x >= -(int)rec->core.border_width &&
-           y >= -(int)rec->core.border_width &&
-           x < (int)rec->core.width + (int)rec->core.border_width &&
-           y < (int)rec->core.height + (int)rec->core.border_width;
-}
-
-static Widget findFinderAncestor(Widget widget)
-{
-    Widget p = XtParent(widget);
-    while (p)
-    {
-        if (sgFinderWidgetClass && XtIsSubclass(p, sgFinderWidgetClass))
-            return p;
-        p = XtParent(p);
-    }
-    return NULL;
-}
-
-/*
- * Temporary host wiring compatibility: the original Finder installs an
- * activate callback on the ZoomBar. Finder.c has not yet recovered that
- * callback hookup, so preserve current path-click behavior until Pass 3
- * moves this into Finder where the SGI binary has it.
- */
-static void activateFinderSectionFallback(Widget widget, int section)
-{
-    Widget finder;
-    SgSetTextFunc set_section = NULL;
-
-    if (section < 0)
-        return;
-    finder = findFinderAncestor(widget);
-    if (!finder)
-        return;
-    XtVaGetValues(finder, SgNsetTextSectionFunc, &set_section, NULL);
-    if (set_section)
-        set_section(finder, section);
+    bw = (int)rec->core.border_width;
+    return x >= -bw && y >= -bw &&
+           x < (int)rec->core.width + bw &&
+           y < (int)rec->core.height + bw;
 }
 
 static void callZoomCallback(Widget widget, XtCallbackList list,
@@ -533,7 +572,6 @@ static void Arm(Widget widget, XEvent *event,
     rec->zoom_bar.armed_section = section;
     rec->zoom_bar.pointer_section = section;
     zoomBarDrawAll(rec);
-
     callZoomCallback(widget, rec->zoom_bar.arm_callback,
                      XmCR_ARM, event, section);
 }
@@ -550,49 +588,36 @@ static void Activate(Widget widget, XEvent *event,
         return;
 
     section = rec->zoom_bar.armed_section;
-    rec->zoom_bar.armed = False;
     rec->zoom_bar.armed_section = -1;
+    rec->zoom_bar.armed = False;
+    zoomBarDrawAll(rec);
 
-    if (!eventInside(rec, event))
-        return;
-
-    if (rec->zoom_bar.pointer_section == section && section >= 0)
-    {
-        if (rec->zoom_bar.activate_callback)
-            callZoomCallback(widget, rec->zoom_bar.activate_callback,
-                             XmCR_ACTIVATE, event, section);
-        else
-            activateFinderSectionFallback(widget, section);
-    }
+    if (eventInside(rec, event))
+        callZoomCallback(widget, rec->zoom_bar.activate_callback,
+                         XmCR_ACTIVATE, event, section);
 }
 
 static void Disarm(Widget widget, XEvent *event,
                    String *params, Cardinal *num_params)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
-    int old_section = rec->zoom_bar.armed_section;
     (void)params;
     (void)num_params;
 
     callZoomCallback(widget, rec->zoom_bar.disarm_callback,
-                     XmCR_DISARM, event, old_section);
-    rec->zoom_bar.armed = False;
-    rec->zoom_bar.armed_section = -1;
-    zoomBarDrawAll(rec);
+                     XmCR_DISARM, event, rec->zoom_bar.armed_section);
 }
 
 static void Enter(Widget widget, XEvent *event,
                   String *params, Cardinal *num_params)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
-    int old_section, new_section;
+    int old_section = rec->zoom_bar.pointer_section;
+    int new_section = zoomBarHitSection(rec, eventX(event));
     (void)params;
     (void)num_params;
 
-    old_section = rec->zoom_bar.pointer_section;
-    new_section = zoomBarHitSection(rec, eventX(event));
     rec->zoom_bar.pointer_section = new_section;
-
     if (old_section != new_section)
     {
         if (old_section >= 0)
@@ -621,12 +646,11 @@ static void Motion(Widget widget, XEvent *event,
                    String *params, Cardinal *num_params)
 {
     SgZoomBarRecCompat *rec = (SgZoomBarRecCompat *)widget;
-    int old_section, new_section;
+    int old_section = rec->zoom_bar.pointer_section;
+    int new_section = zoomBarHitSection(rec, eventX(event));
     (void)params;
     (void)num_params;
 
-    old_section = rec->zoom_bar.pointer_section;
-    new_section = zoomBarHitSection(rec, eventX(event));
     if (new_section == old_section)
         return;
 
@@ -638,10 +662,6 @@ static void Motion(Widget widget, XEvent *event,
                            rec->zoom_bar.armed ? 4 : 2);
 }
 
-/*
- * Original private/public helper. Arguments are widget, pointer X,
- * optional section result, optional XRectangle result.
- */
 void _SgZoomBarGetSectionInfo(Widget widget, Position x,
                               int *section_return,
                               XRectangle *rect_return)
@@ -654,7 +674,6 @@ void _SgZoomBarGetSectionInfo(Widget widget, Position x,
 
     if (!rect_return)
         return;
-
     if (section < 0 || !zoomBarSectionGeometry(rec, section, rect_return))
         memset(rect_return, 0, sizeof(*rect_return));
 }
