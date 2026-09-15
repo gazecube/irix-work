@@ -29,7 +29,7 @@ WidgetClass glwMDrawingAreaWidgetClass = (WidgetClass)0;
 WidgetClass sgColorChooserWidgetClass = (WidgetClass)0;
 WidgetClass glxMDrawWidgetClass = (WidgetClass)0;
 WidgetClass sgDropPocketWidgetClass = (WidgetClass)0;
-WidgetClass sgDynaMenuWidgetClass = (WidgetClass)0;
+extern WidgetClass sgDynaMenuWidgetClass;
 WidgetClass sgZbTextWidgetClass = (WidgetClass)0;
 extern WidgetClass sgZoomBarWidgetClass;
 WidgetClass sgColumnWidgetClass = (WidgetClass)0;
@@ -58,7 +58,6 @@ static void SgmCompatInitClasses(void)
     sgColorChooserWidgetClass = xmFormWidgetClass;
     glxMDrawWidgetClass = xmDrawingAreaWidgetClass;
     sgDropPocketWidgetClass = xmDrawingAreaWidgetClass;
-    sgDynaMenuWidgetClass = xmRowColumnWidgetClass;
     sgZbTextWidgetClass = xmFormWidgetClass;
     sgColumnWidgetClass = xmFormWidgetClass;
     sgOglColorChooserWidgetClass = xmFormWidgetClass;
@@ -93,7 +92,6 @@ Widget name(Widget parent, char *widgetName, ArgList args, Cardinal count) \
 
 SGM_CREATOR(SgCreateColorChooser, sgColorChooserWidgetClass)
 SGM_CREATOR(SgCreateDropPocket, sgDropPocketWidgetClass)
-SGM_CREATOR(SgCreateDynaMenu, sgDynaMenuWidgetClass)
 SGM_CREATOR(SgCreateZbText, sgZbTextWidgetClass)
 SGM_CREATOR(SgCreateColumn, sgColumnWidgetClass)
 SGM_CREATOR(SgOglCreateColorChooser, sgOglColorChooserWidgetClass)
