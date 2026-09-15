@@ -38,9 +38,11 @@ if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND
         FtrMatchEvaluator.c++
         ImdIconPanel.c++
         IconLayout.c++
+        IconOnlyRenderer.c++
         InvertedTeeRenderer.c++
         ModelBasedIconPanel.c++
         ModelBasedIconView.c++
+        SingleViewLayout.c++
         ViewPanelAdopt.c++
     )
 
