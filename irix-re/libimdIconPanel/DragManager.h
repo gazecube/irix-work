@@ -30,6 +30,15 @@ public:
     void dragStart(int item, long x, long y, XEvent *event);
     void dragFinished();
 
+    /*
+     * Original libimdIconPanel.so exports the static callback
+     * purgeDeleted__14ImdDragManagerSGP10_WidgetRecPvT2 @ 0x09680b9c.
+     * The callback clears retained ImdView references after their deleted
+     * state becomes visible. The portable panel lifecycle calls this seam
+     * before releasing a view so pointer-motion state cannot retain it.
+     */
+    void purgeDeleted(ImdView *view);
+
 private:
     static void inputHandler(Widget, XtPointer, XEvent *, Boolean *);
 
