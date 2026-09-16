@@ -18,6 +18,7 @@ typedef struct IrixGuestCpu {
     uint64_t gpr[IRIX_GUEST_GPR_COUNT];
     uint64_t hi;
     uint64_t lo;
+    uint64_t fpr[32];
     IrixGuestAddr pc;
 } IrixGuestCpu;
 
@@ -44,6 +45,9 @@ typedef struct IrixGuestFunctionEntry {
 
 typedef struct IrixGuestRuntime {
     IrixGuestMemory memory;
+    IrixGuestAddr trap_pc;
+    uint32_t trap_code;
+    int trapped;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     size_t function_count;
 } IrixGuestRuntime;
@@ -61,12 +65,17 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value);
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value);
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value);
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value);
+float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg);
+double irix_guest_fpr_get_d(const IrixGuestCpu *cpu, unsigned reg);
+void irix_guest_fpr_set_s(IrixGuestCpu *cpu, unsigned reg, float value);
+void irix_guest_fpr_set_d(IrixGuestCpu *cpu, unsigned reg, double value);
 
 int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
                                  IrixGuestFunction function, const char *name);
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
+void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
                              IrixGuestAddr *entry_out);
 
