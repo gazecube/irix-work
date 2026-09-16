@@ -8,6 +8,8 @@
 #define IRIX_RUNTIME_X11_TMP_BASE 0x74400000u
 #define IRIX_RUNTIME_X11_TMP_SIZE 0x00100000u
 #define IRIX_RUNTIME_X11_MAX_DISPLAYS 16u
+#define IRIX_SGI_FAST_ATOM_FIRST 69u
+#define IRIX_SGI_FAST_ATOM_LAST 200u
 
 typedef struct {
     IrixGuestRuntime *rt;
@@ -18,6 +20,50 @@ typedef struct {
 } IrixRuntimeX11State;
 
 static IrixRuntimeX11State g_x11;
+
+/* SGI's X11/SGIFastAtom.h defines extra predefined atoms 69..200 and
+   _XSGIFastInternAtom(Display *, int fast_name, Bool onlyIfExists).
+   Non-SGI X servers do not reserve those numeric IDs, so translate the SGI
+   fast-name ID back to the canonical atom string and intern it on the host
+   server.  Atom IDs are server-global, so the same-server fallback Display is
+   sufficient here even though connection-local APIs must use the real bridge
+   Display. */
+static const char *const g_sgi_fast_atom_names[] = {
+    "SGI_EXTRA_PREDEFINES", "AVERAGE_WIDTH", "BACKGROUND", "CLIPBOARD",
+    "CLIP_TEMPORARY", "COMPOUND_TEXT", "EXTENDED_TARGETS", "FOREGROUND",
+    "INCR", "LENGTH", "MOTIF_DESTINATION", "MULTIPLE", "NATIVE_TARGETS",
+    "NULL", "PIXEL", "PIXEL_SIZE", "RESOLUTION_Y", "SCREEN_RESOURCES",
+    "SERVER_OVERLAY_VISUALS", "SM_CLIENT_ID", "TARGETS", "TEXT", "TIMESTAMP",
+    "WM_CHANGE_STATE", "WM_CLIENT_LEADER", "WM_COLORMAP_WINDOWS",
+    "WM_DELETE_WINDOW", "WM_LOCALE_NAME", "WM_PROTOCOLS", "WM_STATE",
+    "WM_WINDOW_ROLE", "XDCCC_CORRECT_ATOM_NAME", "XDCCC_MATRIX_ATOM_NAME",
+    "_MOTIF_BINDINGS", "_MOTIF_CANCEL_DROP_EFFECT", "_MOTIF_CLIP_DATA_DELETE",
+    "_MOTIF_CLIP_DATA_REQUEST", "_MOTIF_CLIP_HEADER", "_MOTIF_CLIP_LOCK",
+    "_MOTIF_CLIP_LOCK_ACCESS_VALID", "_MOTIF_CLIP_MESSAGE", "_MOTIF_CLIP_TIME",
+    "_MOTIF_DEFAULT_BINDINGS", "_MOTIF_DRAG_ATOMS", "_MOTIF_DRAG_ATOM_PAIRS",
+    "_MOTIF_DRAG_INITIATOR_INFO", "_MOTIF_DRAG_PROXY_WINDOW",
+    "_MOTIF_DRAG_RECEIVER_INFO", "_MOTIF_DRAG_TARGETS", "_MOTIF_DRAG_WINDOW",
+    "_MOTIF_DROP", "_MOTIF_PROXY_WINDOW", "_MOTIF_WINDOW", "_MOTIF_WM_HINTS",
+    "_MOTIF_WM_INFO", "_MOTIF_WM_MESSAGES", "_MOTIF_WM_OFFSET", "_WM_QUIT_APP",
+    "_XM_TEXT_I_S_PROP", "_XT_SELECTION_0", "SGI_HELP_REQUEST", "SGI_HELP_SERVER",
+    "_SGI_GAMMA_FLAG", "_SGI_ICON", "_SGI_ICONS_VISUALS", "_SGI__MENU_WINDOW",
+    "Compose", "close", "play", "install", "level", "mute", "_SGI_SoundScheme",
+    "DELETE", "INSERT_SELECTION", "ATOM_PAIR", "Editres", "EditresCommand",
+    "EditresClientVal", "EditresProtocol", "_MOTIF_WM_MENU", "CHARACTER_POSITION",
+    "CLASS", "CLIENT_WINDOW", "CLIPBOARD_MANAGER", "COLUMN_NUMBER", "DONE",
+    "FILE", "FILE_NAME", "HOST_NAME", "INSERT_PROPERTY", "LINE_NUMBER",
+    "LINK_SELECTION", "LIST_LENGTH", "MODULE", "NAME", "None", "ODIF",
+    "OWNER_OS", "PDM_EXIT_CANCEL", "PDM_EXIT_ERROR", "PDM_EXIT_OK", "PDM_REPLY",
+    "PDM_START", "PDM_START_ERROR", "PDM_START_OK", "PDM_START_PXAUTH",
+    "PDM_START_VXAUTH", "PROCEDURE", "PROCESS", "Pixel_Sets", "SDT_Pixel_Set",
+    "SPAN", "TASK", "TRANSFER_FAILURE", "TRANSFER_SUCCESS", "USER",
+    "_MOTIF_ATOM_0", "_MOTIF_CLIPBOARD_TARGETS", "_MOTIF_COMPOUND_STRING",
+    "_MOTIF_CURRENT_TIME", "_MOTIF_DEFERRED_CLIPBOARD_TARGETS",
+    "_MOTIF_DESTINATION", "_MOTIF_DRAG_OFFSET", "_MOTIF_ENCODING_REGISTRY",
+    "_MOTIF_EXPORT_TARGETS", "_MOTIF_LOSE_SELECTION", "_MOTIF_RENDER_TABLE",
+    "_MOTIF_SELECTION_TEXT", "_MOTIF_SNAPSHOT", "_MOTIF_WM_ALL_CLIENTS",
+    "_MOTIF_WM_QUERY"
+};
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
@@ -139,6 +185,24 @@ static void bridge_XFreeStringList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+static void bridge__XSGIFastInternAtom(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    uint32_t fast_name = (uint32_t)cpu->gpr[5];
+    Bool only_if_exists = (Bool)cpu->gpr[6];
+    const char *name;
+    Atom atom;
+
+    if (!d || fast_name < IRIX_SGI_FAST_ATOM_FIRST ||
+        fast_name > IRIX_SGI_FAST_ATOM_LAST) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    name = g_sgi_fast_atom_names[fast_name - IRIX_SGI_FAST_ATOM_FIRST];
+    atom = XInternAtom(d, name, only_if_exists);
+    cpu->gpr[2] = (uint32_t)atom;
+}
+
 static void bridge_XInternAtoms(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
@@ -257,7 +321,7 @@ IrixGuestFunction irix_runtime_x11_bridge_lookup(const char *name)
     MAP(XGrabServer); MAP(XUngrabServer); MAP(XMaxRequestSize);
     MAP(XScreenNumberOfScreen); MAP(XVisualIDFromVisual);
     MAP(XSetErrorHandler); MAP(XSetIOErrorHandler); MAP(XFree); MAP(XFreeStringList);
-    MAP(XInternAtoms); MAP(XRestackWindows);
+    MAP(_XSGIFastInternAtom); MAP(XInternAtoms); MAP(XRestackWindows);
     MAP(XInstallColormap); MAP(XFreeColormap); MAP(XListInstalledColormaps); MAP(XSetWMColormapWindows);
 #undef MAP
     return 0;
