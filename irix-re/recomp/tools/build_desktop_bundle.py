@@ -23,10 +23,18 @@ def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--runtime-tree',type=Path,required=True); ap.add_argument('--internal-tree',type=Path,required=True); ap.add_argument('--core-link',type=Path,required=True); ap.add_argument('-o','--output',type=Path,required=True)
     ap.add_argument('--cc',default=os.environ.get('CC','cc')); ap.add_argument('--ar',default=os.environ.get('AR','ar')); ap.add_argument('-j','--jobs',type=int,default=max(1,os.cpu_count() or 1)); ap.add_argument('--generate-only',action='store_true'); a=ap.parse_args()
     here=Path(__file__).resolve().parent; out=a.output.resolve(); gen=out/'generated'; obj=out/'obj'; gen.mkdir(parents=True,exist_ok=True)
-    bundles=[]
+    components=[]
     for prefix,kind,rel in COMPONENTS:
         root=a.runtime_tree if kind=='runtime' else a.internal_tree; binary=root/rel
         if not binary.is_file(): raise SystemExit(f'missing {prefix}: {binary}')
+        components.append((prefix,binary))
+
+    # Fail once with the complete unsupported-instruction inventory instead of
+    # discovering decoder holes one DSO/function at a time during generation.
+    run([sys.executable,here/'audit_n32_bundle.py',*[p for _,p in components]])
+
+    bundles=[]
+    for prefix,binary in components:
         dst=gen/prefix; run([sys.executable,here/'recomp_elf_bundle.py',binary,'-o',dst,'--prefix',prefix]); bundles.append(dst/'bundle.json')
     bind=gen/'bindings'; run([sys.executable,here/'gen_prebound_bindings.py',a.core_link,*bundles,'-o',bind])
     summary={'components':[json.loads(p.read_text()) for p in bundles],'core_link':str(a.core_link),'bindings':str(bind/'bindings.json')}; (out/'desktop.json').write_text(json.dumps(summary,indent=2)+'\n')
