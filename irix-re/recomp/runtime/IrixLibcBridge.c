@@ -150,6 +150,14 @@ static void bridge_strcmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strcmp(a, b) : (a ? 1 : (b ? -1 : 0)));
 }
 
+static void bridge_strncmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strncmp(a, b, n) : (a ? 1 : (b ? -1 : 0)));
+}
+
 static void bridge_strcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
@@ -160,6 +168,60 @@ static void bridge_strcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         if (dst) memcpy(dst, src, n);
     }
     cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_strncpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    char *dst = (char *)irix_guest_ptr(rt, dst_addr, n);
+    if (dst && src) strncpy(dst, src, n);
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_strcat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    char *dst = (char *)irix_guest_ptr(rt, dst_addr, 1);
+    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    if (dst && src) strcat(dst, src);
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_strncat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    char *dst = (char *)irix_guest_ptr(rt, dst_addr, 1);
+    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    if (dst && src) strncat(dst, src, n);
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_strchr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, addr);
+    const char *p = s ? strchr(s, (int)(uint32_t)cpu->gpr[5]) : 0;
+    cpu->gpr[2] = p ? addr + (IrixGuestAddr)(p - s) : 0;
+}
+
+static void bridge_strrchr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, addr);
+    const char *p = s ? strrchr(s, (int)(uint32_t)cpu->gpr[5]) : 0;
+    cpu->gpr[2] = p ? addr + (IrixGuestAddr)(p - s) : 0;
+}
+
+static void bridge_strstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, addr);
+    const char *needle = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    const char *p = (s && needle) ? strstr(s, needle) : 0;
+    cpu->gpr[2] = p ? addr + (IrixGuestAddr)(p - s) : 0;
 }
 
 static void bridge_memcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -192,6 +254,24 @@ static void bridge_memset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     void *dst = irix_guest_ptr(rt, dst_addr, n);
     if (dst && n) memset(dst, c, n);
     cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_memcmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    const void *a = irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], n);
+    const void *b = irix_guest_ptr(rt, (uint32_t)cpu->gpr[5], n);
+    int r = (a && b) ? memcmp(a, b, n) : (a ? 1 : (b ? -1 : 0));
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
+}
+
+static void bridge_memchr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    const unsigned char *s = (const unsigned char *)irix_guest_ptr(rt, addr, n);
+    const unsigned char *p = s ? (const unsigned char *)memchr(s, (int)(uint32_t)cpu->gpr[5], n) : 0;
+    cpu->gpr[2] = p ? addr + (IrixGuestAddr)(p - s) : 0;
 }
 
 static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -240,10 +320,19 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "strdup")) return bridge_strdup;
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
+    if (!strcmp(name, "strncmp")) return bridge_strncmp;
     if (!strcmp(name, "strcpy")) return bridge_strcpy;
+    if (!strcmp(name, "strncpy")) return bridge_strncpy;
+    if (!strcmp(name, "strcat")) return bridge_strcat;
+    if (!strcmp(name, "strncat")) return bridge_strncat;
+    if (!strcmp(name, "strchr") || !strcmp(name, "index")) return bridge_strchr;
+    if (!strcmp(name, "strrchr") || !strcmp(name, "rindex")) return bridge_strrchr;
+    if (!strcmp(name, "strstr")) return bridge_strstr;
     if (!strcmp(name, "memcpy") || !strcmp(name, "bcopy")) return bridge_memcpy;
     if (!strcmp(name, "memmove")) return bridge_memmove;
     if (!strcmp(name, "memset")) return bridge_memset;
+    if (!strcmp(name, "memcmp") || !strcmp(name, "bcmp")) return bridge_memcmp;
+    if (!strcmp(name, "memchr")) return bridge_memchr;
     if (!strcmp(name, "setlocale")) return bridge_setlocale;
     return 0;
 }
