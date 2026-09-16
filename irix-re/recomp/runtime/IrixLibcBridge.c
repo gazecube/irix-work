@@ -3,6 +3,7 @@
 #include <locale.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #define IRIX_LIBC_MAX_ALLOCS 65536u
@@ -186,6 +187,21 @@ static void bridge_strncmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strncmp(a, b, n) : (a ? 1 : (b ? -1 : 0)));
 }
 
+static void bridge_strcasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strcasecmp(a, b) : (a ? 1 : (b ? -1 : 0)));
+}
+
+static void bridge_strncasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strncasecmp(a, b, n) : (a ? 1 : (b ? -1 : 0)));
+}
+
 static void bridge_strcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
@@ -263,6 +279,17 @@ static void bridge_memcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = dst_addr;
 }
 
+static void bridge_bcopy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr src_addr = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[5];
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    void *dst = irix_guest_ptr(rt, dst_addr, n);
+    const void *src = irix_guest_ptr(rt, src_addr, n);
+    if (dst && src && n) memmove(dst, src, n);
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_memmove(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
@@ -321,8 +348,6 @@ static void bridge_qsort(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     tmp = (unsigned char *)malloc(size);
     if (!tmp) { irix_guest_trap(rt, cpu, 0xeeee2003u); return; }
 
-    /* Insertion sort is intentionally simple here: comparisons re-enter
-       translated guest code, so correctness matters more than host-side speed. */
     for (i = 1; i < nmemb && !rt->trapped; ++i) {
         uint32_t j = i;
         memcpy(tmp, data + (size_t)i * size, size);
@@ -471,6 +496,8 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
     if (!strcmp(name, "strncmp")) return bridge_strncmp;
+    if (!strcmp(name, "strcasecmp")) return bridge_strcasecmp;
+    if (!strcmp(name, "strncasecmp")) return bridge_strncasecmp;
     if (!strcmp(name, "strcpy")) return bridge_strcpy;
     if (!strcmp(name, "strncpy")) return bridge_strncpy;
     if (!strcmp(name, "strcat")) return bridge_strcat;
@@ -478,7 +505,8 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "strchr") || !strcmp(name, "index")) return bridge_strchr;
     if (!strcmp(name, "strrchr") || !strcmp(name, "rindex")) return bridge_strrchr;
     if (!strcmp(name, "strstr")) return bridge_strstr;
-    if (!strcmp(name, "memcpy") || !strcmp(name, "bcopy")) return bridge_memcpy;
+    if (!strcmp(name, "memcpy")) return bridge_memcpy;
+    if (!strcmp(name, "bcopy")) return bridge_bcopy;
     if (!strcmp(name, "memmove")) return bridge_memmove;
     if (!strcmp(name, "memset")) return bridge_memset;
     if (!strcmp(name, "memcmp") || !strcmp(name, "bcmp")) return bridge_memcmp;
