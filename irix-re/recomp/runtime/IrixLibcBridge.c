@@ -3,13 +3,21 @@
 #include <locale.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define IRIX_LIBC_MAX_ALLOCS 65536u
+#define IRIX_ENV_CACHE_MAX 256u
 
 typedef struct IrixGuestAllocation {
     IrixGuestAddr addr;
     uint32_t size;
 } IrixGuestAllocation;
+
+typedef struct IrixEnvCacheEntry {
+    char *name;
+    char *value;
+    IrixGuestAddr guest_value;
+} IrixEnvCacheEntry;
 
 typedef struct IrixLibcBridgeState {
     IrixGuestRuntime *rt;
@@ -18,6 +26,8 @@ typedef struct IrixLibcBridgeState {
     IrixGuestAddr heap_end;
     IrixGuestAllocation allocs[IRIX_LIBC_MAX_ALLOCS];
     size_t alloc_count;
+    IrixEnvCacheEntry env_cache[IRIX_ENV_CACHE_MAX];
+    size_t env_cache_count;
 } IrixLibcBridgeState;
 
 static IrixLibcBridgeState g_libc;
@@ -59,6 +69,22 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+}
+
+static IrixGuestAddr copy_host_string_to_guest(IrixGuestRuntime *rt, const char *s)
+{
+    IrixGuestAddr out;
+    size_t n;
+    void *dst;
+    if (!s) return 0;
+    n = strlen(s) + 1u;
+    if (n > UINT32_MAX) return 0;
+    out = alloc_guest((uint32_t)n, 1u);
+    if (!out) return 0;
+    dst = irix_guest_ptr(rt, out, n);
+    if (!dst) return 0;
+    memcpy(dst, s, n);
+    return out;
 }
 
 static int guest_compare(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
@@ -136,20 +162,7 @@ static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    IrixGuestAddr out = 0;
-    if (src) {
-        size_t n = strlen(src) + 1u;
-        if (n <= UINT32_MAX) {
-            out = alloc_guest((uint32_t)n, 1u);
-            if (out) {
-                void *dst = irix_guest_ptr(rt, out, n);
-                if (dst) memcpy(dst, src, n);
-                else out = 0;
-            }
-        }
-    }
-    cpu->gpr[2] = out;
+    cpu->gpr[2] = copy_host_string_to_guest(rt, guest_cstr(rt, (uint32_t)cpu->gpr[4]));
 }
 
 static void bridge_strlen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -352,25 +365,84 @@ static void bridge_bsearch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 }
 
+static void bridge_getenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *value;
+    size_t i;
+    if (!name) { cpu->gpr[2] = 0; return; }
+    value = getenv(name);
+    if (!value) { cpu->gpr[2] = 0; return; }
+    for (i = 0; i < g_libc.env_cache_count; ++i) {
+        if (strcmp(g_libc.env_cache[i].name, name) == 0 && strcmp(g_libc.env_cache[i].value, value) == 0) {
+            cpu->gpr[2] = g_libc.env_cache[i].guest_value;
+            return;
+        }
+    }
+    if (g_libc.env_cache_count < IRIX_ENV_CACHE_MAX) {
+        IrixEnvCacheEntry *e = &g_libc.env_cache[g_libc.env_cache_count];
+        IrixGuestAddr guest_value = copy_host_string_to_guest(rt, value);
+        if (guest_value) {
+            e->name = strdup(name);
+            e->value = strdup(value);
+            e->guest_value = guest_value;
+            if (e->name && e->value) {
+                ++g_libc.env_cache_count;
+                cpu->gpr[2] = guest_value;
+                return;
+            }
+            free(e->name);
+            free(e->value);
+            e->name = 0;
+            e->value = 0;
+        }
+    }
+    cpu->gpr[2] = copy_host_string_to_guest(rt, value);
+}
+
+static void bridge_getpid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)getpid();
+}
+
+static void bridge_getppid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)getppid();
+}
+
+static void bridge_getuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)getuid();
+}
+
+static void bridge_geteuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)geteuid();
+}
+
+static void bridge_getgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)getgid();
+}
+
+static void bridge_getegid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(uint32_t)getegid();
+}
+
 static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int category = (int)(int32_t)cpu->gpr[4];
     IrixGuestAddr guest_name = (uint32_t)cpu->gpr[5];
     const char *name = guest_name ? (const char *)irix_guest_ptr(rt, guest_name, 1) : 0;
     const char *result = setlocale(category, name);
-    IrixGuestAddr out = 0;
-    if (result) {
-        size_t n = strlen(result) + 1u;
-        if (n <= UINT32_MAX) {
-            out = alloc_guest((uint32_t)n, 1u);
-            if (out) {
-                void *p = irix_guest_ptr(rt, out, n);
-                if (p) memcpy(p, result, n);
-                else out = 0;
-            }
-        }
-    }
-    cpu->gpr[2] = out;
+    cpu->gpr[2] = copy_host_string_to_guest(rt, result);
 }
 
 int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_t heap_size)
@@ -413,6 +485,13 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "memchr")) return bridge_memchr;
     if (!strcmp(name, "qsort")) return bridge_qsort;
     if (!strcmp(name, "bsearch")) return bridge_bsearch;
+    if (!strcmp(name, "getenv")) return bridge_getenv;
+    if (!strcmp(name, "getpid")) return bridge_getpid;
+    if (!strcmp(name, "getppid")) return bridge_getppid;
+    if (!strcmp(name, "getuid")) return bridge_getuid;
+    if (!strcmp(name, "geteuid")) return bridge_geteuid;
+    if (!strcmp(name, "getgid")) return bridge_getgid;
+    if (!strcmp(name, "getegid")) return bridge_getegid;
     if (!strcmp(name, "setlocale")) return bridge_setlocale;
     return 0;
 }
