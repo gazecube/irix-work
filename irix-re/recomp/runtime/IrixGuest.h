@@ -10,7 +10,7 @@ extern "C" {
 
 #define IRIX_GUEST_GPR_COUNT 32
 #define IRIX_GUEST_MAX_SEGMENTS 64
-#define IRIX_GUEST_MAX_FUNCTIONS 8192
+#define IRIX_GUEST_MAX_FUNCTIONS 32768
 
 typedef uint32_t IrixGuestAddr;
 
@@ -19,6 +19,7 @@ typedef struct IrixGuestCpu {
     uint64_t hi;
     uint64_t lo;
     uint64_t fpr[32];
+    uint32_t fcr31;
     IrixGuestAddr pc;
 } IrixGuestCpu;
 
