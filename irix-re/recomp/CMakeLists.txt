@@ -11,6 +11,19 @@ set_target_properties(irix_recomp_runtime PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+add_library(irix_recomp_libc_bridge STATIC
+    runtime/IrixLibcBridge.c
+)
+target_include_directories(irix_recomp_libc_bridge PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+)
+target_link_libraries(irix_recomp_libc_bridge PUBLIC
+    irix_recomp_runtime
+)
+set_target_properties(irix_recomp_libc_bridge PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
 find_package(X11)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
