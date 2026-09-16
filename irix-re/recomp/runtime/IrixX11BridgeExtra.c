@@ -8,6 +8,12 @@
 
 #define IRIX_X11_MAX_DISPLAYS 16u
 #define IRIX_X11_DISPLAY_BASE 0x72400000u
+#define IRIX_X11_DISPLAY_STRIDE 0x00001000u
+#define IRIX_X11_SCREEN_BASE 0x72440000u
+#define IRIX_X11_SCREEN_STRIDE 0x00001000u
+#define IRIX_X11_VISUAL_BASE 0x72480000u
+#define IRIX_X11_VISUAL_STRIDE 0x00001000u
+#define IRIX_X11_DISPLAY_SHADOW_SIZE 0x00100000u
 #define IRIX_X11_MAX_GCS 1024u
 #define IRIX_X11_GC_BASE 0x72500000u
 #define IRIX_X11_TMP_BASE 0x72600000u
@@ -24,30 +30,151 @@ typedef struct {
 
 static IrixX11ExtraState g_x11;
 
+static IrixGuestAddr gc_to_guest(GC gc);
+
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
 }
 
+static void wr32(IrixGuestRuntime *rt, IrixGuestAddr p, uint32_t v)
+{
+    if (p) irix_guest_write32be(rt, p, v);
+}
+
+static IrixGuestAddr tmp_alloc(uint32_t n)
+{
+    IrixGuestAddr a;
+    n = (n + 7u) & ~7u;
+    if (!n || g_x11.tmp_cur + n < g_x11.tmp_cur ||
+        g_x11.tmp_cur + n > IRIX_X11_TMP_BASE + IRIX_X11_TMP_SIZE)
+        return 0;
+    a = g_x11.tmp_cur;
+    g_x11.tmp_cur += n;
+    return a;
+}
+
+static IrixGuestAddr copy_host_string(const char *s)
+{
+    IrixGuestAddr a;
+    size_t n;
+    void *p;
+    if (!s) return 0;
+    n = strlen(s) + 1u;
+    if (n > UINT32_MAX) return 0;
+    a = tmp_alloc((uint32_t)n);
+    if (!a) return 0;
+    p = irix_guest_ptr(g_x11.rt, a, n);
+    if (!p) return 0;
+    memcpy(p, s, n);
+    return a;
+}
+
+static IrixGuestAddr display_guest_addr(size_t i)
+{
+    return IRIX_X11_DISPLAY_BASE + (IrixGuestAddr)(i * IRIX_X11_DISPLAY_STRIDE);
+}
+
 static Display *display_from_guest(IrixGuestAddr addr)
 {
-    uint32_t i;
-    if (addr < IRIX_X11_DISPLAY_BASE) return 0;
-    i = (addr - IRIX_X11_DISPLAY_BASE) / 4u;
+    uint32_t off, i;
+    if (addr < IRIX_X11_DISPLAY_BASE || addr >= IRIX_X11_SCREEN_BASE) return 0;
+    off = addr - IRIX_X11_DISPLAY_BASE;
+    if (off % IRIX_X11_DISPLAY_STRIDE) return 0;
+    i = off / IRIX_X11_DISPLAY_STRIDE;
     return i < g_x11.display_count ? g_x11.displays[i] : 0;
+}
+
+static void write_visual_shadow(IrixGuestRuntime *rt, IrixGuestAddr a, Visual *v)
+{
+    if (!a || !v) return;
+    wr32(rt, a + 0, 0);
+    wr32(rt, a + 4, (uint32_t)v->visualid);
+    wr32(rt, a + 8, (uint32_t)v->class);
+    wr32(rt, a + 12, (uint32_t)v->red_mask);
+    wr32(rt, a + 16, (uint32_t)v->green_mask);
+    wr32(rt, a + 20, (uint32_t)v->blue_mask);
+    wr32(rt, a + 24, (uint32_t)v->bits_per_rgb);
+    wr32(rt, a + 28, (uint32_t)v->map_entries);
+}
+
+static void write_display_shadow(size_t i, Display *dpy)
+{
+    IrixGuestRuntime *rt = g_x11.rt;
+    IrixGuestAddr d = display_guest_addr(i);
+    IrixGuestAddr screens = IRIX_X11_SCREEN_BASE + (IrixGuestAddr)(i * IRIX_X11_SCREEN_STRIDE);
+    IrixGuestAddr visuals = IRIX_X11_VISUAL_BASE + (IrixGuestAddr)(i * IRIX_X11_VISUAL_STRIDE);
+    IrixGuestAddr vendor = copy_host_string(ServerVendor(dpy));
+    IrixGuestAddr name = copy_host_string(DisplayString(dpy));
+    int ns = ScreenCount(dpy);
+    int s;
+
+    /* Classic 32-bit Xlib Display layout used by Xlib.h macros on IRIX/N32. */
+    wr32(rt, d + 0, 0);                  /* ext_data */
+    wr32(rt, d + 4, 0);                  /* private1 */
+    wr32(rt, d + 8, (uint32_t)ConnectionNumber(dpy));
+    wr32(rt, d + 12, 0);                 /* private2 */
+    wr32(rt, d + 16, (uint32_t)ProtocolVersion(dpy));
+    wr32(rt, d + 20, (uint32_t)ProtocolRevision(dpy));
+    wr32(rt, d + 24, vendor);
+    wr32(rt, d + 48, (uint32_t)ImageByteOrder(dpy));
+    wr32(rt, d + 52, (uint32_t)BitmapUnit(dpy));
+    wr32(rt, d + 56, (uint32_t)BitmapPad(dpy));
+    wr32(rt, d + 60, (uint32_t)BitmapBitOrder(dpy));
+    wr32(rt, d + 76, (uint32_t)VendorRelease(dpy));
+    wr32(rt, d + 88, (uint32_t)QLength(dpy));
+    wr32(rt, d + 92, (uint32_t)LastKnownRequestProcessed(dpy));
+    wr32(rt, d + 96, (uint32_t)(NextRequest(dpy) - 1));
+    wr32(rt, d + 128, name);
+    wr32(rt, d + 132, (uint32_t)DefaultScreen(dpy));
+    wr32(rt, d + 136, (uint32_t)ns);
+    wr32(rt, d + 140, screens);
+
+    if (ns > 16) ns = 16;
+    for (s = 0; s < ns; ++s) {
+        Screen *hs = ScreenOfDisplay(dpy, s);
+        Visual *hv = DefaultVisual(dpy, s);
+        IrixGuestAddr gs = screens + (IrixGuestAddr)(s * 80u);
+        IrixGuestAddr gv = visuals + (IrixGuestAddr)(s * 32u);
+        write_visual_shadow(rt, gv, hv);
+        wr32(rt, gs + 0, 0);
+        wr32(rt, gs + 4, d);
+        wr32(rt, gs + 8, (uint32_t)hs->root);
+        wr32(rt, gs + 12, (uint32_t)hs->width);
+        wr32(rt, gs + 16, (uint32_t)hs->height);
+        wr32(rt, gs + 20, (uint32_t)hs->mwidth);
+        wr32(rt, gs + 24, (uint32_t)hs->mheight);
+        wr32(rt, gs + 28, (uint32_t)hs->ndepths);
+        wr32(rt, gs + 32, 0);            /* Depth[] needs explicit marshalling if used. */
+        wr32(rt, gs + 36, (uint32_t)hs->root_depth);
+        wr32(rt, gs + 40, gv);
+        wr32(rt, gs + 44, gc_to_guest(hs->default_gc));
+        wr32(rt, gs + 48, (uint32_t)hs->cmap);
+        wr32(rt, gs + 52, (uint32_t)hs->white_pixel);
+        wr32(rt, gs + 56, (uint32_t)hs->black_pixel);
+        wr32(rt, gs + 60, (uint32_t)hs->max_maps);
+        wr32(rt, gs + 64, (uint32_t)hs->min_maps);
+        wr32(rt, gs + 68, (uint32_t)hs->backing_store);
+        wr32(rt, gs + 72, (uint32_t)hs->save_unders);
+        wr32(rt, gs + 76, (uint32_t)hs->root_input_mask);
+    }
 }
 
 static IrixGuestAddr display_to_guest(Display *dpy)
 {
     size_t i;
     if (!dpy) return 0;
-    for (i = 0; i < g_x11.display_count; ++i)
-        if (g_x11.displays[i] == dpy)
-            return IRIX_X11_DISPLAY_BASE + (IrixGuestAddr)(i * 4u);
+    for (i = 0; i < g_x11.display_count; ++i) {
+        if (g_x11.displays[i] == dpy) {
+            write_display_shadow(i, dpy);
+            return display_guest_addr(i);
+        }
+    }
     if (g_x11.display_count >= IRIX_X11_MAX_DISPLAYS) return 0;
     i = g_x11.display_count++;
     g_x11.displays[i] = dpy;
-    return IRIX_X11_DISPLAY_BASE + (IrixGuestAddr)(i * 4u);
+    write_display_shadow(i, dpy);
+    return display_guest_addr(i);
 }
 
 static GC gc_from_guest(IrixGuestAddr addr)
@@ -69,23 +196,6 @@ static IrixGuestAddr gc_to_guest(GC gc)
     i = g_x11.gc_count++;
     g_x11.gcs[i] = gc;
     return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * 4u);
-}
-
-static IrixGuestAddr tmp_alloc(uint32_t n)
-{
-    IrixGuestAddr a;
-    n = (n + 7u) & ~7u;
-    if (!n || g_x11.tmp_cur + n < g_x11.tmp_cur ||
-        g_x11.tmp_cur + n > IRIX_X11_TMP_BASE + IRIX_X11_TMP_SIZE)
-        return 0;
-    a = g_x11.tmp_cur;
-    g_x11.tmp_cur += n;
-    return a;
-}
-
-static void wr32(IrixGuestRuntime *rt, IrixGuestAddr p, uint32_t v)
-{
-    if (p) irix_guest_write32be(rt, p, v);
 }
 
 static void bridge_XrmParseCommand(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -407,6 +517,7 @@ void irix_x11_extra_init(IrixGuestRuntime *rt)
 {
     memset(&g_x11,0,sizeof(g_x11));
     g_x11.rt=rt;
+    (void)irix_guest_map(rt,IRIX_X11_DISPLAY_BASE,IRIX_X11_DISPLAY_SHADOW_SIZE,3u);
     if(irix_guest_map(rt,IRIX_X11_TMP_BASE,IRIX_X11_TMP_SIZE,3u)==0 || irix_guest_ptr(rt,IRIX_X11_TMP_BASE,1))
         g_x11.tmp_cur=IRIX_X11_TMP_BASE;
 }
