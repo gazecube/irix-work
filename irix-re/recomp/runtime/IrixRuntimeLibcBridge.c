@@ -1,0 +1,206 @@
+#include "IrixRuntimeLibcBridge.h"
+
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static IrixGuestRuntime *g_rt;
+static IrixGuestAddr g_strtok_state;
+
+static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+}
+
+static void ret_i32(IrixGuestCpu *cpu, int v)
+{
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)v;
+}
+
+static IrixGuestAddr guest_tokenize(IrixGuestRuntime *rt, IrixGuestAddr start_addr,
+                                    const char *delim, IrixGuestAddr *state)
+{
+    char *s;
+    size_t skip, take;
+    IrixGuestAddr token;
+
+    if (!delim || !state) return 0;
+    if (start_addr) *state = start_addr;
+    if (!*state) return 0;
+
+    s = (char *)irix_guest_ptr(rt, *state, 1);
+    if (!s) return 0;
+
+    skip = strspn(s, delim);
+    *state += (IrixGuestAddr)skip;
+    s += skip;
+    if (!*s) {
+        *state = 0;
+        return 0;
+    }
+
+    token = *state;
+    take = strcspn(s, delim);
+    if (s[take]) {
+        s[take] = '\0';
+        *state += (IrixGuestAddr)take + 1u;
+    } else {
+        *state = 0;
+    }
+    return token;
+}
+
+static void bridge_strcasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    int r = (a && b) ? strcasecmp(a, b) : (a ? 1 : (b ? -1 : 0));
+    ret_i32(cpu, r);
+}
+
+static void bridge_strncasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    size_t n = (size_t)(uint32_t)cpu->gpr[6];
+    int r = (a && b) ? strncasecmp(a, b, n) : (a ? 1 : (b ? -1 : 0));
+    ret_i32(cpu, r);
+}
+
+static void bridge_strcoll(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    int r = (a && b) ? strcoll(a, b) : (a ? 1 : (b ? -1 : 0));
+    ret_i32(cpu, r);
+}
+
+static void bridge_strcspn(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *reject = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = (s && reject) ? (uint32_t)strcspn(s, reject) : 0;
+}
+
+static void bridge_strpbrk(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr base = (uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, base);
+    const char *accept = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    const char *p = (s && accept) ? strpbrk(s, accept) : 0;
+    cpu->gpr[2] = p ? base + (IrixGuestAddr)(p - s) : 0;
+}
+
+static void bridge_strtok(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr start = (uint32_t)cpu->gpr[4];
+    const char *delim = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = guest_tokenize(rt, start, delim, &g_strtok_state);
+}
+
+static void bridge_strtok_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr start = (uint32_t)cpu->gpr[4];
+    const char *delim = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    IrixGuestAddr savep = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr state = 0;
+    IrixGuestAddr out;
+
+    if (!savep || !delim) { cpu->gpr[2] = 0; return; }
+    if (!start) state = irix_guest_read32be(rt, savep);
+    out = guest_tokenize(rt, start, delim, &state);
+    irix_guest_write32be(rt, savep, state);
+    cpu->gpr[2] = out;
+}
+
+static void bridge_gettimeofday(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct timeval tv;
+    struct timezone tz;
+    IrixGuestAddr tvp = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr tzp = (uint32_t)cpu->gpr[5];
+    int rc = gettimeofday(&tv, tzp ? &tz : 0);
+
+    if (rc == 0 && tvp) {
+        irix_guest_write32be(rt, tvp + 0u, (uint32_t)tv.tv_sec);
+        irix_guest_write32be(rt, tvp + 4u, (uint32_t)tv.tv_usec);
+    }
+    if (rc == 0 && tzp) {
+        irix_guest_write32be(rt, tzp + 0u, (uint32_t)tz.tz_minuteswest);
+        irix_guest_write32be(rt, tzp + 4u, (uint32_t)tz.tz_dsttime);
+    }
+    ret_i32(cpu, rc);
+}
+
+static void bridge_getdomainname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    uint32_t len = (uint32_t)cpu->gpr[5];
+    char *dst = len ? (char *)irix_guest_ptr(rt, dst_addr, len) : 0;
+    int rc = (dst && len) ? getdomainname(dst, (size_t)len) : -1;
+    if (rc == 0 && len) dst[len - 1u] = '\0';
+    ret_i32(cpu, rc);
+}
+
+static void bridge_getgroups(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int count = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr out = (uint32_t)cpu->gpr[5];
+    gid_t *groups = 0;
+    int rc, i;
+
+    if (count > 0) {
+        groups = (gid_t *)calloc((size_t)count, sizeof(*groups));
+        if (!groups) { ret_i32(cpu, -1); return; }
+    }
+    rc = getgroups(count, groups);
+    if (rc >= 0 && out && groups) {
+        for (i = 0; i < rc; ++i)
+            irix_guest_write32be(rt, out + (IrixGuestAddr)i * 4u, (uint32_t)groups[i]);
+    }
+    free(groups);
+    ret_i32(cpu, rc);
+}
+
+static void bridge_getdtablehi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    long n;
+    (void)rt;
+#ifdef _SC_OPEN_MAX
+    n = sysconf(_SC_OPEN_MAX);
+#else
+    n = 256;
+#endif
+    if (n < 0) n = 256;
+    if (n > INT32_MAX) n = INT32_MAX;
+    cpu->gpr[2] = (uint32_t)n;
+}
+
+static void bridge_setpgrp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    ret_i32(cpu, setpgrp());
+}
+
+void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
+{
+    g_rt = rt;
+    g_strtok_state = 0;
+    (void)g_rt;
+}
+
+IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
+{
+    if (!name) return 0;
+#define MAP(n) if (!strcmp(name, #n)) return bridge_##n
+    MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
+    MAP(strtok); MAP(strtok_r);
+    MAP(gettimeofday); MAP(getdomainname); MAP(getgroups); MAP(getdtablehi); MAP(setpgrp);
+#undef MAP
+    return 0;
+}
