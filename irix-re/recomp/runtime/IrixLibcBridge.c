@@ -1,5 +1,6 @@
 #include "IrixLibcBridge.h"
 
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -113,6 +114,27 @@ static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     (void)cpu;
 }
 
+static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int category = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr guest_name = (uint32_t)cpu->gpr[5];
+    const char *name = guest_name ? (const char *)irix_guest_ptr(rt, guest_name, 1) : 0;
+    const char *result = setlocale(category, name);
+    IrixGuestAddr out = 0;
+    if (result) {
+        size_t n = strlen(result) + 1u;
+        if (n <= UINT32_MAX) {
+            out = alloc_guest((uint32_t)n, 1u);
+            if (out) {
+                void *p = irix_guest_ptr(rt, out, n);
+                if (p) memcpy(p, result, n);
+                else out = 0;
+            }
+        }
+    }
+    cpu->gpr[2] = out;
+}
+
 int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_t heap_size)
 {
     memset(&g_libc, 0, sizeof(g_libc));
@@ -135,5 +157,6 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "realloc")) return bridge_realloc;
     if (!strcmp(name, "memalign")) return bridge_memalign;
     if (!strcmp(name, "free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
+    if (!strcmp(name, "setlocale")) return bridge_setlocale;
     return 0;
 }
