@@ -106,5 +106,57 @@ if(IRIX_DEV_TREE)
         add_library(irix_desktop_bundle STATIC IMPORTED GLOBAL)
         set_target_properties(irix_desktop_bundle PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_DESKTOP_LIB}")
         add_dependencies(irix_desktop_bundle irix_recompiled_desktop)
+
+        if(X11_FOUND)
+            set(IRIX_FAST_QUARK_INC "${IRIX_RECOMP_DESKTOP_DIR}/irix_fast_quarks.inc")
+            set(IRIX_X11_GUEST_LIB "")
+            foreach(_x11_candidate
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.1"
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.3"
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so")
+                if(EXISTS "${_x11_candidate}" AND NOT IRIX_X11_GUEST_LIB)
+                    set(IRIX_X11_GUEST_LIB "${_x11_candidate}")
+                endif()
+            endforeach()
+
+            if(IRIX_X11_GUEST_LIB)
+                add_custom_command(
+                    OUTPUT "${IRIX_FAST_QUARK_INC}"
+                    COMMAND "${Python3_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_fast_quarks.py"
+                            "${IRIX_X11_GUEST_LIB}"
+                            -o "${IRIX_FAST_QUARK_INC}"
+                            --format c
+                    DEPENDS tools/extract_fast_quarks.py "${IRIX_X11_GUEST_LIB}"
+                    VERBATIM
+                )
+                add_custom_target(irix_fast_quarks DEPENDS "${IRIX_FAST_QUARK_INC}")
+            endif()
+
+            add_executable(irix_desktop_runner runtime/DesktopRunner.c)
+            add_dependencies(irix_desktop_runner irix_recompiled_core irix_recompiled_desktop)
+            if(TARGET irix_fast_quarks)
+                add_dependencies(irix_desktop_runner irix_fast_quarks)
+                target_compile_definitions(irix_desktop_runner PRIVATE IRIX_HAVE_FAST_QUARKS=1)
+            endif()
+            target_include_directories(irix_desktop_runner PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                ${IRIX_RECOMP_DESKTOP_DIR}
+            )
+            target_compile_definitions(irix_desktop_runner PRIVATE
+                IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+                IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
+            )
+            target_link_libraries(irix_desktop_runner PRIVATE
+                irix_desktop_bundle
+                irix_recompiled_stack
+                irix_recomp_libc_bridge
+                irix_recomp_x11_bridge
+                irix_recomp_runtime
+                X11::X11
+                m
+            )
+        endif()
     endif()
 endif()
