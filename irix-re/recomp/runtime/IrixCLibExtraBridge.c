@@ -188,6 +188,23 @@ static void bridge_printf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)n;
 }
 
+static void bridge_fprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char buf[8192];
+    int n;
+
+    /* IRIX FILE is an ABI object and cannot be cast to the host libc FILE.
+       The desktop/Xt startup path uses fprintf for diagnostics, overwhelmingly
+       through stderr.  Preserve the N32 varargs semantics here and route the
+       formatted bytes to host stderr until the full guest stdio handle layer
+       (fopen/fclose/fread/fwrite/etc.) is introduced. */
+    (void)cpu->gpr[4];
+    n = format_guest(rt, cpu, (uint32_t)cpu->gpr[5], 6u,
+                     (uint32_t)cpu->gpr[29], buf, sizeof(buf));
+    if (n >= 0) fputs(buf, stderr);
+    cpu->gpr[2] = (uint64_t)(int64_t)n;
+}
+
 static void bridge_puts(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -228,7 +245,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
 {
     if(!name)return 0;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
-    M(sprintf); M(snprintf); M(printf); M(puts); M(putchar);
+    M(sprintf); M(snprintf); M(printf); M(fprintf); M(puts); M(putchar);
     M(atoi); M(atol); M(strtol); M(strtoul); M(strtod);
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);
