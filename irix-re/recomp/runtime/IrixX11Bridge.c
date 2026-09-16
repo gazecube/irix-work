@@ -200,6 +200,16 @@ static void bridge_XrmQGetSearchResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu
     cpu->gpr[2] = ok ? 1 : 0;
 }
 
+static void bridge_XAllocSizeHints(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = value_alloc(rt, 72u);
+    if (addr) {
+        void *p = irix_guest_ptr(rt, addr, 72u);
+        if (p) memset(p, 0, 72u);
+    }
+    cpu->gpr[2] = addr;
+}
+
 static void bridge_XrmInitialize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -277,6 +287,7 @@ void irix_x11_bridge_init(IrixGuestRuntime *rt,
 IrixGuestFunction irix_x11_bridge_lookup(const char *name)
 {
     if (!name) return 0;
+    if (!strcmp(name, "XAllocSizeHints")) return bridge_XAllocSizeHints;
     if (!strcmp(name, "XrmInitialize")) return bridge_XrmInitialize;
     if (!strcmp(name, "XrmPermStringToQuark")) return bridge_XrmPermStringToQuark;
     if (!strcmp(name, "XrmStringToQuark")) return bridge_XrmStringToQuark;
