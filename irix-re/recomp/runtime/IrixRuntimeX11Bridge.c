@@ -101,6 +101,33 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     return g_x11.host_display[i];
 }
 
+/* IRIX N32 XColor is 12 bytes: 32-bit pixel; three 16-bit channels;
+   flags and pad bytes.  Never memcpy the host LP64 XColor across the ABI. */
+static int guest_xcolor_read(IrixGuestRuntime *rt, IrixGuestAddr addr, XColor *c)
+{
+    if (!addr || !c || !irix_guest_ptr(rt, addr, 12u)) return 0;
+    memset(c, 0, sizeof(*c));
+    c->pixel = (unsigned long)irix_guest_read32be(rt, addr + 0u);
+    c->red = irix_guest_read16be(rt, addr + 4u);
+    c->green = irix_guest_read16be(rt, addr + 6u);
+    c->blue = irix_guest_read16be(rt, addr + 8u);
+    c->flags = (char)irix_guest_read8(rt, addr + 10u);
+    c->pad = (char)irix_guest_read8(rt, addr + 11u);
+    return !rt->trapped;
+}
+
+static int guest_xcolor_write(IrixGuestRuntime *rt, IrixGuestAddr addr, const XColor *c)
+{
+    if (!addr || !c || !irix_guest_ptr(rt, addr, 12u)) return 0;
+    irix_guest_write32be(rt, addr + 0u, (uint32_t)c->pixel);
+    irix_guest_write16be(rt, addr + 4u, c->red);
+    irix_guest_write16be(rt, addr + 6u, c->green);
+    irix_guest_write16be(rt, addr + 8u, c->blue);
+    irix_guest_write8(rt, addr + 10u, (uint8_t)c->flags);
+    irix_guest_write8(rt, addr + 11u, (uint8_t)c->pad);
+    return !rt->trapped;
+}
+
 static void bridge_XDisableAccessControl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
@@ -253,6 +280,100 @@ static void bridge_XRestackWindows(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)rc;
 }
 
+static void bridge_XAllocNamedColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+    IrixGuestAddr screen_out = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr exact_out = (uint32_t)cpu->gpr[8];
+    XColor screen_def, exact_def;
+    int rc = 0;
+    if (d && name && screen_out && exact_out) {
+        rc = XAllocNamedColor(d, cmap, name, &screen_def, &exact_def);
+        if (rc) {
+            guest_xcolor_write(rt, screen_out, &screen_def);
+            guest_xcolor_write(rt, exact_out, &exact_def);
+        }
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XAllocColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr color_addr = (uint32_t)cpu->gpr[6];
+    XColor color;
+    int rc = 0;
+    if (d && guest_xcolor_read(rt, color_addr, &color)) {
+        rc = XAllocColor(d, cmap, &color);
+        if (rc) guest_xcolor_write(rt, color_addr, &color);
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XParseColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    const char *spec = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+    IrixGuestAddr out = (uint32_t)cpu->gpr[7];
+    XColor color;
+    int rc = 0;
+    if (d && spec && out) {
+        memset(&color, 0, sizeof(color));
+        rc = XParseColor(d, cmap, spec, &color);
+        if (rc) guest_xcolor_write(rt, out, &color);
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XQueryColors(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr guest_colors = (uint32_t)cpu->gpr[6];
+    int count = (int)(int32_t)cpu->gpr[7];
+    XColor *colors = 0;
+    int i, rc = 0;
+    if (!d || count < 0 || (count && !guest_colors)) { cpu->gpr[2] = 0; return; }
+    if (!count) { cpu->gpr[2] = 1; return; }
+    colors = (XColor *)calloc((size_t)count, sizeof(*colors));
+    if (!colors) { cpu->gpr[2] = 0; return; }
+    for (i = 0; i < count; ++i) {
+        IrixGuestAddr a = guest_colors + (IrixGuestAddr)i * 12u;
+        if (!guest_xcolor_read(rt, a, &colors[i])) goto out;
+    }
+    rc = XQueryColors(d, cmap, colors, count);
+    if (rc)
+        for (i = 0; i < count; ++i)
+            guest_xcolor_write(rt, guest_colors + (IrixGuestAddr)i * 12u, &colors[i]);
+out:
+    free(colors);
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XFreeColors(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr guest_pixels = (uint32_t)cpu->gpr[6];
+    int count = (int)(int32_t)cpu->gpr[7];
+    unsigned long planes = (unsigned long)(uint32_t)cpu->gpr[8];
+    unsigned long *pixels = 0;
+    int i, rc = 0;
+    if (!d || count < 0 || (count && !guest_pixels)) { cpu->gpr[2] = 0; return; }
+    if (!count) { cpu->gpr[2] = 1; return; }
+    pixels = (unsigned long *)calloc((size_t)count, sizeof(*pixels));
+    if (!pixels) { cpu->gpr[2] = 0; return; }
+    for (i = 0; i < count; ++i)
+        pixels[i] = (unsigned long)irix_guest_read32be(rt, guest_pixels + (IrixGuestAddr)i * 4u);
+    if (!rt->trapped) rc = XFreeColors(d, cmap, pixels, count, planes);
+    free(pixels);
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
 static void bridge_XInstallColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
@@ -322,6 +443,7 @@ IrixGuestFunction irix_runtime_x11_bridge_lookup(const char *name)
     MAP(XScreenNumberOfScreen); MAP(XVisualIDFromVisual);
     MAP(XSetErrorHandler); MAP(XSetIOErrorHandler); MAP(XFree); MAP(XFreeStringList);
     MAP(_XSGIFastInternAtom); MAP(XInternAtoms); MAP(XRestackWindows);
+    MAP(XAllocNamedColor); MAP(XAllocColor); MAP(XParseColor); MAP(XQueryColors); MAP(XFreeColors);
     MAP(XInstallColormap); MAP(XFreeColormap); MAP(XListInstalledColormaps); MAP(XSetWMColormapWindows);
 #undef MAP
     return 0;
