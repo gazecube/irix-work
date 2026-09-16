@@ -58,7 +58,6 @@ if(IRIX_DEV_TREE)
                 "${IRIX_DEV_TREE}"
                 -o "${IRIX_RECOMP_CORE_DIR}"
                 --cc "${CMAKE_C_COMPILER}"
-                -j 1
         DEPENDS
             tools/build_core_stack.py
             tools/recomp_linked_stack.py
@@ -90,7 +89,6 @@ if(IRIX_DEV_TREE)
                     --core-link "${IRIX_RECOMP_CORE_LINK}"
                     -o "${IRIX_RECOMP_DESKTOP_DIR}"
                     --cc "${CMAKE_C_COMPILER}"
-                    -j 1
             DEPENDS
                 irix_recompiled_core
                 tools/build_desktop_bundle.py
