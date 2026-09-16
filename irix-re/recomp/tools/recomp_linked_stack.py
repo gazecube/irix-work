@@ -3,7 +3,7 @@ import argparse,json,re,struct,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parent))
 from link_stack_n32 import StackLink
-from translate_n32_regimm import decode
+from translate_n32_core import decode
 
 STT_FUNC=2
 
