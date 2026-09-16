@@ -108,6 +108,34 @@ void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t val
     irix_guest_write32be(rt, addr + 4, (uint32_t)value);
 }
 
+float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg)
+{
+    union { uint32_t u; float f; } v;
+    v.u = (uint32_t)cpu->fpr[reg & 31u];
+    return v.f;
+}
+
+double irix_guest_fpr_get_d(const IrixGuestCpu *cpu, unsigned reg)
+{
+    union { uint64_t u; double d; } v;
+    v.u = cpu->fpr[reg & 31u];
+    return v.d;
+}
+
+void irix_guest_fpr_set_s(IrixGuestCpu *cpu, unsigned reg, float value)
+{
+    union { uint32_t u; float f; } v;
+    v.f = value;
+    cpu->fpr[reg & 31u] = (cpu->fpr[reg & 31u] & UINT64_C(0xffffffff00000000)) | v.u;
+}
+
+void irix_guest_fpr_set_d(IrixGuestCpu *cpu, unsigned reg, double value)
+{
+    union { uint64_t u; double d; } v;
+    v.d = value;
+    cpu->fpr[reg & 31u] = v.u;
+}
+
 int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
                                  IrixGuestFunction function, const char *name)
 {
@@ -128,6 +156,13 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuest
         if (rt->functions[i].address == address)
             return &rt->functions[i];
     return 0;
+}
+
+void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
+{
+    rt->trapped = 1;
+    rt->trap_pc = cpu->pc;
+    rt->trap_code = code;
 }
 
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
