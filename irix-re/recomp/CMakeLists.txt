@@ -1,5 +1,6 @@
 add_library(irix_recomp_runtime STATIC
     runtime/IrixGuest.c
+    runtime/IrixElf.c
 )
 
 target_include_directories(irix_recomp_runtime PUBLIC
