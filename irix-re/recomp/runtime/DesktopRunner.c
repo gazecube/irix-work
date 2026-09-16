@@ -36,6 +36,8 @@ void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*reso
 void register_irix_prebound_imports(IrixGuestRuntime *rt);
 void irix_x11_extra_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_extra_lookup(const char *name);
+void irix_x11_bulk_init(IrixGuestRuntime *rt);
+IrixGuestFunction irix_x11_bulk_lookup(const char *name);
 
 static IrixGuestFunction resolve_native(const char *name)
 {
@@ -45,7 +47,9 @@ static IrixGuestFunction resolve_native(const char *name)
     if (fn) return fn;
     fn = irix_x11_extra_lookup(name);
     if (fn) return fn;
-    return irix_x11_keyboard_bridge_lookup(name);
+    fn = irix_x11_keyboard_bridge_lookup(name);
+    if (fn) return fn;
+    return irix_x11_bulk_lookup(name);
 }
 
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
@@ -157,6 +161,7 @@ int main(int argc, char **argv)
 #endif
     irix_x11_extra_init(&rt);
     irix_x11_keyboard_bridge_init(&rt);
+    irix_x11_bulk_init(&rt);
 
     irix_register_recompiled_stack(&rt);
     register_desktop(&rt);
