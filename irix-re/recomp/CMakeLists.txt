@@ -64,6 +64,7 @@ if(IRIX_DEV_TREE)
             tools/recomp_linked_stack.py
             tools/link_stack_n32.py
             tools/translate_n32.py
+            tools/translate_n32_regimm.py
             tools/extract_ar.py
             runtime/IrixGuest.h
         VERBATIM
@@ -96,6 +97,7 @@ if(IRIX_DEV_TREE)
                 tools/recomp_elf_bundle.py
                 tools/gen_prebound_bindings.py
                 tools/translate_n32.py
+                tools/translate_n32_regimm.py
                 runtime/IrixGuest.h
             VERBATIM
         )
