@@ -54,11 +54,17 @@ def main():
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     with (out/'bindings.c').open('w') as w:
         w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n')
+        w.write('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);\n')
         w.write('typedef struct { IrixGuestAddr stub,target; const char *name; } Fwd;\nstatic const Fwd fwds[]={\n')
         for addr,target,name,owner in resolved: w.write(f'{{0x{addr:08x}u,0x{target:08x}u,"{owner}:{name}"}},\n')
         w.write('};\n')
         w.write('static void forward_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){size_t i;for(i=0;i<sizeof(fwds)/sizeof(fwds[0]);++i)if(fwds[i].stub==cpu->pc){(void)irix_guest_call(rt,cpu,fwds[i].target);return;}fprintf(stderr,"NO FORWARD 0x%08x\\n",cpu->pc);irix_guest_trap(rt,cpu,0xeeee1001u);}\n')
         w.write('static void missing_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){IrixGuestFunctionEntry*e=irix_guest_find_function(rt,cpu->pc);fprintf(stderr,"MISSING IMPORT pc=0x%08x %s\\n",cpu->pc,e&&e->name?e->name:"?");irix_guest_trap(rt,cpu,0xeeee1002u);}\n')
+        w.write('void register_irix_bridge_imports(IrixGuestRuntime *rt,IrixGuestImportResolver resolver){IrixGuestFunction fn;\n')
+        for addr,target,name,owner in missing:
+            q=json.dumps(name)
+            w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{addr:08x}u,fn,"{owner}:{name}");\n')
+        w.write('}\n')
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
         for addr,target,name,owner in missing: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,missing_import,"{owner}:{name}");\n')
