@@ -92,6 +92,7 @@ if(IRIX_DEV_TREE)
             DEPENDS
                 irix_recompiled_core
                 tools/build_desktop_bundle.py
+                tools/audit_n32_bundle.py
                 tools/recomp_elf_bundle.py
                 tools/gen_prebound_bindings.py
                 tools/translate_n32.py
