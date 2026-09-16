@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Translate one IRIX N32 MIPS function into portable C.
+"""Translate a single IRIX N32 MIPS function into portable C.
 
-The translator is deliberately conservative: unsupported instructions stop
-translation instead of silently inventing semantics. Guest addresses remain
-32-bit and generated code uses the runtime's big-endian memory helpers.
+This is the first execution-oriented translator for IID. It intentionally
+fails on unsupported instructions instead of emitting guessed semantics.
 """
 import argparse
 import re
@@ -124,13 +123,16 @@ def decode(addr, insn):
     target = insn & 0x03ffffff
 
     if insn == 0:
-        return ['/* nop */']
+        return ['/* nop */'], None
 
     if op == 0:
+        if fn == 0x0d:
+            code = (insn >> 6) & 0xfffff
+            return ['irix_guest_trap(rt, cpu, %du);' % code, 'return;'], 'control'
         if fn == 0x08:
-            kind = 'IRIX_PENDING_RETURN' if rs == 31 else 'IRIX_PENDING_JUMP'
-            return ['pending_kind = %s;' % kind,
-                    'pending_target = (IrixGuestAddr)%s;' % reg(rs)]
+            if rs == 31:
+                return ['pending_kind = IRIX_PENDING_RETURN;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs)], 'control'
+            return ['pending_kind = IRIX_PENDING_JUMP;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs)], 'control'
         if fn == 0x09:
             link = rd if rd else 31
             return [
@@ -138,22 +140,32 @@ def decode(addr, insn):
                 'pending_kind = IRIX_PENDING_CALL;',
                 'pending_target = (IrixGuestAddr)%s;' % reg(rs),
                 'pending_return = 0x%08xu;' % (addr + 8)
-            ]
+            ], 'control'
         if fn in (0x21, 0x2d):
             if fn == 0x21:
                 expr = sx32_expr('(uint32_t)%s + (uint32_t)%s' % (reg(rs), reg(rt)))
             else:
                 expr = '%s + %s' % (reg(rs), reg(rt))
-            return ['%s = %s;' % (reg(rd), expr)]
+            return ['%s = %s;' % (reg(rd), expr)], None
+        if fn == 0x23:
+            return ['%s = %s;' % (reg(rd), sx32_expr('(uint32_t)%s - (uint32_t)%s' % (reg(rs), reg(rt))))], None
         if fn == 0x25:
-            return ['%s = %s | %s;' % (reg(rd), reg(rs), reg(rt))]
+            return ['%s = %s | %s;' % (reg(rd), reg(rs), reg(rt))], None
+        if fn == 0x2a:
+            return ['%s = ((int64_t)%s < (int64_t)%s) ? 1 : 0;' % (reg(rd), reg(rs), reg(rt))], None
         if fn == 0x00:
-            return ['%s = %s;' % (reg(rd), sx32_expr('(uint32_t)%s << %d' % (reg(rt), sa)))]
+            return ['%s = %s;' % (reg(rd), sx32_expr('(uint32_t)%s << %d' % (reg(rt), sa)))], None
+        if fn == 0x02:
+            return ['%s = %s;' % (reg(rd), sx32_expr('(uint32_t)%s >> %d' % (reg(rt), sa)))], None
+        if fn == 0x24:
+            return ['%s = %s & %s;' % (reg(rd), reg(rs), reg(rt))], None
+        if fn == 0x2b:
+            return ['%s = ((uint64_t)%s < (uint64_t)%s) ? 1 : 0;' % (reg(rd), reg(rs), reg(rt))], None
         raise ValueError('unsupported SPECIAL fn=0x%x at 0x%08x word=0x%08x' % (fn, addr, insn))
 
     if op == 0x02:
         dst = ((addr + 4) & 0xf0000000) | (target << 2)
-        return ['pending_kind = IRIX_PENDING_JUMP;', 'pending_target = 0x%08xu;' % dst]
+        return ['pending_kind = IRIX_PENDING_JUMP;', 'pending_target = 0x%08xu;' % dst], 'control'
     if op == 0x03:
         dst = ((addr + 4) & 0xf0000000) | (target << 2)
         return [
@@ -161,7 +173,7 @@ def decode(addr, insn):
             'pending_kind = IRIX_PENDING_CALL;',
             'pending_target = 0x%08xu;' % dst,
             'pending_return = 0x%08xu;' % (addr + 8)
-        ]
+        ], 'control'
     if op in (0x04, 0x05):
         dst = (addr + 4 + (imm << 2)) & 0xffffffff
         cond = '%s == %s' % (reg(rs), reg(rt)) if op == 0x04 else '%s != %s' % (reg(rs), reg(rt))
@@ -170,29 +182,121 @@ def decode(addr, insn):
             '    pending_kind = IRIX_PENDING_JUMP;',
             '    pending_target = 0x%08xu;' % dst,
             '}'
-        ]
+        ], 'control'
+    if op in (0x14, 0x15):
+        dst = (addr + 4 + (imm << 2)) & 0xffffffff
+        cond = '%s == %s' % (reg(rs), reg(rt)) if op == 0x14 else '%s != %s' % (reg(rs), reg(rt))
+        return [
+            'if (%s) {' % cond,
+            '    pending_kind = IRIX_PENDING_JUMP;',
+            '    pending_target = 0x%08xu;' % dst,
+            '} else {',
+            '    pc += 4;',
+            '}'
+        ], 'control'
+    if op in (0x06, 0x07):
+        dst = (addr + 4 + (imm << 2)) & 0xffffffff
+        cmp = '<= 0' if op == 0x06 else '> 0'
+        return [
+            'if ((int64_t)%s %s) {' % (reg(rs), cmp),
+            '    pending_kind = IRIX_PENDING_JUMP;',
+            '    pending_target = 0x%08xu;' % dst,
+            '}'
+        ], 'control'
+    if op == 0x01:
+        dst = (addr + 4 + (imm << 2)) & 0xffffffff
+        if rt in (0, 2):
+            cond = '(int64_t)%s < 0' % reg(rs)
+        elif rt in (1, 3):
+            cond = '(int64_t)%s >= 0' % reg(rs)
+        elif rt == 0x11:
+            cond = '(int64_t)%s >= 0' % reg(rs)
+        else:
+            raise ValueError('unsupported REGIMM rt=0x%x at 0x%08x word=0x%08x' % (rt, addr, insn))
+        likely = rt in (2, 3)
+        lines = []
+        if rt == 0x11:
+            lines.append('%s = %s;' % (reg(31), sx32_expr('0x%08xu' % (addr + 8))))
+        lines.extend([
+            'if (%s) {' % cond,
+            '    pending_kind = IRIX_PENDING_JUMP;',
+            '    pending_target = 0x%08xu;' % dst,
+            '}'
+        ])
+        if likely:
+            lines = [
+                'if (%s) {' % cond,
+                '    pending_kind = IRIX_PENDING_JUMP;',
+                '    pending_target = 0x%08xu;' % dst,
+                '} else {', '    pc += 4;', '}'
+            ]
+        return lines, 'control'
     if op in (0x08, 0x09):
-        return ['%s = %s;' % (reg(rt), sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d' % (reg(rs), imm)))]
+        return ['%s = %s;' % (reg(rt), sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d' % (reg(rs), imm)))], None
+    if op == 0x19:
+        return ['%s = %s + (uint64_t)(int64_t)(int16_t)0x%04xu;' % (reg(rt), reg(rs), immu)], None
+    if op == 0x0a:
+        return ['%s = ((int64_t)%s < (int64_t)%d) ? 1 : 0;' % (reg(rt), reg(rs), imm)], None
+    if op == 0x0b:
+        return ['%s = ((uint64_t)%s < (uint64_t)(int64_t)(int16_t)0x%04xu) ? 1 : 0;' % (reg(rt), reg(rs), immu)], None
     if op == 0x0d:
-        return ['%s = %s | 0x%xu;' % (reg(rt), reg(rs), immu)]
+        return ['%s = %s | 0x%xu;' % (reg(rt), reg(rs), immu)], None
     if op == 0x0c:
-        return ['%s = %s & 0x%xu;' % (reg(rt), reg(rs), immu)]
+        return ['%s = %s & 0x%xu;' % (reg(rt), reg(rs), immu)], None
     if op == 0x0f:
-        return ['%s = %s;' % (reg(rt), sx32_expr('0x%08xu' % ((immu << 16) & 0xffffffff)))]
+        return ['%s = %s;' % (reg(rt), sx32_expr('0x%08xu' % ((immu << 16) & 0xffffffff)))], None
+    if op == 0x35:
+        return ['cpu->fpr[%d] = irix_guest_read64be(rt, %s);' % (rt, mem_addr(rs, imm))], None
+    if op == 0x3d:
+        return ['irix_guest_write64be(rt, %s, cpu->fpr[%d]);' % (mem_addr(rs, imm), rt)], None
+    if op == 0x39:
+        return ['irix_guest_write32be(rt, %s, (uint32_t)cpu->fpr[%d]);' % (mem_addr(rs, imm), rt)], None
+    if op == 0x21:
+        return ['%s = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
+    if op == 0x25:
+        return ['%s = irix_guest_read16be(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
     if op == 0x20:
-        return ['%s = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, %s);' % (reg(rt), mem_addr(rs, imm))]
+        return ['%s = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
     if op == 0x24:
-        return ['%s = irix_guest_read8(rt, %s);' % (reg(rt), mem_addr(rs, imm))]
+        return ['%s = irix_guest_read8(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
     if op == 0x23:
-        return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);' % (reg(rt), mem_addr(rs, imm))]
+        return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
     if op == 0x37:
-        return ['%s = irix_guest_read64be(rt, %s);' % (reg(rt), mem_addr(rs, imm))]
+        return ['%s = irix_guest_read64be(rt, %s);' % (reg(rt), mem_addr(rs, imm))], None
     if op == 0x28:
-        return ['irix_guest_write8(rt, %s, (uint8_t)%s);' % (mem_addr(rs, imm), reg(rt))]
+        return ['irix_guest_write8(rt, %s, (uint8_t)%s);' % (mem_addr(rs, imm), reg(rt))], None
+    if op == 0x29:
+        return ['irix_guest_write16be(rt, %s, (uint16_t)%s);' % (mem_addr(rs, imm), reg(rt))], None
     if op == 0x2b:
-        return ['irix_guest_write32be(rt, %s, (uint32_t)%s);' % (mem_addr(rs, imm), reg(rt))]
+        return ['irix_guest_write32be(rt, %s, (uint32_t)%s);' % (mem_addr(rs, imm), reg(rt))], None
     if op == 0x3f:
-        return ['irix_guest_write64be(rt, %s, %s);' % (mem_addr(rs, imm), reg(rt))]
+        return ['irix_guest_write64be(rt, %s, %s);' % (mem_addr(rs, imm), reg(rt))], None
+
+    if op == 0x11:
+        fmt = rs
+        ft = rt
+        fs = rd
+        fd = sa
+        funct = fn
+        if fmt == 0x00:
+            return ['%s = (uint64_t)(int64_t)(int32_t)(uint32_t)cpu->fpr[%d];' % (reg(ft), fs)], None
+        if fmt == 0x04:
+            return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)%s;' % (fs, fs, reg(ft))], None
+        if fmt == 0x10:
+            if funct == 0x21:
+                return ['irix_guest_fpr_set_d(cpu, %d, (double)irix_guest_fpr_get_s(cpu, %d));' % (fd, fs)], None
+        if fmt == 0x11:
+            if funct == 0x02:
+                return ['irix_guest_fpr_set_d(cpu, %d, irix_guest_fpr_get_d(cpu, %d) * irix_guest_fpr_get_d(cpu, %d));' % (fd, fs, ft)], None
+            if funct == 0x03:
+                return ['irix_guest_fpr_set_d(cpu, %d, irix_guest_fpr_get_d(cpu, %d) / irix_guest_fpr_get_d(cpu, %d));' % (fd, fs, ft)], None
+            if funct == 0x0d:
+                return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)(int32_t)irix_guest_fpr_get_d(cpu, %d);' % (fd, fd, fs)], None
+            if funct == 0x20:
+                return ['irix_guest_fpr_set_s(cpu, %d, (float)irix_guest_fpr_get_d(cpu, %d));' % (fd, fs)], None
+        if fmt == 0x14 and funct == 0x20:
+            return ['irix_guest_fpr_set_s(cpu, %d, (float)(int32_t)(uint32_t)cpu->fpr[%d]);' % (fd, fs)], None
+        raise ValueError('unsupported COP1 fmt=0x%x funct=0x%x at 0x%08x word=0x%08x' % (fmt, funct, addr, insn))
 
     raise ValueError('unsupported op=0x%x at 0x%08x word=0x%08x' % (op, addr, insn))
 
@@ -210,7 +314,8 @@ def emit(path, name):
     decoded = []
     for i, word in enumerate(words):
         addr = start + i * 4
-        decoded.append((addr, word, decode(addr, word)))
+        lines, control = decode(addr, word)
+        decoded.append((addr, word, lines, control))
 
     fn = 'irix_recomp_%s' % c_name(name)
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */' % (path, sym_name, start, size))
@@ -236,7 +341,7 @@ def emit(path, name):
     print('        cpu->pc = pc;')
     print('')
     print('        switch (pc) {')
-    for addr, word, lines in decoded:
+    for addr, word, lines, _ in decoded:
         print('        case 0x%08xu: /* 0x%08x */' % (addr, word))
         for line in lines:
             print('            ' + line)
