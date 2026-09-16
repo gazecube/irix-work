@@ -6,6 +6,9 @@ local helper calls. The original translator handled only BGEZAL and lost the
 link assignment when rewriting a likely branch. Patch the shared decoder here
 so all production generators can use the corrected semantics without carrying
 a second full translator implementation.
+
+This front end also carries instruction classes first observed in the runtime
+DSO/application corpus rather than the static core archives.
 """
 import translate_n32 as _base
 
@@ -16,6 +19,7 @@ def decode(addr, insn):
     op = insn >> 26
     rt = (insn >> 16) & 31
     rs = (insn >> 21) & 31
+
     if op == 0x01 and rt in (0x10, 0x11, 0x12, 0x13):
         imm = _base.sx16(insn & 0xffff)
         dst = (addr + 4 + (imm << 2)) & 0xffffffff
@@ -32,6 +36,15 @@ def decode(addr, insn):
         if likely:
             lines += ['else {', '    pc += 4;', '}']
         return lines, 'control'
+
+    # LWU: load a 32-bit word and zero-extend it into the 64-bit N32 GPR.
+    if op == 0x27:
+        imm = _base.sx16(insn & 0xffff)
+        return [
+            '%s = (uint64_t)irix_guest_read32be(rt, %s);' %
+            (_base.reg(rt), _base.mem_addr(rs, imm))
+        ], None
+
     return _base_decode(addr, insn)
 
 
