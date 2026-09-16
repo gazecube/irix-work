@@ -67,6 +67,8 @@ int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
+int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
+                             IrixGuestAddr *entry_out);
 
 #ifdef __cplusplus
 }
