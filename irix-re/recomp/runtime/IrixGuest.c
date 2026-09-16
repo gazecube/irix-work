@@ -136,6 +136,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     if (!entry)
         return -1;
     cpu->pc = address;
+    /* N32 PIC entry convention: t9 contains the callee address. */
+    cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
     entry->function(rt, cpu);
     cpu->gpr[0] = 0;
     return 0;
