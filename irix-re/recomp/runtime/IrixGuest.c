@@ -16,6 +16,16 @@ static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, 
     return 0;
 }
 
+static void memory_fault(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    if (!rt->trapped) {
+        rt->trapped = 1;
+        rt->trap_pc = rt->current_pc;
+        rt->fault_addr = addr;
+        rt->trap_code = 0xeeee0004u;
+    }
+}
+
 void irix_guest_runtime_init(IrixGuestRuntime *rt)
 {
     memset(rt, 0, sizeof(*rt));
@@ -58,20 +68,23 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 uint8_t irix_guest_read8(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
-    return p ? *p : 0;
+    if (!p) { memory_fault(rt, addr); return 0; }
+    return *p;
 }
 
 uint16_t irix_guest_read16be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
-    return p ? (uint16_t)(((uint16_t)p[0] << 8) | p[1]) : 0;
+    if (!p) { memory_fault(rt, addr); return 0; }
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
 uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
-    return p ? ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-               ((uint32_t)p[2] << 8) | (uint32_t)p[3] : 0;
+    if (!p) { memory_fault(rt, addr); return 0; }
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
@@ -84,22 +97,23 @@ uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
-    if (p) *p = value;
+    if (!p) { memory_fault(rt, addr); return; }
+    *p = value;
 }
 
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
-    if (p) { p[0] = (uint8_t)(value >> 8); p[1] = (uint8_t)value; }
+    if (!p) { memory_fault(rt, addr); return; }
+    p[0] = (uint8_t)(value >> 8); p[1] = (uint8_t)value;
 }
 
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
-    if (p) {
-        p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
-        p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
-    }
+    if (!p) { memory_fault(rt, addr); return; }
+    p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
 }
 
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value)
@@ -168,12 +182,17 @@ void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
-    if (!entry)
+    if (!entry) {
+        rt->trapped = 1;
+        rt->trap_pc = address;
+        rt->trap_code = 0xeeee0003u;
         return -1;
+    }
     cpu->pc = address;
+    rt->current_pc = address;
     /* N32 PIC entry convention: t9 contains the callee address. */
     cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
     entry->function(rt, cpu);
     cpu->gpr[0] = 0;
-    return 0;
+    return rt->trapped ? -1 : 0;
 }
