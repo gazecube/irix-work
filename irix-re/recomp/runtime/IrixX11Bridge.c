@@ -9,6 +9,8 @@
 #define IRIX_XRM_HANDLE_BASE 0x72000000u
 #define IRIX_XRM_SEARCH_HANDLE_BASE 0x72100000u
 #define IRIX_XRM_MAX_SEARCH_ENTRIES 4096u
+#define IRIX_XRM_VALUE_BASE 0x73000000u
+#define IRIX_XRM_VALUE_SIZE 0x01000000u
 
 typedef struct IrixX11BridgeState {
     IrixGuestRuntime *rt;
@@ -18,6 +20,7 @@ typedef struct IrixX11BridgeState {
     size_t database_count;
     XrmHashTable search_entries[IRIX_XRM_MAX_SEARCH_ENTRIES];
     size_t search_entry_count;
+    IrixGuestAddr value_cur;
 } IrixX11BridgeState;
 
 static IrixX11BridgeState g_bridge;
@@ -133,6 +136,65 @@ static void bridge_XrmQGetSearchList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = ok ? 1 : 0;
 }
 
+static XrmHashTable search_entry_from_guest(IrixGuestAddr addr)
+{
+    uint32_t index;
+    if (!addr || addr < IRIX_XRM_SEARCH_HANDLE_BASE) return 0;
+    index = (addr - IRIX_XRM_SEARCH_HANDLE_BASE) / 4u;
+    if (index >= g_bridge.search_entry_count) return 0;
+    return g_bridge.search_entries[index];
+}
+
+static IrixGuestAddr value_alloc(IrixGuestRuntime *rt, uint32_t size)
+{
+    IrixGuestAddr a;
+    uint32_t n = (size + 7u) & ~7u;
+    if (!n || g_bridge.value_cur + n < g_bridge.value_cur ||
+        g_bridge.value_cur + n > IRIX_XRM_VALUE_BASE + IRIX_XRM_VALUE_SIZE)
+        return 0;
+    a = g_bridge.value_cur;
+    g_bridge.value_cur += n;
+    if (!irix_guest_ptr(rt, a, n)) return 0;
+    return a;
+}
+
+static void write_xrm_value(IrixGuestRuntime *rt, IrixGuestAddr out, const XrmValue *value)
+{
+    IrixGuestAddr data = 0;
+    if (!out) return;
+    if (value && value->addr && value->size) {
+        data = value_alloc(rt, (uint32_t)value->size);
+        if (data) {
+            void *dst = irix_guest_ptr(rt, data, value->size);
+            if (dst) memcpy(dst, value->addr, value->size);
+        }
+    }
+    write32(rt, out, value ? (uint32_t)value->size : 0);
+    write32(rt, out + 4, data);
+}
+
+static void bridge_XrmQGetSearchResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr list_addr = (uint32_t)cpu->gpr[4];
+    XrmHashTable host_list[256];
+    XrmRepresentation type = 0;
+    XrmValue value;
+    Bool ok;
+    int i;
+    memset(&value, 0, sizeof(value));
+    for (i = 0; i < 255; ++i) {
+        IrixGuestAddr handle = read32(rt, list_addr + (IrixGuestAddr)(i * 4));
+        host_list[i] = search_entry_from_guest(handle);
+        if (!handle || !host_list[i]) break;
+    }
+    host_list[i] = 0;
+    ok = XrmQGetSearchResource(host_list, (XrmName)cpu->gpr[5],
+                               (XrmClass)cpu->gpr[6], &type, &value);
+    if ((uint32_t)cpu->gpr[7]) write32(rt, (uint32_t)cpu->gpr[7], (uint32_t)type);
+    if ((uint32_t)cpu->gpr[8]) write_xrm_value(rt, (uint32_t)cpu->gpr[8], ok ? &value : 0);
+    cpu->gpr[2] = ok ? 1 : 0;
+}
+
 static void bridge_XrmInitialize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -202,6 +264,9 @@ void irix_x11_bridge_init(IrixGuestRuntime *rt,
     g_bridge.rt = rt;
     g_bridge.fast_quark_names = fast_quark_names;
     g_bridge.fast_quark_count = fast_quark_count;
+    if (irix_guest_map(rt, IRIX_XRM_VALUE_BASE, IRIX_XRM_VALUE_SIZE, 3u) == 0 ||
+        irix_guest_ptr(rt, IRIX_XRM_VALUE_BASE, 1))
+        g_bridge.value_cur = IRIX_XRM_VALUE_BASE;
 }
 
 IrixGuestFunction irix_x11_bridge_lookup(const char *name)
@@ -211,6 +276,7 @@ IrixGuestFunction irix_x11_bridge_lookup(const char *name)
     if (!strcmp(name, "XrmPermStringToQuark")) return bridge_XrmPermStringToQuark;
     if (!strcmp(name, "XrmStringToQuark")) return bridge_XrmStringToQuark;
     if (!strcmp(name, "XrmQGetSearchList")) return bridge_XrmQGetSearchList;
+    if (!strcmp(name, "XrmQGetSearchResource")) return bridge_XrmQGetSearchResource;
     if (!strcmp(name, "XrmGetFileDatabase")) return bridge_XrmGetFileDatabase;
     if (!strcmp(name, "XrmGetStringDatabase")) return bridge_XrmGetStringDatabase;
     if (!strcmp(name, "XrmMergeDatabases")) return bridge_XrmMergeDatabases;
