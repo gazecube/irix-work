@@ -141,6 +141,26 @@ static void bridge_XNextRequest(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_XLastKnownRequestProcessed(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { RET_D(LastKnownRequestProcessed(d)); }
 
+static void bridge_XSynchronize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    D0();
+    if (d) (void)XSynchronize(d, (Bool)cpu->gpr[5]);
+    /* XSynchronize returns a host-side XAfterFunction pointer. Never expose
+       that pointer to translated N32 code. Xt uses this call for the side
+       effect during bootstrap, so a guest NULL callback is the safe value. */
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_XSetAfterFunction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    D0();
+    /* A non-NULL guest callback cannot be installed directly in host Xlib.
+       NULL is safe and is the common restore/disable path. */
+    if (d && (uint32_t)cpu->gpr[5] == 0)
+        (void)XSetAfterFunction(d, 0);
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_XScreenOfDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     cpu->gpr[2] = guest_screen(rt, (uint32_t)cpu->gpr[4], (int)cpu->gpr[5]);
@@ -289,7 +309,8 @@ IrixGuestFunction irix_x11_bulk_lookup(const char *name)
     MAP(XResourceManagerString); MAP(XScreenResourceString); MAP(XDisplayString); MAP(XServerVendor);
     MAP(XProtocolVersion); MAP(XProtocolRevision); MAP(XVendorRelease); MAP(XScreenCount); MAP(XImageByteOrder);
     MAP(XBitmapUnit); MAP(XBitmapPad); MAP(XBitmapBitOrder); MAP(XDisplayCells); MAP(XDisplayPlanes); MAP(XQLength);
-    MAP(XNextRequest); MAP(XLastKnownRequestProcessed); MAP(XScreenOfDisplay); MAP(XDefaultVisual); MAP(XDefaultGC);
+    MAP(XNextRequest); MAP(XLastKnownRequestProcessed); MAP(XSynchronize); MAP(XSetAfterFunction);
+    MAP(XScreenOfDisplay); MAP(XDefaultVisual); MAP(XDefaultGC);
     MAP(XDisplayOfScreen); MAP(XRootWindowOfScreen); MAP(XWidthOfScreen); MAP(XHeightOfScreen); MAP(XWidthMMOfScreen); MAP(XHeightMMOfScreen);
     MAP(XDefaultDepthOfScreen); MAP(XDefaultVisualOfScreen); MAP(XDefaultGCOfScreen); MAP(XDefaultColormapOfScreen);
     MAP(XWhitePixelOfScreen); MAP(XBlackPixelOfScreen); MAP(XMaxCmapsOfScreen); MAP(XMinCmapsOfScreen); MAP(XDoesBackingStore); MAP(XDoesSaveUnders); MAP(XEventMaskOfScreen);
