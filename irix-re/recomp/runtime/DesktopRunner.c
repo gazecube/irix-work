@@ -1,6 +1,7 @@
 #include "IrixGuest.h"
 #include "IrixLibcBridge.h"
 #include "IrixX11Bridge.h"
+#include "IrixX11KeyboardBridge.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +43,9 @@ static IrixGuestFunction resolve_native(const char *name)
     if (fn) return fn;
     fn = irix_x11_bridge_lookup(name);
     if (fn) return fn;
-    return irix_x11_extra_lookup(name);
+    fn = irix_x11_extra_lookup(name);
+    if (fn) return fn;
+    return irix_x11_keyboard_bridge_lookup(name);
 }
 
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
@@ -153,6 +156,7 @@ int main(int argc, char **argv)
     irix_x11_bridge_init(&rt, 0, 0);
 #endif
     irix_x11_extra_init(&rt);
+    irix_x11_keyboard_bridge_init(&rt);
 
     irix_register_recompiled_stack(&rt);
     register_desktop(&rt);
