@@ -86,18 +86,6 @@ static void bridge_XrmQuarkToString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = quark_string_to_guest((XrmQuark)(uint32_t)cpu->gpr[4]);
 }
 
-static void bridge_XrmStringToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{
-    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = s ? (uint32_t)XrmStringToQuark(s) : 0;
-}
-
-static void bridge_XrmPermStringToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{
-    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = s ? (uint32_t)XrmPermStringToQuark(s) : 0;
-}
-
 static void bridge_XrmUniqueQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -177,15 +165,17 @@ IrixGuestFunction irix_xrm_quark_bridge_lookup(const char *name)
 {
     if (!name) return 0;
 
-    /* _XQstring is Xlib's private quark-to-string entry point.  Keep it on
+    /* _XQstring is Xlib's private quark-to-string entry point. Keep it on
        the same guest-string cache as the public XrmQuarkToString API so no
        host pointer ever escapes into translated IRIX code. */
     if (!strcmp(name, "_XQstring")) return bridge_XrmQuarkToString;
 
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(XrmQuarkToString);
-    MAP(XrmStringToQuark);
-    MAP(XrmPermStringToQuark);
+    /* XrmStringToQuark and XrmPermStringToQuark intentionally fall through
+       to IrixX11Bridge.c. SGI Xt passes negative fast-quark pseudo-pointers
+       to these entry points; only that bridge decodes them through the
+       extracted _SGIXQuarkNameTable before calling host Xrm. */
     MAP(XrmUniqueQuark);
     MAP(XrmStringToQuarkList);
     MAP(XrmStringToBindingQuarkList);
