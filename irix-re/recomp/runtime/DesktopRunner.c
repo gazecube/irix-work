@@ -33,12 +33,16 @@ void register_imdFtrGallery(IrixGuestRuntime *rt);
 void register_imdFtrIcon(IrixGuestRuntime *rt);
 void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
 void register_irix_prebound_imports(IrixGuestRuntime *rt);
+void irix_x11_extra_init(IrixGuestRuntime *rt);
+IrixGuestFunction irix_x11_extra_lookup(const char *name);
 
 static IrixGuestFunction resolve_native(const char *name)
 {
     IrixGuestFunction fn = irix_libc_bridge_lookup(name);
     if (fn) return fn;
-    return irix_x11_bridge_lookup(name);
+    fn = irix_x11_bridge_lookup(name);
+    if (fn) return fn;
+    return irix_x11_extra_lookup(name);
 }
 
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
@@ -148,6 +152,7 @@ int main(int argc, char **argv)
 #else
     irix_x11_bridge_init(&rt, 0, 0);
 #endif
+    irix_x11_extra_init(&rt);
 
     irix_register_recompiled_stack(&rt);
     register_desktop(&rt);
