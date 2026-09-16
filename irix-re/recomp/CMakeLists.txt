@@ -13,6 +13,7 @@ set_target_properties(irix_recomp_runtime PROPERTIES
 
 add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixLibcBridge.c
+    runtime/IrixPosixBridge.c
 )
 target_include_directories(irix_recomp_libc_bridge PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
