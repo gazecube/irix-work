@@ -61,6 +61,21 @@ static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
     return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
 }
 
+static int guest_compare(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
+                         IrixGuestAddr fn, IrixGuestAddr a, IrixGuestAddr b)
+{
+    IrixGuestCpu cb = *caller;
+    IrixGuestAddr saved_pc = rt->current_pc;
+    cb.gpr[4] = (uint64_t)(int64_t)(int32_t)a;
+    cb.gpr[5] = (uint64_t)(int64_t)(int32_t)b;
+    if (irix_guest_call(rt, &cb, fn) != 0) {
+        rt->current_pc = saved_pc;
+        return 0;
+    }
+    rt->current_pc = saved_pc;
+    return (int)(int32_t)cb.gpr[2];
+}
+
 static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -274,6 +289,69 @@ static void bridge_memchr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = p ? addr + (IrixGuestAddr)(p - s) : 0;
 }
 
+static void bridge_qsort(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr base = (uint32_t)cpu->gpr[4];
+    uint32_t nmemb = (uint32_t)cpu->gpr[5];
+    uint32_t size = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr compar = (uint32_t)cpu->gpr[7];
+    uint64_t total = (uint64_t)nmemb * (uint64_t)size;
+    unsigned char *data;
+    unsigned char *tmp;
+    uint32_t i;
+
+    cpu->gpr[2] = 0;
+    if (nmemb < 2u || size == 0u) return;
+    if (!compar || total > UINT32_MAX) { irix_guest_trap(rt, cpu, 0xeeee2001u); return; }
+    data = (unsigned char *)irix_guest_ptr(rt, base, (size_t)total);
+    if (!data) { irix_guest_trap(rt, cpu, 0xeeee2002u); return; }
+    tmp = (unsigned char *)malloc(size);
+    if (!tmp) { irix_guest_trap(rt, cpu, 0xeeee2003u); return; }
+
+    /* Insertion sort is intentionally simple here: comparisons re-enter
+       translated guest code, so correctness matters more than host-side speed. */
+    for (i = 1; i < nmemb && !rt->trapped; ++i) {
+        uint32_t j = i;
+        memcpy(tmp, data + (size_t)i * size, size);
+        while (j > 0u) {
+            IrixGuestAddr prev = base + (j - 1u) * size;
+            IrixGuestAddr cur = base + j * size;
+            memcpy(data + (size_t)j * size, tmp, size);
+            if (guest_compare(rt, cpu, compar, prev, cur) <= 0 || rt->trapped)
+                break;
+            memmove(data + (size_t)j * size,
+                    data + (size_t)(j - 1u) * size, size);
+            --j;
+        }
+        if (!rt->trapped)
+            memcpy(data + (size_t)j * size, tmp, size);
+    }
+    free(tmp);
+}
+
+static void bridge_bsearch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr key = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr base = (uint32_t)cpu->gpr[5];
+    uint32_t nmemb = (uint32_t)cpu->gpr[6];
+    uint32_t size = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr compar = (uint32_t)cpu->gpr[8];
+    uint32_t lo = 0, hi = nmemb;
+
+    cpu->gpr[2] = 0;
+    if (!size || !compar || ((uint64_t)nmemb * size) > UINT32_MAX) return;
+    if (nmemb && !irix_guest_ptr(rt, base, (size_t)nmemb * size)) return;
+    while (lo < hi && !rt->trapped) {
+        uint32_t mid = lo + (hi - lo) / 2u;
+        IrixGuestAddr elem = base + mid * size;
+        int r = guest_compare(rt, cpu, compar, key, elem);
+        if (rt->trapped) return;
+        if (r < 0) hi = mid;
+        else if (r > 0) lo = mid + 1u;
+        else { cpu->gpr[2] = elem; return; }
+    }
+}
+
 static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int category = (int)(int32_t)cpu->gpr[4];
@@ -333,6 +411,8 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "memset")) return bridge_memset;
     if (!strcmp(name, "memcmp") || !strcmp(name, "bcmp")) return bridge_memcmp;
     if (!strcmp(name, "memchr")) return bridge_memchr;
+    if (!strcmp(name, "qsort")) return bridge_qsort;
+    if (!strcmp(name, "bsearch")) return bridge_bsearch;
     if (!strcmp(name, "setlocale")) return bridge_setlocale;
     return 0;
 }
