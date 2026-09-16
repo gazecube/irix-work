@@ -1,6 +1,7 @@
 #include "IrixX11Bridge.h"
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/Xresource.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,19 +46,9 @@ static const char *guest_quark_string(IrixGuestRuntime *rt, uint32_t encoded)
     return guest_cstr(rt, encoded);
 }
 
-static uint16_t read16(IrixGuestRuntime *rt, IrixGuestAddr addr)
-{
-    return irix_guest_read16be(rt, addr);
-}
-
 static uint32_t read32(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return irix_guest_read32be(rt, addr);
-}
-
-static void write16(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value)
-{
-    irix_guest_write16be(rt, addr, value);
 }
 
 static void write32(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
@@ -89,54 +80,6 @@ static XrmDatabase database_from_guest(IrixGuestAddr addr)
     if (index >= g_bridge.database_count)
         return 0;
     return g_bridge.databases[index];
-}
-
-static IrixGuestAddr region_to_guest(Region region)
-{
-    size_t i;
-    if (!region) return 0;
-    for (i = 0; i < g_bridge.region_count; ++i)
-        if (g_bridge.regions[i] == region)
-            return IRIX_REGION_HANDLE_BASE + (IrixGuestAddr)(i * 4u);
-    if (g_bridge.region_count >= IRIX_REGION_MAX_HANDLES)
-        return 0;
-    i = g_bridge.region_count++;
-    g_bridge.regions[i] = region;
-    return IRIX_REGION_HANDLE_BASE + (IrixGuestAddr)(i * 4u);
-}
-
-static Region region_from_guest(IrixGuestAddr addr)
-{
-    uint32_t index;
-    if (!addr || addr < IRIX_REGION_HANDLE_BASE) return 0;
-    index = (addr - IRIX_REGION_HANDLE_BASE) / 4u;
-    if (index >= g_bridge.region_count) return 0;
-    return g_bridge.regions[index];
-}
-
-static void region_forget(IrixGuestAddr addr)
-{
-    uint32_t index;
-    if (!addr || addr < IRIX_REGION_HANDLE_BASE) return;
-    index = (addr - IRIX_REGION_HANDLE_BASE) / 4u;
-    if (index < g_bridge.region_count)
-        g_bridge.regions[index] = 0;
-}
-
-static void read_guest_rectangle(IrixGuestRuntime *rt, IrixGuestAddr addr, XRectangle *r)
-{
-    r->x = (short)read16(rt, addr + 0);
-    r->y = (short)read16(rt, addr + 2);
-    r->width = read16(rt, addr + 4);
-    r->height = read16(rt, addr + 6);
-}
-
-static void write_guest_rectangle(IrixGuestRuntime *rt, IrixGuestAddr addr, const XRectangle *r)
-{
-    write16(rt, addr + 0, (uint16_t)r->x);
-    write16(rt, addr + 2, (uint16_t)r->y);
-    write16(rt, addr + 4, r->width);
-    write16(rt, addr + 6, r->height);
 }
 
 static int read_quark_list(IrixGuestRuntime *rt, IrixGuestAddr addr, XrmQuark *out, int cap)
@@ -212,6 +155,28 @@ static XrmHashTable search_entry_from_guest(IrixGuestAddr addr)
     return g_bridge.search_entries[index];
 }
 
+static IrixGuestAddr region_to_guest(Region region)
+{
+    size_t i;
+    if (!region) return 0;
+    for (i = 0; i < g_bridge.region_count; ++i)
+        if (g_bridge.regions[i] == region)
+            return IRIX_REGION_HANDLE_BASE + (IrixGuestAddr)(i * 4u);
+    if (g_bridge.region_count >= IRIX_REGION_MAX_HANDLES) return 0;
+    i = g_bridge.region_count++;
+    g_bridge.regions[i] = region;
+    return IRIX_REGION_HANDLE_BASE + (IrixGuestAddr)(i * 4u);
+}
+
+static Region region_from_guest(IrixGuestAddr addr)
+{
+    uint32_t index;
+    if (!addr || addr < IRIX_REGION_HANDLE_BASE) return 0;
+    index = (addr - IRIX_REGION_HANDLE_BASE) / 4u;
+    if (index >= g_bridge.region_count) return 0;
+    return g_bridge.regions[index];
+}
+
 static IrixGuestAddr value_alloc(IrixGuestRuntime *rt, uint32_t size)
 {
     IrixGuestAddr a;
@@ -274,32 +239,29 @@ static void bridge_XAllocSizeHints(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XCreateRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Region r;
     (void)rt;
-    r = XCreateRegion();
-    cpu->gpr[2] = region_to_guest(r);
-    if (r && !cpu->gpr[2]) XDestroyRegion(r);
+    cpu->gpr[2] = region_to_guest(XCreateRegion());
 }
 
 static void bridge_XDestroyRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
-    Region r = region_from_guest(handle);
+    Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    if (r) {
-        XDestroyRegion(r);
-        region_forget(handle);
-    }
+    if (r) XDestroyRegion(r);
     cpu->gpr[2] = 0;
 }
 
 static void bridge_XUnionRectWithRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    XRectangle rect;
+    IrixGuestAddr rect_addr = (uint32_t)cpu->gpr[4];
     Region src = region_from_guest((uint32_t)cpu->gpr[5]);
     Region dst = region_from_guest((uint32_t)cpu->gpr[6]);
-    read_guest_rectangle(rt, (uint32_t)cpu->gpr[4], &rect);
-    cpu->gpr[2] = (src && dst) ? (uint64_t)(uint32_t)XUnionRectWithRegion(&rect, src, dst) : 0;
+    XRectangle rect;
+    rect.x = (short)irix_guest_read16be(rt, rect_addr + 0);
+    rect.y = (short)irix_guest_read16be(rt, rect_addr + 2);
+    rect.width = irix_guest_read16be(rt, rect_addr + 4);
+    rect.height = irix_guest_read16be(rt, rect_addr + 6);
+    cpu->gpr[2] = (src && dst) ? (uint64_t)XUnionRectWithRegion(&rect, src, dst) : 0;
 }
 
 static void bridge_XUnionRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -308,7 +270,7 @@ static void bridge_XUnionRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Region b = region_from_guest((uint32_t)cpu->gpr[5]);
     Region dst = region_from_guest((uint32_t)cpu->gpr[6]);
     (void)rt;
-    cpu->gpr[2] = (a && b && dst) ? (uint64_t)(uint32_t)XUnionRegion(a, b, dst) : 0;
+    cpu->gpr[2] = (a && b && dst) ? (uint64_t)XUnionRegion(a, b, dst) : 0;
 }
 
 static void bridge_XIntersectRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -317,7 +279,7 @@ static void bridge_XIntersectRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Region b = region_from_guest((uint32_t)cpu->gpr[5]);
     Region dst = region_from_guest((uint32_t)cpu->gpr[6]);
     (void)rt;
-    cpu->gpr[2] = (a && b && dst) ? (uint64_t)(uint32_t)XIntersectRegion(a, b, dst) : 0;
+    cpu->gpr[2] = (a && b && dst) ? (uint64_t)XIntersectRegion(a, b, dst) : 0;
 }
 
 static void bridge_XSubtractRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -326,7 +288,7 @@ static void bridge_XSubtractRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Region b = region_from_guest((uint32_t)cpu->gpr[5]);
     Region dst = region_from_guest((uint32_t)cpu->gpr[6]);
     (void)rt;
-    cpu->gpr[2] = (a && b && dst) ? (uint64_t)(uint32_t)XSubtractRegion(a, b, dst) : 0;
+    cpu->gpr[2] = (a && b && dst) ? (uint64_t)XSubtractRegion(a, b, dst) : 0;
 }
 
 static void bridge_XXorRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -335,28 +297,28 @@ static void bridge_XXorRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Region b = region_from_guest((uint32_t)cpu->gpr[5]);
     Region dst = region_from_guest((uint32_t)cpu->gpr[6]);
     (void)rt;
-    cpu->gpr[2] = (a && b && dst) ? (uint64_t)(uint32_t)XXorRegion(a, b, dst) : 0;
+    cpu->gpr[2] = (a && b && dst) ? (uint64_t)XXorRegion(a, b, dst) : 0;
 }
 
 static void bridge_XOffsetRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    cpu->gpr[2] = r ? (uint64_t)(uint32_t)XOffsetRegion(r, (int)(int32_t)cpu->gpr[5], (int)(int32_t)cpu->gpr[6]) : 0;
+    cpu->gpr[2] = r ? (uint64_t)XOffsetRegion(r, (int)cpu->gpr[5], (int)cpu->gpr[6]) : 0;
 }
 
 static void bridge_XShrinkRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    cpu->gpr[2] = r ? (uint64_t)(uint32_t)XShrinkRegion(r, (int)(int32_t)cpu->gpr[5], (int)(int32_t)cpu->gpr[6]) : 0;
+    cpu->gpr[2] = r ? (uint64_t)XShrinkRegion(r, (int)cpu->gpr[5], (int)cpu->gpr[6]) : 0;
 }
 
 static void bridge_XEmptyRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    cpu->gpr[2] = r ? (uint64_t)(uint32_t)XEmptyRegion(r) : 1;
+    cpu->gpr[2] = r ? (uint64_t)XEmptyRegion(r) : 1;
 }
 
 static void bridge_XEqualRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -364,36 +326,37 @@ static void bridge_XEqualRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Region a = region_from_guest((uint32_t)cpu->gpr[4]);
     Region b = region_from_guest((uint32_t)cpu->gpr[5]);
     (void)rt;
-    cpu->gpr[2] = (a && b) ? (uint64_t)(uint32_t)XEqualRegion(a, b) : 0;
+    cpu->gpr[2] = (a && b) ? (uint64_t)XEqualRegion(a, b) : 0;
 }
 
 static void bridge_XPointInRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    cpu->gpr[2] = r ? (uint64_t)(uint32_t)XPointInRegion(r, (int)(int32_t)cpu->gpr[5], (int)(int32_t)cpu->gpr[6]) : 0;
+    cpu->gpr[2] = r ? (uint64_t)XPointInRegion(r, (int)cpu->gpr[5], (int)cpu->gpr[6]) : 0;
 }
 
 static void bridge_XRectInRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
     (void)rt;
-    cpu->gpr[2] = r ? (uint64_t)(uint32_t)XRectInRegion(r,
-        (int)(int32_t)cpu->gpr[5], (int)(int32_t)cpu->gpr[6],
-        (unsigned int)(uint32_t)cpu->gpr[7], (unsigned int)(uint32_t)cpu->gpr[8]) : 0;
+    cpu->gpr[2] = r ? (uint64_t)XRectInRegion(r, (int)cpu->gpr[5], (int)cpu->gpr[6],
+                                               (unsigned)cpu->gpr[7], (unsigned)cpu->gpr[8]) : RectangleOut;
 }
 
 static void bridge_XClipBox(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Region r = region_from_guest((uint32_t)cpu->gpr[4]);
-    IrixGuestAddr out = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr rect_addr = (uint32_t)cpu->gpr[5];
     XRectangle rect;
-    int rc = 0;
-    if (r && out) {
-        rc = XClipBox(r, &rect);
-        write_guest_rectangle(rt, out, &rect);
+    int rc = r ? XClipBox(r, &rect) : 0;
+    if (r && rect_addr) {
+        irix_guest_write16be(rt, rect_addr + 0, (uint16_t)rect.x);
+        irix_guest_write16be(rt, rect_addr + 2, (uint16_t)rect.y);
+        irix_guest_write16be(rt, rect_addr + 4, rect.width);
+        irix_guest_write16be(rt, rect_addr + 6, rect.height);
     }
-    cpu->gpr[2] = (uint64_t)(uint32_t)rc;
+    cpu->gpr[2] = (uint64_t)rc;
 }
 
 static void bridge_XrmInitialize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
