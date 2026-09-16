@@ -56,6 +56,11 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
     return addr;
 }
 
+static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+}
+
 static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -114,6 +119,81 @@ static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     (void)cpu;
 }
 
+static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr out = 0;
+    if (src) {
+        size_t n = strlen(src) + 1u;
+        if (n <= UINT32_MAX) {
+            out = alloc_guest((uint32_t)n, 1u);
+            if (out) {
+                void *dst = irix_guest_ptr(rt, out, n);
+                if (dst) memcpy(dst, src, n);
+                else out = 0;
+            }
+        }
+    }
+    cpu->gpr[2] = out;
+}
+
+static void bridge_strlen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    cpu->gpr[2] = s ? (uint64_t)strlen(s) : 0;
+}
+
+static void bridge_strcmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *b = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)((a && b) ? strcmp(a, b) : (a ? 1 : (b ? -1 : 0)));
+}
+
+static void bridge_strcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    const char *src = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    if (src) {
+        size_t n = strlen(src) + 1u;
+        void *dst = irix_guest_ptr(rt, dst_addr, n);
+        if (dst) memcpy(dst, src, n);
+    }
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_memcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr src_addr = (uint32_t)cpu->gpr[5];
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    void *dst = irix_guest_ptr(rt, dst_addr, n);
+    const void *src = irix_guest_ptr(rt, src_addr, n);
+    if (dst && src && n) memcpy(dst, src, n);
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_memmove(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr src_addr = (uint32_t)cpu->gpr[5];
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    void *dst = irix_guest_ptr(rt, dst_addr, n);
+    const void *src = irix_guest_ptr(rt, src_addr, n);
+    if (dst && src && n) memmove(dst, src, n);
+    cpu->gpr[2] = dst_addr;
+}
+
+static void bridge_memset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    int c = (int)(uint32_t)cpu->gpr[5];
+    uint32_t n = (uint32_t)cpu->gpr[6];
+    void *dst = irix_guest_ptr(rt, dst_addr, n);
+    if (dst && n) memset(dst, c, n);
+    cpu->gpr[2] = dst_addr;
+}
+
 static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int category = (int)(int32_t)cpu->gpr[4];
@@ -157,6 +237,13 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "realloc")) return bridge_realloc;
     if (!strcmp(name, "memalign")) return bridge_memalign;
     if (!strcmp(name, "free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
+    if (!strcmp(name, "strdup")) return bridge_strdup;
+    if (!strcmp(name, "strlen")) return bridge_strlen;
+    if (!strcmp(name, "strcmp")) return bridge_strcmp;
+    if (!strcmp(name, "strcpy")) return bridge_strcpy;
+    if (!strcmp(name, "memcpy") || !strcmp(name, "bcopy")) return bridge_memcpy;
+    if (!strcmp(name, "memmove")) return bridge_memmove;
+    if (!strcmp(name, "memset")) return bridge_memset;
     if (!strcmp(name, "setlocale")) return bridge_setlocale;
     return 0;
 }
