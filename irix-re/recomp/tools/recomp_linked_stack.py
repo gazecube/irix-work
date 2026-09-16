@@ -28,7 +28,7 @@ def emit_function(path, cname, source, name, start, words):
   p('        old_target = pending_target;')
   p('        old_return = pending_return;')
   p('        pending_kind = IRIX_PENDING_NONE;')
-  p('        cpu->pc = pc;'); p()
+  p('        cpu->pc = pc;'); p('        rt->current_pc = pc;'); p()
   p('        switch (pc) {')
   for i,word in enumerate(words):
    addr=start+i*4; lines,_=decode(addr,word)
@@ -36,7 +36,7 @@ def emit_function(path, cname, source, name, start, words):
    for line in lines:p('            '+line)
    p('            break;')
   p('        default:'); p('            return;'); p('        }'); p()
-  p('        cpu->gpr[0] = 0;')
+  p('        cpu->gpr[0] = 0;'); p('        if (rt->trapped) return;')
   p('        if (old_pending == IRIX_PENDING_RETURN) return;')
   p('        if (old_pending == IRIX_PENDING_CALL) {')
   p('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
