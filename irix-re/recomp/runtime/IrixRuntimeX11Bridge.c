@@ -1,6 +1,7 @@
 #include "IrixRuntimeX11Bridge.h"
 
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -125,6 +126,57 @@ static int guest_xcolor_write(IrixGuestRuntime *rt, IrixGuestAddr addr, const XC
     irix_guest_write16be(rt, addr + 8u, c->blue);
     irix_guest_write8(rt, addr + 10u, (uint8_t)c->flags);
     irix_guest_write8(rt, addr + 11u, (uint8_t)c->pad);
+    return !rt->trapped;
+}
+
+/* SGI N32 XSizeHints is 72 bytes.  Host Xlib uses long for flags, which is
+   64-bit on LP64 hosts, so every field is marshalled explicitly. */
+static int guest_xsizehints_read(IrixGuestRuntime *rt, IrixGuestAddr addr, XSizeHints *h)
+{
+    if (!addr || !h || !irix_guest_ptr(rt, addr, 72u)) return 0;
+    memset(h, 0, sizeof(*h));
+    h->flags = (long)(uint32_t)irix_guest_read32be(rt, addr + 0u);
+    h->x = (int32_t)irix_guest_read32be(rt, addr + 4u);
+    h->y = (int32_t)irix_guest_read32be(rt, addr + 8u);
+    h->width = (int32_t)irix_guest_read32be(rt, addr + 12u);
+    h->height = (int32_t)irix_guest_read32be(rt, addr + 16u);
+    h->min_width = (int32_t)irix_guest_read32be(rt, addr + 20u);
+    h->min_height = (int32_t)irix_guest_read32be(rt, addr + 24u);
+    h->max_width = (int32_t)irix_guest_read32be(rt, addr + 28u);
+    h->max_height = (int32_t)irix_guest_read32be(rt, addr + 32u);
+    h->width_inc = (int32_t)irix_guest_read32be(rt, addr + 36u);
+    h->height_inc = (int32_t)irix_guest_read32be(rt, addr + 40u);
+    h->min_aspect.x = (int32_t)irix_guest_read32be(rt, addr + 44u);
+    h->min_aspect.y = (int32_t)irix_guest_read32be(rt, addr + 48u);
+    h->max_aspect.x = (int32_t)irix_guest_read32be(rt, addr + 52u);
+    h->max_aspect.y = (int32_t)irix_guest_read32be(rt, addr + 56u);
+    h->base_width = (int32_t)irix_guest_read32be(rt, addr + 60u);
+    h->base_height = (int32_t)irix_guest_read32be(rt, addr + 64u);
+    h->win_gravity = (int32_t)irix_guest_read32be(rt, addr + 68u);
+    return !rt->trapped;
+}
+
+static int guest_xsizehints_write(IrixGuestRuntime *rt, IrixGuestAddr addr, const XSizeHints *h)
+{
+    if (!addr || !h || !irix_guest_ptr(rt, addr, 72u)) return 0;
+    irix_guest_write32be(rt, addr + 0u, (uint32_t)h->flags);
+    irix_guest_write32be(rt, addr + 4u, (uint32_t)h->x);
+    irix_guest_write32be(rt, addr + 8u, (uint32_t)h->y);
+    irix_guest_write32be(rt, addr + 12u, (uint32_t)h->width);
+    irix_guest_write32be(rt, addr + 16u, (uint32_t)h->height);
+    irix_guest_write32be(rt, addr + 20u, (uint32_t)h->min_width);
+    irix_guest_write32be(rt, addr + 24u, (uint32_t)h->min_height);
+    irix_guest_write32be(rt, addr + 28u, (uint32_t)h->max_width);
+    irix_guest_write32be(rt, addr + 32u, (uint32_t)h->max_height);
+    irix_guest_write32be(rt, addr + 36u, (uint32_t)h->width_inc);
+    irix_guest_write32be(rt, addr + 40u, (uint32_t)h->height_inc);
+    irix_guest_write32be(rt, addr + 44u, (uint32_t)h->min_aspect.x);
+    irix_guest_write32be(rt, addr + 48u, (uint32_t)h->min_aspect.y);
+    irix_guest_write32be(rt, addr + 52u, (uint32_t)h->max_aspect.x);
+    irix_guest_write32be(rt, addr + 56u, (uint32_t)h->max_aspect.y);
+    irix_guest_write32be(rt, addr + 60u, (uint32_t)h->base_width);
+    irix_guest_write32be(rt, addr + 64u, (uint32_t)h->base_height);
+    irix_guest_write32be(rt, addr + 68u, (uint32_t)h->win_gravity);
     return !rt->trapped;
 }
 
@@ -277,6 +329,44 @@ static void bridge_XRestackWindows(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         list[i] = (Window)irix_guest_read32be(rt, list_addr + (IrixGuestAddr)i * 4u);
     rc = XRestackWindows(d, list, count);
     free(list);
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XWMGeometry(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    int screen = (int)(int32_t)cpu->gpr[5];
+    const char *user_geom = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+    const char *default_geom = guest_cstr(rt, (uint32_t)cpu->gpr[7]);
+    unsigned int border_width = (unsigned int)(uint32_t)cpu->gpr[8];
+    IrixGuestAddr hints_addr = (uint32_t)cpu->gpr[9];
+    IrixGuestAddr x_out = (uint32_t)cpu->gpr[10];
+    IrixGuestAddr y_out = (uint32_t)cpu->gpr[11];
+    IrixGuestAddr sp = (uint32_t)cpu->gpr[29];
+    IrixGuestAddr width_out = (uint32_t)irix_guest_read64be(rt, sp + 0u);
+    IrixGuestAddr height_out = (uint32_t)irix_guest_read64be(rt, sp + 8u);
+    IrixGuestAddr gravity_out = (uint32_t)irix_guest_read64be(rt, sp + 16u);
+    XSizeHints hints;
+    int x = 0, y = 0, width = 0, height = 0, gravity = 0;
+    int rc = 0;
+
+    if (!d || !user_geom || !default_geom || !hints_addr || !x_out || !y_out ||
+        !width_out || !height_out || !gravity_out || rt->trapped ||
+        !guest_xsizehints_read(rt, hints_addr, &hints)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    rc = XWMGeometry(d, screen, user_geom, default_geom, border_width, &hints,
+                     &x, &y, &width, &height, &gravity);
+    if (!rt->trapped) {
+        guest_xsizehints_write(rt, hints_addr, &hints);
+        irix_guest_write32be(rt, x_out, (uint32_t)x);
+        irix_guest_write32be(rt, y_out, (uint32_t)y);
+        irix_guest_write32be(rt, width_out, (uint32_t)width);
+        irix_guest_write32be(rt, height_out, (uint32_t)height);
+        irix_guest_write32be(rt, gravity_out, (uint32_t)gravity);
+    }
     cpu->gpr[2] = (uint32_t)rc;
 }
 
@@ -442,7 +532,7 @@ IrixGuestFunction irix_runtime_x11_bridge_lookup(const char *name)
     MAP(XGrabServer); MAP(XUngrabServer); MAP(XMaxRequestSize);
     MAP(XScreenNumberOfScreen); MAP(XVisualIDFromVisual);
     MAP(XSetErrorHandler); MAP(XSetIOErrorHandler); MAP(XFree); MAP(XFreeStringList);
-    MAP(_XSGIFastInternAtom); MAP(XInternAtoms); MAP(XRestackWindows);
+    MAP(_XSGIFastInternAtom); MAP(XInternAtoms); MAP(XRestackWindows); MAP(XWMGeometry);
     MAP(XAllocNamedColor); MAP(XAllocColor); MAP(XParseColor); MAP(XQueryColors); MAP(XFreeColors);
     MAP(XInstallColormap); MAP(XFreeColormap); MAP(XListInstalledColormaps); MAP(XSetWMColormapWindows);
 #undef MAP
