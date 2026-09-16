@@ -228,10 +228,13 @@ int main(int argc, char **argv)
             rt.function_count, entry, getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)");
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
         IrixGuestFunctionEntry *e = irix_guest_find_function(&rt, rt.trap_pc);
+        IrixGuestFunctionEntry *caller = irix_guest_find_function(&rt, (IrixGuestAddr)cpu.pc);
         fprintf(stderr,
-                "IRIX desktop trapped: pc=0x%08x fault=0x%08x code=0x%08x symbol=%s\n",
+                "IRIX desktop trapped: pc=0x%08x fault=0x%08x code=0x%08x symbol=%s caller_pc=0x%08x caller=%s\n",
                 rt.trap_pc, rt.fault_addr, rt.trap_code,
-                e && e->name ? e->name : "?");
+                e && e->name ? e->name : "?",
+                (uint32_t)cpu.pc,
+                caller && caller->name ? caller->name : "?");
         return 2;
     }
 
