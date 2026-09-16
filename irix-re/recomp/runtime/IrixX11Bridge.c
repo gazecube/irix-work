@@ -291,6 +291,7 @@ static void bridge_XClipBox(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Region r=reg
 static void bridge_XrmInitialize(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;XrmInitialize();cpu->gpr[2]=0;}
 static void bridge_XrmPermStringToQuark(IrixGuestRuntime *rt,IrixGuestCpu *cpu){const char*s=guest_quark_string(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=s?(uint32_t)XrmPermStringToQuark(s):0;}
 static void bridge_XrmStringToQuark(IrixGuestRuntime *rt,IrixGuestCpu *cpu){const char*s=guest_quark_string(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=s?(uint32_t)XrmStringToQuark(s):0;}
+static void bridge_XQstrcmp(IrixGuestRuntime *rt,IrixGuestCpu *cpu){uint32_t a=(uint32_t)cpu->gpr[4],b=(uint32_t)cpu->gpr[5];int32_t rc;if((int32_t)a<0&&(int32_t)b<0)rc=(int32_t)(a-b);else{const char*sa=guest_quark_string(rt,a);const char*sb=guest_quark_string(rt,b);if(sa&&sb)rc=strcmp(sa,sb);else if(sa)rc=1;else if(sb)rc=-1;else rc=0;}cpu->gpr[2]=(uint64_t)(int64_t)rc;}
 static void bridge_XrmGetFileDatabase(IrixGuestRuntime *rt,IrixGuestCpu *cpu){const char*p=guest_cstr(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=database_to_guest(p?XrmGetFileDatabase(p):0);}
 static void bridge_XrmGetStringDatabase(IrixGuestRuntime *rt,IrixGuestCpu *cpu){const char*t=guest_cstr(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=database_to_guest(t?XrmGetStringDatabase(t):0);}
 static void bridge_XrmMergeDatabases(IrixGuestRuntime *rt,IrixGuestCpu *cpu){IrixGuestAddr p=(uint32_t)cpu->gpr[5];XrmDatabase s=database_from_guest((uint32_t)cpu->gpr[4]),d=database_from_guest(read32(rt,p));XrmMergeDatabases(s,&d);write32(rt,p,database_to_guest(d));cpu->gpr[2]=0;}
@@ -322,6 +323,7 @@ IrixGuestFunction irix_x11_bridge_lookup(const char *name)
     if(!strcmp(name,"XPointInRegion"))return bridge_XPointInRegion;
     if(!strcmp(name,"XRectInRegion"))return bridge_XRectInRegion;
     if(!strcmp(name,"XClipBox"))return bridge_XClipBox;
+    if(!strcmp(name,"_XQstrcmp"))return bridge_XQstrcmp;
     if(!strcmp(name,"XrmInitialize"))return bridge_XrmInitialize;
     if(!strcmp(name,"XrmPermStringToQuark"))return bridge_XrmPermStringToQuark;
     if(!strcmp(name,"XrmStringToQuark"))return bridge_XrmStringToQuark;
