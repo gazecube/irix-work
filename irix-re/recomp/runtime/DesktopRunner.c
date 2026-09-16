@@ -2,10 +2,10 @@
 #include "IrixLibcBridge.h"
 #include "IrixPosixBridge.h"
 #include "IrixCLibExtraBridge.h"
+#include "IrixRuntimeLibcBridge.h"
 #include "IrixFsBridge.h"
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
-#include "IrixX11ConnectionBridge.h"
 #include "IrixXrmCompat.h"
 #include "IrixXrmQuarkBridge.h"
 
@@ -42,6 +42,8 @@ void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*reso
 void register_irix_prebound_imports(IrixGuestRuntime *rt);
 void irix_x11_extra_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_extra_lookup(const char *name);
+void irix_x11_connection_bridge_init(IrixGuestRuntime *rt);
+IrixGuestFunction irix_x11_connection_bridge_lookup(const char *name);
 void irix_x11_bulk_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_bulk_lookup(const char *name);
 
@@ -54,6 +56,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_fs_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_clib_extra_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_runtime_libc_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_xrm_quark_bridge_lookup(name);
     if (fn) return fn;
@@ -175,6 +179,7 @@ int main(int argc, char **argv)
     irix_posix_bridge_init(&rt);
     irix_fs_bridge_init(&rt);
     irix_clib_extra_bridge_init(&rt);
+    irix_runtime_libc_bridge_init(&rt);
     irix_xrm_quark_bridge_init(&rt);
     irix_xrm_compat_init(&rt);
 #ifdef IRIX_HAVE_FAST_QUARKS
