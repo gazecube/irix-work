@@ -116,8 +116,13 @@ static void bridge_XrmQGetSearchList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Bool ok;
     int i;
 
-    if (!db || !list_addr || list_length <= 0 || list_length > 4096) {
+    if (!list_addr || list_length <= 0 || list_length > 4096) {
         cpu->gpr[2] = 0;
+        return;
+    }
+    if (!db) {
+        write32(rt, list_addr, 0);
+        cpu->gpr[2] = 1;
         return;
     }
     read_quark_list(rt, names_addr, names, 128);
