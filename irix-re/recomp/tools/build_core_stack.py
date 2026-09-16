@@ -47,10 +47,15 @@ def main():
     obj.mkdir(parents=True, exist_ok=True)
     sources = sorted((gen / 'c').rglob('*.c')) + [gen / 'registry.c']
     inc = here.parent / 'runtime'
+    header = inc / 'IrixGuest.h'
 
     def compile_one(src):
         rel = src.relative_to(gen)
         dst = obj / (str(rel).replace('/', '__') + '.o')
+        # Generated sources are written only when their contents change. Reuse
+        # an object whenever it is newer than both its source and runtime ABI.
+        if dst.is_file() and dst.stat().st_mtime_ns >= max(src.stat().st_mtime_ns, header.stat().st_mtime_ns):
+            return src, dst, None
         cmd = [a.cc, '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
                '-I', str(inc), '-c', str(src), '-o', str(dst)]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -58,16 +63,22 @@ def main():
         return src, dst, p
 
     objects = []
+    rebuilt = 0
+    reused = 0
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:
         futures = [ex.submit(compile_one, s) for s in sources]
         for i, f in enumerate(as_completed(futures), 1):
             src, dst, p = f.result()
-            if p.returncode:
-                sys.stderr.write(p.stdout + p.stderr)
-                raise SystemExit(f'compile failed: {src}')
+            if p is None:
+                reused += 1
+            else:
+                if p.returncode:
+                    sys.stderr.write(p.stdout + p.stderr)
+                    raise SystemExit(f'compile failed: {src}')
+                rebuilt += 1
             objects.append(dst)
             if i % 250 == 0 or i == len(futures):
-                print(f'compiled {i}/{len(futures)}', flush=True)
+                print(f'processed {i}/{len(futures)} rebuilt={rebuilt} reused={reused}', flush=True)
 
     lib = out / 'libirix_recompiled_stack.a'
     if lib.exists():
@@ -80,6 +91,7 @@ def main():
         w.write('SAVE\nEND\n')
     with mri.open('rb') as f:
         subprocess.run([a.ar, '-M'], stdin=f, check=True)
+    print(f'archive rebuilt from objects: rebuilt={rebuilt} reused={reused}')
     print(lib)
 
 if __name__ == '__main__':
