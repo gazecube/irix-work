@@ -79,9 +79,17 @@ def main():
    funcs.append({'address':start,'size':s['size'],'name':s['name'],'c_name':cname,'archive':o.archive,'member':o.name,'source':str(dst)})
  funcs.sort(key=lambda x:x['address'])
  w=io.StringIO(); print('#include "IrixGuest.h"',file=w); print(file=w)
+ print('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);',file=w); print(file=w)
  for f in funcs: print(f'extern void {f["c_name"]}(IrixGuestRuntime *, IrixGuestCpu *);',file=w)
  print('\nvoid irix_register_recompiled_stack(IrixGuestRuntime *rt)\n{',file=w)
  for f in funcs: print(f'    irix_guest_register_function(rt, 0x{f["address"]:08x}u, {f["c_name"]}, "{f["name"]}");',file=w)
+ print('}',file=w)
+ print('\nvoid irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestImportResolver resolver)\n{',file=w)
+ print('    IrixGuestFunction fn;',file=w)
+ for name,addr in sorted(L.imports.items(), key=lambda kv: kv[1]):
+  q=json.dumps(name)
+  print(f'    fn = resolver ? resolver({q}) : 0;',file=w)
+  print(f'    if (fn) irix_guest_register_function(rt, 0x{addr:08x}u, fn, {q});',file=w)
  print('}',file=w)
  if write_if_changed(out/'registry.c',w.getvalue()): changed+=1
  else: unchanged+=1
