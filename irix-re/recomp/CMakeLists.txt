@@ -125,13 +125,17 @@ if(IRIX_DEV_TREE)
             foreach(_x11_candidate
                     "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.1"
                     "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.3"
-                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so")
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so"
+                    "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so.3"
+                    "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so.1"
+                    "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so")
                 if(EXISTS "${_x11_candidate}" AND NOT IRIX_X11_GUEST_LIB)
                     set(IRIX_X11_GUEST_LIB "${_x11_candidate}")
                 endif()
             endforeach()
 
             if(IRIX_X11_GUEST_LIB)
+                message(STATUS "Using IRIX libX11 for SGI fast quarks: ${IRIX_X11_GUEST_LIB}")
                 add_custom_command(
                     OUTPUT "${IRIX_FAST_QUARK_INC}"
                     COMMAND "${Python3_EXECUTABLE}"
@@ -143,6 +147,8 @@ if(IRIX_DEV_TREE)
                     VERBATIM
                 )
                 add_custom_target(irix_fast_quarks DEPENDS "${IRIX_FAST_QUARK_INC}")
+            else()
+                message(WARNING "No IRIX libX11 found; SGI FAST_QUARKS support will be disabled")
             endif()
 
             add_executable(irix_desktop_runner runtime/DesktopRunner.c)
