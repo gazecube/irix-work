@@ -6,6 +6,7 @@
 #include "IrixFsBridge.h"
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
+#include "IrixRuntimeX11Bridge.h"
 #include "IrixXrmCompat.h"
 #include "IrixXrmQuarkBridge.h"
 
@@ -70,6 +71,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_x11_keyboard_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_x11_connection_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_runtime_x11_bridge_lookup(name);
     if (fn) return fn;
     return irix_x11_bulk_lookup(name);
 }
@@ -190,6 +193,7 @@ int main(int argc, char **argv)
     irix_x11_extra_init(&rt);
     irix_x11_keyboard_bridge_init(&rt);
     irix_x11_connection_bridge_init(&rt);
+    irix_runtime_x11_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
 
     irix_register_recompiled_stack(&rt);
