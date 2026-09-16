@@ -11,6 +11,23 @@ set_target_properties(irix_recomp_runtime PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+find_package(X11)
+if(X11_FOUND)
+    add_library(irix_recomp_x11_bridge STATIC
+        runtime/IrixX11Bridge.c
+    )
+    target_include_directories(irix_recomp_x11_bridge PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+    )
+    target_link_libraries(irix_recomp_x11_bridge PUBLIC
+        irix_recomp_runtime
+        X11::X11
+    )
+    set_target_properties(irix_recomp_x11_bridge PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+    )
+endif()
+
 set(IRIX_DEV_TREE "" CACHE PATH "Path to an extracted IRIX development tree")
 set(IRIX_RUNTIME_TREE "" CACHE PATH "Path to an extracted IRIX runtime tree")
 set(IRIX_INTERNAL_TREE "" CACHE PATH "Path to a tree containing usr/lib32/internal")
