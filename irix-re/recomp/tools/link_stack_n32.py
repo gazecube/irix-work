@@ -55,15 +55,18 @@ class StackLink:
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
  def layout(self):
   main=self.base; small=self.small_base
+  # ordinary runtime sections first
   for o in self.objs:
    for s in o.sec:
     if s['type'] not in (SHT_PROGBITS,SHT_NOBITS) or not (s['flags']&SHF_ALLOC) or not s['size'] or s['name'] in SMALL: continue
     main=align(main,max(s['align'],16)); o.alloc_section(s,main); main+=s['size']
+  # small-data sections are kept in one GP window
   for o in self.objs:
    for s in o.sec:
     if s['type'] not in (SHT_PROGBITS,SHT_NOBITS) or not (s['flags']&SHF_ALLOC) or not s['size'] or s['name'] not in SMALL: continue
     small=align(small,max(s['align'],8)); o.alloc_section(s,small); small+=s['size']
   self.main_end=main; self.small_data_end=small
+  # collect globals after sections have addresses
   for o in self.objs:
    for s in o.syms:
     a=o.local_addr(s)
@@ -71,12 +74,14 @@ class StackLink:
     old=self.globals.get(s['name'])
     if old is None or (old[1]==STB_WEAK and s['bind']==STB_GLOBAL): self.globals[s['name']]=(a,s['bind'],o.name)
     elif s['bind']==STB_GLOBAL and old[1]==STB_GLOBAL and old[0]!=a: self.duplicates.append((s['name'],old[2],o.name))
+  # allocate COMMONs in main BSS-like tail
   for o in self.objs:
    for s in o.syms:
     if s['shndx']!=SHN_COMMON or not s['name']: continue
     if s['name'] in self.globals: continue
     main=align(main,max(s['value'],8)); self.globals[s['name']]=(main,s['bind'],o.name); main+=s['size']
   self.main_end=main
+  # GP sits at +0x8000 from small region base. GOT grows after small data.
   self.gp=self.small_base+0x8000; self.nextgot=align(self.small_data_end,4)
  def import_addr(self,name):
   if name not in self.imports: self.imports[name]=self.import_base+len(self.imports)*8
@@ -106,6 +111,8 @@ class StackLink:
    elif typ==R_MIPS_CALL16:
     G=self.gotaddr(('sym',sym['name'],S),S); d=self.check16(G-self.gp,'CALL16 '+sym['name']); p16(b,ro+2,d)
    elif typ==R_MIPS_SCN_DISP:
+    # Sections are not concatenated in this synthetic image, so S-scn_addr is zero.
+    # The stored section-relative addend therefore remains unchanged.
     pass
    elif typ==R_MIPS_GPREL16:
     A=sx16(word&0xffff)
@@ -128,7 +135,7 @@ class StackLink:
    types=[x[2] for x in group]
    if types==[R_MIPS_JALR]: count+=1; continue
    if types in ([R_MIPS_GPREL16,R_MIPS_SUB,R_MIPS_HI16],[R_MIPS_GPREL16,R_MIPS_SUB,R_MIPS_LO16]):
-    _,sn,_,A=group[0]; S=self.symaddr(o,o.syms[sn]); v=self.gp-(S+A)
+    _,sn,_,A=group[0]; sym=o.syms[sn]; S=self.symaddr(o,sym); v=self.gp-(S+A)-(o.gp0 if sym['bind']==STB_LOCAL and sym['type']==STT_SECTION else 0)
     p16(b,ro+2,hi(v) if types[-1]==R_MIPS_HI16 else v); count+=3; continue
    if len(group)!=1: raise ValueError(f'unknown RELA composition {types} in {o.name}:{ts["name"]}+{ro:#x}')
    _,sn,typ,A=group[0]; sym=o.syms[sn]; S=self.symaddr(o,sym)
