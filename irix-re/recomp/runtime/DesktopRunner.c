@@ -5,6 +5,7 @@
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
 #include "IrixXrmCompat.h"
+#include "IrixXrmQuarkBridge.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_posix_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_clib_extra_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_xrm_quark_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_xrm_compat_lookup(name);
     if (fn) return fn;
@@ -165,6 +168,7 @@ int main(int argc, char **argv)
     }
     irix_posix_bridge_init(&rt);
     irix_clib_extra_bridge_init(&rt);
+    irix_xrm_quark_bridge_init(&rt);
     irix_xrm_compat_init(&rt);
 #ifdef IRIX_HAVE_FAST_QUARKS
     irix_x11_bridge_init(&rt, irix_fast_quark_names, irix_fast_quark_count);
