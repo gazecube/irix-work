@@ -32,6 +32,7 @@ if(X11_FOUND)
         runtime/IrixX11BridgeExtra.c
         runtime/IrixX11KeyboardBridge.c
         runtime/IrixX11BridgeBulk.c
+        runtime/IrixXrmCompat.c
     )
     target_include_directories(irix_recomp_x11_bridge PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
