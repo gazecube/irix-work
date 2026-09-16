@@ -12,6 +12,8 @@ set_target_properties(irix_recomp_runtime PROPERTIES
 )
 
 set(IRIX_DEV_TREE "" CACHE PATH "Path to an extracted IRIX development tree")
+set(IRIX_RUNTIME_TREE "" CACHE PATH "Path to an extracted IRIX runtime tree")
+set(IRIX_INTERNAL_TREE "" CACHE PATH "Path to a tree containing usr/lib32/internal")
 
 if(IRIX_DEV_TREE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -37,13 +39,40 @@ if(IRIX_DEV_TREE)
         VERBATIM
     )
 
-    add_custom_target(irix_recompiled_core ALL
-        DEPENDS "${IRIX_RECOMP_CORE_LIB}"
-    )
-
+    add_custom_target(irix_recompiled_core ALL DEPENDS "${IRIX_RECOMP_CORE_LIB}")
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
-    set_target_properties(irix_recompiled_stack PROPERTIES
-        IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}"
-    )
+    set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
     add_dependencies(irix_recompiled_stack irix_recompiled_core)
+
+    if(IRIX_RUNTIME_TREE AND IRIX_INTERNAL_TREE)
+        set(IRIX_RECOMP_DESKTOP_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-desktop")
+        set(IRIX_RECOMP_DESKTOP_LIB "${IRIX_RECOMP_DESKTOP_DIR}/libirix_desktop_bundle.a")
+        set(IRIX_RECOMP_CORE_LINK "${IRIX_RECOMP_CORE_DIR}/generated/image/link.json")
+
+        add_custom_command(
+            OUTPUT "${IRIX_RECOMP_DESKTOP_LIB}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_RECOMP_DESKTOP_DIR}"
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_desktop_bundle.py"
+                    --runtime-tree "${IRIX_RUNTIME_TREE}"
+                    --internal-tree "${IRIX_INTERNAL_TREE}"
+                    --core-link "${IRIX_RECOMP_CORE_LINK}"
+                    -o "${IRIX_RECOMP_DESKTOP_DIR}"
+                    --cc "${CMAKE_C_COMPILER}"
+                    -j 1
+            DEPENDS
+                irix_recompiled_core
+                tools/build_desktop_bundle.py
+                tools/recomp_elf_bundle.py
+                tools/gen_prebound_bindings.py
+                tools/translate_n32.py
+                runtime/IrixGuest.h
+            VERBATIM
+        )
+
+        add_custom_target(irix_recompiled_desktop ALL DEPENDS "${IRIX_RECOMP_DESKTOP_LIB}")
+        add_library(irix_desktop_bundle STATIC IMPORTED GLOBAL)
+        set_target_properties(irix_desktop_bundle PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_DESKTOP_LIB}")
+        add_dependencies(irix_desktop_bundle irix_recompiled_desktop)
+    endif()
 endif()
