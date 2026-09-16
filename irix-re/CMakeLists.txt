@@ -6,6 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED OFF)
 set(CMAKE_CXX_STANDARD 98)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
 
+add_subdirectory(recomp)
 add_subdirectory(libSgm)
 add_subdirectory(libimdUtil)
 add_subdirectory(libimdModel)
