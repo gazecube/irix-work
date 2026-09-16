@@ -33,6 +33,7 @@ if(X11_FOUND)
         runtime/IrixX11Bridge.c
         runtime/IrixX11BridgeExtra.c
         runtime/IrixX11KeyboardBridge.c
+        runtime/IrixX11ConnectionBridge.c
         runtime/IrixX11BridgeBulk.c
         runtime/IrixXrmCompat.c
         runtime/IrixXrmQuarkBridge.c
@@ -113,6 +114,7 @@ if(IRIX_DEV_TREE)
         add_custom_target(irix_recompiled_desktop ALL DEPENDS "${IRIX_RECOMP_DESKTOP_LIB}")
         add_library(irix_desktop_bundle STATIC IMPORTED GLOBAL)
         set_target_properties(irix_desktop_bundle PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_DESKTOP_LIB}")
+        add_dependencies(irix_recompiled_stack irix_recompiled_core)
         add_dependencies(irix_desktop_bundle irix_recompiled_desktop)
 
         if(X11_FOUND)
