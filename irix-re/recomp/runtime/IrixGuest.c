@@ -1,5 +1,6 @@
 #include "IrixGuest.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -183,6 +184,22 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     if (!entry) {
+        IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
+        fprintf(stderr,
+                "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x",
+                address, (uint32_t)cpu->pc, s4);
+        if (s4 && irix_guest_ptr(rt, s4, 28u)) {
+            fprintf(stderr,
+                    " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+                    irix_guest_read32be(rt, s4 + 0u),
+                    irix_guest_read32be(rt, s4 + 4u),
+                    irix_guest_read32be(rt, s4 + 8u),
+                    irix_guest_read32be(rt, s4 + 12u),
+                    irix_guest_read32be(rt, s4 + 16u),
+                    irix_guest_read32be(rt, s4 + 20u),
+                    irix_guest_read32be(rt, s4 + 24u));
+        }
+        fputc('\n', stderr);
         rt->trapped = 1;
         rt->trap_pc = address;
         rt->trap_code = 0xeeee0003u;
