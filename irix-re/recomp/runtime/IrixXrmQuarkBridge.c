@@ -176,6 +176,12 @@ void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt)
 IrixGuestFunction irix_xrm_quark_bridge_lookup(const char *name)
 {
     if (!name) return 0;
+
+    /* _XQstring is Xlib's private quark-to-string entry point.  Keep it on
+       the same guest-string cache as the public XrmQuarkToString API so no
+       host pointer ever escapes into translated IRIX code. */
+    if (!strcmp(name, "_XQstring")) return bridge_XrmQuarkToString;
+
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(XrmQuarkToString);
     MAP(XrmStringToQuark);
