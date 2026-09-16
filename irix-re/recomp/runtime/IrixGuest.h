@@ -47,6 +47,8 @@ typedef struct IrixGuestFunctionEntry {
 typedef struct IrixGuestRuntime {
     IrixGuestMemory memory;
     IrixGuestAddr trap_pc;
+    IrixGuestAddr current_pc;
+    IrixGuestAddr fault_addr;
     uint32_t trap_code;
     int trapped;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
