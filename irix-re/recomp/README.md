@@ -5,7 +5,7 @@ machine code remains authoritative. MIPS code is translated ahead of time and
 runs against a small compatibility runtime; clean recovered implementations
 can later override translated functions one address at a time.
 
-Initial invariants:
+Invariants:
 
 - guest virtual addresses and pointers remain 32-bit;
 - MIPS-III integer registers remain 64-bit;
@@ -15,33 +15,40 @@ Initial invariants:
   by verified native overrides without changing callers;
 - X11/OS bridges are explicit ABI boundaries, not silent structure casts.
 
-The first target is Toolchest because it provides a compact end-to-end test of
-N32 loading, translated control flow, libc/Xt/Motif imports and callbacks. The
-same runtime is then used for Desktop, IconCatalog, 4Dwm and FM.
+Toolchest proved the execution model: original PT_LOAD state, N32 t9/PIC,
+delay slots, guest dispatch, integer/memory/COP1 translation and explicit
+traps. All 282 sized Toolchest entries generate host C; 105 are application
+functions and 177 are quickstart/import stubs. F_Separator and ToLower have
+executed from translated code against original guest state.
 
-Current Toolchest checkpoint:
+The pipeline is now deliberately whole-stack rather than function-at-a-time:
 
-- the original ELF32 big-endian N32 PT_LOAD segments load into guest memory;
-- N32 PIC entry sets t9 to the guest callee address;
-- generated code preserves normal and branch-likely delay-slot behavior;
-- direct and indirect guest calls dispatch by original guest address;
-- integer, memory and the COP1 subset used by Toolchest are translated;
-- MIPS break instructions become explicit recorded guest traps;
-- all 282 sized function entries in the executable generate host C and compile
-  cleanly with `-Wall -Wextra -Werror`;
-- 105 of those entries are functions defined by Toolchest and 177 are IRIX
-  quickstart/import stubs; keep that distinction when building the registry;
-- translated `F_Separator` executes and returns the original value 1;
-- translated `ToLower` executes against the original Toolchest ELF/GOT state
-  with native bindings for its libc dependencies and converts
-  `HeLLo IRIX 6.5!` to `hello irix 6.5!`.
+- `extract_ar.py` extracts members from IRIX static archives without relying on
+  host `ar` compatibility.
+- `link_n32_rel.py` lays ET_REL allocatable sections into synthetic guest
+  memory, resolves symbols, builds a guest GOT, applies supported MIPS
+  relocations and can emit a linked guest image.
+- `recomp_archive.py` translates every sized function in every ELF object in an
+  archive and records unsupported functions without hiding later successes.
+- `recomp_stack.py` locates and processes the N32 Xt/Motif/Sgm/ViewKit/Mrm/Uil
+  archive set from an IRIX development tree.
+- `audit_manifest.py` groups the remaining translator failures by unsupported
+  instruction so opcode implementation can be attacked breadth-first.
+- `gen_registry.py` emits address-based runtime registration for successfully
+  translated functions.
+- `gen_stack_build.py` emits the complete translated C source inventory for a
+  generated stack.
 
-`tools/inspect_n32.py` is dependency-free and verifies the ELF properties
-needed before a binary enters the translation pipeline. `tools/translate_n32.py`
-translates one sized symbol at a time and intentionally fails instead of
-inventing semantics when it encounters an unsupported instruction.
+Typical broad pass:
 
-Next executable milestone: generate a whole-program registry for the 105
-Toolchest-defined functions, classify/bind the 177 import stubs, construct an
-N32 argc/argv/environment stack, and enter the translated application startup
-path.
+```
+python3 tools/recomp_stack.py /path/to/irix-development-tree -o build/recomp-stack
+python3 tools/audit_manifest.py build/recomp-stack/*/manifest.json
+python3 tools/gen_registry.py build/recomp-stack/*/manifest.json -o build/recomp-stack/registry.c
+python3 tools/gen_stack_build.py build/recomp-stack -o build/recomp-stack/sources.json
+```
+
+The intended closure is application -> ViewKit/Sgm/Motif -> Xt/Xrm where guest
+layout or behavior matters, with native boundaries pushed down toward Xlib,
+libc and the host OS. The same machinery is intended for Toolchest, Desktop,
+IconCatalog, File Manager and 4Dwm rather than separate compatibility hacks.
