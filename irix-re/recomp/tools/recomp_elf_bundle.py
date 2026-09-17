@@ -344,6 +344,72 @@ def code_link_function_ranges(elf, known_starts):
         out.append(('__link_%08x'%addr,addr,size,sec_index))
     return out
 
+def _stack_frame_setup(word):
+    op=(word>>26)&0x3f; rs=(word>>21)&0x1f; rt=(word>>16)&0x1f
+    imm=word&0xffff
+    if imm&0x8000: imm-=0x10000
+    return op in (0x09,0x19) and rs==29 and rt==29 and imm<0
+
+def _simple_entry_prefix(word):
+    op=(word>>26)&0x3f; rs=(word>>21)&0x1f; rt=(word>>16)&0x1f
+    return op in (0x09,0x0d) and rs==0 and 4<=rt<=11
+
+def _nonfallthrough_control(word):
+    op=(word>>26)&0x3f; rs=(word>>21)&0x1f; rt=(word>>16)&0x1f; fn=word&0x3f
+    if op==0x02:
+        return True
+    if op==0x00 and fn==0x08:
+        return True
+    return op==0x04 and rs==0 and rt==0
+
+def boundary_entry_function_ranges(elf, known_starts):
+    """Recover callback-only hidden entries at strong code boundaries.
+
+    SGI/EDG sometimes places separately callable helpers inside a larger
+    symbol's nominal address range and passes their addresses indirectly to Xt.
+    Require both a non-fallthrough predecessor (plus its delay slot) and a real
+    negative stack-frame setup in the first two instructions of the new block.
+    """
+    exec_sections=[]
+    for i,sec in enumerate(elf.sections):
+        if (sec['flags']&SHF_EXECINSTR) and sec['size']:
+            exec_sections.append((i,sec['addr'],sec['addr']+sec['size']))
+
+    def exec_section_for(addr):
+        for item in exec_sections:
+            if item[1]<=addr<item[2]: return item
+        return None
+
+    candidates=set()
+    for sec_index,lo,hi in exec_sections:
+        if hi-lo<16: continue
+        try:
+            words=elf.words(lo,hi-lo)
+        except Exception:
+            continue
+        for i in range(2,len(words)-1):
+            addr=lo+i*4
+            if addr in known_starts:
+                continue
+            if not _nonfallthrough_control(words[i-2]):
+                continue
+            w0=words[i]; w1=words[i+1]
+            if _stack_frame_setup(w0) or (_simple_entry_prefix(w0) and _stack_frame_setup(w1)):
+                candidates.add(addr)
+
+    barriers=set(known_starts)|candidates
+    out=[]
+    for addr in sorted(candidates):
+        sec=exec_section_for(addr)
+        if sec is None: continue
+        sec_index,lo,hi=sec
+        size=_reachable_code_extent(elf,addr,lo,hi,barriers)
+        if not size: continue
+        size=validated_recovered_size(elf,addr,size)
+        if not size: continue
+        out.append(('__boundary_%08x'%addr,addr,size,sec_index))
+    return out
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('binary'); ap.add_argument('-o','--output',required=True); ap.add_argument('--prefix')
     a=ap.parse_args(); path=Path(a.binary); out=Path(a.output); prefix=a.prefix or path.stem; out.mkdir(parents=True,exist_ok=True)
@@ -377,11 +443,17 @@ def main():
         if addr not in recovered_addrs:
             link_defs.append((n,addr,size,sh,'code_link'))
 
-    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; dropped_count=0
-    all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs+link_defs,key=lambda x:(x[1],x[0]))
+    recovered_addrs|={addr for _,addr,_,_,_ in link_defs}
+    boundary_defs=[]
+    for n,addr,size,sh in boundary_entry_function_ranges(elf,recovered_addrs):
+        if addr not in recovered_addrs:
+            boundary_defs.append((n,addr,size,sh,'boundary_entry'))
+
+    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
+    all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,key=lambda x:(x[1],x[0]))
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
-        if source_kind in ('pdr','zero_size','data_ptr','code_link'):
+        if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
             checked_size=validated_recovered_size(elf,addr,size)
             if not checked_size:
                 dropped_count+=1
@@ -389,7 +461,7 @@ def main():
             size=checked_size
         seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
         with dst.open('w') as f, contextlib.redirect_stdout(f):
-            if source_kind in ('pdr','zero_size','data_ptr','code_link'):
+            if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
@@ -403,6 +475,7 @@ def main():
         if source_kind=='zero_size': zero_count+=1
         if source_kind=='data_ptr': ptr_count+=1
         if source_kind=='code_link': link_count+=1
+        if source_kind=='boundary_entry': boundary_count+=1
 
     imports=[s for s in raw_syms if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
@@ -413,5 +486,5 @@ def main():
         w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
         for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
         w.write('}\n')
-    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} recovered_dropped={dropped_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
 if __name__=='__main__': main()
