@@ -31,6 +31,8 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 )
 
 find_package(X11)
+find_path(XPM_INCLUDE_DIR X11/xpm.h)
+find_library(XPM_LIBRARY NAMES Xpm)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
         runtime/IrixX11BridgeUnit.c
@@ -53,6 +55,14 @@ if(X11_FOUND)
         irix_recomp_runtime
         X11::X11
     )
+    if(XPM_INCLUDE_DIR AND XPM_LIBRARY)
+        message(STATUS "Using host Xpm: ${XPM_LIBRARY}")
+        target_include_directories(irix_recomp_x11_bridge PRIVATE ${XPM_INCLUDE_DIR})
+        target_compile_definitions(irix_recomp_x11_bridge PRIVATE IRIX_HAVE_XPM=1)
+        target_link_libraries(irix_recomp_x11_bridge PUBLIC ${XPM_LIBRARY})
+    else()
+        message(WARNING "Host Xpm development files not found; Xpm bridges will be disabled")
+    endif()
     set_target_properties(irix_recomp_x11_bridge PROPERTIES
         POSITION_INDEPENDENT_CODE ON
     )
