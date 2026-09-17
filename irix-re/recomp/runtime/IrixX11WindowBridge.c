@@ -178,6 +178,73 @@ static XFontSet fontset_from_guest(IrixGuestAddr addr)
     return i < g_window.fontset_count ? g_window.fontsets[i] : 0;
 }
 
+static void write_char_struct(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                              const XCharStruct *c)
+{
+    if (!addr || !c || !irix_guest_ptr(rt, addr, 12u)) return;
+    irix_guest_write16be(rt, addr + 0u, (uint16_t)c->lbearing);
+    irix_guest_write16be(rt, addr + 2u, (uint16_t)c->rbearing);
+    irix_guest_write16be(rt, addr + 4u, (uint16_t)c->width);
+    irix_guest_write16be(rt, addr + 6u, (uint16_t)c->ascent);
+    irix_guest_write16be(rt, addr + 8u, (uint16_t)c->descent);
+    irix_guest_write16be(rt, addr + 10u, c->attributes);
+}
+
+static IrixGuestAddr font_to_guest(IrixGuestRuntime *rt, const XFontStruct *f)
+{
+    IrixGuestAddr out, props = 0, per = 0;
+    uint64_t rows, cols, nchar = 0;
+    size_t i;
+
+    if (!f) return 0;
+    out = tmp_alloc(80u);
+    if (!out) return 0;
+
+    if (f->n_properties > 0 && f->properties) {
+        uint64_t nbytes = (uint64_t)(unsigned)f->n_properties * 8u;
+        if (nbytes > UINT32_MAX) return 0;
+        props = tmp_alloc((uint32_t)nbytes);
+        if (!props) return 0;
+        for (i = 0; i < (size_t)f->n_properties; ++i) {
+            wr32(rt, props + (IrixGuestAddr)i * 8u + 0u,
+                 (uint32_t)f->properties[i].name);
+            wr32(rt, props + (IrixGuestAddr)i * 8u + 4u,
+                 (uint32_t)f->properties[i].card32);
+        }
+    }
+
+    if (f->per_char) {
+        cols = (uint64_t)f->max_char_or_byte2 - (uint64_t)f->min_char_or_byte2 + 1u;
+        rows = (uint64_t)f->max_byte1 - (uint64_t)f->min_byte1 + 1u;
+        if (f->min_byte1 == 0 && f->max_byte1 == 0) rows = 1u;
+        nchar = rows * cols;
+        if (nchar && nchar <= UINT32_MAX / 12u) {
+            per = tmp_alloc((uint32_t)(nchar * 12u));
+            if (!per) return 0;
+            for (i = 0; i < (size_t)nchar; ++i)
+                write_char_struct(rt, per + (IrixGuestAddr)i * 12u, &f->per_char[i]);
+        }
+    }
+
+    wr32(rt, out + 0u, 0u);
+    wr32(rt, out + 4u, (uint32_t)f->fid);
+    wr32(rt, out + 8u, f->direction);
+    wr32(rt, out + 12u, f->min_char_or_byte2);
+    wr32(rt, out + 16u, f->max_char_or_byte2);
+    wr32(rt, out + 20u, f->min_byte1);
+    wr32(rt, out + 24u, f->max_byte1);
+    wr32(rt, out + 28u, (uint32_t)f->all_chars_exist);
+    wr32(rt, out + 32u, f->default_char);
+    wr32(rt, out + 36u, (uint32_t)f->n_properties);
+    wr32(rt, out + 40u, props);
+    write_char_struct(rt, out + 44u, &f->min_bounds);
+    write_char_struct(rt, out + 56u, &f->max_bounds);
+    wr32(rt, out + 68u, per);
+    wr32(rt, out + 72u, (uint32_t)f->ascent);
+    wr32(rt, out + 76u, (uint32_t)f->descent);
+    return out;
+}
+
 static void write_xrectangle(IrixGuestRuntime *rt, IrixGuestAddr addr,
                              const XRectangle *r)
 {
@@ -414,6 +481,46 @@ static void bridge_XLocaleOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = set ? copy_host_string(rt, XLocaleOfFontSet(set)) : 0;
 }
 
+static void bridge_XFontsOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
+    XFontStruct **fonts = 0;
+    char **names = 0;
+    IrixGuestAddr guest_fonts = 0, guest_names = 0;
+    int count = 0, i;
+
+    if (set)
+        count = XFontsOfFontSet(set, &fonts, &names);
+    if (count > 0) {
+        if ((uint64_t)(unsigned)count * 4u <= UINT32_MAX) {
+            guest_fonts = tmp_alloc((uint32_t)count * 4u);
+            guest_names = tmp_alloc((uint32_t)count * 4u);
+        }
+        if (!guest_fonts || !guest_names) {
+            count = 0;
+            guest_fonts = 0;
+            guest_names = 0;
+        } else {
+            for (i = 0; i < count; ++i) {
+                IrixGuestAddr gf = font_to_guest(rt, fonts ? fonts[i] : 0);
+                IrixGuestAddr gn = copy_host_string(rt, names ? names[i] : 0);
+                wr32(rt, guest_fonts + (IrixGuestAddr)i * 4u, gf);
+                wr32(rt, guest_names + (IrixGuestAddr)i * 4u, gn);
+                if (!gf || rt->trapped) {
+                    count = 0;
+                    guest_fonts = 0;
+                    guest_names = 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    wr32(rt, (uint32_t)cpu->gpr[5], guest_fonts);
+    wr32(rt, (uint32_t)cpu->gpr[6], guest_names);
+    cpu->gpr[2] = (uint64_t)(int64_t)count;
+}
+
 static void bridge_XExtentsOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
@@ -488,6 +595,7 @@ IrixGuestFunction irix_x11_window_bridge_lookup(const char *name)
     if (!strcmp(name, "XFreeFontSet")) return bridge_XFreeFontSet;
     if (!strcmp(name, "XBaseFontNameListOfFontSet")) return bridge_XBaseFontNameListOfFontSet;
     if (!strcmp(name, "XLocaleOfFontSet")) return bridge_XLocaleOfFontSet;
+    if (!strcmp(name, "XFontsOfFontSet")) return bridge_XFontsOfFontSet;
     if (!strcmp(name, "XExtentsOfFontSet")) return bridge_XExtentsOfFontSet;
     if (!strcmp(name, "XmbTextExtents")) return bridge_XmbTextExtents;
     if (!strcmp(name, "XFreeStringList")) return bridge_XFreeStringList;
