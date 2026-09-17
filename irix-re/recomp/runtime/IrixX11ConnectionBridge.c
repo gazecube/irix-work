@@ -79,6 +79,25 @@ static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
             (uint32_t)cpu->gpr[4], (uint32_t)cpu->pc,
             rt->trapped, rt->fault_addr);
 
+    /* The second call currently occurs while __ct__23ImdClassResourceManager
+       is nested inside __ct__26ImdDefaultsResourceManager.  If its Display *
+       argument is NULL, use the known N32 frame sizes to recover the outer
+       constructor's saved caller RA and original this pointer. */
+    if ((uint32_t)cpu->gpr[4] == 0u) {
+        IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+        IrixGuestAddr outer_ra_addr = sp + 2128u;
+        IrixGuestAddr outer_this_addr = sp + 2164u;
+        uint32_t outer_ra = 0;
+        uint32_t outer_this = 0;
+        if (irix_guest_ptr(rt, outer_ra_addr, 4u))
+            outer_ra = irix_guest_read32be(rt, outer_ra_addr);
+        if (irix_guest_ptr(rt, outer_this_addr, 4u))
+            outer_this = irix_guest_read32be(rt, outer_this_addr);
+        fprintf(stderr,
+                "XRMSTR null-chain sp=0x%08x outer_ra=0x%08x outer_call=0x%08x outer_this=0x%08x\n",
+                sp, outer_ra, outer_ra ? outer_ra - 8u : 0u, outer_this);
+    }
+
     /* Use the process DISPLAY directly.  The guest Display is a synthetic
        shadow rather than a real SGI Xlib Display, so dereferencing fields from
        it here is both unnecessary and brittle.  XResourceManagerString is a
