@@ -3,6 +3,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -88,8 +89,12 @@ static void bridge_XrmQuarkToString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XrmUniqueQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    (void)rt;
-    cpu->gpr[2] = (uint32_t)XrmUniqueQuark();
+    XrmQuark q = XrmUniqueQuark();
+    fprintf(stderr,
+            "XrmUniqueQuark pc=0x%08x s5/extType=%u -> context=0x%08x\n",
+            (uint32_t)rt->current_pc, (unsigned)(uint32_t)cpu->gpr[21],
+            (uint32_t)q);
+    cpu->gpr[2] = (uint32_t)q;
 }
 
 static void bridge__XrmBufferToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
