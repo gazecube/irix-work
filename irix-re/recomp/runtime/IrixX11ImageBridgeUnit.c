@@ -61,6 +61,32 @@ static void bridge_XPutImage(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                                       width, height);
 }
 
+static void bridge_XCreateBitmapFromData(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *dpy = irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
+    Drawable drawable = (Drawable)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr data_addr = (uint32_t)cpu->gpr[6];
+    unsigned int width = (uint32_t)cpu->gpr[7];
+    unsigned int height = (uint32_t)cpu->gpr[8];
+    uint64_t stride = ((uint64_t)width + 7u) >> 3;
+    uint64_t bytes = stride * (uint64_t)height;
+    const char *data;
+
+    if (!dpy || bytes > SIZE_MAX) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    data = (const char *)irix_guest_ptr(rt, data_addr, (size_t)bytes);
+    if (!data || rt->trapped) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    cpu->gpr[2] = (uint32_t)XCreateBitmapFromData(dpy, drawable, data,
+                                                  width, height);
+}
+
 static void bridge_XCheckMaskEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr guest_display = (uint32_t)cpu->gpr[4];
@@ -80,6 +106,7 @@ static void bridge_XCheckMaskEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 IrixGuestFunction irix_x11_image_bridge_lookup(const char *name)
 {
     if (name && !strcmp(name, "XPutImage")) return bridge_XPutImage;
+    if (name && !strcmp(name, "XCreateBitmapFromData")) return bridge_XCreateBitmapFromData;
     if (name && !strcmp(name, "XCheckMaskEvent")) return bridge_XCheckMaskEvent;
     return irix_x11_image_bridge_lookup_base(name);
 }
