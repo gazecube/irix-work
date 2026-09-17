@@ -251,8 +251,10 @@ int main(int argc, char **argv)
     irix_xrm_quark_bridge_init(&rt);
     irix_xrm_compat_init(&rt);
 #ifdef IRIX_HAVE_FAST_QUARKS
+    irix_xrm_quark_bridge_set_fast_table(irix_fast_quark_names, irix_fast_quark_count);
     irix_x11_bridge_init(&rt, irix_fast_quark_names, irix_fast_quark_count);
 #else
+    irix_xrm_quark_bridge_set_fast_table(0, 0);
     irix_x11_bridge_init(&rt, 0, 0);
 #endif
     irix_x11_extra_init(&rt);
