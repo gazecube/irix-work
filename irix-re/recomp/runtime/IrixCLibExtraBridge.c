@@ -193,12 +193,6 @@ static void bridge_fprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char buf[8192];
     int n;
-
-    /* IRIX FILE is an ABI object and cannot be cast to the host libc FILE.
-       The desktop/Xt startup path uses fprintf for diagnostics, overwhelmingly
-       through stderr.  Preserve the N32 varargs semantics here and route the
-       formatted bytes to host stderr until the full guest stdio handle layer
-       (fopen/fclose/fread/fwrite/etc.) is introduced. */
     (void)cpu->gpr[4];
     n = format_guest(rt, cpu, (uint32_t)cpu->gpr[5], 6u,
                      (uint32_t)cpu->gpr[29], buf, sizeof(buf));
@@ -225,6 +219,7 @@ static void bridge_strtol(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr
 static void bridge_strtoul(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr a=(uint32_t)cpu->gpr[4],ep=(uint32_t)cpu->gpr[5];const char*s=guest_cstr(rt,a),*e=0;unsigned long v=s?strtoul(s,(char**)&e,(int)cpu->gpr[6]):0;if(ep)irix_guest_write32be(rt,ep,e? a+(uint32_t)(e-s):0);cpu->gpr[2]=(uint64_t)v;}
 static void bridge_strtod(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr a=(uint32_t)cpu->gpr[4],ep=(uint32_t)cpu->gpr[5];const char*s=guest_cstr(rt,a),*e=0;double v=s?strtod(s,(char**)&e):0.0;if(ep)irix_guest_write32be(rt,ep,e? a+(uint32_t)(e-s):0);irix_guest_fpr_set_d(cpu,0,v);}
 static void bridge_setoserror(IrixGuestRuntime *rt,IrixGuestCpu *cpu){int old=errno;(void)rt;errno=(int)(int32_t)cpu->gpr[4];cpu->gpr[2]=(uint64_t)(int64_t)old;}
+static void bridge_oserror(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint64_t)(int64_t)errno;}
 static void bridge_tolower(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint64_t)(int64_t)tolower((int)(uint32_t)cpu->gpr[4]);}
 static void bridge_toupper(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint64_t)(int64_t)toupper((int)(uint32_t)cpu->gpr[4]);}
 static void bridge_isalpha(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=isalpha((int)(uint32_t)cpu->gpr[4])?1:0;}
@@ -306,7 +301,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if(!strcmp(name,"__vec_new_eh2"))return bridge___vec_new_eh2;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
     M(sprintf); M(snprintf); M(printf); M(fprintf); M(puts); M(putchar);
-    M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod); M(setoserror);
+    M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod); M(setoserror); M(oserror);
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);
     M(abs); M(labs); M(rand); M(srand);
