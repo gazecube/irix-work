@@ -288,6 +288,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         IrixGuestAddr caller_pc = (IrixGuestAddr)(uint32_t)cpu->pc;
         IrixGuestAddr traced_base_object = 0;
         IrixGuestAddr traced_base_display = 0;
+        IrixGuestAddr traced_set_object = 0;
+        IrixGuestAddr traced_set_sp = 0;
         if (address == 0x097a82d8u) {
             fprintf(stderr,
                     "CLASSRM CALL caller=0x%08x ra=0x%08x sp=0x%08x a0-a5=%08x,%08x,%08x,%08x,%08x,%08x\n",
@@ -304,6 +306,20 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     caller_pc, traced_base_object, traced_base_display,
                     (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7]);
         }
+        if (address == 0x097a74d8u) {
+            uint32_t stack_obj = 0;
+            uint32_t display_field = 0;
+            traced_set_object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            traced_set_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+            if (irix_guest_ptr(rt, traced_set_sp + 36u, 4u))
+                stack_obj = irix_guest_read32be(rt, traced_set_sp + 36u);
+            if (traced_set_object && irix_guest_ptr(rt, traced_set_object + 8u, 4u))
+                display_field = irix_guest_read32be(rt, traced_set_object + 8u);
+            fprintf(stderr,
+                    "SETFILENAME CALL caller=0x%08x sp=0x%08x obj=0x%08x stack+36=0x%08x obj+8=0x%08x name=0x%08x\n",
+                    caller_pc, traced_set_sp, traced_set_object, stack_obj,
+                    display_field, (uint32_t)cpu->gpr[5]);
+        }
         cpu->pc = address;
         rt->current_pc = address;
         /* N32 PIC entry convention: t9 contains the callee address. */
@@ -316,6 +332,18 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             fprintf(stderr,
                     "BASERM RET obj=0x%08x display_arg=0x%08x obj+8=0x%08x trapped=%d fault=0x%08x\n",
                     traced_base_object, traced_base_display, display_field,
+                    rt->trapped, rt->fault_addr);
+        }
+        if (address == 0x097a74d8u && traced_set_object) {
+            uint32_t stack_obj = 0;
+            uint32_t display_field = 0;
+            if (irix_guest_ptr(rt, traced_set_sp + 36u, 4u))
+                stack_obj = irix_guest_read32be(rt, traced_set_sp + 36u);
+            if (irix_guest_ptr(rt, traced_set_object + 8u, 4u))
+                display_field = irix_guest_read32be(rt, traced_set_object + 8u);
+            fprintf(stderr,
+                    "SETFILENAME RET sp=0x%08x obj=0x%08x stack+36=0x%08x obj+8=0x%08x trapped=%d fault=0x%08x\n",
+                    traced_set_sp, traced_set_object, stack_obj, display_field,
                     rt->trapped, rt->fault_addr);
         }
         /* $gp is callee-saved in the N32 ABI.  Preserve the caller's value
