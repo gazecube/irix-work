@@ -3,7 +3,11 @@
 import argparse, json, struct
 from pathlib import Path
 
-def dyn_prebound(path):
+STT_NOTYPE=0
+STT_OBJECT=1
+STT_FUNC=2
+
+def dyn_got(path):
     p=Path(path).read_bytes(); h=struct.unpack_from('>16sHHIIIIIHHHHHH',p,0); phoff,phentsz,phnum=h[5],h[9],h[10]
     ph=[struct.unpack_from('>IIIIIIII',p,phoff+i*phentsz) for i in range(phnum)]
     def voff(v):
@@ -26,7 +30,7 @@ def dyn_prebound(path):
         ge=got+(local_gotno+i-gotsym)*4
         try: val=struct.unpack_from('>I',p,voff(ge))[0]
         except KeyError: continue
-        if val: out[name]=val
+        out[name]=dict(value=val,got=ge,type=info&15,bind=info>>4,shndx=sh,size=z,sym_value=v)
     return out
 
 def main():
@@ -35,14 +39,29 @@ def main():
     for b in bundles:
         for f in b['functions']: defs.setdefault(f['name'],f['address'])
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
-    entries=[]
+
+    entries=[]; data_patches=[]
     for b in bundles:
-        pre=dyn_prebound(b['path'])
+        got=dyn_got(b['path'])
         for imp in b['imports']:
-            name=imp['name']; addrs=[]
+            name=imp['name']; addrs=[]; row=got.get(name)
             if imp['address']: addrs.append(imp['address'])
-            if pre.get(name): addrs.append(pre[name])
+            if row and row['value']: addrs.append(row['value'])
             for stub in addrs: entries.append((stub,defs.get(name,0),name,b['prefix']))
+
+        # The desktop/internal DSOs are loaded at their original virtual
+        # addresses, but their prebound GOT may still contain pointers into
+        # SGI shared libraries that are replaced by the synthetic core image.
+        # Rebind undefined data objects to the matching core global before
+        # guest execution. Function imports remain handled by the forwarding
+        # table above.
+        for name,row in got.items():
+            if row['shndx']!=0 or row['type']!=STT_OBJECT:
+                continue
+            target=link['globals'].get(name,0)
+            if target:
+                data_patches.append((row['got'],target,name,b['prefix'],row['value']))
+
     by={}; conflicts=[]
     for e in entries:
         addr,target,name,owner=e; old=by.get(addr)
@@ -51,6 +70,18 @@ def main():
     if conflicts:
         for x in conflicts[:20]: print('CONFLICT',x)
         raise SystemExit(f'{len(conflicts)} binding conflicts')
+
+    # A GOT slot is unique within one loaded image. If duplicate metadata
+    # reaches us, require it to resolve to the same target rather than silently
+    # choosing one.
+    data_by={}
+    for e in data_patches:
+        got_addr,target,name,owner,old=e; prev=data_by.get(got_addr)
+        if prev and prev[1]!=target:
+            raise SystemExit(f'data binding conflict at 0x{got_addr:08x}: {prev} vs {e}')
+        data_by[got_addr]=e
+    data_patches=sorted(data_by.values())
+
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
     target_entries=sorted({(target,name) for addr,target,name,owner in resolved if target})
     out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
@@ -77,10 +108,14 @@ def main():
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
         w.write('}\n')
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){\n')
+        for got_addr,target,name,owner,old in data_patches:
+            w.write(f'irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
         for addr,target,name,owner in missing: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,missing_import,"{owner}:{name}");\n')
         w.write('}\n')
-    data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing]}
+    data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],
+          'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing],
+          'data_patches':[dict(got=a,target=t,name=n,owner=o,old_value=old) for a,t,n,o,old in data_patches]}
     (out/'bindings.json').write_text(json.dumps(data,indent=2)+'\n')
-    print(f'addresses={len(by)} resolved={len(resolved)} missing={len(missing)} native_targets={len(target_entries)}')
+    print(f'addresses={len(by)} resolved={len(resolved)} missing={len(missing)} native_targets={len(target_entries)} data_patches={len(data_patches)}')
 if __name__=='__main__': main()
