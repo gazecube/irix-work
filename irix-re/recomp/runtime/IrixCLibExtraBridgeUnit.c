@@ -3,8 +3,14 @@
 #undef irix_clib_extra_bridge_lookup
 
 #include <sys/file.h>
+#include <unistd.h>
+
+#define IRIX_GUEST_MMAP_BASE 0x74000000u
+#define IRIX_GUEST_MMAP_END  0x7f000000u
+#define IRIX_GUEST_PAGE_SIZE 0x1000u
 
 static int g_guest_oserror;
+static IrixGuestAddr g_guest_mmap_next = IRIX_GUEST_MMAP_BASE;
 
 static void scan_write_integer(IrixGuestRuntime *rt, IrixGuestAddr dst,
                                uint64_t value, int length, int is_signed)
@@ -282,6 +288,138 @@ static void bridge_guest_flock(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)rc;
 }
 
+static uint32_t guest_page_round(uint32_t n)
+{
+    if (!n || n > UINT32_MAX - (IRIX_GUEST_PAGE_SIZE - 1u)) return 0;
+    return (n + IRIX_GUEST_PAGE_SIZE - 1u) & ~(IRIX_GUEST_PAGE_SIZE - 1u);
+}
+
+static int guest_range_free(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size)
+{
+    uint64_t end = (uint64_t)base + size;
+    size_t i;
+    if (!size || end > UINT32_MAX + UINT64_C(1)) return 0;
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        uint64_t seg_end = (uint64_t)seg->guest_base + seg->size;
+        if ((uint64_t)base < seg_end && end > seg->guest_base)
+            return 0;
+    }
+    return 1;
+}
+
+static IrixGuestAddr guest_mmap_alloc(IrixGuestRuntime *rt, uint32_t size)
+{
+    IrixGuestAddr base = g_guest_mmap_next;
+    while ((uint64_t)base + size <= IRIX_GUEST_MMAP_END) {
+        if (guest_range_free(rt, base, size)) {
+            g_guest_mmap_next = base + size;
+            return base;
+        }
+        base += IRIX_GUEST_PAGE_SIZE;
+    }
+    return 0;
+}
+
+static void guest_drop_segment(IrixGuestRuntime *rt, size_t index)
+{
+    free(rt->memory.segments[index].host_base);
+    if (index + 1u < rt->memory.count)
+        memmove(&rt->memory.segments[index], &rt->memory.segments[index + 1u],
+                (rt->memory.count - index - 1u) * sizeof(rt->memory.segments[0]));
+    --rt->memory.count;
+}
+
+static void bridge_guest_mmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr requested = (uint32_t)cpu->gpr[4];
+    uint32_t length = (uint32_t)cpu->gpr[5];
+    unsigned prot = (unsigned)(uint32_t)cpu->gpr[6];
+    int fd = (int)(int32_t)cpu->gpr[8];
+    off_t offset = (off_t)(int64_t)cpu->gpr[9];
+    uint32_t map_size = guest_page_round(length);
+    IrixGuestAddr base;
+    unsigned char *dst;
+    size_t done = 0;
+
+    if (!map_size) {
+        g_guest_oserror = EINVAL;
+        cpu->gpr[2] = UINT32_MAX;
+        return;
+    }
+
+    if (requested) {
+        base = requested & ~(IRIX_GUEST_PAGE_SIZE - 1u);
+        if (base != requested || !guest_range_free(rt, base, map_size)) {
+            g_guest_oserror = EINVAL;
+            cpu->gpr[2] = UINT32_MAX;
+            return;
+        }
+    } else {
+        base = guest_mmap_alloc(rt, map_size);
+        if (!base) {
+            g_guest_oserror = ENOMEM;
+            cpu->gpr[2] = UINT32_MAX;
+            return;
+        }
+    }
+
+    if (irix_guest_map(rt, base, map_size, prot) != 0) {
+        g_guest_oserror = ENOMEM;
+        cpu->gpr[2] = UINT32_MAX;
+        return;
+    }
+
+    dst = (unsigned char *)irix_guest_ptr(rt, base, map_size);
+    if (!dst) {
+        g_guest_oserror = EFAULT;
+        cpu->gpr[2] = UINT32_MAX;
+        return;
+    }
+
+    if (fd >= 0) {
+        errno = 0;
+        while (done < length) {
+            ssize_t n = pread(fd, dst + done, (size_t)length - done,
+                              offset + (off_t)done);
+            if (n > 0) {
+                done += (size_t)n;
+                continue;
+            }
+            if (n == 0) break;
+            if (errno == EINTR) continue;
+            g_guest_oserror = errno ? errno : EIO;
+            guest_drop_segment(rt, rt->memory.count - 1u);
+            cpu->gpr[2] = UINT32_MAX;
+            return;
+        }
+    }
+
+    g_guest_oserror = 0;
+    cpu->gpr[2] = (uint64_t)(uint32_t)base;
+}
+
+static void bridge_guest_munmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr base = (uint32_t)cpu->gpr[4];
+    uint32_t length = (uint32_t)cpu->gpr[5];
+    uint32_t map_size = guest_page_round(length);
+    size_t i;
+
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        if (seg->guest_base == base && (!map_size || seg->size == map_size)) {
+            guest_drop_segment(rt, i);
+            g_guest_oserror = 0;
+            cpu->gpr[2] = 0;
+            return;
+        }
+    }
+
+    g_guest_oserror = EINVAL;
+    cpu->gpr[2] = (uint64_t)(int64_t)-1;
+}
+
 static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int old = g_guest_oserror;
@@ -303,6 +441,8 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if (!strcmp(name, "setoserror")) return bridge_guest_setoserror;
     if (!strcmp(name, "oserror")) return bridge_guest_oserror;
     if (!strcmp(name, "flock")) return bridge_guest_flock;
+    if (!strcmp(name, "mmap")) return bridge_guest_mmap;
+    if (!strcmp(name, "munmap")) return bridge_guest_munmap;
     fn = irix_clib_extra_bridge_lookup_base(name);
     if (fn) return fn;
     if (!strcmp(name, "sscanf")) return bridge_sscanf;
