@@ -2,11 +2,13 @@
 #include "IrixPosixBridge.c"
 #undef irix_posix_bridge_lookup
 
+#include <sched.h>
 #include <sys/select.h>
 #include <sys/time.h>
 
 #define IRIX_FD_SETSIZE 1024
 #define IRIX_FDSET_BYTES 128u
+#define IRIX_SGINAP_HZ 100L
 
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
                            int nfds, fd_set *out)
@@ -109,10 +111,48 @@ static void bridge_select(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+static void bridge_sginap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int32_t ticks = (int32_t)cpu->gpr[4];
+    struct timespec req, rem;
+    long remaining;
+    (void)rt;
+
+    if (ticks <= 0) {
+        (void)sched_yield();
+        ret_i32(cpu, 0);
+        return;
+    }
+
+    req.tv_sec = ticks / IRIX_SGINAP_HZ;
+    req.tv_nsec = (long)(ticks % IRIX_SGINAP_HZ) *
+                  (1000000000L / IRIX_SGINAP_HZ);
+    rem.tv_sec = 0;
+    rem.tv_nsec = 0;
+
+    if (nanosleep(&req, &rem) == 0) {
+        ret_i32(cpu, 0);
+        return;
+    }
+
+    if (errno == EINTR) {
+        remaining = rem.tv_sec * IRIX_SGINAP_HZ;
+        remaining += (rem.tv_nsec + (1000000000L / IRIX_SGINAP_HZ) - 1L) /
+                     (1000000000L / IRIX_SGINAP_HZ);
+        if (remaining < 0) remaining = 0;
+        if (remaining > INT32_MAX) remaining = INT32_MAX;
+        ret_i32(cpu, (int)remaining);
+        return;
+    }
+
+    ret_i32(cpu, 0);
+}
+
 IrixGuestFunction irix_posix_bridge_lookup(const char *name)
 {
     IrixGuestFunction fn = irix_posix_bridge_lookup_base(name);
     if (fn || !name) return fn;
     if (!strcmp(name, "select")) return bridge_select;
+    if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
 }
