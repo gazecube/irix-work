@@ -153,6 +153,47 @@ static void bridge_XQueryBestCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)ok;
 }
 
+static void bridge_XGetFontProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr font = (uint32_t)cpu->gpr[4];
+    Atom atom = (Atom)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr value_out = (uint32_t)cpu->gpr[6];
+    uint32_t count, props;
+    uint32_t i;
+
+    if (!font || !irix_guest_ptr(rt, font, 80u)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    count = irix_guest_read32be(rt, font + 36u);
+    props = irix_guest_read32be(rt, font + 40u);
+    if (rt->trapped || (!props && count)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        IrixGuestAddr p = props + (IrixGuestAddr)i * 8u;
+        uint32_t name;
+        uint32_t value;
+        if (!irix_guest_ptr(rt, p, 8u)) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+        name = irix_guest_read32be(rt, p + 0u);
+        value = irix_guest_read32be(rt, p + 4u);
+        if (rt->trapped) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+        if (name == (uint32_t)atom) {
+            wr32(rt, value_out, value);
+            cpu->gpr[2] = 1;
+            return;
+        }
+    }
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_XKeycodeToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
@@ -206,6 +247,7 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XkbLookupKeySym")) return bridge_XkbLookupKeySym;
     if (!strcmp(name, "XQueryBestCursor")) return bridge_XQueryBestCursor;
+    if (!strcmp(name, "XGetFontProperty")) return bridge_XGetFontProperty;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;
     if (!strcmp(name, "XKeysymToKeycode")) return bridge_XKeysymToKeycode;
     if (!strcmp(name, "XKeysymToString")) return bridge_XKeysymToString;
