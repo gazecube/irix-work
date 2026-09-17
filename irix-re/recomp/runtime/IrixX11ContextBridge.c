@@ -47,6 +47,50 @@ static int ensure_capacity(void)
     return 0;
 }
 
+static void diagnose_save(IrixGuestRuntime *rt,
+                          IrixGuestAddr display, uint32_t rid,
+                          int32_t context, IrixGuestAddr data)
+{
+    IrixGuestAddr rec = 0;
+    IrixGuestAddr widget = 0;
+    IrixGuestAddr req = 0;
+    IrixGuestAddr old = 0;
+    uint32_t klass = 0;
+    uint32_t logical_parent = 0;
+    uint8_t extension_type = 0;
+    uint8_t raw_offset_target = 0;
+    int have_raw_offset_target = 0;
+
+    if (data && irix_guest_ptr(rt, data, 8u)) {
+        rec = irix_guest_read32be(rt, data + 0u);
+        if (!rt->trapped && rec && irix_guest_ptr(rt, rec, 12u)) {
+            widget = irix_guest_read32be(rt, rec + 0u);
+            req = irix_guest_read32be(rt, rec + 4u);
+            old = irix_guest_read32be(rt, rec + 8u);
+            if (!rt->trapped && widget && irix_guest_ptr(rt, widget, 33u)) {
+                klass = irix_guest_read32be(rt, widget + 4u);
+                logical_parent = irix_guest_read32be(rt, widget + 28u);
+                extension_type = irix_guest_read8(rt, widget + 32u);
+            }
+            if (!rt->trapped && widget >= 33u && irix_guest_ptr(rt, widget - 33u, 1u)) {
+                raw_offset_target = irix_guest_read8(rt, widget - 33u);
+                have_raw_offset_target = !rt->trapped;
+            }
+        }
+    }
+
+    fprintf(stderr,
+            "XSaveContext display=0x%08x rid=0x%08x context=0x%08x data=0x%08x "
+            "rec=0x%08x widget=0x%08x class=0x%08x logicalParent=0x%08x "
+            "extensionType=%u rawOffsetTarget[-0x21]=%s%u req=0x%08x old=0x%08x\n",
+            (uint32_t)display, rid, (uint32_t)context, (uint32_t)data,
+            (uint32_t)rec, (uint32_t)widget, klass, logical_parent,
+            (unsigned)extension_type,
+            have_raw_offset_target ? "" : "?",
+            (unsigned)raw_offset_target,
+            (uint32_t)req, (uint32_t)old);
+}
+
 static void bridge_XSaveContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr display = (uint32_t)cpu->gpr[4];
@@ -54,7 +98,12 @@ static void bridge_XSaveContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int32_t context = (int32_t)cpu->gpr[6];
     uint32_t data = (uint32_t)cpu->gpr[7];
     IrixX11ContextEntry *e = find_entry(display, rid, context);
-    (void)rt;
+
+    diagnose_save(rt, display, rid, context, data);
+    if (rt->trapped) {
+        cpu->gpr[2] = (uint32_t)XCNOENT;
+        return;
+    }
 
     if (e) {
         e->data = data;
