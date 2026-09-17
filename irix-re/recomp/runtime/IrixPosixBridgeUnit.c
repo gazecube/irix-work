@@ -6,7 +6,9 @@
 #include <netdb.h>
 #include <sched.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/un.h>
 
 #define IRIX_FD_SETSIZE 1024
 #define IRIX_FDSET_BYTES 128u
@@ -500,6 +502,106 @@ static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     exit(status);
 }
 
+static int host_socket_domain_from_irix(int domain)
+{
+    switch (domain) {
+    case 1: return AF_UNIX;
+#ifdef AF_INET
+    case 2: return AF_INET;
+#endif
+    default: return -1;
+    }
+}
+
+static int host_socket_type_from_irix(int type)
+{
+    switch (type) {
+    case 1: return SOCK_STREAM;
+    case 2: return SOCK_DGRAM;
+#ifdef SOCK_RAW
+    case 3: return SOCK_RAW;
+#endif
+#ifdef SOCK_RDM
+    case 5: return SOCK_RDM;
+#endif
+#ifdef SOCK_SEQPACKET
+    case 6: return SOCK_SEQPACKET;
+#endif
+    default: return -1;
+    }
+}
+
+static void bridge_socket(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int irix_domain = (int)(int32_t)cpu->gpr[4];
+    int irix_type = (int)(int32_t)cpu->gpr[5];
+    int protocol = (int)(int32_t)cpu->gpr[6];
+    int domain = host_socket_domain_from_irix(irix_domain);
+    int type = host_socket_type_from_irix(irix_type);
+    int rc;
+
+    (void)rt;
+    if (domain < 0 || type < 0) {
+        errno = EAFNOSUPPORT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    rc = socket(domain, type, protocol);
+    ret_i32(cpu, rc);
+}
+
+static void bridge_connect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int fd = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[5];
+    uint32_t len = (uint32_t)cpu->gpr[6];
+    uint16_t family;
+
+    if (!addr || len < 2u || !irix_guest_ptr(rt, addr, len)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    family = irix_guest_read16be(rt, addr);
+    if (rt->trapped) {
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    if (family == 1u) {
+        struct sockaddr_un sun;
+        uint32_t path_len;
+
+        memset(&sun, 0, sizeof(sun));
+        sun.sun_family = AF_UNIX;
+
+        path_len = len > 2u ? len - 2u : 0u;
+        if (path_len > 108u)
+            path_len = 108u;
+        if (path_len >= sizeof(sun.sun_path))
+            path_len = sizeof(sun.sun_path) - 1u;
+
+        if (path_len) {
+            const char *src = (const char *)irix_guest_ptr(rt, addr + 2u, path_len);
+            if (!src) {
+                errno = EFAULT;
+                ret_i32(cpu, -1);
+                return;
+            }
+            memcpy(sun.sun_path, src, path_len);
+            sun.sun_path[sizeof(sun.sun_path) - 1u] = '\0';
+        }
+
+        ret_i32(cpu, connect(fd, (struct sockaddr *)&sun, sizeof(sun)));
+        return;
+    }
+
+    errno = EAFNOSUPPORT;
+    ret_i32(cpu, -1);
+}
+
 static void bridge_fork(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     pid_t pid;
@@ -626,6 +728,8 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "realpath")) return bridge_realpath;
     if (!strcmp(name, "execl")) return bridge_execl;
     if (!strcmp(name, "exit")) return bridge_exit;
+    if (!strcmp(name, "socket")) return bridge_socket;
+    if (!strcmp(name, "connect")) return bridge_connect;
     if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
