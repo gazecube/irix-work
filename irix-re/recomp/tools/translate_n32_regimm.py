@@ -62,7 +62,7 @@ def decode(addr, insn):
         if fn == 0x1e:
             return ['if ((int64_t)%s == 0) {' % _base.reg(rt), '    cpu->lo = ((int64_t)%s < 0) ? 1 : UINT64_C(0xffffffffffffffff);' % _base.reg(rs), '    cpu->hi = (uint64_t)%s;' % _base.reg(rs), '} else if ((uint64_t)%s == UINT64_C(0x8000000000000000) && (uint64_t)%s == UINT64_C(0xffffffffffffffff)) {' % (_base.reg(rs), _base.reg(rt)), '    cpu->lo = UINT64_C(0x8000000000000000); cpu->hi = 0;', '} else {', '    cpu->lo = (uint64_t)((int64_t)%s / (int64_t)%s);' % (_base.reg(rs), _base.reg(rt)), '    cpu->hi = (uint64_t)((int64_t)%s %% (int64_t)%s);' % (_base.reg(rs), _base.reg(rt)), '}'], None
         if fn == 0x1f:
-            return ['if ((uint64_t)%s == 0) {' % _base.reg(rt), '    cpu->lo = UINT64_C(0xffffffffffffffff);', '    cpu->hi = (uint64_t)%s;' % _base.reg(rs), '} else {', '    cpu->lo = (uint64_t)%s / (uint64_t)%s;' % (_base.reg(rs), _base.reg(rt)), '    cpu->hi = (uint64_t)%s %% (uint64_t)%s;' % (_base.reg(rs), _base.reg(rt)), '}'], None
+            return ['if ((uint64_t)%s == 0) {' % _base.reg(rt),'    cpu->lo = UINT64_C(0xffffffffffffffff);','    cpu->hi = (uint64_t)%s;' % _base.reg(rs),'} else {','    cpu->lo = (uint64_t)%s / (uint64_t)%s;' % (_base.reg(rs), _base.reg(rt)),'    cpu->hi = (uint64_t)%s %% (uint64_t)%s;' % (_base.reg(rs), _base.reg(rt)),'}'], None
         if fn in (0x2c, 0x2d):
             return ['%s = (uint64_t)%s + (uint64_t)%s;' % (_base.reg(rd), _base.reg(rs), _base.reg(rt))], None
         if fn in (0x2e, 0x2f):
@@ -77,7 +77,14 @@ def decode(addr, insn):
         nonnegative = rt in (0x11, 0x13)
         likely = rt in (0x12, 0x13)
         cond = '(int64_t)%s >= 0' % _base.reg(rs) if nonnegative else '(int64_t)%s < 0' % _base.reg(rs)
-        lines = ['%s = %s;' % (_base.reg(31), _base.sx32_expr('0x%08xu' % (addr + 8))), 'if (%s) {' % cond, '    pending_kind = IRIX_PENDING_JUMP;', '    pending_target = 0x%08xu;' % dst, '}']
+        lines = [
+            '%s = %s;' % (_base.reg(31), _base.sx32_expr('0x%08xu' % (addr + 8))),
+            'if (%s) {' % cond,
+            '    pending_kind = IRIX_PENDING_CALL;',
+            '    pending_target = 0x%08xu;' % dst,
+            '    pending_return = 0x%08xu;' % (addr + 8),
+            '}'
+        ]
         if likely:
             lines += ['else {', '    pc += 4;', '}']
         return lines, 'control'
