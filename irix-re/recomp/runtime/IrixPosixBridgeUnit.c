@@ -2,6 +2,7 @@
 #include "IrixPosixBridge.c"
 #undef irix_posix_bridge_lookup
 
+#include <fcntl.h>
 #include <sched.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -13,6 +14,19 @@
 #define IRIX_SIGSET_BYTES (IRIX_SIGSET_WORDS * 4u)
 #define IRIX_SIGACTION_BYTES 24u
 #define IRIX_NSIG 128
+
+#define IRIX_F_DUPFD 0
+#define IRIX_F_GETFD 1
+#define IRIX_F_SETFD 2
+#define IRIX_F_GETFL 3
+#define IRIX_F_SETFL 4
+
+#define IRIX_FD_CLOEXEC 0x0001u
+#define IRIX_O_ACCMODE  0x0003u
+#define IRIX_O_APPEND   0x0008u
+#define IRIX_O_SYNC     0x0010u
+#define IRIX_O_ASYNC    0x0040u
+#define IRIX_O_NONBLOCK 0x0080u
 
 typedef struct IrixSigActionState {
     uint32_t handler;
@@ -185,6 +199,95 @@ static void bridge_sigaction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, 0);
 }
 
+static int host_status_flags_from_irix(uint32_t flags)
+{
+    int out = 0;
+
+    switch (flags & IRIX_O_ACCMODE) {
+    case 1u: out |= O_WRONLY; break;
+    case 2u: out |= O_RDWR; break;
+    default: out |= O_RDONLY; break;
+    }
+    if (flags & IRIX_O_APPEND) out |= O_APPEND;
+#ifdef O_NONBLOCK
+    if (flags & IRIX_O_NONBLOCK) out |= O_NONBLOCK;
+#endif
+#ifdef O_ASYNC
+    if (flags & IRIX_O_ASYNC) out |= O_ASYNC;
+#endif
+#ifdef O_SYNC
+    if (flags & IRIX_O_SYNC) out |= O_SYNC;
+#endif
+    return out;
+}
+
+static uint32_t irix_status_flags_from_host(int flags)
+{
+    uint32_t out = 0;
+
+    switch (flags & O_ACCMODE) {
+    case O_WRONLY: out |= 1u; break;
+    case O_RDWR: out |= 2u; break;
+    default: break;
+    }
+    if (flags & O_APPEND) out |= IRIX_O_APPEND;
+#ifdef O_NONBLOCK
+    if (flags & O_NONBLOCK) out |= IRIX_O_NONBLOCK;
+#endif
+#ifdef O_ASYNC
+    if (flags & O_ASYNC) out |= IRIX_O_ASYNC;
+#endif
+#ifdef O_SYNC
+    if (flags & O_SYNC) out |= IRIX_O_SYNC;
+#endif
+    return out;
+}
+
+static void bridge_fcntl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int fd = (int)(int32_t)cpu->gpr[4];
+    int cmd = (int)(int32_t)cpu->gpr[5];
+    uint32_t arg = (uint32_t)cpu->gpr[6];
+    int rc;
+
+    (void)rt;
+    errno = 0;
+
+    switch (cmd) {
+    case IRIX_F_DUPFD:
+        rc = fcntl(fd, F_DUPFD, (int)arg);
+        break;
+    case IRIX_F_GETFD:
+        rc = fcntl(fd, F_GETFD);
+        if (rc >= 0)
+            rc = (rc & FD_CLOEXEC) ? (int)IRIX_FD_CLOEXEC : 0;
+        break;
+    case IRIX_F_SETFD:
+        rc = fcntl(fd, F_SETFD,
+                   (arg & IRIX_FD_CLOEXEC) ? FD_CLOEXEC : 0);
+        break;
+    case IRIX_F_GETFL:
+        rc = fcntl(fd, F_GETFL);
+        if (rc >= 0)
+            rc = (int)irix_status_flags_from_host(rc);
+        break;
+    case IRIX_F_SETFL:
+        /*
+         * IRIX and Linux use different bit values for status flags.
+         * In particular IRIX O_NONBLOCK is 0x80 while Linux/x86 uses
+         * another value, so raw passthrough is not ABI-correct.
+         */
+        rc = fcntl(fd, F_SETFL, host_status_flags_from_irix(arg));
+        break;
+    default:
+        errno = EINVAL;
+        rc = -1;
+        break;
+    }
+
+    ret_i32(cpu, rc);
+}
+
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
                            int nfds, fd_set *out)
 {
@@ -333,6 +436,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigdelset")) return bridge_sigdelset;
     if (!strcmp(name, "sigismember")) return bridge_sigismember;
     if (!strcmp(name, "sigaction")) return bridge_sigaction;
+    if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
