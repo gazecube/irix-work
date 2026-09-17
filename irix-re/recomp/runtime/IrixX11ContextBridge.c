@@ -47,7 +47,7 @@ static int ensure_capacity(void)
     return 0;
 }
 
-static void diagnose_save(IrixGuestRuntime *rt,
+static void diagnose_save(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr display, uint32_t rid,
                           int32_t context, IrixGuestAddr data)
 {
@@ -55,11 +55,17 @@ static void diagnose_save(IrixGuestRuntime *rt,
     IrixGuestAddr widget = 0;
     IrixGuestAddr req = 0;
     IrixGuestAddr old = 0;
+    IrixGuestAddr push_caller_ra = 0;
+    IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
     uint32_t klass = 0;
     uint32_t logical_parent = 0;
     uint8_t extension_type = 0;
     uint8_t raw_offset_target = 0;
     int have_raw_offset_target = 0;
+
+    /* _XmPushWidgetExtData saves its incoming $ra with `sd ra,8(sp)`. */
+    if (sp && irix_guest_ptr(rt, sp + 8u, 8u))
+        push_caller_ra = (IrixGuestAddr)(uint32_t)irix_guest_read64be(rt, sp + 8u);
 
     if (data && irix_guest_ptr(rt, data, 8u)) {
         rec = irix_guest_read32be(rt, data + 0u);
@@ -81,9 +87,10 @@ static void diagnose_save(IrixGuestRuntime *rt,
 
     fprintf(stderr,
             "XSaveContext display=0x%08x rid=0x%08x context=0x%08x data=0x%08x "
-            "rec=0x%08x widget=0x%08x class=0x%08x logicalParent=0x%08x "
+            "pushCallerRA=0x%08x rec=0x%08x widget=0x%08x class=0x%08x logicalParent=0x%08x "
             "extensionType=%u rawOffsetTarget[-0x21]=%s%u req=0x%08x old=0x%08x\n",
             (uint32_t)display, rid, (uint32_t)context, (uint32_t)data,
+            (uint32_t)push_caller_ra,
             (uint32_t)rec, (uint32_t)widget, klass, logical_parent,
             (unsigned)extension_type,
             have_raw_offset_target ? "" : "?",
@@ -99,7 +106,7 @@ static void bridge_XSaveContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     uint32_t data = (uint32_t)cpu->gpr[7];
     IrixX11ContextEntry *e = find_entry(display, rid, context);
 
-    diagnose_save(rt, display, rid, context, data);
+    diagnose_save(rt, cpu, display, rid, context, data);
     if (rt->trapped) {
         cpu->gpr[2] = (uint32_t)XCNOENT;
         return;
