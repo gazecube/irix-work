@@ -6,7 +6,7 @@ from extract_ar import members
 
 SHT_PROGBITS=1; SHT_SYMTAB=2; SHT_RELA=4; SHT_NOBITS=8; SHT_REL=9
 SHF_ALLOC=2; SHN_UNDEF=0; SHN_ABS=0xfff1; SHN_COMMON=0xfff2
-STB_LOCAL=0; STB_GLOBAL=1; STB_WEAK=2; STT_SECTION=3
+STB_LOCAL=0; STB_GLOBAL=1; STB_WEAK=2; STT_OBJECT=1; STT_FUNC=2; STT_SECTION=3
 R_MIPS_32=2; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11
 R_MIPS_GOT_DISP=19; R_MIPS_GOT_PAGE=20; R_MIPS_GOT_OFST=21; R_MIPS_SUB=24; R_MIPS_SCN_DISP=32; R_MIPS_JALR=37
 SMALL={'.srdata','.sdata','.sbss','.lit4','.lit8'}
@@ -49,7 +49,7 @@ class Obj:
 
 class StackLink:
  def __init__(self,base=0x50000000,small_base=0x60000000,import_base=0x70000000):
-  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.globals={}; self.imports={}; self.got={}; self.duplicates=[]
+  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.globals={}; self.imports={}; self.data_imports={}; self.got={}; self.duplicates=[]
  def add_archive(self,p):
   for name,data in members(Path(p).read_bytes()):
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
@@ -80,6 +80,18 @@ class StackLink:
     if s['shndx']!=SHN_COMMON or not s['name']: continue
     if s['name'] in self.globals: continue
     main=align(main,max(s['value'],8)); self.globals[s['name']]=(main,s['bind'],o.name); main+=s['size']
+  # Undefined object symbols are data imports, not callable stubs. Give them
+  # real zero-initialized guest storage so translated code may dereference
+  # them safely. Keep STT_FUNC and ambiguous STT_NOTYPE symbols on the existing
+  # import-stub path.
+  for o in self.objs:
+   for s in o.syms:
+    if s['shndx']!=SHN_UNDEF or s['type']!=STT_OBJECT or not s['name'] or s['bind'] not in (STB_GLOBAL,STB_WEAK): continue
+    if s['name'] in self.globals or s['name'] in self.data_imports: continue
+    size=max(s['size'],8)
+    a=align(main,8)
+    self.data_imports[s['name']]=(a,size,o.name)
+    main=a+size
   self.main_end=main
   # GP sits at +0x8000 from small region base. GOT grows after small data.
   self.gp=self.small_base+0x8000; self.nextgot=align(self.small_data_end,4)
@@ -90,6 +102,7 @@ class StackLink:
   a=o.local_addr(s)
   if a is not None: return a
   if s['name'] in self.globals: return self.globals[s['name']][0]
+  if s['name'] in self.data_imports: return self.data_imports[s['name']][0]
   if s['shndx']==SHN_UNDEF and s['name']: return self.import_addr(s['name'])
   raise ValueError(f'unresolvable symbol {s["name"]!r} in {o.name}')
  def gotaddr(self,key,value):
@@ -167,7 +180,7 @@ class StackLink:
     dst[a-origin:a-origin+len(b)]=b
   for _,(a,v) in self.got.items(): p32(small,a-self.small_base,v)
   (out/'main.bin').write_bytes(main); (out/'small.bin').write_bytes(small)
-  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates}
+  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'data_imports':{k:[a,z,owner] for k,(a,z,owner) in self.data_imports.items()},'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates}
   for o in self.objs: mani['objects'].append({'archive':o.archive,'member':o.name,'gp0':o.gp0,'sections':{o.sec[n]['name']:a for n,a in o.base.items()}})
   (out/'link.json').write_text(json.dumps(mani,indent=2)+'\n')
 
@@ -175,6 +188,6 @@ def main():
  ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('-o','--output',required=True); a=ap.parse_args(); L=StackLink()
  for p in a.archives:L.add_archive(p)
  L.layout(); L.relocate(); L.write(a.output)
- print(f'objects={len(L.objs)} globals={len(L.globals)} imports={len(L.imports)} got={len(L.got)} relocs={L.relocations}')
+ print(f'objects={len(L.objs)} globals={len(L.globals)} imports={len(L.imports)} data_imports={len(L.data_imports)} got={len(L.got)} relocs={L.relocations}')
  print(f'main={L.base:#x}-{L.main_end:#x} small={L.small_base:#x}-{L.nextgot:#x} gp={L.gp:#x} duplicates={len(L.duplicates)}')
 if __name__=='__main__': main()
