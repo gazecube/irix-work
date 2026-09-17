@@ -1,4 +1,5 @@
 #include "IrixCLibExtraBridge.h"
+#include "IrixLibcBridge.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -239,11 +240,68 @@ static void bridge_labs(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gp
 static void bridge_rand(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint32_t)rand();}
 static void bridge_srand(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;srand((unsigned)cpu->gpr[4]);cpu->gpr[2]=0;}
 
+static IrixGuestAddr alloc_guest_for_vec(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t size)
+{
+    IrixGuestFunction malloc_fn = irix_libc_bridge_lookup("malloc");
+    IrixGuestCpu call;
+    if (!malloc_fn) return 0;
+    call = *cpu;
+    call.gpr[4] = size;
+    malloc_fn(rt, &call);
+    return (uint32_t)call.gpr[2];
+}
+
+static int call_guest_vec_ctor(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
+                               IrixGuestAddr ctor, IrixGuestAddr object)
+{
+    IrixGuestCpu call = *caller;
+    IrixGuestAddr saved_pc = rt->current_pc;
+    call.gpr[4] = object;
+    if (irix_guest_call(rt, &call, ctor) != 0) {
+        rt->current_pc = saved_pc;
+        return -1;
+    }
+    rt->current_pc = saved_pc;
+    return 0;
+}
+
+static void bridge___vec_new_eh2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr array = (uint32_t)cpu->gpr[4];
+    uint32_t count = (uint32_t)cpu->gpr[5];
+    uint32_t element_size = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr ctor = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr dtor = (uint32_t)cpu->gpr[8];
+    uint64_t total = (uint64_t)count * (uint64_t)element_size;
+    uint32_t i;
+
+    (void)dtor;
+    if (total > UINT32_MAX) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    if (!array) {
+        array = alloc_guest_for_vec(rt, cpu, (uint32_t)(total ? total : 1u));
+        if (!array) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+    }
+    if (ctor && element_size) {
+        for (i = 0; i < count && !rt->trapped; ++i) {
+            if (call_guest_vec_ctor(rt, cpu, ctor, array + i * element_size) != 0)
+                break;
+        }
+    }
+    cpu->gpr[2] = array;
+}
+
 void irix_clib_extra_bridge_init(IrixGuestRuntime *rt){g_rt=rt;(void)g_rt;}
 
 IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
 {
     if(!name)return 0;
+    if(!strcmp(name,"__vec_new_eh2"))return bridge___vec_new_eh2;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
     M(sprintf); M(snprintf); M(printf); M(fprintf); M(puts); M(putchar);
     M(atoi); M(atol); M(strtol); M(strtoul); M(strtod);
