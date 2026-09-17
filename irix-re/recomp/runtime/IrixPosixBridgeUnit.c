@@ -11,7 +11,16 @@
 #define IRIX_SGINAP_HZ 100L
 #define IRIX_SIGSET_WORDS 4u
 #define IRIX_SIGSET_BYTES (IRIX_SIGSET_WORDS * 4u)
+#define IRIX_SIGACTION_BYTES 24u
 #define IRIX_NSIG 128
+
+typedef struct IrixSigActionState {
+    uint32_t handler;
+    uint32_t flags;
+    uint32_t mask[IRIX_SIGSET_WORDS];
+} IrixSigActionState;
+
+static IrixSigActionState g_irix_sigactions[IRIX_NSIG + 1];
 
 static int valid_irix_sigset(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
@@ -120,6 +129,60 @@ static void bridge_sigismember(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     ret_i32(cpu, (bits & mask) ? 1 : 0);
+}
+
+static int read_irix_sigaction(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                               IrixSigActionState *out)
+{
+    unsigned i;
+    if (!addr || !out || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_BYTES))
+        return -1;
+    out->handler = irix_guest_read32be(rt, addr + 0u);
+    out->flags = irix_guest_read32be(rt, addr + 4u);
+    for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
+        out->mask[i] = irix_guest_read32be(rt, addr + 8u + (IrixGuestAddr)i * 4u);
+    return rt->trapped ? -1 : 0;
+}
+
+static int write_irix_sigaction(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                                const IrixSigActionState *in)
+{
+    unsigned i;
+    if (!addr || !in || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_BYTES))
+        return -1;
+    irix_guest_write32be(rt, addr + 0u, in->handler);
+    irix_guest_write32be(rt, addr + 4u, in->flags);
+    for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
+        irix_guest_write32be(rt, addr + 8u + (IrixGuestAddr)i * 4u, in->mask[i]);
+    return rt->trapped ? -1 : 0;
+}
+
+static void bridge_sigaction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int signo = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr act_addr = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr old_addr = (uint32_t)cpu->gpr[6];
+    IrixSigActionState next;
+
+    if (signo <= 0 || signo > IRIX_NSIG) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (old_addr && write_irix_sigaction(rt, old_addr, &g_irix_sigactions[signo]) != 0) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (act_addr) {
+        if (read_irix_sigaction(rt, act_addr, &next) != 0) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        g_irix_sigactions[signo] = next;
+    }
+    ret_i32(cpu, 0);
 }
 
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
@@ -269,6 +332,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigaddset")) return bridge_sigaddset;
     if (!strcmp(name, "sigdelset")) return bridge_sigdelset;
     if (!strcmp(name, "sigismember")) return bridge_sigismember;
+    if (!strcmp(name, "sigaction")) return bridge_sigaction;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
