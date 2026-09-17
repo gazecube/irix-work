@@ -198,8 +198,79 @@ PATH2(rename, rename(a,b))
 PATH2(link, link(a,b))
 PATH2(symlink, symlink(a,b))
 
+static int host_mkdirp(const char *path, mode_t mode)
+{
+    char *copy;
+    char *p;
+    struct stat st;
+    size_t n;
+
+    if (!path || !*path) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    n = strlen(path);
+    copy = (char *)malloc(n + 1u);
+    if (!copy) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(copy, path, n + 1u);
+
+    while (n > 1u && copy[n - 1u] == '/')
+        copy[--n] = '\0';
+
+    p = copy + (copy[0] == '/' ? 1 : 0);
+    for (; *p; ++p) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (*copy && mkdir(copy, mode) != 0 && errno != EEXIST) {
+            int saved = errno;
+            free(copy);
+            errno = saved;
+            return -1;
+        }
+        if (*copy && stat(copy, &st) != 0) {
+            int saved = errno;
+            free(copy);
+            errno = saved;
+            return -1;
+        }
+        if (*copy && !S_ISDIR(st.st_mode)) {
+            free(copy);
+            errno = ENOTDIR;
+            return -1;
+        }
+        *p = '/';
+    }
+
+    if (mkdir(copy, mode) != 0 && errno != EEXIST) {
+        int saved = errno;
+        free(copy);
+        errno = saved;
+        return -1;
+    }
+    if (stat(copy, &st) != 0) {
+        int saved = errno;
+        free(copy);
+        errno = saved;
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        free(copy);
+        errno = ENOTDIR;
+        return -1;
+    }
+
+    free(copy);
+    return 0;
+}
+
 static void bridge_mkdir(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
 { const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?mkdir(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
+static void bridge_mkdirp(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{ const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?host_mkdirp(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
 static void bridge_chmod(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
 { const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?chmod(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
 static void bridge_fchmod(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
@@ -256,7 +327,7 @@ IrixGuestFunction irix_fs_bridge_lookup(const char *name)
     MAP(stat); MAP(lstat); MAP(fstat);
     MAP(open); MAP(creat); MAP(close); MAP(read); MAP(write); MAP(lseek);
     MAP(unlink); MAP(remove); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
-    MAP(mkdir); MAP(rmdir); MAP(chmod); MAP(fchmod); MAP(chown); MAP(fchown);
+    MAP(mkdir); MAP(mkdirp); MAP(rmdir); MAP(chmod); MAP(fchmod); MAP(chown); MAP(fchown);
     MAP(dup); MAP(dup2); MAP(pipe); MAP(fsync); MAP(fdatasync); MAP(isatty); MAP(umask);
     MAP(truncate); MAP(ftruncate);
 #undef MAP
