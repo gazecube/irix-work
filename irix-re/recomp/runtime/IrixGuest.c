@@ -236,6 +236,13 @@ static void report_nearest_functions(IrixGuestRuntime *rt, IrixGuestAddr address
                 (uint32_t)(above->address - address));
 }
 
+static int trace_dialog_call(const char *name)
+{
+    if (!name) return 0;
+    return strstr(name, "postBlocked__15VkDialogManager") != 0 ||
+           strstr(name, "waitForDialog__15VkDialogManager") != 0;
+}
+
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
@@ -285,6 +292,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     }
     {
         uint64_t caller_gp = cpu->gpr[28];
+        IrixGuestAddr caller_pc = cpu->pc;
+        if (trace_dialog_call(entry->name)) {
+            fprintf(stderr,
+                    "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    address, entry->name ? entry->name : "?", caller_pc,
+                    (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[4],
+                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
+                    (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
+                    (uint32_t)cpu->gpr[11]);
+        }
         cpu->pc = address;
         rt->current_pc = address;
         /* N32 PIC entry convention: t9 contains the callee address. */
