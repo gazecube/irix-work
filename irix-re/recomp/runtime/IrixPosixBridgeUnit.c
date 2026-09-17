@@ -3,6 +3,7 @@
 #undef irix_posix_bridge_lookup
 
 #include <fcntl.h>
+#include <netdb.h>
 #include <sched.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -336,6 +337,78 @@ static void bridge_sgikopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, 0);
 }
 
+static IrixGuestAddr copy_guest_tmp_string(IrixGuestRuntime *rt, const char *src)
+{
+    IrixGuestAddr out;
+    size_t n;
+    void *dst;
+
+    if (!src) return 0;
+    n = strlen(src) + 1u;
+    if (n > UINT32_MAX) return 0;
+    out = tmp_alloc((uint32_t)n);
+    if (!out) return 0;
+    dst = irix_guest_ptr(rt, out, n);
+    if (!dst) return 0;
+    memcpy(dst, src, n);
+    return out;
+}
+
+static void bridge_gethostbyname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    struct hostent *host;
+    IrixGuestAddr guest_host, guest_name, guest_aliases, guest_addrs;
+    size_t alias_count = 0, addr_count = 0, i;
+
+    cpu->gpr[2] = 0;
+    if (!name) return;
+
+    host = gethostbyname(name);
+    if (!host) return;
+
+    while (host->h_aliases && host->h_aliases[alias_count])
+        ++alias_count;
+    while (host->h_addr_list && host->h_addr_list[addr_count])
+        ++addr_count;
+
+    guest_host = tmp_alloc(20u);
+    guest_aliases = tmp_alloc((uint32_t)((alias_count + 1u) * 4u));
+    guest_addrs = tmp_alloc((uint32_t)((addr_count + 1u) * 4u));
+    guest_name = copy_guest_tmp_string(rt, host->h_name ? host->h_name : name);
+    if (!guest_host || !guest_aliases || !guest_addrs || !guest_name)
+        return;
+
+    for (i = 0; i < alias_count; ++i) {
+        IrixGuestAddr a = copy_guest_tmp_string(rt, host->h_aliases[i]);
+        if (!a) return;
+        irix_guest_write32be(rt, guest_aliases + (IrixGuestAddr)i * 4u, a);
+    }
+    irix_guest_write32be(rt, guest_aliases + (IrixGuestAddr)alias_count * 4u, 0u);
+
+    for (i = 0; i < addr_count; ++i) {
+        IrixGuestAddr a;
+        void *dst;
+        if (host->h_length <= 0) return;
+        a = tmp_alloc((uint32_t)host->h_length);
+        if (!a) return;
+        dst = irix_guest_ptr(rt, a, (size_t)host->h_length);
+        if (!dst) return;
+        memcpy(dst, host->h_addr_list[i], (size_t)host->h_length);
+        irix_guest_write32be(rt, guest_addrs + (IrixGuestAddr)i * 4u, a);
+    }
+    irix_guest_write32be(rt, guest_addrs + (IrixGuestAddr)addr_count * 4u, 0u);
+
+    irix_guest_write32be(rt, guest_host + 0u, guest_name);
+    irix_guest_write32be(rt, guest_host + 4u, guest_aliases);
+    irix_guest_write32be(rt, guest_host + 8u, (uint32_t)host->h_addrtype);
+    irix_guest_write32be(rt, guest_host + 12u, (uint32_t)host->h_length);
+    irix_guest_write32be(rt, guest_host + 16u, guest_addrs);
+
+    if (!rt->trapped)
+        cpu->gpr[2] = guest_host;
+}
+
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
                            int nfds, fd_set *out)
 {
@@ -486,6 +559,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigaction")) return bridge_sigaction;
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
+    if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
