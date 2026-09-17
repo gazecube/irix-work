@@ -35,14 +35,21 @@ def main():
     for b in bundles:
         for f in b['functions']: defs.setdefault(f['name'],f['address'])
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
-    entries=[]
+    entries=[]; trace=[]
     for b in bundles:
         pre=dyn_prebound(b['path'])
         for imp in b['imports']:
             name=imp['name']; addrs=[]
             if imp['address']: addrs.append(imp['address'])
             if pre.get(name): addrs.append(pre[name])
+            if name == 'XResourceManagerString':
+                trace.append((b['prefix'], imp['address'], pre.get(name,0), defs.get(name,0)))
             for stub in addrs: entries.append((stub,defs.get(name,0),name,b['prefix']))
+    if trace:
+        print('TRACE XResourceManagerString defs=0x%08x' % defs.get('XResourceManagerString',0))
+        for owner,imp_addr,pre_addr,target in trace:
+            print('TRACE XResourceManagerString owner=%s import=0x%08x prebound=0x%08x target=0x%08x' %
+                  (owner,imp_addr or 0,pre_addr or 0,target or 0))
     by={}; conflicts=[]
     for e in entries:
         addr,target,name,owner=e; old=by.get(addr)
