@@ -196,32 +196,66 @@ def decode(addr, insn):
         dst=(addr+4+(imm<<2))&0xffffffff; cond='%s == %s'%(reg(rs),reg(rt)) if op==0x14 else '%s != %s'%(reg(rs),reg(rt)); return ['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'} else {','    pc += 4;','}'],'control'
     if op in (0x06,0x07):
         dst=(addr+4+(imm<<2))&0xffffffff; cmp='<= 0' if op==0x06 else '> 0'; return ['if ((int64_t)%s %s)'%(reg(rs),cmp)+' {','    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'],'control'
-    if op==0x08: return ['%s = %s;'%(reg(rt),sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d'%(reg(rs),imm)))],None
-    if op==0x09: return ['%s = %s;'%(reg(rt),sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d'%(reg(rs),imm)))],None
-    if op==0x0a: return ['%s = ((int64_t)%s < (int64_t)(int32_t)%d) ? 1 : 0;'%(reg(rt),reg(rs),imm)],None
-    if op==0x0b: return ['%s = ((uint64_t)%s < (uint64_t)(uint32_t)(int32_t)%d) ? 1 : 0;'%(reg(rt),reg(rs),imm)],None
-    if op==0x0c: return ['%s = %s & 0x%04xu;'%(reg(rt),reg(rs),immu)],None
-    if op==0x0d: return ['%s = %s | 0x%04xu;'%(reg(rt),reg(rs),immu)],None
-    if op==0x0e: return ['%s = %s ^ 0x%04xu;'%(reg(rt),reg(rs),immu)],None
-    if op==0x0f: return ['%s = %s;'%(reg(rt),sx32_expr('0x%08xu'%(immu<<16)))],None
-    if op==0x20: return ['%s = (uint64_t)(int64_t)(int8_t)*(int8_t*)irix_guest_ptr(rt, %s, 1);'%(reg(rt),mem_addr(rs,imm))],None
-    if op==0x21: return ['%s = (uint64_t)(int64_t)(int16_t)(uint16_t)((irix_guest_read32be(rt, %s & ~3u) >> (16 - ((%s & 2u) * 8))) & 0xffffu);'%(reg(rt),mem_addr(rs,imm),mem_addr(rs,imm))],None
+    if op in (0x16,0x17):
+        dst=(addr+4+(imm<<2))&0xffffffff; cmp='<= 0' if op==0x16 else '> 0'; return ['if ((int64_t)%s %s) {'%(reg(rs),cmp),'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'} else {','    pc += 4;','}'],'control'
+    if op==0x01:
+        dst=(addr+4+(imm<<2))&0xffffffff
+        if rt in (0,2): cond='(int64_t)%s < 0'%reg(rs)
+        elif rt in (1,3): cond='(int64_t)%s >= 0'%reg(rs)
+        elif rt==0x11: cond='(int64_t)%s >= 0'%reg(rs)
+        else: raise ValueError('unsupported REGIMM rt=0x%x at 0x%08x word=0x%08x'%(rt,addr,insn))
+        likely=rt in (2,3); lines=[]
+        if rt==0x11: lines.append('%s = %s;'%(reg(31),sx32_expr('0x%08xu'%(addr+8))))
+        lines.extend(['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'])
+        if likely: lines=['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'} else {','    pc += 4;','}']
+        return lines,'control'
+    if op in (0x08,0x09): return ['%s = %s;'%(reg(rt),sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d'%(reg(rs),imm)))],None
+    if op==0x1a:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; unsigned n = a & 7u; uint64_t m = irix_guest_read64be(rt, a & ~7u); uint64_t mask = n ? ((UINT64_C(1) << (n * 8u)) - 1u) : 0u;'%a,'  %s = (%s & mask) | (m << (n * 8u)); }'%(reg(rt),reg(rt))],None
+    if op==0x1b:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; unsigned n = a & 7u; unsigned sh = (7u - n) * 8u; uint64_t m = irix_guest_read64be(rt, a & ~7u); uint64_t mask = sh ? (~UINT64_C(0) << (64u - sh)) : 0u;'%a,'  %s = (%s & mask) | (m >> sh); }'%(reg(rt),reg(rt))],None
+    if op==0x19: return ['%s = %s + (uint64_t)(int64_t)(int16_t)0x%04xu;'%(reg(rt),reg(rs),immu)],None
+    if op==0x0a: return ['%s = ((int64_t)%s < (int64_t)%d) ? 1 : 0;'%(reg(rt),reg(rs),imm)],None
+    if op==0x0b: return ['%s = ((uint64_t)%s < (uint64_t)(int64_t)(int16_t)0x%04xu) ? 1 : 0;'%(reg(rt),reg(rs),immu)],None
+    if op==0x0d: return ['%s = %s | 0x%xu;'%(reg(rt),reg(rs),immu)],None
+    if op==0x0c: return ['%s = %s & 0x%xu;'%(reg(rt),reg(rs),immu)],None
+    if op==0x0e: return ['%s = %s ^ 0x%xu;'%(reg(rt),reg(rs),immu)],None
+    if op==0x0f: return ['%s = %s;'%(reg(rt),sx32_expr('0x%08xu'%((immu<<16)&0xffffffff)))],None
+    if op==0x35: return ['cpu->fpr[%d] = irix_guest_read64be(rt, %s);'%(rt,mem_addr(rs,imm))],None
+    if op==0x3d: return ['irix_guest_write64be(rt, %s, cpu->fpr[%d]);'%(mem_addr(rs,imm),rt)],None
+    if op==0x39: return ['irix_guest_write32be(rt, %s, (uint32_t)cpu->fpr[%d]);'%(mem_addr(rs,imm),rt)],None
+    if op==0x21: return ['%s = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x25: return ['%s = irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x20: return ['%s = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x24: return ['%s = irix_guest_read8(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x22:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = w; break;','  case 1: old = (old & 0x000000ffu) | (w << 8); break;','  case 2: old = (old & 0x0000ffffu) | (w << 16); break;','  default: old = (old & 0x00ffffffu) | (w << 24); break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
+    if op==0x26:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = (old & 0xffffff00u) | (w >> 24); break;','  case 1: old = (old & 0xffff0000u) | (w >> 16); break;','  case 2: old = (old & 0xff000000u) | (w >> 8); break;','  default: old = w; break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
     if op==0x23: return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
-    if op==0x24: return ['%s = (uint64_t)(uint8_t)*(uint8_t*)irix_guest_ptr(rt, %s, 1);'%(reg(rt),mem_addr(rs,imm))],None
-    if op==0x25: return ['%s = (uint64_t)(uint16_t)((irix_guest_read32be(rt, %s & ~3u) >> (16 - ((%s & 2u) * 8))) & 0xffffu);'%(reg(rt),mem_addr(rs,imm),mem_addr(rs,imm))],None
-    if op==0x28: return ['*(uint8_t*)irix_guest_ptr(rt, %s, 1) = (uint8_t)%s;'%(mem_addr(rs,imm),reg(rt))],None
-    if op==0x29: return ['{ IrixGuestAddr a=%s; uint32_t w=irix_guest_read32be(rt,a&~3u); unsigned s=16-((a&2u)*8); w=(w&~(0xffffu<<s))|(((uint32_t)%s&0xffffu)<<s); irix_guest_write32be(rt,a&~3u,w); }'%(mem_addr(rs,imm),reg(rt))],None
+    if op==0x31: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | irix_guest_read32be(rt, %s);'%(rt,rt,mem_addr(rs,imm))],None
+    if op==0x37: return ['%s = irix_guest_read64be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x28: return ['irix_guest_write8(rt, %s, (uint8_t)%s);'%(mem_addr(rs,imm),reg(rt))],None
+    if op==0x29: return ['irix_guest_write16be(rt, %s, (uint16_t)%s);'%(mem_addr(rs,imm),reg(rt))],None
+    if op==0x2a:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; IrixGuestAddr q = a & ~3u; uint32_t m = irix_guest_read32be(rt, q); uint32_t v = (uint32_t)%s;'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: m = v; break;','  case 1: m = (m & 0xff000000u) | (v >> 8); break;','  case 2: m = (m & 0xffff0000u) | (v >> 16); break;','  default: m = (m & 0xffffff00u) | (v >> 24); break;','  } irix_guest_write32be(rt, q, m); }'],None
+    if op==0x2e:
+        a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; IrixGuestAddr q = a & ~3u; uint32_t m = irix_guest_read32be(rt, q); uint32_t v = (uint32_t)%s;'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: m = (m & 0x00ffffffu) | (v << 24); break;','  case 1: m = (m & 0x0000ffffu) | (v << 16); break;','  case 2: m = (m & 0x000000ffu) | (v << 8); break;','  default: m = v; break;','  } irix_guest_write32be(rt, q, m); }'],None
     if op==0x2b: return ['irix_guest_write32be(rt, %s, (uint32_t)%s);'%(mem_addr(rs,imm),reg(rt))],None
-    if op==0x31: return ['irix_guest_fpr_set_s(cpu, %d, irix_guest_read_f32be(rt, %s));'%(rt,mem_addr(rs,imm))],None
-    if op==0x35: return ['irix_guest_fpr_set_d(cpu, %d, irix_guest_read_f64be(rt, %s));'%(rt,mem_addr(rs,imm))],None
-    if op==0x39: return ['irix_guest_write_f32be(rt, %s, irix_guest_fpr_get_s(cpu, %d));'%(mem_addr(rs,imm),rt)],None
-    if op==0x3d: return ['irix_guest_write_f64be(rt, %s, irix_guest_fpr_get_d(cpu, %d));'%(mem_addr(rs,imm),rt)],None
+    if op==0x3f: return ['irix_guest_write64be(rt, %s, %s);'%(mem_addr(rs,imm),reg(rt))],None
+
     if op==0x11:
         fmt=rs; ft=rt; fs=rd; fd=sa; funct=fn
-        if fmt==0x00: return ['%s = %s;'%(reg(ft),sx32_expr('(uint32_t)cpu->fpr[%d]'%fs))],None
-        if fmt==0x04: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)%s;'%(fs,fs,reg(ft))],None
         if fmt==0x08:
-            dst=(addr+4+(imm<<2))&0xffffffff; cond='(cpu->fcr31 & (1u << 23)) == 0' if ft==0 else '(cpu->fcr31 & (1u << 23)) != 0'; return ['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'],'control'
+            dst=(addr+4+(imm<<2))&0xffffffff; tf=ft&1; likely=bool(ft&2); cond='(cpu->fcr31 & (1u << 23)) != 0'
+            if not tf: cond='!(%s)'%cond
+            lines=['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}']
+            if likely: lines += ['else {','    pc += 4;','}']
+            return lines,'control'
+        if fmt==0x01: return ['%s = cpu->fpr[%d];'%(reg(ft),fs)],None
+        if fmt==0x05: return ['cpu->fpr[%d] = %s;'%(fs,reg(ft))],None
+        if fmt==0x00: return ['%s = (uint64_t)(int64_t)(int32_t)(uint32_t)cpu->fpr[%d];'%(reg(ft),fs)],None
+        if fmt==0x04: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)%s;'%(fs,fs,reg(ft))],None
         if fmt==0x10:
             if funct==0x00: return ['irix_guest_fpr_set_s(cpu, %d, irix_guest_fpr_get_s(cpu, %d) + irix_guest_fpr_get_s(cpu, %d));'%(fd,fs,ft)],None
             if funct==0x01: return ['irix_guest_fpr_set_s(cpu, %d, irix_guest_fpr_get_s(cpu, %d) - irix_guest_fpr_get_s(cpu, %d));'%(fd,fs,ft)],None
@@ -229,7 +263,7 @@ def decode(addr, insn):
             if funct==0x03: return ['irix_guest_fpr_set_s(cpu, %d, irix_guest_fpr_get_s(cpu, %d) / irix_guest_fpr_get_s(cpu, %d));'%(fd,fs,ft)],None
             if funct==0x04: return ['irix_guest_fpr_set_s(cpu, %d, sqrtf(irix_guest_fpr_get_s(cpu, %d)));'%(fd,fs)],None
             if funct==0x05: return ['irix_guest_fpr_set_s(cpu, %d, fabsf(irix_guest_fpr_get_s(cpu, %d)));'%(fd,fs)],None
-            if funct==0x06: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (cpu->fpr[%d] & 0xffffffffu);'%(fd,fd,fs)],None
+            if funct==0x06: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)cpu->fpr[%d];'%(fd,fd,fs)],None
             if funct==0x07: return ['irix_guest_fpr_set_s(cpu, %d, -irix_guest_fpr_get_s(cpu, %d));'%(fd,fs)],None
             if funct==0x0d: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | (uint32_t)(int32_t)irix_guest_fpr_get_s(cpu, %d);'%(fd,fd,fs)],None
             if funct==0x21: return ['irix_guest_fpr_set_d(cpu, %d, (double)irix_guest_fpr_get_s(cpu, %d));'%(fd,fs)],None
@@ -261,12 +295,8 @@ def decode(addr, insn):
 
 def c_name(name): return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
-def emit(path,name,section_base=None,c_prefix='',symbol_override=None):
-    elf=Elf32BE(path)
-    if symbol_override is None:
-        sym_name,sym_value,size,shndx=elf.find_function(name)
-    else:
-        sym_name,sym_value,size,shndx=symbol_override
+def emit(path,name,section_base=None,c_prefix=''):
+    elf=Elf32BE(path); sym_name,sym_value,size,shndx=elf.find_function(name)
     if not size: raise ValueError('symbol has zero size: %s'%name)
     if elf.etype==1:
         if section_base is None: section_base=0x50000000
