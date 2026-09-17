@@ -27,8 +27,8 @@ def raw_function_symbols(path):
 def emit_explicit(path, name, start, size, c_prefix):
     """Emit one desktop/runtime function from an explicit address range.
 
-    This intentionally lives here instead of changing translate_n32.py so PDR
-    recovery cannot invalidate the static core translator.
+    This intentionally lives here instead of changing translate_n32.py so
+    metadata recovery cannot invalidate the static core translator.
     """
     elf=t.Elf32BE(str(path))
     words=elf.words(start,size)
@@ -38,7 +38,7 @@ def emit_explicit(path, name, start, size, c_prefix):
         lines,control=t.decode(addr,word)
         decoded.append((addr,word,lines,control))
     fn='irix_recomp_%s%s'%(t.c_name(c_prefix),t.c_name(name))
-    print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (PDR range). */'%(path,name,start,size))
+    print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (explicit range). */'%(path,name,start,size))
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
@@ -77,6 +77,33 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        pc += 4;')
     print('    }')
     print('}')
+
+def zero_size_function_ranges(elf, symbol_rows):
+    """Recover named zero-sized STT_FUNC symbols conservatively.
+
+    IRIX/EDG can leave compiler-generated ctor/dtor helpers with a valid
+    STT_FUNC address but st_size == 0.  Derive their extent only from the next
+    distinct defined function start in the same executable section, or the
+    section end.  Never cross sections and never invent a function start.
+    """
+    out=[]
+    defined=[s for s in symbol_rows if s['shndx']!=0 and s['address']]
+    for sec_index,sec in enumerate(elf.sections):
+        if not (sec['flags']&SHF_EXECINSTR) or not sec['size']:
+            continue
+        lo=sec['addr']; hi=lo+sec['size']
+        rows=[s for s in defined if s['shndx']==sec_index and lo<=s['address']<hi]
+        if not rows: continue
+        starts=sorted(set(s['address'] for s in rows)+{hi})
+        next_boundary={starts[i]:starts[i+1] for i in range(len(starts)-1)}
+        for s in rows:
+            if s['size']!=0: continue
+            end=next_boundary.get(s['address'])
+            if end is None: continue
+            size=end-s['address']
+            if size<=0 or size%4: continue
+            out.append((s['name'],s['address'],size,sec_index))
+    return out
 
 def pdr_function_ranges(elf, path, symbol_rows):
     """Recover procedure starts/ranges from the MIPS ELF .pdr section.
@@ -132,23 +159,31 @@ def main():
 
     raw_syms=raw_function_symbols(path)
     symbol_addrs={addr for _,addr,_,_,_ in defs}
+
+    zero_defs=[]
+    for n,addr,size,sh in zero_size_function_ranges(elf,raw_syms):
+        if addr not in symbol_addrs:
+            zero_defs.append((n,addr,size,sh,'zero_size'))
+
+    recovered_addrs=symbol_addrs|{addr for _,addr,_,_,_ in zero_defs}
     pdr_defs=[]
     for n,addr,size,sh in pdr_function_ranges(elf,path,raw_syms):
-        if addr not in symbol_addrs:
+        if addr not in recovered_addrs:
             pdr_defs.append((n,addr,size,sh,'pdr'))
 
-    seen_addr=set(); functions=[]; pdr_count=0
-    all_defs=sorted(defs+pdr_defs,key=lambda x:(x[1],x[0]))
+    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0
+    all_defs=sorted(defs+zero_defs+pdr_defs,key=lambda x:(x[1],x[0]))
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
         seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
         with dst.open('w') as f, contextlib.redirect_stdout(f):
-            if source_kind=='pdr':
+            if source_kind in ('pdr','zero_size'):
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
         functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst),source_kind=source_kind))
         if source_kind=='pdr': pdr_count+=1
+        if source_kind=='zero_size': zero_count+=1
 
     # Keep every undefined function symbol, even when st_value is zero.  IRIX
     # quickstart/prebound binaries may leave the dynamic symbol value unset
@@ -163,5 +198,5 @@ def main():
         w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
         for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
         w.write('}\n')
-    print(f'{path}: functions={len(functions)} pdr_recovered={pdr_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} imports={len(imports)}')
 if __name__=='__main__': main()
