@@ -215,6 +215,12 @@ int main(int argc, char **argv)
     irix_runtime_x11_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
 
+    /* Guest lookup is first-match. Register native import bridges before any
+       translated definition at the same prebound address so deliberate ABI
+       overrides (for example host-backed Xlib objects) actually take effect. */
+    irix_register_recompiled_stack_imports(&rt, resolve_native);
+    register_irix_bridge_imports(&rt, resolve_native);
+
     irix_register_recompiled_stack(&rt);
     register_desktop(&rt);
     register_imdApp(&rt);
@@ -226,10 +232,7 @@ int main(int argc, char **argv)
     register_imdFtrGallery(&rt);
     register_imdFtrIcon(&rt);
 
-    /* Native bridge entries must be registered before fallback missing stubs,
-       because guest lookup intentionally returns the first matching address. */
-    irix_register_recompiled_stack_imports(&rt, resolve_native);
-    register_irix_bridge_imports(&rt, resolve_native);
+    /* Prebound and missing-import forwarders remain fallback entries. */
     register_irix_prebound_imports(&rt);
 
     if (setup_argv(&rt, &cpu, argc, argv) != 0) {
