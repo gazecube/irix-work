@@ -87,6 +87,12 @@ static void wr32(IrixGuestRuntime *rt, IrixGuestAddr p, uint32_t v)
     if (p) irix_guest_write32be(rt, p, v);
 }
 
+static uint32_t n32_stack_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu, unsigned index)
+{
+    IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    return (uint32_t)irix_guest_read64be(rt, sp + (IrixGuestAddr)(index * 8u));
+}
+
 #define D0() Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4])
 #define RET_D(expr) do { D0(); cpu->gpr[2] = d ? (uint32_t)(expr) : 0; } while (0)
 
@@ -145,17 +151,12 @@ static void bridge_XSynchronize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     D0();
     if (d) (void)XSynchronize(d, (Bool)cpu->gpr[5]);
-    /* XSynchronize returns a host-side XAfterFunction pointer. Never expose
-       that pointer to translated N32 code. Xt uses this call for the side
-       effect during bootstrap, so a guest NULL callback is the safe value. */
     cpu->gpr[2] = 0;
 }
 
 static void bridge_XSetAfterFunction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     D0();
-    /* A non-NULL guest callback cannot be installed directly in host Xlib.
-       NULL is safe and is the common restore/disable path. */
     if (d && (uint32_t)cpu->gpr[5] == 0)
         (void)XSetAfterFunction(d, 0);
     cpu->gpr[2] = 0;
@@ -221,18 +222,20 @@ static void bridge_XParseGeometry(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_XQueryPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     D0(); Window root=0,child=0; int rx=0,ry=0,wx=0,wy=0; unsigned mask=0; Bool ok=False;
-    if(d) ok=XQueryPointer(d,(Window)(uint32_t)cpu->gpr[5],&root,&child,&rx,&ry,&wx,&wy,&mask);
+    IrixGuestAddr mask_return=n32_stack_arg32(rt,cpu,0u);
+    if(d && !rt->trapped) ok=XQueryPointer(d,(Window)(uint32_t)cpu->gpr[5],&root,&child,&rx,&ry,&wx,&wy,&mask);
     wr32(rt,(uint32_t)cpu->gpr[6],(uint32_t)root); wr32(rt,(uint32_t)cpu->gpr[7],(uint32_t)child);
     wr32(rt,(uint32_t)cpu->gpr[8],(uint32_t)rx); wr32(rt,(uint32_t)cpu->gpr[9],(uint32_t)ry);
     wr32(rt,(uint32_t)cpu->gpr[10],(uint32_t)wx); wr32(rt,(uint32_t)cpu->gpr[11],(uint32_t)wy);
-    wr32(rt,(uint32_t)cpu->gpr[12],mask); cpu->gpr[2]=ok?1u:0u;
+    wr32(rt,mask_return,mask); cpu->gpr[2]=ok?1u:0u;
 }
 
 static void bridge_XWarpPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    D0(); (void)rt;
-    cpu->gpr[2]=d?(uint32_t)XWarpPointer(d,(Window)(uint32_t)cpu->gpr[5],(Window)(uint32_t)cpu->gpr[6],
-        (int)cpu->gpr[7],(int)cpu->gpr[8],(unsigned)cpu->gpr[9],(unsigned)cpu->gpr[10],(int)cpu->gpr[11],(int)cpu->gpr[12]):0;
+    D0();
+    int dest_y=(int32_t)n32_stack_arg32(rt,cpu,0u);
+    cpu->gpr[2]=(d && !rt->trapped)?(uint32_t)XWarpPointer(d,(Window)(uint32_t)cpu->gpr[5],(Window)(uint32_t)cpu->gpr[6],
+        (int)cpu->gpr[7],(int)cpu->gpr[8],(unsigned)cpu->gpr[9],(unsigned)cpu->gpr[10],(int)cpu->gpr[11],dest_y):0;
 }
 
 static void bridge_XGetWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -274,7 +277,12 @@ static void bridge_XListProperties(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_XGetWindowProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     D0(); Atom type=0; int format=0; unsigned long n=0,after=0; unsigned char *data=0; int rc=BadRequest; IrixGuestAddr ga=0; size_t bytes=0,i;
-    if(d) rc=XGetWindowProperty(d,(Window)(uint32_t)cpu->gpr[5],(Atom)(uint32_t)cpu->gpr[6],
+    IrixGuestAddr actual_type_return=(uint32_t)cpu->gpr[11];
+    IrixGuestAddr actual_format_return=n32_stack_arg32(rt,cpu,0u);
+    IrixGuestAddr nitems_return=n32_stack_arg32(rt,cpu,1u);
+    IrixGuestAddr bytes_after_return=n32_stack_arg32(rt,cpu,2u);
+    IrixGuestAddr prop_return=n32_stack_arg32(rt,cpu,3u);
+    if(d && !rt->trapped) rc=XGetWindowProperty(d,(Window)(uint32_t)cpu->gpr[5],(Atom)(uint32_t)cpu->gpr[6],
         (long)(int32_t)cpu->gpr[7],(long)(int32_t)cpu->gpr[8],(Bool)cpu->gpr[9],(Atom)(uint32_t)cpu->gpr[10],&type,&format,&n,&after,&data);
     if(rc==Success && data && n) {
         bytes = format==8 ? (size_t)n : format==16 ? (size_t)n*2u : (size_t)n*4u;
@@ -285,8 +293,11 @@ static void bridge_XGetWindowProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         }
     }
     if(data) XFree(data);
-    wr32(rt,(uint32_t)cpu->gpr[11],(uint32_t)type); wr32(rt,(uint32_t)cpu->gpr[12],(uint32_t)format);
-    wr32(rt,(uint32_t)cpu->gpr[13],(uint32_t)n); wr32(rt,(uint32_t)cpu->gpr[14],(uint32_t)after); wr32(rt,(uint32_t)cpu->gpr[15],ga);
+    wr32(rt,actual_type_return,(uint32_t)type);
+    wr32(rt,actual_format_return,(uint32_t)format);
+    wr32(rt,nitems_return,(uint32_t)n);
+    wr32(rt,bytes_after_return,(uint32_t)after);
+    wr32(rt,prop_return,ga);
     cpu->gpr[2]=(uint32_t)rc;
 }
 
