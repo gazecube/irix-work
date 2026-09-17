@@ -33,7 +33,7 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 find_package(X11)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
-        runtime/IrixX11Bridge.c
+        runtime/IrixX11BridgeUnit.c
         runtime/IrixX11BridgeExtraUnit.c
         runtime/IrixX11KeyboardBridge.c
         runtime/IrixX11ConnectionBridge.c
