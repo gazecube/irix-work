@@ -1,0 +1,58 @@
+{
+  "apps": [
+    {
+      "name": "desktop",
+      "prefix": "desktop",
+      "kind": "runtime",
+      "path": "usr/sbin/desktop"
+    },
+    {
+      "name": "fm",
+      "prefix": "fm",
+      "kind": "runtime",
+      "path": "usr/sbin/fm"
+    }
+  ],
+  "shared_components": [
+    {
+      "prefix": "imdApp",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdApp.so"
+    },
+    {
+      "prefix": "imdUtil",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdUtil.so"
+    },
+    {
+      "prefix": "imdXutil",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdXutil.so"
+    },
+    {
+      "prefix": "imdModel",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdModel.so"
+    },
+    {
+      "prefix": "imdIconPanel",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdIconPanel.so"
+    },
+    {
+      "prefix": "imdFtrDB",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdFtrDB.so"
+    },
+    {
+      "prefix": "imdFtrGallery",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdFtrGallery.so"
+    },
+    {
+      "prefix": "imdFtrIcon",
+      "kind": "internal",
+      "path": "usr/lib32/internal/libimdFtrIcon.so"
+    }
+  ]
+}
