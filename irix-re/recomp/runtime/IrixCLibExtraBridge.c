@@ -224,6 +224,7 @@ static void bridge_atof(IrixGuestRuntime *rt, IrixGuestCpu *cpu){const char*s=gu
 static void bridge_strtol(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr a=(uint32_t)cpu->gpr[4],ep=(uint32_t)cpu->gpr[5];const char*s=guest_cstr(rt,a),*e=0;long v=s?strtol(s,(char**)&e,(int)cpu->gpr[6]):0;if(ep)irix_guest_write32be(rt,ep,e? a+(uint32_t)(e-s):0);cpu->gpr[2]=(uint64_t)(int64_t)v;}
 static void bridge_strtoul(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr a=(uint32_t)cpu->gpr[4],ep=(uint32_t)cpu->gpr[5];const char*s=guest_cstr(rt,a),*e=0;unsigned long v=s?strtoul(s,(char**)&e,(int)cpu->gpr[6]):0;if(ep)irix_guest_write32be(rt,ep,e? a+(uint32_t)(e-s):0);cpu->gpr[2]=(uint64_t)v;}
 static void bridge_strtod(IrixGuestRuntime *rt, IrixGuestCpu *cpu){IrixGuestAddr a=(uint32_t)cpu->gpr[4],ep=(uint32_t)cpu->gpr[5];const char*s=guest_cstr(rt,a),*e=0;double v=s?strtod(s,(char**)&e):0.0;if(ep)irix_guest_write32be(rt,ep,e? a+(uint32_t)(e-s):0);irix_guest_fpr_set_d(cpu,0,v);}
+static void bridge_setoserror(IrixGuestRuntime *rt,IrixGuestCpu *cpu){int old=errno;(void)rt;errno=(int)(int32_t)cpu->gpr[4];cpu->gpr[2]=(uint64_t)(int64_t)old;}
 static void bridge_tolower(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint64_t)(int64_t)tolower((int)(uint32_t)cpu->gpr[4]);}
 static void bridge_toupper(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint64_t)(int64_t)toupper((int)(uint32_t)cpu->gpr[4]);}
 static void bridge_isalpha(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=isalpha((int)(uint32_t)cpu->gpr[4])?1:0;}
@@ -305,7 +306,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if(!strcmp(name,"__vec_new_eh2"))return bridge___vec_new_eh2;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
     M(sprintf); M(snprintf); M(printf); M(fprintf); M(puts); M(putchar);
-    M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod);
+    M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod); M(setoserror);
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);
     M(abs); M(labs); M(rand); M(srand);
