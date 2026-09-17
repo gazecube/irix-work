@@ -57,23 +57,16 @@ static IrixGuestAddr copy_host_string_to_guest(IrixGuestRuntime *rt,
 static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
                                           IrixGuestCpu *cpu)
 {
-    IrixGuestAddr guest_dpy = (uint32_t)cpu->gpr[4];
-    IrixGuestAddr name_addr = 0;
-    const char *name = 0;
     Display *dpy;
     const char *resource_string;
     IrixGuestAddr out = 0;
 
-    /* IrixX11BridgeExtra's classic 32-bit Display shadow stores the display
-       name pointer at +128.  Re-open that same server connection here rather
-       than exposing a host Display * through guest memory. */
-    if (guest_dpy && irix_guest_ptr(rt, guest_dpy, 132u)) {
-        name_addr = irix_guest_read32be(rt, guest_dpy + 128u);
-        if (name_addr)
-            name = (const char *)irix_guest_ptr(rt, name_addr, 1u);
-    }
-
-    dpy = XOpenDisplay(name);
+    /* Use the process DISPLAY directly.  The guest Display is a synthetic
+       shadow rather than a real SGI Xlib Display, so dereferencing fields from
+       it here is both unnecessary and brittle.  XResourceManagerString is a
+       server property query; opening the same DISPLAY gives the same value
+       without exposing host pointers or depending on shadow layout. */
+    dpy = XOpenDisplay(0);
     if (dpy) {
         resource_string = XResourceManagerString(dpy);
         out = copy_host_string_to_guest(rt, cpu, resource_string);
