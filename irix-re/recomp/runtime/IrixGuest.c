@@ -220,6 +220,30 @@ static int try_trivial_stripped_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     return 1;
 }
 
+static void report_nearest_functions(IrixGuestRuntime *rt, IrixGuestAddr address)
+{
+    IrixGuestFunctionEntry *below = 0;
+    IrixGuestFunctionEntry *above = 0;
+    size_t i;
+
+    for (i = 0; i < rt->function_count; ++i) {
+        IrixGuestFunctionEntry *e = &rt->functions[i];
+        if (e->address < address && (!below || e->address > below->address))
+            below = e;
+        if (e->address > address && (!above || e->address < above->address))
+            above = e;
+    }
+
+    if (below)
+        fprintf(stderr, " below=0x%08x:%s(+0x%x)",
+                below->address, below->name ? below->name : "?",
+                (uint32_t)(address - below->address));
+    if (above)
+        fprintf(stderr, " above=0x%08x:%s(-0x%x)",
+                above->address, above->name ? above->name : "?",
+                (uint32_t)(above->address - address));
+}
+
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
@@ -247,6 +271,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     irix_guest_read32be(rt, address + 12u),
                     irix_guest_read32be(rt, address + 16u));
         }
+        report_nearest_functions(rt, address);
         if (s4 && irix_guest_ptr(rt, s4, 28u)) {
             fprintf(stderr,
                     " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x",
