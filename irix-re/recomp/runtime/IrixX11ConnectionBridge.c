@@ -87,15 +87,19 @@ static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
         IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
         IrixGuestAddr outer_ra_addr = sp + 2128u;
         IrixGuestAddr outer_this_addr = sp + 2164u;
+        uint64_t outer_ra_slot = 0;
         uint32_t outer_ra = 0;
         uint32_t outer_this = 0;
-        if (irix_guest_ptr(rt, outer_ra_addr, 4u))
-            outer_ra = irix_guest_read32be(rt, outer_ra_addr);
+        if (irix_guest_ptr(rt, outer_ra_addr, 8u)) {
+            outer_ra_slot = irix_guest_read64be(rt, outer_ra_addr);
+            outer_ra = (uint32_t)outer_ra_slot;
+        }
         if (irix_guest_ptr(rt, outer_this_addr, 4u))
             outer_this = irix_guest_read32be(rt, outer_this_addr);
         fprintf(stderr,
-                "XRMSTR null-chain sp=0x%08x outer_ra=0x%08x outer_call=0x%08x outer_this=0x%08x\n",
-                sp, outer_ra, outer_ra ? outer_ra - 8u : 0u, outer_this);
+                "XRMSTR null-chain sp=0x%08x outer_ra_slot=0x%016llx outer_ra=0x%08x outer_call=0x%08x outer_this=0x%08x\n",
+                sp, (unsigned long long)outer_ra_slot, outer_ra,
+                outer_ra ? outer_ra - 8u : 0u, outer_this);
     }
 
     /* Use the process DISPLAY directly.  The guest Display is a synthetic
