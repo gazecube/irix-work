@@ -288,6 +288,54 @@ static void bridge_fcntl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+static void bridge_sgikopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr option_addr = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr buf_addr = (uint32_t)cpu->gpr[5];
+    int buflen = (int)(int32_t)cpu->gpr[6];
+    const char *option = guest_cstr(rt, option_addr);
+    char envname[256];
+    const char *value;
+    char *buf;
+    size_t n;
+
+    if (!option || !buf_addr || buflen <= 0) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    if ((size_t)snprintf(envname, sizeof(envname), "IRIX_KOPT_%s", option) >= sizeof(envname)) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    value = getenv(envname);
+    fprintf(stderr, "IRIX sgikopt: option=%s%s\n",
+            option, value ? " (environment override)" : " (unset)");
+
+    if (!value) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    buf = (char *)irix_guest_ptr(rt, buf_addr, (size_t)buflen);
+    if (!buf) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    n = strlen(value);
+    if (n >= (size_t)buflen)
+        n = (size_t)buflen - 1u;
+    memcpy(buf, value, n);
+    buf[n] = '\0';
+    ret_i32(cpu, 0);
+}
+
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
                            int nfds, fd_set *out)
 {
@@ -437,6 +485,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigismember")) return bridge_sigismember;
     if (!strcmp(name, "sigaction")) return bridge_sigaction;
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
+    if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
