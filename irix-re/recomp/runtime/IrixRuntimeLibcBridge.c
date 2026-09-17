@@ -55,6 +55,15 @@ static IrixGuestAddr guest_tokenize(IrixGuestRuntime *rt, IrixGuestAddr start_ad
     return token;
 }
 
+static void bridge_bzero(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    uint32_t n = (uint32_t)cpu->gpr[5];
+    void *dst = n ? irix_guest_ptr(rt, dst_addr, n) : 0;
+    if (dst && n) memset(dst, 0, n);
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_strcasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -198,6 +207,7 @@ IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
 {
     if (!name) return 0;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
+    MAP(bzero);
     MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
     MAP(strtok); MAP(strtok_r);
     MAP(gettimeofday); MAP(getdomainname); MAP(getgroups); MAP(getdtablehi); MAP(setpgrp);
