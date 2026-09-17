@@ -4,6 +4,40 @@
 
 #include "IrixX11BridgeExtraAccess.h"
 
+#define IRIX_N32_XEVENT_SIZE 96u
+
+static int write_n32_event(IrixGuestRuntime *rt, IrixGuestAddr guest,
+                           IrixGuestAddr guest_display, const XEvent *ev)
+{
+    void *p;
+    if (!guest || !ev) return 0;
+    p = irix_guest_ptr(rt, guest, IRIX_N32_XEVENT_SIZE);
+    if (!p) return 0;
+    memset(p, 0, IRIX_N32_XEVENT_SIZE);
+
+    irix_guest_write32be(rt, guest + 0u, (uint32_t)ev->type);
+    irix_guest_write32be(rt, guest + 4u, (uint32_t)ev->xany.serial);
+    irix_guest_write32be(rt, guest + 8u, (uint32_t)ev->xany.send_event);
+    irix_guest_write32be(rt, guest + 12u, guest_display);
+    irix_guest_write32be(rt, guest + 16u, (uint32_t)ev->xany.window);
+
+    switch (ev->type) {
+    case Expose:
+        irix_guest_write32be(rt, guest + 20u, (uint32_t)ev->xexpose.x);
+        irix_guest_write32be(rt, guest + 24u, (uint32_t)ev->xexpose.y);
+        irix_guest_write32be(rt, guest + 28u, (uint32_t)ev->xexpose.width);
+        irix_guest_write32be(rt, guest + 32u, (uint32_t)ev->xexpose.height);
+        irix_guest_write32be(rt, guest + 36u, (uint32_t)ev->xexpose.count);
+        break;
+    case VisibilityNotify:
+        irix_guest_write32be(rt, guest + 20u, (uint32_t)ev->xvisibility.state);
+        break;
+    default:
+        break;
+    }
+    return !rt->trapped;
+}
+
 static void bridge_XPutImage(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
@@ -27,8 +61,25 @@ static void bridge_XPutImage(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                                       width, height);
 }
 
+static void bridge_XCheckMaskEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_display = (uint32_t)cpu->gpr[4];
+    Display *dpy = irix_x11_primary_display_from_guest(guest_display);
+    long mask = (long)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr guest_event = (uint32_t)cpu->gpr[6];
+    XEvent ev;
+    Bool ok = False;
+
+    if (dpy && guest_event)
+        ok = XCheckMaskEvent(dpy, mask, &ev);
+    if (ok && !write_n32_event(rt, guest_event, guest_display, &ev))
+        ok = False;
+    cpu->gpr[2] = (uint32_t)ok;
+}
+
 IrixGuestFunction irix_x11_image_bridge_lookup(const char *name)
 {
     if (name && !strcmp(name, "XPutImage")) return bridge_XPutImage;
+    if (name && !strcmp(name, "XCheckMaskEvent")) return bridge_XCheckMaskEvent;
     return irix_x11_image_bridge_lookup_base(name);
 }
