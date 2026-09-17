@@ -11,6 +11,7 @@
 
 static int g_guest_oserror;
 static IrixGuestAddr g_guest_mmap_next = IRIX_GUEST_MMAP_BASE;
+static unsigned long g_guest_mktemp_counter;
 
 static void scan_write_integer(IrixGuestRuntime *rt, IrixGuestAddr dst,
                                uint64_t value, int length, int is_signed)
@@ -288,6 +289,64 @@ static void bridge_guest_flock(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)rc;
 }
 
+static void bridge_guest_mktemp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    static const char alphabet[] =
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    char *tmpl = addr ? (char *)irix_guest_ptr(rt, addr, 1u) : 0;
+    size_t len, xcount, attempt;
+
+    if (!tmpl) {
+        g_guest_oserror = EFAULT;
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    len = strlen(tmpl);
+    xcount = 0;
+    while (xcount < len && tmpl[len - xcount - 1u] == 'X')
+        ++xcount;
+
+    if (xcount < 6u) {
+        tmpl[0] = '\0';
+        g_guest_oserror = EINVAL;
+        cpu->gpr[2] = (uint64_t)(uint32_t)addr;
+        return;
+    }
+
+    for (attempt = 0; attempt < 10000u; ++attempt) {
+        uint64_t value = ((uint64_t)(uint32_t)getpid() << 32) ^
+                         (uint64_t)++g_guest_mktemp_counter ^
+                         (uint64_t)attempt;
+        size_t i;
+        struct stat st;
+
+        for (i = 0; i < xcount; ++i) {
+            tmpl[len - 1u - i] = alphabet[value % (sizeof(alphabet) - 1u)];
+            value = value / (sizeof(alphabet) - 1u) + UINT64_C(0x9e3779b97f4a7c15);
+        }
+
+        errno = 0;
+        if (lstat(tmpl, &st) != 0 && errno == ENOENT) {
+            g_guest_oserror = 0;
+            cpu->gpr[2] = (uint64_t)(uint32_t)addr;
+            return;
+        }
+        if (errno != 0 && errno != EEXIST) {
+            int err = errno;
+            tmpl[0] = '\0';
+            g_guest_oserror = err;
+            cpu->gpr[2] = (uint64_t)(uint32_t)addr;
+            return;
+        }
+    }
+
+    tmpl[0] = '\0';
+    g_guest_oserror = EEXIST;
+    cpu->gpr[2] = (uint64_t)(uint32_t)addr;
+}
+
 static uint32_t guest_page_round(uint32_t n)
 {
     if (!n || n > UINT32_MAX - (IRIX_GUEST_PAGE_SIZE - 1u)) return 0;
@@ -441,6 +500,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if (!strcmp(name, "setoserror")) return bridge_guest_setoserror;
     if (!strcmp(name, "oserror")) return bridge_guest_oserror;
     if (!strcmp(name, "flock")) return bridge_guest_flock;
+    if (!strcmp(name, "mktemp")) return bridge_guest_mktemp;
     if (!strcmp(name, "mmap")) return bridge_guest_mmap;
     if (!strcmp(name, "munmap")) return bridge_guest_munmap;
     fn = irix_clib_extra_bridge_lookup_base(name);
