@@ -16,6 +16,8 @@
 
 static IrixGuestRuntime *g_rt;
 static IrixGuestAddr g_strtok_state;
+static IrixGuestAddr g_setcat_name;
+static IrixGuestAddr g_locale_name;
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
@@ -73,6 +75,60 @@ static void bridge_gettext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr msgid = (uint32_t)cpu->gpr[4];
     cpu->gpr[2] = guest_cstr(rt, msgid) ? msgid : 0;
+}
+
+/*
+ * System V / IRIX message catalog compatibility.
+ *
+ * These APIs return char pointers. Never return a host libc pointer here:
+ * translated code can only dereference guest addresses.
+ */
+static void bridge_setcat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr name = (uint32_t)cpu->gpr[4];
+
+    if (name && !guest_cstr(rt, name)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    g_setcat_name = name;
+    cpu->gpr[2] = name;
+}
+
+static void bridge_gettxt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr msgid = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr fallback = (uint32_t)cpu->gpr[5];
+
+    if (msgid && !guest_cstr(rt, msgid)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    /* Catalog loading comes later; preserve gettxt() fallback semantics. */
+    cpu->gpr[2] = guest_cstr(rt, fallback) ? fallback : 0;
+}
+
+static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr locale = (uint32_t)cpu->gpr[5];
+
+    (void)cpu->gpr[4]; /* locale category */
+    if (!locale) {
+        cpu->gpr[2] = g_locale_name;
+        return;
+    }
+    if (!guest_cstr(rt, locale)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    /*
+     * Accept the guest request without exposing a host locale pointer.
+     * Remember the guest-owned string for later setlocale(category, NULL).
+     */
+    g_locale_name = locale;
+    cpu->gpr[2] = locale;
 }
 
 static void bridge_strcasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -321,6 +377,8 @@ void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
 {
     g_rt = rt;
     g_strtok_state = 0;
+    g_setcat_name = 0;
+    g_locale_name = 0;
     (void)g_rt;
 }
 
@@ -330,7 +388,7 @@ IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "__vec_delete2")) return bridge___vec_delete2;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(bzero);
-    MAP(gettext);
+    MAP(gettext); MAP(setcat); MAP(gettxt); MAP(setlocale);
     MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
     MAP(strtok); MAP(strtok_r);
     MAP(gettimeofday); MAP(getdomainname); MAP(getgroups); MAP(getdtablehi); MAP(setpgrp);
