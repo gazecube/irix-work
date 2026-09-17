@@ -1,5 +1,6 @@
 #include "IrixX11KeyboardBridge.h"
 
+#include <X11/XKBlib.h>
 #include <X11/Xlib.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,6 +119,24 @@ static void bridge_XFreeModifiermap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 1;
 }
 
+static void bridge_XkbLookupKeySym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    KeyCode keycode = (KeyCode)(uint32_t)cpu->gpr[5];
+    unsigned int state = (unsigned int)(uint32_t)cpu->gpr[6];
+    IrixGuestAddr mods_out = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr sym_out = (uint32_t)cpu->gpr[8];
+    unsigned int mods = 0;
+    KeySym sym = NoSymbol;
+    Bool ok = False;
+
+    if (d)
+        ok = XkbLookupKeySym(d, keycode, state, &mods, &sym);
+    wr32(rt, mods_out, (uint32_t)mods);
+    wr32(rt, sym_out, (uint32_t)sym);
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
 static void bridge_XKeycodeToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
@@ -169,6 +188,7 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!strcmp(name, "XGetKeyboardMapping")) return bridge_XGetKeyboardMapping;
     if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
+    if (!strcmp(name, "XkbLookupKeySym")) return bridge_XkbLookupKeySym;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;
     if (!strcmp(name, "XKeysymToKeycode")) return bridge_XKeysymToKeycode;
     if (!strcmp(name, "XKeysymToString")) return bridge_XKeysymToString;
