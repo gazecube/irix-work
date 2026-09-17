@@ -69,6 +69,12 @@ static void bridge_bzero(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+static void bridge_gettext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr msgid = (uint32_t)cpu->gpr[4];
+    cpu->gpr[2] = guest_cstr(rt, msgid) ? msgid : 0;
+}
+
 static void bridge_strcasecmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *a = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -324,6 +330,7 @@ IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "__vec_delete2")) return bridge___vec_delete2;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(bzero);
+    MAP(gettext);
     MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
     MAP(strtok); MAP(strtok_r);
     MAP(gettimeofday); MAP(getdomainname); MAP(getgroups); MAP(getdtablehi); MAP(setpgrp);
