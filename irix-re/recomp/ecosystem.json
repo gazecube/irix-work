@@ -15,6 +15,16 @@
   ],
   "shared_components": [
     {
+      "prefix": "libC",
+      "kind": "runtime",
+      "path": "usr/lib32/libC.so.2"
+    },
+    {
+      "prefix": "libCio",
+      "kind": "runtime",
+      "path": "usr/lib32/libCio.so.1"
+    },
+    {
       "prefix": "imdApp",
       "kind": "internal",
       "path": "usr/lib32/internal/libimdApp.so"

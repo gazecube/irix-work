@@ -110,6 +110,27 @@ def main():
     run([sys.executable, here / 'gen_prebound_bindings.py', a.core_link,
          *bundles, '-o', bind])
 
+    descriptor = gen / 'app_components.c'
+    with descriptor.open('w') as w:
+        w.write('#include "IrixGuest.h"\n#include <stddef.h>\n\n')
+        w.write('typedef struct IrixAppGuestComponent {\n')
+        w.write('    int kind; /* 0 = runtime tree, 1 = internal tree */\n')
+        w.write('    const char *path;\n')
+        w.write('} IrixAppGuestComponent;\n\n')
+        for row in rows:
+            w.write(f"void register_{row['prefix']}(IrixGuestRuntime *rt);\n")
+        w.write('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
+        for row in rows:
+            kind = 0 if row['kind'] == 'runtime' else 1
+            w.write(f'    {{{kind}, {json.dumps(row["path"])}}},\n')
+        w.write('};\n')
+        w.write('const size_t irix_app_guest_component_count =\n')
+        w.write('    sizeof(irix_app_guest_components) / sizeof(irix_app_guest_components[0]);\n\n')
+        w.write('void irix_register_app_bundle(IrixGuestRuntime *rt)\n{\n')
+        for row in rows:
+            w.write(f"    register_{row['prefix']}(rt);\n")
+        w.write('}\n')
+
     summary = {
         'app': app,
         'components': [json.loads(p.read_text()) for p in bundles],
@@ -125,8 +146,8 @@ def main():
     for bundle in bundles:
         d = bundle.parent
         sources.extend(sorted(d.glob('*.c')))
-        sources.append(d / 'registry.c')
     sources.append(bind / 'bindings.c')
+    sources.append(descriptor)
 
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'

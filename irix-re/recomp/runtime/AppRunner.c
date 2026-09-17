@@ -35,24 +35,16 @@
 #ifndef IRIX_APP_NAME
 #define IRIX_APP_NAME "desktop"
 #endif
-#ifndef IRIX_APP_PATH
-#define IRIX_APP_PATH "usr/sbin/desktop"
-#endif
-#ifndef IRIX_APP_REGISTER
-#define IRIX_APP_REGISTER register_desktop
-#endif
-
 void irix_register_recompiled_stack(IrixGuestRuntime *rt);
 void irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
-void IRIX_APP_REGISTER(IrixGuestRuntime *rt);
-void register_imdApp(IrixGuestRuntime *rt);
-void register_imdUtil(IrixGuestRuntime *rt);
-void register_imdXutil(IrixGuestRuntime *rt);
-void register_imdModel(IrixGuestRuntime *rt);
-void register_imdIconPanel(IrixGuestRuntime *rt);
-void register_imdFtrDB(IrixGuestRuntime *rt);
-void register_imdFtrGallery(IrixGuestRuntime *rt);
-void register_imdFtrIcon(IrixGuestRuntime *rt);
+typedef struct IrixAppGuestComponent {
+    int kind; /* 0 = runtime tree, 1 = internal tree */
+    const char *path;
+} IrixAppGuestComponent;
+
+extern const IrixAppGuestComponent irix_app_guest_components[];
+extern const size_t irix_app_guest_component_count;
+void irix_register_app_bundle(IrixGuestRuntime *rt);
 void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
 void register_irix_prebound_imports(IrixGuestRuntime *rt);
 void irix_x11_extra_init(IrixGuestRuntime *rt);
@@ -234,16 +226,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (load_elf(&rt, IRIX_RUNTIME_TREE, IRIX_APP_PATH) != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdApp.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdUtil.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdXutil.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdModel.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdIconPanel.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdFtrDB.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdFtrGallery.so") != 0 ||
-        load_elf(&rt, IRIX_INTERNAL_TREE, "usr/lib32/internal/libimdFtrIcon.so") != 0)
-        return 1;
+    {
+        size_t i;
+        for (i = 0; i < irix_app_guest_component_count; ++i) {
+            const IrixAppGuestComponent *component = &irix_app_guest_components[i];
+            const char *root = component->kind == 0 ? IRIX_RUNTIME_TREE : IRIX_INTERNAL_TREE;
+            if (load_elf(&rt, root, component->path) != 0)
+                return 1;
+        }
+    }
 
     if (irix_libc_bridge_init(&rt, 0x30000000u, 0x04000000u) != 0) {
         fprintf(stderr, "failed to initialize guest heap\n");
@@ -281,15 +272,7 @@ int main(int argc, char **argv)
     register_irix_bridge_imports(&rt, resolve_native);
 
     irix_register_recompiled_stack(&rt);
-    IRIX_APP_REGISTER(&rt);
-    register_imdApp(&rt);
-    register_imdUtil(&rt);
-    register_imdXutil(&rt);
-    register_imdModel(&rt);
-    register_imdIconPanel(&rt);
-    register_imdFtrDB(&rt);
-    register_imdFtrGallery(&rt);
-    register_imdFtrIcon(&rt);
+    irix_register_app_bundle(&rt);
 
     register_irix_prebound_imports(&rt);
 
