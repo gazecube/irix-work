@@ -8,5 +8,6 @@ Display *irix_x11_primary_display_from_guest(IrixGuestAddr addr);
 GC irix_x11_primary_gc_from_guest(IrixGuestAddr addr);
 XFontStruct *irix_x11_primary_font_from_guest(IrixGuestAddr addr);
 IrixGuestAddr irix_x11_primary_font_to_guest(IrixGuestRuntime *rt, XFontStruct *font);
+void irix_x11_primary_forget_font(IrixGuestAddr addr);
 
 #endif
