@@ -5,7 +5,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import translate_n32_regimm as t
 
-SHT_SYMTAB=2; SHT_DYNSYM=11; STT_FUNC=2; SHF_EXECINSTR=0x4
+SHT_SYMTAB=2; SHT_DYNSYM=11; SHT_NOBITS=8; STT_FUNC=2
+SHF_WRITE=0x1; SHF_ALLOC=0x2; SHF_EXECINSTR=0x4
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
@@ -79,13 +80,7 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('}')
 
 def zero_size_function_ranges(elf, symbol_rows):
-    """Recover named zero-sized STT_FUNC symbols conservatively.
-
-    IRIX/EDG can leave compiler-generated ctor/dtor helpers with a valid
-    STT_FUNC address but st_size == 0.  Derive their extent only from the next
-    distinct defined function start in the same executable section, or the
-    section end.  Never cross sections and never invent a function start.
-    """
+    """Recover named zero-sized STT_FUNC symbols conservatively."""
     out=[]
     defined=[s for s in symbol_rows if s['shndx']!=0 and s['address']]
     for sec_index,sec in enumerate(elf.sections):
@@ -106,13 +101,7 @@ def zero_size_function_ranges(elf, symbol_rows):
     return out
 
 def pdr_function_ranges(elf, path, symbol_rows):
-    """Recover procedure starts/ranges from the MIPS ELF .pdr section.
-
-    SGI/MIPS runtime PDR entries are 32 bytes.  The first word is the
-    procedure start address.  Use only starts that fall inside executable
-    sections, and derive each extent from the next known callable boundary in
-    the same executable section or the section end.
-    """
+    """Recover procedure starts/ranges from the MIPS ELF .pdr section."""
     p=Path(path).read_bytes()
     pdr=next((s for s in elf.sections if s.get('name')=='.pdr'),None)
     if not pdr or not pdr['size'] or pdr['size']%32:
@@ -150,6 +139,69 @@ def pdr_function_ranges(elf, path, symbol_rows):
             out.append((name,addr,size,sec_index))
     return out
 
+def plausible_mips_entry(elf, addr):
+    """Require a strong function-entry signature for pointer-derived starts.
+
+    The hidden SGI/EDG callbacks observed so far use a conventional stack frame.
+    Accept only addiu/daddiu sp,sp,-N with a nonzero negative frame size.  This
+    intentionally misses frameless leaf functions rather than treating random
+    text addresses as callable entry points.
+    """
+    try:
+        w=elf.words(addr,4)[0]
+    except Exception:
+        return False
+    op=(w>>26)&0x3f; rs=(w>>21)&0x1f; rt=(w>>16)&0x1f; imm=w&0xffff
+    return op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff
+
+def data_pointer_function_ranges(elf, path, known_starts):
+    """Recover hidden callable starts materialized as data/GOT pointers.
+
+    Scan only allocated, non-executable, file-backed sections for aligned
+    32-bit values pointing into executable sections.  A candidate is accepted
+    only when the target begins with a strong MIPS stack-frame prologue.  Range
+    ends are then derived from the next known or pointer-derived callable start
+    in the same executable section.
+    """
+    p=Path(path).read_bytes()
+    candidates=set()
+    exec_sections=[]
+    for i,sec in enumerate(elf.sections):
+        if (sec['flags']&SHF_EXECINSTR) and sec['size']:
+            exec_sections.append((i,sec['addr'],sec['addr']+sec['size']))
+
+    def exec_section_for(addr):
+        for i,lo,hi in exec_sections:
+            if lo<=addr<hi: return i,lo,hi
+        return None
+
+    for sec in elf.sections:
+        if not (sec['flags']&SHF_ALLOC) or (sec['flags']&SHF_EXECINSTR):
+            continue
+        if sec['type']==SHT_NOBITS or sec['size']<4:
+            continue
+        begin=sec['offset']; end=min(begin+sec['size'],len(p))
+        for off in range(begin,end-3,4):
+            addr=struct.unpack_from('>I',p,off)[0]
+            if not addr or addr in known_starts:
+                continue
+            if exec_section_for(addr) is None:
+                continue
+            if plausible_mips_entry(elf,addr):
+                candidates.add(addr)
+
+    out=[]
+    for sec_index,lo,hi in exec_sections:
+        local=sorted(a for a in candidates if lo<=a<hi)
+        if not local: continue
+        boundaries=sorted(set(local+[a for a in known_starts if lo<=a<hi]+[hi]))
+        next_boundary={boundaries[i]:boundaries[i+1] for i in range(len(boundaries)-1)}
+        for addr in local:
+            end=next_boundary.get(addr,hi); size=end-addr
+            if size<=0 or size%4: continue
+            out.append(('__ptr_%08x'%addr,addr,size,sec_index))
+    return out
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('binary'); ap.add_argument('-o','--output',required=True); ap.add_argument('--prefix')
     a=ap.parse_args(); path=Path(a.binary); out=Path(a.output); prefix=a.prefix or path.stem; out.mkdir(parents=True,exist_ok=True)
@@ -171,24 +223,27 @@ def main():
         if addr not in recovered_addrs:
             pdr_defs.append((n,addr,size,sh,'pdr'))
 
-    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0
-    all_defs=sorted(defs+zero_defs+pdr_defs,key=lambda x:(x[1],x[0]))
+    recovered_addrs|={addr for _,addr,_,_,_ in pdr_defs}
+    ptr_defs=[]
+    for n,addr,size,sh in data_pointer_function_ranges(elf,path,recovered_addrs):
+        if addr not in recovered_addrs:
+            ptr_defs.append((n,addr,size,sh,'data_ptr'))
+
+    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0
+    all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs,key=lambda x:(x[1],x[0]))
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
         seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
         with dst.open('w') as f, contextlib.redirect_stdout(f):
-            if source_kind in ('pdr','zero_size'):
+            if source_kind in ('pdr','zero_size','data_ptr'):
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
         functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst),source_kind=source_kind))
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
+        if source_kind=='data_ptr': ptr_count+=1
 
-    # Keep every undefined function symbol, even when st_value is zero.  IRIX
-    # quickstart/prebound binaries may leave the dynamic symbol value unset
-    # while the corresponding GOT entry already contains a callable prebound
-    # address.  gen_prebound_bindings.py recovers that address from the GOT.
     imports=[s for s in raw_syms if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
     (out/'bundle.json').write_text(json.dumps(meta,indent=2)+'\n')
@@ -198,5 +253,5 @@ def main():
         w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
         for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
         w.write('}\n')
-    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} imports={len(imports)}')
 if __name__=='__main__': main()
