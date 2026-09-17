@@ -419,6 +419,20 @@ static void bridge_XParseColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)rc;
 }
 
+static void bridge_XQueryColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Colormap cmap = (Colormap)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr color_addr = (uint32_t)cpu->gpr[6];
+    XColor color;
+    int rc = 0;
+    if (d && guest_xcolor_read(rt, color_addr, &color)) {
+        rc = XQueryColor(d, cmap, &color);
+        if (rc) guest_xcolor_write(rt, color_addr, &color);
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
 static void bridge_XQueryColors(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
@@ -533,7 +547,7 @@ IrixGuestFunction irix_runtime_x11_bridge_lookup(const char *name)
     MAP(XScreenNumberOfScreen); MAP(XVisualIDFromVisual);
     MAP(XSetErrorHandler); MAP(XSetIOErrorHandler); MAP(XFree); MAP(XFreeStringList);
     MAP(_XSGIFastInternAtom); MAP(XInternAtoms); MAP(XRestackWindows); MAP(XWMGeometry);
-    MAP(XAllocNamedColor); MAP(XAllocColor); MAP(XParseColor); MAP(XQueryColors); MAP(XFreeColors);
+    MAP(XAllocNamedColor); MAP(XAllocColor); MAP(XParseColor); MAP(XQueryColor); MAP(XQueryColors); MAP(XFreeColors);
     MAP(XInstallColormap); MAP(XFreeColormap); MAP(XListInstalledColormaps); MAP(XSetWMColormapWindows);
 #undef MAP
     return 0;
