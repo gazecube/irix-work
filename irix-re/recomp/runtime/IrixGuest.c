@@ -195,14 +195,6 @@ static int try_trivial_stripped_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     w3 = irix_guest_read32be(rt, address + 12u);
     w4 = irix_guest_read32be(rt, address + 16u);
 
-    /* SGI/EDG emits tiny local constructors that may have no STT_FUNC symbol.
-       Recognize only the exact leaf sequence observed in libimdUtil:
-         move v0,a0
-         sw   zero,8(a0)
-         sw   zero,4(a0)
-         jr   ra
-         sw   zero,0(a0)   # delay slot
-       Anything else remains a hard invalid-call trap. */
     if (w0 != 0x00801025u || w1 != 0xac800008u ||
         w2 != 0xac800004u || w3 != 0x03e00008u ||
         w4 != 0xac800000u)
@@ -254,10 +246,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             return rt->trapped ? -1 : 0;
 
         fprintf(stderr,
-                "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x",
-                address, (uint32_t)cpu->pc, s4);
-        fprintf(stderr,
-                " gp=%08x t9=%08x sp=%08x ra=%08x",
+                "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x gp=%08x t9=%08x sp=%08x ra=%08x",
+                address, (uint32_t)cpu->pc, s4,
                 (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25],
                 (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[31]);
         fprintf(stderr,
@@ -293,11 +283,18 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         rt->trap_code = 0xeeee0003u;
         return -1;
     }
-    cpu->pc = address;
-    rt->current_pc = address;
-    /* N32 PIC entry convention: t9 contains the callee address. */
-    cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
-    entry->function(rt, cpu);
+    {
+        uint64_t caller_gp = cpu->gpr[28];
+        cpu->pc = address;
+        rt->current_pc = address;
+        /* N32 PIC entry convention: t9 contains the callee address. */
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        entry->function(rt, cpu);
+        /* $gp is callee-saved in the N32 ABI.  Preserve the caller's value
+           across all translated/native guest calls, including bridge entries
+           that do not execute a guest epilogue themselves. */
+        cpu->gpr[28] = caller_gp;
+    }
     cpu->gpr[0] = 0;
     return rt->trapped ? -1 : 0;
 }
