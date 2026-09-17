@@ -124,7 +124,7 @@ def main():
         w.write('  for(j=0;j<i;++j)if(strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;\n')
         w.write('  if(j==i){if(missing_imports[i].native)++native_names;else++unresolved_names;}\n')
         w.write('}\n')
-        w.write('fprintf(stderr,"IRIX import closure: guest-resolved=%zu native-resolved=%zu unresolved=%zu unique-native=%zu unique-unresolved=%zu data-patches=%zu\\n",(size_t)%du,native_addresses,unresolved_addresses,native_names,unresolved_names,(size_t)%du);\n' % (len(resolved),len(data_patches)))
+        w.write(f'fprintf(stderr,"IRIX import closure: guest-resolved=%zu native-resolved=%zu unresolved=%zu unique-native=%zu unique-unresolved=%zu data-patches=%zu\\n",(size_t){len(resolved)}u,native_addresses,unresolved_addresses,native_names,unresolved_names,(size_t){len(data_patches)}u);\n')
         w.write('if(unresolved_names){size_t shown=0;fprintf(stderr,"IRIX unresolved imports:");for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0])&&shown<32u;++i){if(missing_imports[i].native)continue;for(j=0;j<i;++j)if(!missing_imports[j].native&&strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;if(j==i){fprintf(stderr," %s",missing_imports[i].name);++shown;}}if(unresolved_names>shown)fprintf(stderr," ...(+%zu)",unresolved_names-shown);fputc(\'\\n\',stderr);}\n')
         w.write('}\n')
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],
