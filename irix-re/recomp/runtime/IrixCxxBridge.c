@@ -64,6 +64,7 @@ static int call_imd_dictionary_slot_dtor(IrixGuestRuntime *rt,
         call.gpr[4] = (uint64_t)(int64_t)(int32_t)adjusted;
         call.gpr[5] = 3u;
         call.gpr[6] = (uint64_t)(int64_t)(int32_t)dtor_flag;
+        call.gpr[25] = (uint64_t)(int64_t)(int32_t)method;
         saved_pc = rt->current_pc;
         if (irix_guest_call(rt, &call, method) != 0) {
             rt->current_pc = saved_pc;
@@ -95,6 +96,7 @@ static int call_guest_dtor(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
 
     call.gpr[4] = (uint64_t)(int64_t)(int32_t)object;
     call.gpr[5] = (uint64_t)(int64_t)(int32_t)dtor_flag;
+    call.gpr[25] = (uint64_t)(int64_t)(int32_t)dtor;
     if (irix_guest_call(rt, &call, dtor) != 0) {
         rt->current_pc = saved_pc;
         return -1;
