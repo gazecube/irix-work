@@ -133,6 +133,11 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     w = XCreateWindow(dpy, parent, x, y, width, height, border_width,
                       depth, class_value, visual, valuemask, attrs_ptr);
+    /* This bridge currently owns a separate host Xlib connection from the
+       other translated-X11 bridges.  XCreateWindow is normally buffered;
+       flush it here so a subsequent bridge cannot send a request referencing
+       this XID before the server has seen the CreateWindow request. */
+    if (w) XFlush(dpy);
     cpu->gpr[2] = (uint32_t)w;
 }
 
