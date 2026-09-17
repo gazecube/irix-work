@@ -55,7 +55,8 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        old_target = pending_target;')
     print('        old_return = pending_return;')
     print('        pending_kind = IRIX_PENDING_NONE;')
-    print('        cpu->pc = pc;'); print('')
+    print('        cpu->pc = pc;')
+    print('        rt->current_pc = pc;'); print('')
     print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
@@ -89,7 +90,7 @@ def zero_size_function_ranges(elf, symbol_rows):
         lo=sec['addr']; hi=lo+sec['size']
         rows=[s for s in defined if s['shndx']==sec_index and lo<=s['address']<hi]
         if not rows: continue
-        starts=sorted(set(s['address'] for s in rows)+{hi})
+        starts=sorted(set(s['address'] for s in rows) | {hi})
         next_boundary={starts[i]:starts[i+1] for i in range(len(starts)-1)}
         for s in rows:
             if s['size']!=0: continue
@@ -152,9 +153,9 @@ def validated_recovered_size(elf, start, provisional_size):
     """Validate or trim a metadata-recovered function extent.
 
     Recovered metadata can prove a callable start without proving its exact
-    size.  Decode the provisional range.  If decoding encounters non-code,
+    size. Decode the provisional range. If decoding encounters non-code,
     accept only a complete function ending at the last `jr ra` plus its delay
-    slot before the failure.  Otherwise reject the recovered candidate.
+    slot before the failure. Otherwise reject the recovered candidate.
     """
     try:
         words=elf.words(start,provisional_size)
@@ -269,6 +270,11 @@ def main():
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
+        text=dst.read_text()
+        if '        rt->current_pc = pc;\n' not in text:
+            text=text.replace('        cpu->pc = pc;\n',
+                              '        cpu->pc = pc;\n        rt->current_pc = pc;\n')
+            dst.write_text(text)
         functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst),source_kind=source_kind))
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
