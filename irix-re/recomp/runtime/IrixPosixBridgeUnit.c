@@ -446,6 +446,60 @@ static int write_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
     return rt->trapped ? -1 : 0;
 }
 
+static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr path_addr = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr out_addr = (uint32_t)cpu->gpr[5];
+    const char *path = guest_cstr(rt, path_addr);
+    char resolved[PATH_MAX];
+    char *dst;
+    size_t n;
+
+    cpu->gpr[2] = 0;
+    if (!path || !out_addr) {
+        errno = EFAULT;
+        return;
+    }
+
+    if (!realpath(path, resolved))
+        return;
+
+    n = strlen(resolved) + 1u;
+    dst = (char *)irix_guest_ptr(rt, out_addr, n);
+    if (!dst) {
+        errno = EFAULT;
+        return;
+    }
+    memcpy(dst, resolved, n);
+    cpu->gpr[2] = out_addr;
+}
+
+static void bridge_execl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *arg0 = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    const char *arg1 = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+
+    /*
+     * Guest IRIX executables cannot be handed to the Linux kernel.
+     * Until guest exec replacement is wired to translated app bundles,
+     * fail exactly as an exec of an unsupported binary would.
+     */
+    fprintf(stderr, "IRIX execl: guest exec unavailable: path=%s arg0=%s arg1=%s\n",
+            path ? path : "(invalid)",
+            arg0 ? arg0 : "(null)",
+            arg1 ? arg1 : "(null)");
+    errno = path ? ENOEXEC : EFAULT;
+    ret_i32(cpu, -1);
+}
+
+static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int status = (int)(int32_t)cpu->gpr[4];
+    (void)rt;
+    exit(status);
+}
+
 static void bridge_fork(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     pid_t pid;
@@ -569,6 +623,9 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
+    if (!strcmp(name, "realpath")) return bridge_realpath;
+    if (!strcmp(name, "execl")) return bridge_execl;
+    if (!strcmp(name, "exit")) return bridge_exit;
     if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
