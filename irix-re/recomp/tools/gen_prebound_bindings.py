@@ -52,6 +52,7 @@ def main():
         for x in conflicts[:20]: print('CONFLICT',x)
         raise SystemExit(f'{len(conflicts)} binding conflicts')
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
+    target_entries=sorted({(target,name) for addr,target,name,owner in resolved if target})
     out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     with (out/'bindings.c').open('w') as w:
         w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n')
@@ -62,14 +63,18 @@ def main():
         w.write('static void forward_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){size_t i;for(i=0;i<sizeof(fwds)/sizeof(fwds[0]);++i)if(fwds[i].stub==cpu->pc){(void)irix_guest_call(rt,cpu,fwds[i].target);return;}fprintf(stderr,"NO FORWARD 0x%08x\\n",cpu->pc);irix_guest_trap(rt,cpu,0xeeee1001u);}\n')
         w.write('static void missing_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){IrixGuestFunctionEntry*e=irix_guest_find_function(rt,cpu->pc);fprintf(stderr,"MISSING IMPORT pc=0x%08x %s\\n",cpu->pc,e&&e->name?e->name:"?");irix_guest_trap(rt,cpu,0xeeee1002u);}\n')
         w.write('void register_irix_bridge_imports(IrixGuestRuntime *rt,IrixGuestImportResolver resolver){IrixGuestFunction fn;\n')
-        w.write('/* Native bridges are allowed to override any import stub by name, even\n')
-        w.write('   when the IRIX image also provides a prebound guest implementation.\n')
-        w.write('   DesktopRunner registers this table before prebound forwarders, and\n')
-        w.write('   guest lookup returns the first address match, so a native bridge wins\n')
-        w.write('   only when resolver(name) actually exists. */\n')
+        w.write('/* Native bridges may override both import stubs and their resolved guest\n')
+        w.write('   targets.  This matters for prebound GOT calls which jump directly to\n')
+        w.write('   the SGI implementation and never execute an import stub.  DesktopRunner\n')
+        w.write('   registers these entries before translated functions, so an override wins\n')
+        w.write('   only when resolver(name) actually supplies a native bridge. */\n')
         for addr,target,name,owner in all_entries:
             q=json.dumps(name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{addr:08x}u,fn,"{owner}:{name}");\n')
+        for target,name in target_entries:
+            q=json.dumps(name)
+            label=json.dumps('native-target:'+name)
+            w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
         w.write('}\n')
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
@@ -77,5 +82,5 @@ def main():
         w.write('}\n')
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing]}
     (out/'bindings.json').write_text(json.dumps(data,indent=2)+'\n')
-    print(f'addresses={len(by)} resolved={len(resolved)} missing={len(missing)}')
+    print(f'addresses={len(by)} resolved={len(resolved)} missing={len(missing)} native_targets={len(target_entries)}')
 if __name__=='__main__': main()
