@@ -2,7 +2,6 @@
 #include "IrixLibcBridge.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 static IrixGuestRuntime *g_rt;
@@ -171,22 +170,10 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     if (count == UINT32_MAX) {
         if (recover_vec_count(rt, array, element_size, &count, &cookie_back) == 0) {
-            fprintf(stderr,
-                    "VEC_DELETE2 recovered count=%u cookie_back=%u array=%08x elem=%u\n",
-                    count, cookie_back, array, element_size);
+            /* recovered from the compiler's vector cookie */
         } else if (validate_vec_count(rt, array, element_size, extended_count) == 0) {
             count = extended_count;
-            fprintf(stderr,
-                    "VEC_DELETE2 using SGI extended count=%u array=%08x elem=%u\n",
-                    count, array, element_size);
         } else {
-            fprintf(stderr,
-                    "VEC_DELETE2 COUNT UNKNOWN array=%08x elem=%u a6=%u pre=%08x,%08x,%08x,%08x\n",
-                    array, element_size, extended_count,
-                    array >= 16u && irix_guest_ptr(rt, array - 16u, 4u) ? irix_guest_read32be(rt, array - 16u) : 0u,
-                    array >= 12u && irix_guest_ptr(rt, array - 12u, 4u) ? irix_guest_read32be(rt, array - 12u) : 0u,
-                    array >= 8u && irix_guest_ptr(rt, array - 8u, 4u) ? irix_guest_read32be(rt, array - 8u) : 0u,
-                    array >= 4u && irix_guest_ptr(rt, array - 4u, 4u) ? irix_guest_read32be(rt, array - 4u) : 0u);
             irix_guest_trap(rt, cpu, 0xeeee2103u);
             return;
         }
