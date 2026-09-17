@@ -18,6 +18,37 @@ def p32(b,o,v): struct.pack_into('>I',b,o,v&0xffffffff)
 def u32(b,o): return struct.unpack_from('>I',b,o)[0]
 def hi(v): return ((v+0x8000)>>16)&0xffff
 
+def sgi_c_locale_ctype():
+ # SGI IRIX usr/include/ctype.h + usr/include/locale_attr.h define
+ # __ctype_t as 257 uint32 class entries, 257 int16 lower entries,
+ # 257 int16 upper entries, then 8 bytes of width/padding data.  The
+ # values below reproduce the C-locale __ctype_t in usr/lib/abi/libc.so
+ # byte-for-byte.
+ out=bytearray(); cls=[0]*257
+ for c in range(256):
+  v=0
+  if c<32 or c==127: v|=0x00000020
+  if 9<=c<=13: v|=0x00000008
+  if c==9: v|=0x80000000
+  if c==32: v=0x80000000|0x00008000|0x00000008
+  if 33<=c<=47 or 58<=c<=64 or 91<=c<=96 or 123<=c<=126: v=0x00000010
+  if 48<=c<=57: v=0x00000084
+  if 65<=c<=70: v=0x00000081
+  elif 71<=c<=90: v=0x00000001
+  if 97<=c<=102: v=0x00000082
+  elif 103<=c<=122: v=0x00000002
+  if c>=128: v=0
+  cls[c+1]=v
+ for v in cls: out+=struct.pack('>I',v)
+ lower=[-1]+list(range(256)); upper=[-1]+list(range(256))
+ for c in range(65,91): lower[c+1]=c+32
+ for c in range(97,123): upper[c+1]=c-32
+ for v in lower: out+=struct.pack('>h',v)
+ for v in upper: out+=struct.pack('>h',v)
+ out+=b'\0'*8
+ assert len(out)==2064
+ return bytes(out)
+
 class Obj:
  def __init__(self,archive,name,data):
   self.archive=archive; self.name=name; self.data=data; self.sec=[]; self.syms=[]; self.base={}; self.image={}; self.gp0=0
@@ -49,7 +80,7 @@ class Obj:
 
 class StackLink:
  def __init__(self,base=0x50000000,small_base=0x60000000,import_base=0x70000000):
-  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.globals={}; self.imports={}; self.data_imports={}; self.got={}; self.duplicates=[]
+  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.globals={}; self.imports={}; self.data_imports={}; self.synthetic_data={}; self.got={}; self.duplicates=[]
  def add_archive(self,p):
   for name,data in members(Path(p).read_bytes()):
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
@@ -92,6 +123,21 @@ class StackLink:
     a=align(main,8)
     self.data_imports[s['name']]=(a,size,o.name)
     main=a+size
+  # __libc_attr is initialized data in IRIX libc, not BSS.  In the default C
+  # locale its first N32 word points at a __ctype_t table.  Materialize the
+  # exact SGI C-locale table and initialize the scalar fields we can reproduce
+  # without importing libc code pointers.
+  if '__libc_attr' in self.data_imports:
+   attr,size,owner=self.data_imports['__libc_attr']
+   if size<92: raise ValueError(f'__libc_attr data import is only {size} bytes')
+   ctype=sgi_c_locale_ctype(); ctype_addr=align(main,8); main=ctype_addr+len(ctype)
+   self.synthetic_data[ctype_addr]=ctype
+   blob=bytearray(size); p32(blob,0,ctype_addr)
+   # __attr_t._csinfo for the C locale: eucwidth={1,0,0}, scrwidth={1,0,0}, mb_cur_max=1.
+   blob[4:11]=bytes((1,0,0,1,0,0,1))
+   # _euc_func._is_euc and its callback pointers remain zero for the C locale.
+   blob[0x1c]=1  # _collate_res._coll_as_cmp
+   self.synthetic_data[attr]=bytes(blob)
   self.main_end=main
   # GP sits at +0x8000 from small region base. GOT grows after small data.
   self.gp=self.small_base+0x8000; self.nextgot=align(self.small_data_end,4)
@@ -178,9 +224,10 @@ class StackLink:
     a=o.base[no]
     dst=small if self.small_base<=a<self.small_base+0x10000 else main; origin=self.small_base if dst is small else self.base
     dst[a-origin:a-origin+len(b)]=b
+  for a,b in self.synthetic_data.items(): main[a-self.base:a-self.base+len(b)]=b
   for _,(a,v) in self.got.items(): p32(small,a-self.small_base,v)
   (out/'main.bin').write_bytes(main); (out/'small.bin').write_bytes(small)
-  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'data_imports':{k:[a,z,owner] for k,(a,z,owner) in self.data_imports.items()},'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates}
+  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'data_imports':{k:[a,z,owner] for k,(a,z,owner) in self.data_imports.items()},'synthetic_data':{hex(a):len(b) for a,b in self.synthetic_data.items()},'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates}
   for o in self.objs: mani['objects'].append({'archive':o.archive,'member':o.name,'gp0':o.gp0,'sections':{o.sec[n]['name']:a for n,a in o.base.items()}})
   (out/'link.json').write_text(json.dumps(mani,indent=2)+'\n')
 
