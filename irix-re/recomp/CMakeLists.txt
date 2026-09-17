@@ -41,6 +41,7 @@ if(X11_FOUND)
         runtime/IrixX11BridgeBulk.c
         runtime/IrixRuntimeX11Bridge.c
         runtime/IrixX11WindowBridge.c
+        runtime/IrixX11ImageBridge.c
         runtime/IrixX11WmBridge.c
         runtime/IrixXrmCompat.c
         runtime/IrixXrmQuarkBridge.c
