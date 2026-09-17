@@ -87,6 +87,19 @@ static void wr32(IrixGuestRuntime *rt, IrixGuestAddr p, uint32_t v)
     if (p) irix_guest_write32be(rt, p, v);
 }
 
+static void write_visual_shadow(IrixGuestRuntime *rt, IrixGuestAddr out, Visual *v)
+{
+    if (!out || !v) return;
+    wr32(rt,out+0u,0u);
+    wr32(rt,out+4u,(uint32_t)v->visualid);
+    wr32(rt,out+8u,(uint32_t)v->class);
+    wr32(rt,out+12u,(uint32_t)v->red_mask);
+    wr32(rt,out+16u,(uint32_t)v->green_mask);
+    wr32(rt,out+20u,(uint32_t)v->blue_mask);
+    wr32(rt,out+24u,(uint32_t)v->bits_per_rgb);
+    wr32(rt,out+28u,(uint32_t)v->map_entries);
+}
+
 static uint32_t n32_stack_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu, unsigned index)
 {
     IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
@@ -301,6 +314,61 @@ static void bridge_XGetWindowProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2]=(uint32_t)rc;
 }
 
+static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    D0();
+    long mask=(long)(int32_t)cpu->gpr[5];
+    IrixGuestAddr tmpl_addr=(uint32_t)cpu->gpr[6];
+    IrixGuestAddr nitems_return=(uint32_t)cpu->gpr[7];
+    XVisualInfo tmpl;
+    XVisualInfo *list=0;
+    int n=0,i;
+    IrixGuestAddr out=0;
+    memset(&tmpl,0,sizeof(tmpl));
+
+    if(tmpl_addr) {
+        IrixGuestAddr gv=irix_guest_read32be(rt,tmpl_addr+0u);
+        tmpl.visualid=(VisualID)irix_guest_read32be(rt,tmpl_addr+4u);
+        tmpl.screen=(int32_t)irix_guest_read32be(rt,tmpl_addr+8u);
+        tmpl.depth=(int32_t)irix_guest_read32be(rt,tmpl_addr+12u);
+        tmpl.class=(int32_t)irix_guest_read32be(rt,tmpl_addr+16u);
+        tmpl.red_mask=(unsigned long)irix_guest_read32be(rt,tmpl_addr+20u);
+        tmpl.green_mask=(unsigned long)irix_guest_read32be(rt,tmpl_addr+24u);
+        tmpl.blue_mask=(unsigned long)irix_guest_read32be(rt,tmpl_addr+28u);
+        tmpl.colormap_size=(int32_t)irix_guest_read32be(rt,tmpl_addr+32u);
+        tmpl.bits_per_rgb=(int32_t)irix_guest_read32be(rt,tmpl_addr+36u);
+        if((mask&VisualMask) && gv) {
+            tmpl.visualid=(VisualID)irix_guest_read32be(rt,gv+4u);
+            mask=(mask&~VisualMask)|VisualIDMask;
+        }
+    }
+
+    if(d && !rt->trapped) list=XGetVisualInfo(d,mask,&tmpl,&n);
+    if(list && n>0 && (uint32_t)n<=UINT32_MAX/40u) {
+        out=bulk_alloc((uint32_t)n*40u);
+        if(out) {
+            for(i=0;i<n;++i) {
+                IrixGuestAddr row=out+(IrixGuestAddr)i*40u;
+                IrixGuestAddr gv=bulk_alloc(32u);
+                if(gv) write_visual_shadow(rt,gv,list[i].visual);
+                wr32(rt,row+0u,gv);
+                wr32(rt,row+4u,(uint32_t)list[i].visualid);
+                wr32(rt,row+8u,(uint32_t)list[i].screen);
+                wr32(rt,row+12u,(uint32_t)list[i].depth);
+                wr32(rt,row+16u,(uint32_t)list[i].class);
+                wr32(rt,row+20u,(uint32_t)list[i].red_mask);
+                wr32(rt,row+24u,(uint32_t)list[i].green_mask);
+                wr32(rt,row+28u,(uint32_t)list[i].blue_mask);
+                wr32(rt,row+32u,(uint32_t)list[i].colormap_size);
+                wr32(rt,row+36u,(uint32_t)list[i].bits_per_rgb);
+            }
+        }
+    }
+    if(list) XFree(list);
+    wr32(rt,nitems_return,(uint32_t)n);
+    cpu->gpr[2]=out;
+}
+
 static void bridge_XSetCloseDownMode(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { D0(); (void)rt; cpu->gpr[2]=d?(uint32_t)XSetCloseDownMode(d,(int)cpu->gpr[5]):0; }
 static void bridge_XKillClient(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -326,7 +394,7 @@ IrixGuestFunction irix_x11_bulk_lookup(const char *name)
     MAP(XDefaultDepthOfScreen); MAP(XDefaultVisualOfScreen); MAP(XDefaultGCOfScreen); MAP(XDefaultColormapOfScreen);
     MAP(XWhitePixelOfScreen); MAP(XBlackPixelOfScreen); MAP(XMaxCmapsOfScreen); MAP(XMinCmapsOfScreen); MAP(XDoesBackingStore); MAP(XDoesSaveUnders); MAP(XEventMaskOfScreen);
     MAP(XGetDefault); MAP(XParseGeometry); MAP(XQueryPointer); MAP(XWarpPointer); MAP(XGetWindowAttributes); MAP(XQueryTree);
-    MAP(XListProperties); MAP(XGetWindowProperty); MAP(XSetCloseDownMode); MAP(XKillClient);
+    MAP(XListProperties); MAP(XGetWindowProperty); MAP(XGetVisualInfo); MAP(XSetCloseDownMode); MAP(XKillClient);
 #undef MAP
     return 0;
 }
