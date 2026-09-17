@@ -7,12 +7,91 @@
 
 static IrixGuestRuntime *g_rt;
 
+static int matches_imd_dictionary_slot_dtor(IrixGuestRuntime *rt,
+                                            IrixGuestAddr dtor)
+{
+    static const uint32_t words[] = {
+        0x27bdffd0u, 0xffb00008u, 0x00808025u, 0xffa50000u,
+        0xffbc0010u, 0x3c010002u, 0x2421e4b0u, 0x10800014u,
+        0x0321e021u, 0x8e070000u, 0x10e0000au, 0xdfa60000u,
+        0x8ce40000u, 0x24050003u, 0x8c990014u, 0x8c84000cu,
+        0xffbf0018u, 0x0320f809u, 0x00872021u, 0xdfbf0018u,
+        0xdfa60000u, 0x30c60001u, 0x10c00005u, 0x8f998070u,
+        0xffbf0018u, 0x0320f809u, 0x02002025u, 0xdfbf0018u,
+        0xdfbc0010u, 0xdfb00008u, 0x03e00008u, 0x27bd0030u
+    };
+    size_t i;
+
+    if (!dtor || !irix_guest_ptr(rt, dtor, sizeof(words)))
+        return 0;
+    for (i = 0; i < sizeof(words) / sizeof(words[0]); ++i)
+        if (irix_guest_read32be(rt, dtor + (IrixGuestAddr)(i * 4u)) != words[i])
+            return 0;
+    return 1;
+}
+
+static int call_imd_dictionary_slot_dtor(IrixGuestRuntime *rt,
+                                         const IrixGuestCpu *caller,
+                                         IrixGuestAddr object,
+                                         uint32_t dtor_flag)
+{
+    IrixGuestAddr entry;
+    IrixGuestAddr table;
+    IrixGuestAddr method;
+    IrixGuestAddr adjusted;
+    IrixGuestCpu call;
+    IrixGuestAddr saved_pc;
+
+    if (!object)
+        return 0;
+    if (!irix_guest_ptr(rt, object, 4u))
+        return -1;
+
+    entry = irix_guest_read32be(rt, object);
+    if (entry) {
+        if (!irix_guest_ptr(rt, entry, 4u))
+            return -1;
+        table = irix_guest_read32be(rt, entry);
+        if (!table || !irix_guest_ptr(rt, table + 20u, 4u))
+            return -1;
+
+        method = irix_guest_read32be(rt, table + 20u);
+        adjusted = entry + irix_guest_read32be(rt, table + 12u);
+        if (!method)
+            return -1;
+
+        call = *caller;
+        call.gpr[4] = (uint64_t)(int64_t)(int32_t)adjusted;
+        call.gpr[5] = 3u;
+        call.gpr[6] = (uint64_t)(int64_t)(int32_t)dtor_flag;
+        saved_pc = rt->current_pc;
+        if (irix_guest_call(rt, &call, method) != 0) {
+            rt->current_pc = saved_pc;
+            return -1;
+        }
+        rt->current_pc = saved_pc;
+    }
+
+    if (dtor_flag & 1u) {
+        IrixGuestFunction free_fn = irix_libc_bridge_lookup("free");
+        if (free_fn) {
+            call = *caller;
+            call.gpr[4] = (uint64_t)(int64_t)(int32_t)object;
+            free_fn(rt, &call);
+        }
+    }
+    return 0;
+}
+
 static int call_guest_dtor(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
                            IrixGuestAddr dtor, IrixGuestAddr object,
                            uint32_t dtor_flag)
 {
     IrixGuestCpu call = *caller;
     IrixGuestAddr saved_pc = rt->current_pc;
+
+    if (matches_imd_dictionary_slot_dtor(rt, dtor))
+        return call_imd_dictionary_slot_dtor(rt, caller, object, dtor_flag);
 
     call.gpr[4] = (uint64_t)(int64_t)(int32_t)object;
     call.gpr[5] = (uint64_t)(int64_t)(int32_t)dtor_flag;
