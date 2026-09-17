@@ -2,6 +2,8 @@
 #include "IrixCLibExtraBridge.c"
 #undef irix_clib_extra_bridge_lookup
 
+static int g_guest_oserror;
+
 static void scan_write_integer(IrixGuestRuntime *rt, IrixGuestAddr dst,
                                uint64_t value, int length, int is_signed)
 {
@@ -263,10 +265,28 @@ static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     exit(status);
 }
 
+static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int old = g_guest_oserror;
+    (void)rt;
+    g_guest_oserror = (int)(int32_t)cpu->gpr[4];
+    cpu->gpr[2] = (uint64_t)(int64_t)old;
+}
+
+static void bridge_guest_oserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint64_t)(int64_t)g_guest_oserror;
+}
+
 IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
 {
-    IrixGuestFunction fn = irix_clib_extra_bridge_lookup_base(name);
-    if (fn || !name) return fn;
+    IrixGuestFunction fn;
+    if (!name) return 0;
+    if (!strcmp(name, "setoserror")) return bridge_guest_setoserror;
+    if (!strcmp(name, "oserror")) return bridge_guest_oserror;
+    fn = irix_clib_extra_bridge_lookup_base(name);
+    if (fn) return fn;
     if (!strcmp(name, "sscanf")) return bridge_sscanf;
     if (!strcmp(name, "exit")) return bridge_exit;
     return 0;
