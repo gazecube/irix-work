@@ -441,6 +441,44 @@ static void bridge_getmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         cpu->gpr[2] = IRIX_MNTENT_BASE;
 }
 
+static void bridge_hasmntopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr mnt_addr = (uint32_t)cpu->gpr[4];
+    const char *opt = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    IrixGuestAddr opts_addr;
+    const char *opts;
+    const char *p;
+    size_t optlen;
+
+    cpu->gpr[2] = 0;
+    if (!mnt_addr || !opt || !irix_guest_ptr(rt, mnt_addr, IRIX_MNTENT_STRUCT_SIZE))
+        return;
+
+    opts_addr = irix_guest_read32be(rt, mnt_addr + 12u);
+    opts = guest_cstr(rt, opts_addr);
+    if (!opts || rt->trapped)
+        return;
+
+    optlen = strlen(opt);
+    p = opts;
+    while (*p) {
+        const char *start = p;
+        size_t len;
+
+        while (*p && *p != ',')
+            ++p;
+        len = (size_t)(p - start);
+
+        if (len >= optlen && !strncmp(start, opt, optlen)) {
+            cpu->gpr[2] = opts_addr + (IrixGuestAddr)(start - opts);
+            return;
+        }
+
+        if (*p == ',')
+            ++p;
+    }
+}
+
 static void bridge_endmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
@@ -483,7 +521,7 @@ IrixGuestFunction irix_stdio_bridge_lookup(const char *name)
     M(fopen); M(fclose); M(fread); M(fwrite); M(fgets); M(fputs);
     M(fgetc); M(getc); M(ungetc); M(fputc); M(putc); M(fflush);
     M(fseek); M(ftell); M(rewind); M(feof); M(ferror); M(clearerr); M(fileno);
-    M(setmntent); M(getmntent); M(endmntent);
+    M(setmntent); M(getmntent); M(endmntent); M(hasmntopt);
     M(__filbuf); M(__semgetc);
 #undef M
     return 0;
