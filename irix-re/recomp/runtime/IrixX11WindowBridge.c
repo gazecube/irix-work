@@ -1,4 +1,5 @@
 #include "IrixX11WindowBridge.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -66,26 +67,17 @@ static IrixGuestAddr copy_host_string(IrixGuestRuntime *rt, const char *s)
 
 static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
 {
-    size_t i;
-    IrixGuestAddr name_addr;
-    const char *name = 0;
-
-    if (!guest) return 0;
-    for (i = 0; i < g_window.display_count; ++i)
-        if (g_window.guest_display[i] == guest)
-            return g_window.host_display[i];
-    if (g_window.display_count >= IRIX_X11_WINDOW_MAX_DISPLAYS) return 0;
-
-    /* The IRIX Display shadow built by IrixX11BridgeExtra.c stores
-       display_name at offset 128 in the classic 32-bit Xlib layout. */
-    name_addr = irix_guest_read32be(rt, guest + 128u);
-    if (!rt->trapped) name = guest_cstr(rt, name_addr);
-    if (rt->trapped) return 0;
-
-    i = g_window.display_count++;
-    g_window.guest_display[i] = guest;
-    g_window.host_display[i] = XOpenDisplay(name);
-    return g_window.host_display[i];
+    (void)rt;
+    /*
+     * The guest Display is a shadow of the primary host Display opened by
+     * IrixX11BridgeExtra. Resource IDs, event selection, GC ownership, and
+     * exclusive root-window masks are connection-local Xlib state. Opening a
+     * second host Display here makes the translated process appear as two X
+     * clients and can make it compete with itself for SubstructureRedirectMask
+     * and other exclusive masks. Always resolve the guest shadow back to the
+     * primary connection instead.
+     */
+    return irix_x11_primary_display_from_guest(guest);
 }
 
 static Visual *visual_from_guest(IrixGuestRuntime *rt, Display *dpy, IrixGuestAddr guest_visual)
@@ -302,12 +294,7 @@ static void bridge_XChangeWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *c
     int rc = 0;
 
     if (!dpy) { cpu->gpr[2] = 0; return; }
-    if (!valuemask) {
-        memset(&attrs, 0, sizeof(attrs));
-        cpu->gpr[2] = (uint32_t)XChangeWindowAttributes(dpy, w, 0, &attrs);
-        return;
-    }
-    if (!read_window_attributes(rt, guest_attrs, &attrs)) {
+    if (valuemask && !read_window_attributes(rt, guest_attrs, &attrs)) {
         cpu->gpr[2] = 0;
         return;
     }
@@ -319,75 +306,44 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
     XWindowChanges changes;
-    if (!dpy || !read_window_changes(rt, (uint32_t)cpu->gpr[7], &changes)) {
+    if (!dpy || !read_window_changes(rt, (uint32_t)cpu->gpr[8], &changes)) {
         cpu->gpr[2] = 0;
         return;
     }
     cpu->gpr[2] = (uint32_t)XConfigureWindow(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                               (unsigned int)(uint32_t)cpu->gpr[6], &changes);
+                                              (unsigned int)(uint32_t)cpu->gpr[6], &changes);
 }
 
-#define SIMPLE_WINDOW_CALL(name, expr) \
-static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
-    Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]); \
-    cpu->gpr[2] = dpy ? (uint32_t)(expr) : 0; \
-}
-
-SIMPLE_WINDOW_CALL(bridge_XMapSubwindows,
-                   XMapSubwindows(dpy, (Window)(uint32_t)cpu->gpr[5]))
-SIMPLE_WINDOW_CALL(bridge_XUnmapSubwindows,
-                   XUnmapSubwindows(dpy, (Window)(uint32_t)cpu->gpr[5]))
-SIMPLE_WINDOW_CALL(bridge_XReparentWindow,
-                   XReparentWindow(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                   (Window)(uint32_t)cpu->gpr[6],
-                                   (int32_t)cpu->gpr[7], (int32_t)cpu->gpr[8]))
-SIMPLE_WINDOW_CALL(bridge_XSetWindowBorderWidth,
-                   XSetWindowBorderWidth(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                         (unsigned int)(uint32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XSetWindowColormap,
-                   XSetWindowColormap(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                      (Colormap)(uint32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XSetWindowBackgroundPixmap,
-                   XSetWindowBackgroundPixmap(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                              (Pixmap)(uint32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XSetWindowBorderPixmap,
-                   XSetWindowBorderPixmap(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                          (Pixmap)(uint32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XAddToSaveSet,
-                   XAddToSaveSet(dpy, (Window)(uint32_t)cpu->gpr[5]))
-SIMPLE_WINDOW_CALL(bridge_XRemoveFromSaveSet,
-                   XRemoveFromSaveSet(dpy, (Window)(uint32_t)cpu->gpr[5]))
-SIMPLE_WINDOW_CALL(bridge_XChangeSaveSet,
-                   XChangeSaveSet(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                  (int32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XCirculateSubwindows,
-                   XCirculateSubwindows(dpy, (Window)(uint32_t)cpu->gpr[5],
-                                        (int32_t)cpu->gpr[6]))
-SIMPLE_WINDOW_CALL(bridge_XCirculateSubwindowsUp,
-                   XCirculateSubwindowsUp(dpy, (Window)(uint32_t)cpu->gpr[5]))
-SIMPLE_WINDOW_CALL(bridge_XCirculateSubwindowsDown,
-                   XCirculateSubwindowsDown(dpy, (Window)(uint32_t)cpu->gpr[5]))
+static void bridge_XMapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XMapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
+static void bridge_XUnmapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUnmapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
+static void bridge_XReparentWindow(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XReparentWindow(d,(Window)(uint32_t)cpu->gpr[5],(Window)(uint32_t)cpu->gpr[6],(int)cpu->gpr[7],(int)cpu->gpr[8]):0;}
+static void bridge_XSetWindowBorderWidth(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBorderWidth(d,(Window)(uint32_t)cpu->gpr[5],(unsigned)cpu->gpr[6]):0;}
+static void bridge_XSetWindowColormap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowColormap(d,(Window)(uint32_t)cpu->gpr[5],(Colormap)(uint32_t)cpu->gpr[6]):0;}
+static void bridge_XSetWindowBackgroundPixmap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBackgroundPixmap(d,(Window)(uint32_t)cpu->gpr[5],(Pixmap)(uint32_t)cpu->gpr[6]):0;}
+static void bridge_XSetWindowBorderPixmap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBorderPixmap(d,(Window)(uint32_t)cpu->gpr[5],(Pixmap)(uint32_t)cpu->gpr[6]):0;}
+static void bridge_XAddToSaveSet(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XAddToSaveSet(d,(Window)(uint32_t)cpu->gpr[5]):0;}
+static void bridge_XRemoveFromSaveSet(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XRemoveFromSaveSet(d,(Window)(uint32_t)cpu->gpr[5]):0;}
+static void bridge_XChangeSaveSet(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XChangeSaveSet(d,(Window)(uint32_t)cpu->gpr[5],(int)cpu->gpr[6]):0;}
+static void bridge_XCirculateSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XCirculateSubwindows(d,(Window)(uint32_t)cpu->gpr[5],(int)cpu->gpr[6]):0;}
+static void bridge_XCirculateSubwindowsUp(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XCirculateSubwindowsUp(d,(Window)(uint32_t)cpu->gpr[5]):0;}
+static void bridge_XCirculateSubwindowsDown(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XCirculateSubwindowsDown(d,(Window)(uint32_t)cpu->gpr[5]):0;}
 
 static void bridge_XRestackWindows(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
-    IrixGuestAddr guest_windows = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr list_addr = (uint32_t)cpu->gpr[5];
     int count = (int32_t)cpu->gpr[6];
-    Window *windows = 0;
+    Window *list = 0;
     int i, rc = 0;
     if (!dpy || count < 0) { cpu->gpr[2] = 0; return; }
     if (count > 0) {
-        if (!irix_guest_ptr(rt, guest_windows, (size_t)count * 4u)) {
-            cpu->gpr[2] = 0;
-            return;
-        }
-        windows = (Window *)calloc((size_t)count, sizeof(*windows));
-        if (!windows) { cpu->gpr[2] = 0; return; }
+        list = (Window *)calloc((size_t)count, sizeof(*list));
+        if (!list) { cpu->gpr[2] = 0; return; }
         for (i = 0; i < count; ++i)
-            windows[i] = (Window)irix_guest_read32be(rt, guest_windows + (IrixGuestAddr)i * 4u);
+            list[i] = (Window)irix_guest_read32be(rt, list_addr + (IrixGuestAddr)i * 4u);
     }
-    if (!rt->trapped) rc = XRestackWindows(dpy, windows, count);
-    free(windows);
+    rc = XRestackWindows(dpy, list, count);
+    free(list);
     cpu->gpr[2] = (uint32_t)rc;
 }
 
@@ -395,49 +351,35 @@ static void bridge_XQueryTree(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
     Window root = 0, parent = 0, *children = 0;
-    unsigned int nchildren = 0;
+    unsigned int count = 0, i;
     IrixGuestAddr guest_children = 0;
-    Status ok = 0;
-    unsigned int i;
-
-    if (dpy)
-        ok = XQueryTree(dpy, (Window)(uint32_t)cpu->gpr[5],
-                        &root, &parent, &children, &nchildren);
-    if (ok && children && nchildren) {
-        if ((uint64_t)nchildren * 4u <= UINT32_MAX)
-            guest_children = tmp_alloc(nchildren * 4u);
-        if (guest_children) {
-            for (i = 0; i < nchildren; ++i)
-                wr32(rt, guest_children + (IrixGuestAddr)i * 4u,
-                     (uint32_t)children[i]);
-        } else {
-            ok = 0;
-            nchildren = 0;
-        }
+    Status ok;
+    if (!dpy) { cpu->gpr[2] = 0; return; }
+    ok = XQueryTree(dpy, (Window)(uint32_t)cpu->gpr[5], &root, &parent, &children, &count);
+    if (ok && children && count) {
+        if (count <= UINT32_MAX / 4u) guest_children = tmp_alloc(count * 4u);
+        if (guest_children)
+            for (i = 0; i < count; ++i)
+                wr32(rt, guest_children + (IrixGuestAddr)i * 4u, (uint32_t)children[i]);
     }
     if (children) XFree(children);
     wr32(rt, (uint32_t)cpu->gpr[6], (uint32_t)root);
     wr32(rt, (uint32_t)cpu->gpr[7], (uint32_t)parent);
     wr32(rt, (uint32_t)cpu->gpr[8], guest_children);
-    wr32(rt, (uint32_t)cpu->gpr[9], nchildren);
-    cpu->gpr[2] = (uint32_t)ok;
+    wr32(rt, (uint32_t)cpu->gpr[9], count);
+    cpu->gpr[2] = ok ? 1u : 0u;
 }
 
 static void bridge_XCreateFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
-    const char *base_name = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    const char *base = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
     char **missing = 0;
-    int missing_count = 0;
-    char *def_string = 0;
-    XFontSet set = 0;
+    int missing_count = 0, i;
+    char *def = 0;
+    XFontSet set;
     IrixGuestAddr guest_missing = 0, guest_def = 0;
-    int i;
-
-    if (dpy && base_name)
-        set = XCreateFontSet(dpy, (char *)base_name, &missing,
-                             &missing_count, &def_string);
-
+    set = (dpy && base) ? XCreateFontSet(dpy, base, &missing, &missing_count, &def) : 0;
     if (missing_count > 0 && missing) {
         guest_missing = tmp_alloc((uint32_t)missing_count * 4u);
         if (guest_missing) {
@@ -446,78 +388,72 @@ static void bridge_XCreateFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                      copy_host_string(rt, missing[i]));
         }
     }
-    if (def_string) guest_def = copy_host_string(rt, def_string);
-    if (missing) XFreeStringList(missing);
-
+    if (def) guest_def = copy_host_string(rt, def);
     wr32(rt, (uint32_t)cpu->gpr[6], guest_missing);
     wr32(rt, (uint32_t)cpu->gpr[7], (uint32_t)missing_count);
     wr32(rt, (uint32_t)cpu->gpr[8], guest_def);
+    if (missing) XFreeStringList(missing);
     cpu->gpr[2] = fontset_to_guest(set);
 }
 
 static void bridge_XFreeFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
-    IrixGuestAddr guest = (uint32_t)cpu->gpr[5];
-    XFontSet set = fontset_from_guest(guest);
-    uint32_t i;
+    XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[5]);
+    size_t i;
     if (dpy && set) {
         XFreeFontSet(dpy, set);
-        i = (guest - IRIX_X11_FONTSET_HANDLE_BASE) / 4u;
-        if (i < g_window.fontset_count) g_window.fontsets[i] = 0;
+        for (i = 0; i < g_window.fontset_count; ++i)
+            if (g_window.fontsets[i] == set) { g_window.fontsets[i] = 0; break; }
     }
     cpu->gpr[2] = 0;
 }
 
 static void bridge_XBaseFontNameListOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    const char *s = 0;
     XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = set ? copy_host_string(rt, XBaseFontNameListOfFontSet(set)) : 0;
+    (void)cpu;
+    if (set) s = XBaseFontNameListOfFontSet(set);
+    cpu->gpr[2] = copy_host_string(rt, s);
 }
 
 static void bridge_XLocaleOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    const char *s = 0;
     XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = set ? copy_host_string(rt, XLocaleOfFontSet(set)) : 0;
+    if (set) s = XLocaleOfFontSet(set);
+    cpu->gpr[2] = copy_host_string(rt, s);
 }
 
 static void bridge_XFontsOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
-    XFontStruct **fonts = 0;
+    IrixGuestAddr structs_out = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr names_out = (uint32_t)cpu->gpr[6];
+    XFontStruct **structs = 0;
     char **names = 0;
-    IrixGuestAddr guest_fonts = 0, guest_names = 0;
-    int count = 0, i;
+    int count = set ? XFontsOfFontSet(set, &structs, &names) : 0;
+    IrixGuestAddr guest_structs = 0, guest_names = 0;
+    int i;
 
-    if (set)
-        count = XFontsOfFontSet(set, &fonts, &names);
-    if (count > 0) {
-        if ((uint64_t)(unsigned)count * 4u <= UINT32_MAX) {
-            guest_fonts = tmp_alloc((uint32_t)count * 4u);
-            guest_names = tmp_alloc((uint32_t)count * 4u);
-        }
-        if (!guest_fonts || !guest_names) {
+    if (count > 0 && structs && names) {
+        guest_structs = tmp_alloc((uint32_t)count * 4u);
+        guest_names = tmp_alloc((uint32_t)count * 4u);
+        if (!guest_structs || !guest_names) {
+            guest_structs = guest_names = 0;
             count = 0;
-            guest_fonts = 0;
-            guest_names = 0;
         } else {
             for (i = 0; i < count; ++i) {
-                IrixGuestAddr gf = font_to_guest(rt, fonts ? fonts[i] : 0);
-                IrixGuestAddr gn = copy_host_string(rt, names ? names[i] : 0);
-                wr32(rt, guest_fonts + (IrixGuestAddr)i * 4u, gf);
-                wr32(rt, guest_names + (IrixGuestAddr)i * 4u, gn);
-                if (!gf || rt->trapped) {
-                    count = 0;
-                    guest_fonts = 0;
-                    guest_names = 0;
-                    break;
-                }
+                wr32(rt, guest_structs + (IrixGuestAddr)i * 4u,
+                     font_to_guest(rt, structs[i]));
+                wr32(rt, guest_names + (IrixGuestAddr)i * 4u,
+                     copy_host_string(rt, names[i]));
             }
         }
     }
-
-    wr32(rt, (uint32_t)cpu->gpr[5], guest_fonts);
-    wr32(rt, (uint32_t)cpu->gpr[6], guest_names);
+    wr32(rt, structs_out, guest_structs);
+    wr32(rt, names_out, guest_names);
     cpu->gpr[2] = (uint64_t)(int64_t)count;
 }
 
