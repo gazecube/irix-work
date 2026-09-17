@@ -12,6 +12,7 @@ static IrixGuestRuntime *g_rt;
 
 typedef struct IrixOstrstreamState {
     IrixGuestAddr object;
+    IrixGuestAddr ostream_object;
     char text[IRIX_OSTRSTREAM_TEXT];
     size_t len;
     int used;
@@ -23,7 +24,9 @@ static IrixOstrstreamState *ostrstream_find(IrixGuestAddr object)
 {
     unsigned i;
     for (i = 0; i < IRIX_OSTRSTREAM_SLOTS; ++i)
-        if (g_ostrstreams[i].used && g_ostrstreams[i].object == object)
+        if (g_ostrstreams[i].used &&
+            (g_ostrstreams[i].object == object ||
+             g_ostrstreams[i].ostream_object == object))
             return &g_ostrstreams[i];
     return 0;
 }
@@ -45,6 +48,11 @@ static IrixOstrstreamState *ostrstream_create(IrixGuestAddr object)
             memset(st, 0, sizeof(*st));
             st->used = 1;
             st->object = object;
+            /*
+             * Observed IRIX libCio layout: the ostream base subobject used
+             * by ostrstream::operator<< is this+0x44.
+             */
+            st->ostream_object = object + 0x44u;
             return st;
         }
     }
