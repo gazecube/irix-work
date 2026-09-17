@@ -38,9 +38,9 @@ if(X11_FOUND)
         runtime/IrixX11KeyboardBridge.c
         runtime/IrixX11ConnectionBridge.c
         runtime/IrixX11ContextBridge.c
-        runtime/IrixX11BridgeBulk.c
+        runtime/IrixX11BridgeBulkUnit.c
         runtime/IrixRuntimeX11Bridge.c
-        runtime/IrixX11WindowBridge.c
+        runtime/IrixX11WindowBridgeUnit.c
         runtime/IrixX11ImageBridgeUnit.c
         runtime/IrixX11WmBridge.c
         runtime/IrixXrmCompat.c
