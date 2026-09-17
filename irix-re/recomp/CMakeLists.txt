@@ -15,6 +15,7 @@ add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixLibcBridge.c
     runtime/IrixPosixBridge.c
     runtime/IrixCLibExtraBridge.c
+    runtime/IrixCxxBridge.c
     runtime/IrixRuntimeLibcBridge.c
     runtime/IrixFsBridge.c
     runtime/IrixStdioBridge.c
