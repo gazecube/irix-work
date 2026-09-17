@@ -327,7 +327,6 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     memset(&tmpl,0,sizeof(tmpl));
 
     if(tmpl_addr) {
-        IrixGuestAddr gv=irix_guest_read32be(rt,tmpl_addr+0u);
         tmpl.visualid=(VisualID)irix_guest_read32be(rt,tmpl_addr+4u);
         tmpl.screen=(int32_t)irix_guest_read32be(rt,tmpl_addr+8u);
         tmpl.depth=(int32_t)irix_guest_read32be(rt,tmpl_addr+12u);
@@ -337,10 +336,6 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         tmpl.blue_mask=(unsigned long)irix_guest_read32be(rt,tmpl_addr+28u);
         tmpl.colormap_size=(int32_t)irix_guest_read32be(rt,tmpl_addr+32u);
         tmpl.bits_per_rgb=(int32_t)irix_guest_read32be(rt,tmpl_addr+36u);
-        if((mask&VisualMask) && gv) {
-            tmpl.visualid=(VisualID)irix_guest_read32be(rt,gv+4u);
-            mask=(mask&~VisualMask)|VisualIDMask;
-        }
     }
 
     if(d && !rt->trapped) list=XGetVisualInfo(d,mask,&tmpl,&n);
