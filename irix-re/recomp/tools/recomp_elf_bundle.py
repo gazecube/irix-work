@@ -148,13 +148,13 @@ def plausible_mips_entry(elf, addr):
     op=(w>>26)&0x3f; rs=(w>>21)&0x1f; rt=(w>>16)&0x1f; imm=w&0xffff
     return op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff
 
-def validated_pointer_size(elf, start, provisional_size):
-    """Validate or trim a pointer-derived function extent.
+def validated_recovered_size(elf, start, provisional_size):
+    """Validate or trim a metadata-recovered function extent.
 
-    Pointer tables prove a callable start but not its size.  First try to
-    decode the whole provisional range.  If decoding encounters non-code,
+    Recovered metadata can prove a callable start without proving its exact
+    size.  Decode the provisional range.  If decoding encounters non-code,
     accept only a complete function ending at the last `jr ra` plus its delay
-    slot before the failure.  If no such return exists, reject the candidate.
+    slot before the failure.  Otherwise reject the recovered candidate.
     """
     try:
         words=elf.words(start,provisional_size)
@@ -172,12 +172,12 @@ def validated_pointer_size(elf, start, provisional_size):
                 if size>0 and size%4==0:
                     try:
                         trimmed=elf.words(start,size)
-                        for j,w in enumerate(trimmed): t.decode(start+j*4,w)
+                        for j,w in enumerate(trimmed):
+                            t.decode(start+j*4,w)
                         return size
                     except Exception:
                         return 0
             return 0
-        # jr $ra; include the mandatory delay-slot instruction in the extent.
         if word==0x03e00008 and i+1<len(words):
             last_return_end=addr+8
 
@@ -221,7 +221,7 @@ def data_pointer_function_ranges(elf, path, known_starts):
         for addr in local:
             end=next_boundary.get(addr,hi); size=end-addr
             if size<=0 or size%4: continue
-            size=validated_pointer_size(elf,addr,size)
+            size=validated_recovered_size(elf,addr,size)
             if not size: continue
             out.append(('__ptr_%08x'%addr,addr,size,sec_index))
     return out
@@ -253,10 +253,16 @@ def main():
         if addr not in recovered_addrs:
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
-    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0
+    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0; dropped_count=0
     all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs,key=lambda x:(x[1],x[0]))
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
+        if source_kind in ('pdr','zero_size','data_ptr'):
+            checked_size=validated_recovered_size(elf,addr,size)
+            if not checked_size:
+                dropped_count+=1
+                continue
+            size=checked_size
         seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
         with dst.open('w') as f, contextlib.redirect_stdout(f):
             if source_kind in ('pdr','zero_size','data_ptr'):
@@ -277,5 +283,5 @@ def main():
         w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
         for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
         w.write('}\n')
-    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} recovered_dropped={dropped_count} imports={len(imports)}')
 if __name__=='__main__': main()
