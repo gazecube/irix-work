@@ -34,14 +34,14 @@ find_package(X11)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
         runtime/IrixX11Bridge.c
-        runtime/IrixX11BridgeExtra.c
+        runtime/IrixX11BridgeExtraUnit.c
         runtime/IrixX11KeyboardBridge.c
         runtime/IrixX11ConnectionBridge.c
         runtime/IrixX11ContextBridge.c
         runtime/IrixX11BridgeBulk.c
         runtime/IrixRuntimeX11Bridge.c
         runtime/IrixX11WindowBridge.c
-        runtime/IrixX11ImageBridge.c
+        runtime/IrixX11ImageBridgeUnit.c
         runtime/IrixX11WmBridge.c
         runtime/IrixXrmCompat.c
         runtime/IrixXrmQuarkBridge.c
