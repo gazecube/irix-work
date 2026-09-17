@@ -188,6 +188,20 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         fprintf(stderr,
                 "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x",
                 address, (uint32_t)cpu->pc, s4);
+        fprintf(stderr,
+                " a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+        if (address && irix_guest_ptr(rt, address, 16u)) {
+            fprintf(stderr,
+                    " target_words=%08x,%08x,%08x,%08x",
+                    irix_guest_read32be(rt, address + 0u),
+                    irix_guest_read32be(rt, address + 4u),
+                    irix_guest_read32be(rt, address + 8u),
+                    irix_guest_read32be(rt, address + 12u));
+        }
         if (s4 && irix_guest_ptr(rt, s4, 28u)) {
             fprintf(stderr,
                     " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x",
