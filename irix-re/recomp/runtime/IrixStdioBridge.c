@@ -1,14 +1,19 @@
 #include "IrixStdioBridge.h"
 
+#include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #define IRIX_STDIO_BASE 0x34000000u
 #define IRIX_STDIO_ARENA_SIZE 0x00010000u
 #define IRIX_STDIO_SLOT_SIZE 16u
 #define IRIX_STDIO_MAX_FILES (IRIX_STDIO_ARENA_SIZE / IRIX_STDIO_SLOT_SIZE)
+#define IRIX_MNTENT_BASE 0x34100000u
+#define IRIX_MNTENT_ARENA_SIZE 0x00010000u
+#define IRIX_MNTENT_STRUCT_SIZE 24u
 #define IRIX_IOEOF 0x10u
 #define IRIX_IOERR 0x20u
 
@@ -305,6 +310,149 @@ static void bridge_clearerr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+static char *mnt_token(char **cursor)
+{
+    char *p = *cursor;
+    char *start;
+
+    while (*p && isspace((unsigned char)*p))
+        ++p;
+    start = p;
+    while (*p && !isspace((unsigned char)*p))
+        ++p;
+    if (*p)
+        *p++ = '\0';
+    *cursor = p;
+    return start;
+}
+
+static IrixGuestAddr copy_mnt_string(IrixGuestRuntime *rt, IrixGuestAddr *cur,
+                                     const char *text)
+{
+    size_t n = strlen(text) + 1u;
+    IrixGuestAddr out = *cur;
+    void *dst;
+
+    if ((uint64_t)out + n > (uint64_t)IRIX_MNTENT_BASE + IRIX_MNTENT_ARENA_SIZE)
+        return 0;
+    dst = irix_guest_ptr(rt, out, n);
+    if (!dst)
+        return 0;
+    memcpy(dst, text, n);
+    *cur += (IrixGuestAddr)n;
+    return out;
+}
+
+static void bridge_setmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *mode = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    FILE *f;
+    IrixGuestAddr handle;
+    const char *p;
+
+    cpu->gpr[2] = 0;
+    if (!path || !mode)
+        return;
+
+    f = fopen(path, mode);
+    if (!f)
+        return;
+
+    for (p = mode; *p; ++p) {
+        if (*p == 'w' || *p == 'a' || *p == '+') {
+            if (flock(fileno(f), LOCK_EX) < 0) {
+                fclose(f);
+                return;
+            }
+            break;
+        }
+    }
+
+    handle = alloc_file_handle(rt, f);
+    if (!handle) {
+        fclose(f);
+        return;
+    }
+    cpu->gpr[2] = handle;
+}
+
+static void bridge_getmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+    char line[512];
+    char *p;
+    char *field[6];
+    IrixGuestAddr cur = IRIX_MNTENT_BASE + IRIX_MNTENT_STRUCT_SIZE;
+    IrixGuestAddr str_addr[4];
+    int i;
+    int freq = 0;
+    int passno = 0;
+
+    cpu->gpr[2] = 0;
+    if (!f)
+        return;
+
+    for (;;) {
+        if (!fgets(line, sizeof(line), f)) {
+            sync_file_by_addr(rt, handle);
+            return;
+        }
+        p = line;
+        while (*p && isspace((unsigned char)*p))
+            ++p;
+        if (*p == '#' || *p == '\0')
+            continue;
+        break;
+    }
+
+    p = line;
+    for (i = 0; i < 6; ++i)
+        field[i] = mnt_token(&p);
+
+    if (!field[0][0] || !field[1][0] || !field[2][0] || !field[3][0]) {
+        sync_file_by_addr(rt, handle);
+        return;
+    }
+
+    for (i = 0; i < 4; ++i) {
+        str_addr[i] = copy_mnt_string(rt, &cur, field[i]);
+        if (!str_addr[i]) {
+            sync_file_by_addr(rt, handle);
+            return;
+        }
+    }
+
+    if (field[4][0])
+        freq = atoi(field[4]);
+    if (field[5][0])
+        passno = atoi(field[5]);
+
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 0u, str_addr[0]);
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 4u, str_addr[1]);
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 8u, str_addr[2]);
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 12u, str_addr[3]);
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 16u, (uint32_t)freq);
+    irix_guest_write32be(rt, IRIX_MNTENT_BASE + 20u, (uint32_t)passno);
+
+    sync_file_by_addr(rt, handle);
+    if (!rt->trapped)
+        cpu->gpr[2] = IRIX_MNTENT_BASE;
+}
+
+static void bridge_endmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+
+    if (f) {
+        fclose(f);
+        free_file_handle(rt, handle);
+    }
+    cpu->gpr[2] = 1u;
+}
+
 static void bridge_fileno(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
@@ -321,6 +469,9 @@ int irix_stdio_bridge_init(IrixGuestRuntime *rt)
     if (irix_guest_map(rt, IRIX_STDIO_BASE, IRIX_STDIO_ARENA_SIZE, 3u) != 0 &&
         !irix_guest_ptr(rt, IRIX_STDIO_BASE, 1))
         return -1;
+    if (irix_guest_map(rt, IRIX_MNTENT_BASE, IRIX_MNTENT_ARENA_SIZE, 3u) != 0 &&
+        !irix_guest_ptr(rt, IRIX_MNTENT_BASE, 1))
+        return -1;
     return 0;
 }
 
@@ -332,6 +483,7 @@ IrixGuestFunction irix_stdio_bridge_lookup(const char *name)
     M(fopen); M(fclose); M(fread); M(fwrite); M(fgets); M(fputs);
     M(fgetc); M(getc); M(ungetc); M(fputc); M(putc); M(fflush);
     M(fseek); M(ftell); M(rewind); M(feof); M(ferror); M(clearerr); M(fileno);
+    M(setmntent); M(getmntent); M(endmntent);
     M(__filbuf); M(__semgetc);
 #undef M
     return 0;
