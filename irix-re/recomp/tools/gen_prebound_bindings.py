@@ -84,13 +84,20 @@ def main():
 
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
     target_entries=sorted({(target,name) for addr,target,name,owner in resolved if target})
+    missing_index={addr:i for i,(addr,target,name,owner) in enumerate(missing)}
     out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     with (out/'bindings.c').open('w') as w:
-        w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n')
+        w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n#include <string.h>\n')
         w.write('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);\n')
         w.write('typedef struct { IrixGuestAddr stub,target; const char *name; } Fwd;\nstatic const Fwd fwds[]={\n')
         for addr,target,name,owner in resolved: w.write(f'{{0x{addr:08x}u,0x{target:08x}u,"{owner}:{name}"}},\n')
         w.write('};\n')
+        w.write('typedef struct { IrixGuestAddr address; const char *name; const char *owner; unsigned native; } Missing;\n')
+        w.write('static Missing missing_imports[]={\n')
+        for addr,target,name,owner in missing:
+            w.write(f'{{0x{addr:08x}u,{json.dumps(name)},{json.dumps(owner)},0u}},\n')
+        w.write('};\n')
+        w.write('static void mark_native(IrixGuestAddr address){size_t i;for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0]);++i)if(missing_imports[i].address==address){missing_imports[i].native=1u;return;}}\n')
         w.write('static void forward_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){size_t i;for(i=0;i<sizeof(fwds)/sizeof(fwds[0]);++i)if(fwds[i].stub==cpu->pc){(void)irix_guest_call(rt,cpu,fwds[i].target);return;}fprintf(stderr,"NO FORWARD 0x%08x\\n",cpu->pc);irix_guest_trap(rt,cpu,0xeeee1001u);}\n')
         w.write('static void missing_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){IrixGuestFunctionEntry*e=irix_guest_find_function(rt,cpu->pc);fprintf(stderr,"MISSING IMPORT pc=0x%08x %s\\n",cpu->pc,e&&e->name?e->name:"?");irix_guest_trap(rt,cpu,0xeeee1002u);}\n')
         w.write('void register_irix_bridge_imports(IrixGuestRuntime *rt,IrixGuestImportResolver resolver){IrixGuestFunction fn;\n')
@@ -101,21 +108,29 @@ def main():
         w.write('   only when resolver(name) actually supplies a native bridge. */\n')
         for addr,target,name,owner in all_entries:
             q=json.dumps(name)
-            w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{addr:08x}u,fn,"{owner}:{name}");\n')
+            mark=f'mark_native(0x{addr:08x}u);' if addr in missing_index else ''
+            w.write(f'fn=resolver?resolver({q}):0;if(fn){{irix_guest_register_function(rt,0x{addr:08x}u,fn,"{owner}:{name}");{mark}}}\n')
         for target,name in target_entries:
             q=json.dumps(name)
             label=json.dumps('native-target:'+name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
         w.write('}\n')
-        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){\n')
+        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0;\n')
         for got_addr,target,name,owner,old in data_patches:
             w.write(f'irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
-        for addr,target,name,owner in missing: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,missing_import,"{owner}:{name}");\n')
+        w.write('for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0]);++i){\n')
+        w.write('  if(missing_imports[i].native){++native_addresses;}else{++unresolved_addresses;irix_guest_register_function(rt,missing_imports[i].address,missing_import,missing_imports[i].name);}\n')
+        w.write('  for(j=0;j<i;++j)if(strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;\n')
+        w.write('  if(j==i){if(missing_imports[i].native)++native_names;else++unresolved_names;}\n')
+        w.write('}\n')
+        w.write('fprintf(stderr,"IRIX import closure: guest-resolved=%zu native-resolved=%zu unresolved=%zu unique-native=%zu unique-unresolved=%zu data-patches=%zu\\n",(size_t)%du,native_addresses,unresolved_addresses,native_names,unresolved_names,(size_t)%du);\n' % (len(resolved),len(data_patches)))
+        w.write('if(unresolved_names){size_t shown=0;fprintf(stderr,"IRIX unresolved imports:");for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0])&&shown<32u;++i){if(missing_imports[i].native)continue;for(j=0;j<i;++j)if(!missing_imports[j].native&&strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;if(j==i){fprintf(stderr," %s",missing_imports[i].name);++shown;}}if(unresolved_names>shown)fprintf(stderr," ...(+%zu)",unresolved_names-shown);fputc(\'\\n\',stderr);}\n')
         w.write('}\n')
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],
           'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing],
+          'missing_unique':sorted({n for a,t,n,o in missing}),
           'data_patches':[dict(got=a,target=t,name=n,owner=o,old_value=old) for a,t,n,o,old in data_patches]}
     (out/'bindings.json').write_text(json.dumps(data,indent=2)+'\n')
-    print(f'addresses={len(by)} resolved={len(resolved)} missing={len(missing)} native_targets={len(target_entries)} data_patches={len(data_patches)}')
+    print(f'addresses={len(by)} guest_resolved={len(resolved)} guest_missing={len(missing)} unique_guest_missing={len({n for a,t,n,o in missing})} native_targets={len(target_entries)} data_patches={len(data_patches)}')
 if __name__=='__main__': main()
