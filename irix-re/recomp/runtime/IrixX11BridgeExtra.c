@@ -1,6 +1,7 @@
 #include "IrixGuest.h"
 
 #include <X11/Xlib.h>
+#include <X11/Xlibint.h>
 #include <X11/Xresource.h>
 #include <X11/Xutil.h>
 #include <stdlib.h>
@@ -16,6 +17,8 @@
 #define IRIX_X11_DISPLAY_SHADOW_SIZE 0x00100000u
 #define IRIX_X11_MAX_GCS 1024u
 #define IRIX_X11_GC_BASE 0x72500000u
+#define IRIX_X11_GC_STRIDE 128u
+#define IRIX_X11_GC_SHADOW_SIZE (IRIX_X11_MAX_GCS * IRIX_X11_GC_STRIDE)
 #define IRIX_X11_TMP_BASE 0x72600000u
 #define IRIX_X11_TMP_SIZE 0x00100000u
 #define IRIX_X11_MAX_FONTS 256u
@@ -102,6 +105,94 @@ static void write_visual_shadow(IrixGuestRuntime *rt, IrixGuestAddr a, Visual *v
     wr32(rt, a + 28, (uint32_t)v->map_entries);
 }
 
+static void write_xgcvalues(IrixGuestRuntime *rt, IrixGuestAddr a, const XGCValues *v)
+{
+    if (!a || !v) return;
+    wr32(rt, a + 0u, (uint32_t)v->function);
+    wr32(rt, a + 4u, (uint32_t)v->plane_mask);
+    wr32(rt, a + 8u, (uint32_t)v->foreground);
+    wr32(rt, a + 12u, (uint32_t)v->background);
+    wr32(rt, a + 16u, (uint32_t)v->line_width);
+    wr32(rt, a + 20u, (uint32_t)v->line_style);
+    wr32(rt, a + 24u, (uint32_t)v->cap_style);
+    wr32(rt, a + 28u, (uint32_t)v->join_style);
+    wr32(rt, a + 32u, (uint32_t)v->fill_style);
+    wr32(rt, a + 36u, (uint32_t)v->fill_rule);
+    wr32(rt, a + 40u, (uint32_t)v->arc_mode);
+    wr32(rt, a + 44u, (uint32_t)v->tile);
+    wr32(rt, a + 48u, (uint32_t)v->stipple);
+    wr32(rt, a + 52u, (uint32_t)v->ts_x_origin);
+    wr32(rt, a + 56u, (uint32_t)v->ts_y_origin);
+    wr32(rt, a + 60u, (uint32_t)v->font);
+    wr32(rt, a + 64u, (uint32_t)v->subwindow_mode);
+    wr32(rt, a + 68u, (uint32_t)v->graphics_exposures);
+    wr32(rt, a + 72u, (uint32_t)v->clip_x_origin);
+    wr32(rt, a + 76u, (uint32_t)v->clip_y_origin);
+    wr32(rt, a + 80u, (uint32_t)v->clip_mask);
+    wr32(rt, a + 84u, (uint32_t)v->dash_offset);
+    irix_guest_write8(rt, a + 88u, (uint8_t)v->dashes);
+    irix_guest_write8(rt, a + 89u, 0);
+    irix_guest_write8(rt, a + 90u, 0);
+    irix_guest_write8(rt, a + 91u, 0);
+}
+
+static int read_xgcvalues(IrixGuestRuntime *rt, IrixGuestAddr a, XGCValues *v)
+{
+    if (!a || !v || !irix_guest_ptr(rt, a, 92u)) return 0;
+    memset(v, 0, sizeof(*v));
+    v->function = (int32_t)irix_guest_read32be(rt, a + 0u);
+    v->plane_mask = (unsigned long)irix_guest_read32be(rt, a + 4u);
+    v->foreground = (unsigned long)irix_guest_read32be(rt, a + 8u);
+    v->background = (unsigned long)irix_guest_read32be(rt, a + 12u);
+    v->line_width = (int32_t)irix_guest_read32be(rt, a + 16u);
+    v->line_style = (int32_t)irix_guest_read32be(rt, a + 20u);
+    v->cap_style = (int32_t)irix_guest_read32be(rt, a + 24u);
+    v->join_style = (int32_t)irix_guest_read32be(rt, a + 28u);
+    v->fill_style = (int32_t)irix_guest_read32be(rt, a + 32u);
+    v->fill_rule = (int32_t)irix_guest_read32be(rt, a + 36u);
+    v->arc_mode = (int32_t)irix_guest_read32be(rt, a + 40u);
+    v->tile = (Pixmap)irix_guest_read32be(rt, a + 44u);
+    v->stipple = (Pixmap)irix_guest_read32be(rt, a + 48u);
+    v->ts_x_origin = (int32_t)irix_guest_read32be(rt, a + 52u);
+    v->ts_y_origin = (int32_t)irix_guest_read32be(rt, a + 56u);
+    v->font = (Font)irix_guest_read32be(rt, a + 60u);
+    v->subwindow_mode = (int32_t)irix_guest_read32be(rt, a + 64u);
+    v->graphics_exposures = (Bool)(int32_t)irix_guest_read32be(rt, a + 68u);
+    v->clip_x_origin = (int32_t)irix_guest_read32be(rt, a + 72u);
+    v->clip_y_origin = (int32_t)irix_guest_read32be(rt, a + 76u);
+    v->clip_mask = (Pixmap)irix_guest_read32be(rt, a + 80u);
+    v->dash_offset = (int32_t)irix_guest_read32be(rt, a + 84u);
+    v->dashes = (char)irix_guest_read8(rt, a + 88u);
+    return !rt->trapped;
+}
+
+static void sync_gc_shadow(size_t i)
+{
+    GC gc;
+    IrixGuestAddr a;
+    if (i >= g_x11.gc_count) return;
+    gc = g_x11.gcs[i];
+    if (!gc) return;
+    a = IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
+    wr32(g_x11.rt, a + 0u, 0u);
+    wr32(g_x11.rt, a + 4u, (uint32_t)gc->gid);
+    wr32(g_x11.rt, a + 8u, (uint32_t)gc->rects);
+    wr32(g_x11.rt, a + 12u, (uint32_t)gc->dashes);
+    wr32(g_x11.rt, a + 16u, (uint32_t)gc->dirty);
+    write_xgcvalues(g_x11.rt, a + 20u, &gc->values);
+}
+
+static void sync_gc_by_ptr(GC gc)
+{
+    size_t i;
+    if (!gc) return;
+    for (i = 0; i < g_x11.gc_count; ++i)
+        if (g_x11.gcs[i] == gc) {
+            sync_gc_shadow(i);
+            return;
+        }
+}
+
 static void write_display_shadow(size_t i, Display *dpy)
 {
     IrixGuestRuntime *rt = g_x11.rt;
@@ -182,9 +273,11 @@ static IrixGuestAddr display_to_guest(Display *dpy)
 
 static GC gc_from_guest(IrixGuestAddr addr)
 {
-    uint32_t i;
-    if (addr < IRIX_X11_GC_BASE) return 0;
-    i = (addr - IRIX_X11_GC_BASE) / 4u;
+    uint32_t off, i;
+    if (addr < IRIX_X11_GC_BASE || addr >= IRIX_X11_GC_BASE + IRIX_X11_GC_SHADOW_SIZE) return 0;
+    off = addr - IRIX_X11_GC_BASE;
+    if (off % IRIX_X11_GC_STRIDE) return 0;
+    i = off / IRIX_X11_GC_STRIDE;
     return i < g_x11.gc_count ? g_x11.gcs[i] : 0;
 }
 
@@ -193,12 +286,15 @@ static IrixGuestAddr gc_to_guest(GC gc)
     size_t i;
     if (!gc) return 0;
     for (i = 0; i < g_x11.gc_count; ++i)
-        if (g_x11.gcs[i] == gc)
-            return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * 4u);
+        if (g_x11.gcs[i] == gc) {
+            sync_gc_shadow(i);
+            return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
+        }
     if (g_x11.gc_count >= IRIX_X11_MAX_GCS) return 0;
     i = g_x11.gc_count++;
     g_x11.gcs[i] = gc;
-    return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * 4u);
+    sync_gc_shadow(i);
+    return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
 }
 
 static void write_char_struct(IrixGuestRuntime *rt, IrixGuestAddr a, const XCharStruct *c)
@@ -444,36 +540,118 @@ WINDOW_CALL1(bridge_XFreePixmap, XFreePixmap(d, (Pixmap)(uint32_t)cpu->gpr[5]))
 
 static void bridge_XCreateGC(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
-    cpu->gpr[2] = d ? gc_to_guest(XCreateGC(d, (Drawable)(uint32_t)cpu->gpr[5], 0, 0)) : 0;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    unsigned long mask = (unsigned long)(uint32_t)cpu->gpr[6];
+    IrixGuestAddr values_addr = (uint32_t)cpu->gpr[7];
+    XGCValues values;
+    XGCValues *values_ptr = 0;
+    GC gc;
+
+    if (!d) { cpu->gpr[2] = 0; return; }
+    if (mask) {
+        if (!read_xgcvalues(rt, values_addr, &values)) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+        values_ptr = &values;
+    }
+    gc = XCreateGC(d, (Drawable)(uint32_t)cpu->gpr[5], mask, values_ptr);
+    cpu->gpr[2] = gc_to_guest(gc);
+}
+
+static void bridge_XChangeGC(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]);
+    unsigned long mask = (unsigned long)(uint32_t)cpu->gpr[6];
+    IrixGuestAddr values_addr = (uint32_t)cpu->gpr[7];
+    XGCValues values;
+    int rc = 0;
+
+    if (d && gc && read_xgcvalues(rt, values_addr, &values)) {
+        rc = XChangeGC(d, gc, mask, &values);
+        sync_gc_by_ptr(gc);
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XGetGCValues(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]);
+    unsigned long mask = (unsigned long)(uint32_t)cpu->gpr[6];
+    IrixGuestAddr out = (uint32_t)cpu->gpr[7];
+    XGCValues values;
+    Status ok = 0;
+    memset(&values, 0, sizeof(values));
+    if (d && gc) ok = XGetGCValues(d, gc, mask, &values);
+    if (ok && out) write_xgcvalues(rt, out, &values);
+    cpu->gpr[2] = (uint32_t)ok;
+}
+
+static void bridge_XCopyGC(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    GC src = gc_from_guest((uint32_t)cpu->gpr[5]);
+    unsigned long mask = (unsigned long)(uint32_t)cpu->gpr[6];
+    GC dst = gc_from_guest((uint32_t)cpu->gpr[7]);
+    int rc = (d && src && dst) ? XCopyGC(d, src, mask, dst) : 0;
+    if (rc && dst) sync_gc_by_ptr(dst);
+    cpu->gpr[2] = (uint32_t)rc;
 }
 
 static void bridge_XFreeGC(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]); (void)rt;
-    cpu->gpr[2] = (d && gc) ? (uint32_t)XFreeGC(d, gc) : 0;
+    IrixGuestAddr guest = (uint32_t)cpu->gpr[5];
+    GC gc = gc_from_guest(guest);
+    uint32_t off, i;
+    int rc = 0;
+    if (d && gc) rc = XFreeGC(d, gc);
+    if (gc && guest >= IRIX_X11_GC_BASE) {
+        off = guest - IRIX_X11_GC_BASE;
+        if ((off % IRIX_X11_GC_STRIDE) == 0u) {
+            i = off / IRIX_X11_GC_STRIDE;
+            if (i < g_x11.gc_count) {
+                g_x11.gcs[i] = 0;
+                if (irix_guest_ptr(rt, guest, 112u))
+                    memset(irix_guest_ptr(rt, guest, 112u), 0, 112u);
+            }
+        }
+    }
+    cpu->gpr[2] = (uint32_t)rc;
 }
 
 #define GC_CALL(name, call) \
 static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]); \
-    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]); (void)rt; \
-    cpu->gpr[2] = (d && gc) ? (uint32_t)(call) : 0; }
+    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]); \
+    int rc = (d && gc) ? (call) : 0; \
+    (void)rt; if (d && gc) sync_gc_by_ptr(gc); \
+    cpu->gpr[2] = (uint32_t)rc; }
 
 GC_CALL(bridge_XSetForeground, XSetForeground(d, gc, (unsigned long)cpu->gpr[6]))
 GC_CALL(bridge_XSetBackground, XSetBackground(d, gc, (unsigned long)cpu->gpr[6]))
 GC_CALL(bridge_XSetFunction, XSetFunction(d, gc, (int)cpu->gpr[6]))
+GC_CALL(bridge_XSetPlaneMask, XSetPlaneMask(d, gc, (unsigned long)cpu->gpr[6]))
 GC_CALL(bridge_XSetFillStyle, XSetFillStyle(d, gc, (int)cpu->gpr[6]))
+GC_CALL(bridge_XSetFillRule, XSetFillRule(d, gc, (int)cpu->gpr[6]))
+GC_CALL(bridge_XSetArcMode, XSetArcMode(d, gc, (int)cpu->gpr[6]))
 GC_CALL(bridge_XSetClipMask, XSetClipMask(d, gc, (Pixmap)(uint32_t)cpu->gpr[6]))
 GC_CALL(bridge_XSetClipOrigin, XSetClipOrigin(d, gc, (int)cpu->gpr[6], (int)cpu->gpr[7]))
+GC_CALL(bridge_XSetFont, XSetFont(d, gc, (Font)(uint32_t)cpu->gpr[6]))
+GC_CALL(bridge_XSetSubwindowMode, XSetSubwindowMode(d, gc, (int)cpu->gpr[6]))
+GC_CALL(bridge_XSetGraphicsExposures, XSetGraphicsExposures(d, gc, (Bool)cpu->gpr[6]))
 
 static void bridge_XSetLineAttributes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]); (void)rt;
-    cpu->gpr[2] = (d && gc) ? (uint32_t)XSetLineAttributes(d, gc, (unsigned)cpu->gpr[6],
+    GC gc = gc_from_guest((uint32_t)cpu->gpr[5]);
+    int rc = (d && gc) ? XSetLineAttributes(d, gc, (unsigned)cpu->gpr[6],
         (int)cpu->gpr[7], (int)cpu->gpr[8], (int)cpu->gpr[9]) : 0;
+    (void)rt;
+    if (d && gc) sync_gc_by_ptr(gc);
+    cpu->gpr[2] = (uint32_t)rc;
 }
 
 static void bridge_XDrawLine(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -604,6 +782,7 @@ void irix_x11_extra_init(IrixGuestRuntime *rt)
     memset(&g_x11,0,sizeof(g_x11));
     g_x11.rt=rt;
     (void)irix_guest_map(rt,IRIX_X11_DISPLAY_BASE,IRIX_X11_DISPLAY_SHADOW_SIZE,3u);
+    (void)irix_guest_map(rt,IRIX_X11_GC_BASE,IRIX_X11_GC_SHADOW_SIZE,3u);
     if(irix_guest_map(rt,IRIX_X11_TMP_BASE,IRIX_X11_TMP_SIZE,3u)==0 || irix_guest_ptr(rt,IRIX_X11_TMP_BASE,1))
         g_x11.tmp_cur=IRIX_X11_TMP_BASE;
 }
@@ -618,8 +797,8 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
-    MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XFreeGC);
-    MAP(XSetForeground); MAP(XSetBackground); MAP(XSetFunction); MAP(XSetFillStyle); MAP(XSetClipMask); MAP(XSetClipOrigin); MAP(XSetLineAttributes);
+    MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
+    MAP(XSetForeground); MAP(XSetBackground); MAP(XSetFunction); MAP(XSetPlaneMask); MAP(XSetFillStyle); MAP(XSetFillRule); MAP(XSetArcMode); MAP(XSetClipMask); MAP(XSetClipOrigin); MAP(XSetFont); MAP(XSetSubwindowMode); MAP(XSetGraphicsExposures); MAP(XSetLineAttributes);
     MAP(XDrawLine); MAP(XDrawRectangle); MAP(XFillRectangle); MAP(XCopyArea); MAP(XGetGeometry); MAP(XTranslateCoordinates);
     MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
     MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
