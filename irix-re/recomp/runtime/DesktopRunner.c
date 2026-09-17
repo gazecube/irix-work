@@ -140,6 +140,47 @@ static IrixGuestAddr find_named(IrixGuestRuntime *rt, const char *name)
     return 0;
 }
 
+static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestFunctionEntry *below = 0, *above = 0, *ra_fn = 0;
+    IrixGuestAddr pc = rt->trap_pc;
+    IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
+    size_t i;
+
+    for (i = 0; i < rt->function_count; ++i) {
+        IrixGuestFunctionEntry *e = &rt->functions[i];
+        if (e->address <= pc && (!below || e->address > below->address)) below = e;
+        if (e->address > pc && (!above || e->address < above->address)) above = e;
+        if (e->address <= ra && (!ra_fn || e->address > ra_fn->address)) ra_fn = e;
+    }
+
+    fprintf(stderr,
+            "  near: below=0x%08x:%s(+0x%x) above=0x%08x:%s(-0x%x) ra=0x%08x:%s(+0x%x)\n",
+            below ? below->address : 0u, below && below->name ? below->name : "?",
+            below ? (uint32_t)(pc - below->address) : 0u,
+            above ? above->address : 0u, above && above->name ? above->name : "?",
+            above ? (uint32_t)(above->address - pc) : 0u,
+            ra, ra_fn && ra_fn->name ? ra_fn->name : "?",
+            ra_fn ? (uint32_t)(ra - ra_fn->address) : 0u);
+
+    if (pc >= 4u && irix_guest_ptr(rt, pc - 4u, 16u)) {
+        fprintf(stderr,
+                "  insn: [%08x]=%08x [%08x]=%08x [%08x]=%08x [%08x]=%08x\n",
+                pc - 4u, irix_guest_read32be(rt, pc - 4u),
+                pc, irix_guest_read32be(rt, pc),
+                pc + 4u, irix_guest_read32be(rt, pc + 4u),
+                pc + 8u, irix_guest_read32be(rt, pc + 8u));
+    }
+    fprintf(stderr,
+            "  regs: v0=%08x sp=%08x gp=%08x ra=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+            (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[29],
+            (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31],
+            (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+            (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+            (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+            (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+}
+
 static int setup_argv(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int argc, char **argv)
 {
     const IrixGuestAddr base = 0x7fd00000u;
@@ -263,6 +304,7 @@ int main(int argc, char **argv)
                 fault_e && fault_e->name ? fault_e->name : "?",
                 (uint32_t)cpu.pc,
                 caller && caller->name ? caller->name : "?");
+        report_trap_context(&rt, &cpu);
         return 2;
     }
 
