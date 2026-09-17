@@ -36,7 +36,11 @@ def main():
         seen.add((n,addr)); dst=out/(f'{i:04d}_{ident(n)}.c')
         with dst.open('w') as f, contextlib.redirect_stdout(f): t.emit(str(path),n,c_prefix=prefix+'_')
         functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst)))
-    imports=[s for s in raw_function_symbols(path) if s['shndx']==0 and s['address']]
+    # Keep every undefined function symbol, even when st_value is zero.  IRIX
+    # quickstart/prebound binaries may leave the dynamic symbol value unset
+    # while the corresponding GOT entry already contains a callable prebound
+    # address.  gen_prebound_bindings.py recovers that address from the GOT.
+    imports=[s for s in raw_function_symbols(path) if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
     (out/'bundle.json').write_text(json.dumps(meta,indent=2)+'\n')
     with (out/'registry.c').open('w') as w:
