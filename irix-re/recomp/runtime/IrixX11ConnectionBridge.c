@@ -3,6 +3,7 @@
 
 #include <X11/Xlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /*
@@ -32,25 +33,37 @@ static IrixGuestAddr copy_host_string_to_guest(IrixGuestRuntime *rt,
     size_t n;
     void *dst;
 
+    fprintf(stderr, "XRMSTR copy enter s=%p trapped=%d fault=0x%08x\n",
+            (const void *)s, rt->trapped, rt->fault_addr);
     if (!s)
         return 0;
     n = strlen(s) + 1u;
+    fprintf(stderr, "XRMSTR copy strlen n=%zu trapped=%d fault=0x%08x\n",
+            n, rt->trapped, rt->fault_addr);
     if (n > UINT32_MAX)
         return 0;
 
     malloc_fn = irix_libc_bridge_lookup("malloc");
+    fprintf(stderr, "XRMSTR copy malloc_fn=%p\n", (void *)malloc_fn);
     if (!malloc_fn)
         return 0;
     call = *cpu;
     call.gpr[4] = (uint32_t)n;
     malloc_fn(rt, &call);
     out = (IrixGuestAddr)(uint32_t)call.gpr[2];
+    fprintf(stderr,
+            "XRMSTR copy malloc out=0x%08x trapped=%d fault=0x%08x\n",
+            out, rt->trapped, rt->fault_addr);
     if (!out)
         return 0;
     dst = irix_guest_ptr(rt, out, n);
+    fprintf(stderr, "XRMSTR copy guest_ptr=%p\n", dst);
     if (!dst)
         return 0;
     memcpy(dst, s, n);
+    fprintf(stderr,
+            "XRMSTR copy done out=0x%08x trapped=%d fault=0x%08x\n",
+            out, rt->trapped, rt->fault_addr);
     return out;
 }
 
@@ -61,18 +74,38 @@ static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
     const char *resource_string;
     IrixGuestAddr out = 0;
 
+    fprintf(stderr,
+            "XRMSTR bridge enter a0=0x%08x pc=0x%08x trapped=%d fault=0x%08x\n",
+            (uint32_t)cpu->gpr[4], (uint32_t)cpu->pc,
+            rt->trapped, rt->fault_addr);
+
     /* Use the process DISPLAY directly.  The guest Display is a synthetic
        shadow rather than a real SGI Xlib Display, so dereferencing fields from
        it here is both unnecessary and brittle.  XResourceManagerString is a
        server property query; opening the same DISPLAY gives the same value
        without exposing host pointers or depending on shadow layout. */
     dpy = XOpenDisplay(0);
+    fprintf(stderr,
+            "XRMSTR bridge XOpenDisplay=%p trapped=%d fault=0x%08x\n",
+            (void *)dpy, rt->trapped, rt->fault_addr);
     if (dpy) {
         resource_string = XResourceManagerString(dpy);
+        fprintf(stderr,
+                "XRMSTR bridge resource_string=%p trapped=%d fault=0x%08x\n",
+                (const void *)resource_string, rt->trapped, rt->fault_addr);
         out = copy_host_string_to_guest(rt, cpu, resource_string);
+        fprintf(stderr,
+                "XRMSTR bridge copied out=0x%08x trapped=%d fault=0x%08x\n",
+                out, rt->trapped, rt->fault_addr);
         XCloseDisplay(dpy);
+        fprintf(stderr,
+                "XRMSTR bridge closed trapped=%d fault=0x%08x\n",
+                rt->trapped, rt->fault_addr);
     }
     cpu->gpr[2] = out;
+    fprintf(stderr,
+            "XRMSTR bridge exit v0=0x%08x trapped=%d fault=0x%08x\n",
+            out, rt->trapped, rt->fault_addr);
 }
 
 static void bridge_XAddConnectionWatch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
