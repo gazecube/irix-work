@@ -255,10 +255,19 @@ static void bridge_sscanf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)rc;
 }
 
+static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int status = (int)(int32_t)cpu->gpr[4];
+    (void)rt;
+    fflush(NULL);
+    exit(status);
+}
+
 IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
 {
     IrixGuestFunction fn = irix_clib_extra_bridge_lookup_base(name);
     if (fn || !name) return fn;
     if (!strcmp(name, "sscanf")) return bridge_sscanf;
+    if (!strcmp(name, "exit")) return bridge_exit;
     return 0;
 }
