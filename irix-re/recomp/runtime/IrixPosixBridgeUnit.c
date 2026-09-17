@@ -446,6 +446,15 @@ static int write_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
     return rt->trapped ? -1 : 0;
 }
 
+static void bridge_fork(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    pid_t pid;
+    (void)rt;
+
+    pid = fork();
+    ret_i32(cpu, pid < 0 ? -1 : (int)pid);
+}
+
 static void bridge_select(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int nfds = (int)(int32_t)cpu->gpr[4];
@@ -560,6 +569,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
+    if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
