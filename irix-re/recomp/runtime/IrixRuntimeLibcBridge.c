@@ -1,10 +1,14 @@
 #include "IrixRuntimeLibcBridge.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -196,6 +200,87 @@ static void bridge_setpgrp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, setpgrp());
 }
 
+static uint32_t rpc_word(const unsigned char *p)
+{
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return ntohl(v);
+}
+
+static void bridge_pmap_getport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr sa_addr = (uint32_t)cpu->gpr[4];
+    uint32_t prog = (uint32_t)cpu->gpr[5];
+    uint32_t vers = (uint32_t)cpu->gpr[6];
+    uint32_t proto = (uint32_t)cpu->gpr[7];
+    struct sockaddr_in dst;
+    struct pollfd pfd;
+    uint32_t req[14];
+    unsigned char reply[256];
+    uint32_t xid;
+    ssize_t n;
+    size_t off;
+    int fd;
+
+    cpu->gpr[2] = 0;
+    if (!sa_addr || !irix_guest_ptr(rt, sa_addr, 16u)) return;
+
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons(111u);
+    dst.sin_addr.s_addr = htonl(irix_guest_read32be(rt, sa_addr + 4u));
+
+    xid = ((uint32_t)getpid() << 16) ^ (uint32_t)cpu->pc ^ prog ^ vers ^ proto;
+    req[0]  = htonl(xid);
+    req[1]  = htonl(0u);        /* CALL */
+    req[2]  = htonl(2u);        /* RPC version */
+    req[3]  = htonl(100000u);   /* portmapper program */
+    req[4]  = htonl(2u);        /* portmapper v2 */
+    req[5]  = htonl(3u);        /* PMAPPROC_GETPORT */
+    req[6]  = htonl(0u);        /* AUTH_NULL credential */
+    req[7]  = htonl(0u);
+    req[8]  = htonl(0u);        /* AUTH_NULL verifier */
+    req[9]  = htonl(0u);
+    req[10] = htonl(prog);
+    req[11] = htonl(vers);
+    req[12] = htonl(proto);
+    req[13] = htonl(0u);
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return;
+    if (sendto(fd, req, sizeof(req), 0, (struct sockaddr *)&dst, sizeof(dst)) != (ssize_t)sizeof(req)) {
+        close(fd);
+        return;
+    }
+
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    if (poll(&pfd, 1, 300) <= 0 || !(pfd.revents & POLLIN)) {
+        close(fd);
+        return;
+    }
+
+    n = recv(fd, reply, sizeof(reply), 0);
+    close(fd);
+    if (n < 28) return;
+    if (rpc_word(reply + 0) != xid || rpc_word(reply + 4) != 1u || rpc_word(reply + 8) != 0u)
+        return;
+
+    off = 12u;
+    if (off + 8u > (size_t)n) return;
+    off += 4u; /* verifier flavor */
+    {
+        uint32_t verf_len = rpc_word(reply + off);
+        off += 4u;
+        off += (size_t)((verf_len + 3u) & ~3u);
+    }
+    if (off + 8u > (size_t)n) return;
+    if (rpc_word(reply + off) != 0u) return; /* accept_stat */
+    off += 4u;
+    cpu->gpr[2] = (uint32_t)(rpc_word(reply + off) & 0xffffu);
+}
+
 void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
 {
     g_rt = rt;
@@ -211,6 +296,7 @@ IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
     MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
     MAP(strtok); MAP(strtok_r);
     MAP(gettimeofday); MAP(getdomainname); MAP(getgroups); MAP(getdtablehi); MAP(setpgrp);
+    MAP(pmap_getport);
 #undef MAP
     return 0;
 }
