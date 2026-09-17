@@ -137,6 +137,22 @@ static void bridge_XkbLookupKeySym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = ok ? 1u : 0u;
 }
 
+static void bridge_XQueryBestCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    unsigned int width = 0, height = 0;
+    Status ok = 0;
+
+    if (d)
+        ok = XQueryBestCursor(d, (Drawable)(uint32_t)cpu->gpr[5],
+                              (unsigned int)(uint32_t)cpu->gpr[6],
+                              (unsigned int)(uint32_t)cpu->gpr[7],
+                              &width, &height);
+    wr32(rt, (uint32_t)cpu->gpr[8], width);
+    wr32(rt, (uint32_t)cpu->gpr[9], height);
+    cpu->gpr[2] = (uint32_t)ok;
+}
+
 static void bridge_XKeycodeToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
@@ -189,6 +205,7 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XkbLookupKeySym")) return bridge_XkbLookupKeySym;
+    if (!strcmp(name, "XQueryBestCursor")) return bridge_XQueryBestCursor;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;
     if (!strcmp(name, "XKeysymToKeycode")) return bridge_XKeysymToKeycode;
     if (!strcmp(name, "XKeysymToString")) return bridge_XKeysymToString;
