@@ -35,21 +35,14 @@ def main():
     for b in bundles:
         for f in b['functions']: defs.setdefault(f['name'],f['address'])
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
-    entries=[]; trace=[]
+    entries=[]
     for b in bundles:
         pre=dyn_prebound(b['path'])
         for imp in b['imports']:
             name=imp['name']; addrs=[]
             if imp['address']: addrs.append(imp['address'])
             if pre.get(name): addrs.append(pre[name])
-            if name == 'XResourceManagerString':
-                trace.append((b['prefix'], imp['address'], pre.get(name,0), defs.get(name,0)))
             for stub in addrs: entries.append((stub,defs.get(name,0),name,b['prefix']))
-    if trace:
-        print('TRACE XResourceManagerString defs=0x%08x' % defs.get('XResourceManagerString',0))
-        for owner,imp_addr,pre_addr,target in trace:
-            print('TRACE XResourceManagerString owner=%s import=0x%08x prebound=0x%08x target=0x%08x' %
-                  (owner,imp_addr or 0,pre_addr or 0,target or 0))
     by={}; conflicts=[]
     for e in entries:
         addr,target,name,owner=e; old=by.get(addr)
@@ -83,13 +76,9 @@ def main():
             label=json.dumps('native-target:'+name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
         w.write('}\n')
-        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){size_t i;IrixGuestFunctionEntry *chosen;\n')
+        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
         for addr,target,name,owner in missing: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,missing_import,"{owner}:{name}");\n')
-        w.write('fprintf(stderr,"XRMSTR TABLE BEGIN\\n");\n')
-        w.write('for(i=0;i<rt->function_count;++i)if(rt->functions[i].address==0x0f708050u)fprintf(stderr,"XRMSTR entry[%zu] name=%s fn=%p\\n",i,rt->functions[i].name?rt->functions[i].name:"?",(void*)rt->functions[i].function);\n')
-        w.write('chosen=irix_guest_find_function(rt,0x0f708050u);fprintf(stderr,"XRMSTR chosen name=%s fn=%p\\n",chosen&&chosen->name?chosen->name:"?",chosen?(void*)chosen->function:0);\n')
-        w.write('fprintf(stderr,"XRMSTR TABLE END\\n");\n')
         w.write('}\n')
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing]}
     (out/'bindings.json').write_text(json.dumps(data,indent=2)+'\n')
