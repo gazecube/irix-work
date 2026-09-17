@@ -13,7 +13,7 @@ set_target_properties(irix_recomp_runtime PROPERTIES
 
 add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixLibcBridge.c
-    runtime/IrixPosixBridge.c
+    runtime/IrixPosixBridgeUnit.c
     runtime/IrixCLibExtraBridgeUnit.c
     runtime/IrixCxxBridge.c
     runtime/IrixRuntimeLibcBridge.c
