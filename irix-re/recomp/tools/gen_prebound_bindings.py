@@ -51,7 +51,8 @@ def main():
     if conflicts:
         for x in conflicts[:20]: print('CONFLICT',x)
         raise SystemExit(f'{len(conflicts)} binding conflicts')
-    resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
+    resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
+    out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
     with (out/'bindings.c').open('w') as w:
         w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n')
         w.write('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);\n')
@@ -61,7 +62,12 @@ def main():
         w.write('static void forward_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){size_t i;for(i=0;i<sizeof(fwds)/sizeof(fwds[0]);++i)if(fwds[i].stub==cpu->pc){(void)irix_guest_call(rt,cpu,fwds[i].target);return;}fprintf(stderr,"NO FORWARD 0x%08x\\n",cpu->pc);irix_guest_trap(rt,cpu,0xeeee1001u);}\n')
         w.write('static void missing_import(IrixGuestRuntime *rt,IrixGuestCpu *cpu){IrixGuestFunctionEntry*e=irix_guest_find_function(rt,cpu->pc);fprintf(stderr,"MISSING IMPORT pc=0x%08x %s\\n",cpu->pc,e&&e->name?e->name:"?");irix_guest_trap(rt,cpu,0xeeee1002u);}\n')
         w.write('void register_irix_bridge_imports(IrixGuestRuntime *rt,IrixGuestImportResolver resolver){IrixGuestFunction fn;\n')
-        for addr,target,name,owner in missing:
+        w.write('/* Native bridges are allowed to override any import stub by name, even\n')
+        w.write('   when the IRIX image also provides a prebound guest implementation.\n')
+        w.write('   DesktopRunner registers this table before prebound forwarders, and\n')
+        w.write('   guest lookup returns the first address match, so a native bridge wins\n')
+        w.write('   only when resolver(name) actually exists. */\n')
+        for addr,target,name,owner in all_entries:
             q=json.dumps(name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{addr:08x}u,fn,"{owner}:{name}");\n')
         w.write('}\n')
