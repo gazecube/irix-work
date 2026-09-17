@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -232,14 +233,14 @@ static void bridge_pmap_getport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     xid = ((uint32_t)getpid() << 16) ^ (uint32_t)cpu->pc ^ prog ^ vers ^ proto;
     req[0]  = htonl(xid);
-    req[1]  = htonl(0u);        /* CALL */
-    req[2]  = htonl(2u);        /* RPC version */
-    req[3]  = htonl(100000u);   /* portmapper program */
-    req[4]  = htonl(2u);        /* portmapper v2 */
-    req[5]  = htonl(3u);        /* PMAPPROC_GETPORT */
-    req[6]  = htonl(0u);        /* AUTH_NULL credential */
+    req[1]  = htonl(0u);
+    req[2]  = htonl(2u);
+    req[3]  = htonl(100000u);
+    req[4]  = htonl(2u);
+    req[5]  = htonl(3u);
+    req[6]  = htonl(0u);
     req[7]  = htonl(0u);
-    req[8]  = htonl(0u);        /* AUTH_NULL verifier */
+    req[8]  = htonl(0u);
     req[9]  = htonl(0u);
     req[10] = htonl(prog);
     req[11] = htonl(vers);
@@ -269,16 +270,45 @@ static void bridge_pmap_getport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     off = 12u;
     if (off + 8u > (size_t)n) return;
-    off += 4u; /* verifier flavor */
+    off += 4u;
     {
         uint32_t verf_len = rpc_word(reply + off);
         off += 4u;
         off += (size_t)((verf_len + 3u) & ~3u);
     }
     if (off + 8u > (size_t)n) return;
-    if (rpc_word(reply + off) != 0u) return; /* accept_stat */
+    if (rpc_word(reply + off) != 0u) return;
     off += 4u;
     cpu->gpr[2] = (uint32_t)(rpc_word(reply + off) & 0xffffu);
+}
+
+static void dump_vec_words(IrixGuestRuntime *rt, const char *label, IrixGuestAddr addr)
+{
+    if (addr && irix_guest_ptr(rt, addr, 20u)) {
+        fprintf(stderr, " %s=%08x,%08x,%08x,%08x,%08x",
+                label,
+                irix_guest_read32be(rt, addr + 0u),
+                irix_guest_read32be(rt, addr + 4u),
+                irix_guest_read32be(rt, addr + 8u),
+                irix_guest_read32be(rt, addr + 12u),
+                irix_guest_read32be(rt, addr + 16u));
+    }
+}
+
+static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    fprintf(stderr,
+            "VEC_DELETE2 ABI a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+            (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+            (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+            (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+            (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    dump_vec_words(rt, "a0_words", (uint32_t)cpu->gpr[4]);
+    dump_vec_words(rt, "a3_words", (uint32_t)cpu->gpr[7]);
+    dump_vec_words(rt, "a4_words", (uint32_t)cpu->gpr[8]);
+    dump_vec_words(rt, "a5_words", (uint32_t)cpu->gpr[9]);
+    fputc('\n', stderr);
+    irix_guest_trap(rt, cpu, 0xeeee2102u);
 }
 
 void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
@@ -291,6 +321,7 @@ void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
 IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
 {
     if (!name) return 0;
+    if (!strcmp(name, "__vec_delete2")) return bridge___vec_delete2;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(bzero);
     MAP(strcasecmp); MAP(strncasecmp); MAP(strcoll); MAP(strcspn); MAP(strpbrk);
