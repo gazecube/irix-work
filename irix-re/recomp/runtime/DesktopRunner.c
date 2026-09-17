@@ -2,6 +2,7 @@
 #include "IrixLibcBridge.h"
 #include "IrixPosixBridge.h"
 #include "IrixCLibExtraBridge.h"
+#include "IrixCxxBridge.h"
 #include "IrixRuntimeLibcBridge.h"
 #include "IrixFsBridge.h"
 #include "IrixStdioBridge.h"
@@ -62,6 +63,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_stdio_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_clib_extra_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_cxx_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_runtime_libc_bridge_lookup(name);
     if (fn) return fn;
@@ -195,6 +198,7 @@ int main(int argc, char **argv)
         return 1;
     }
     irix_clib_extra_bridge_init(&rt);
+    irix_cxx_bridge_init(&rt);
     irix_runtime_libc_bridge_init(&rt);
     irix_xrm_quark_bridge_init(&rt);
     irix_xrm_compat_init(&rt);
