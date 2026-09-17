@@ -9,6 +9,118 @@
 #define IRIX_FD_SETSIZE 1024
 #define IRIX_FDSET_BYTES 128u
 #define IRIX_SGINAP_HZ 100L
+#define IRIX_SIGSET_WORDS 4u
+#define IRIX_SIGSET_BYTES (IRIX_SIGSET_WORDS * 4u)
+#define IRIX_NSIG 128
+
+static int valid_irix_sigset(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    return addr && irix_guest_ptr(rt, addr, IRIX_SIGSET_BYTES) != 0;
+}
+
+static void bridge_sigemptyset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    unsigned i;
+    if (!valid_irix_sigset(rt, addr)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
+        irix_guest_write32be(rt, addr + (IrixGuestAddr)i * 4u, 0u);
+    ret_i32(cpu, rt->trapped ? -1 : 0);
+}
+
+static void bridge_sigfillset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    unsigned i;
+    if (!valid_irix_sigset(rt, addr)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
+        irix_guest_write32be(rt, addr + (IrixGuestAddr)i * 4u, 0xffffffffu);
+    ret_i32(cpu, rt->trapped ? -1 : 0);
+}
+
+static int irix_sig_bit(int signo, unsigned *word, uint32_t *mask)
+{
+    unsigned bit;
+    if (signo <= 0 || signo > IRIX_NSIG) return -1;
+    bit = (unsigned)(signo - 1);
+    *word = bit / 32u;
+    *mask = 1u << (bit & 31u);
+    return 0;
+}
+
+static void bridge_sigaddset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    int signo = (int)(int32_t)cpu->gpr[5];
+    unsigned word;
+    uint32_t mask, bits;
+    if (!valid_irix_sigset(rt, addr)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (irix_sig_bit(signo, &word, &mask) != 0) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    bits = irix_guest_read32be(rt, addr + (IrixGuestAddr)word * 4u);
+    irix_guest_write32be(rt, addr + (IrixGuestAddr)word * 4u, bits | mask);
+    ret_i32(cpu, rt->trapped ? -1 : 0);
+}
+
+static void bridge_sigdelset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    int signo = (int)(int32_t)cpu->gpr[5];
+    unsigned word;
+    uint32_t mask, bits;
+    if (!valid_irix_sigset(rt, addr)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (irix_sig_bit(signo, &word, &mask) != 0) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    bits = irix_guest_read32be(rt, addr + (IrixGuestAddr)word * 4u);
+    irix_guest_write32be(rt, addr + (IrixGuestAddr)word * 4u, bits & ~mask);
+    ret_i32(cpu, rt->trapped ? -1 : 0);
+}
+
+static void bridge_sigismember(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    int signo = (int)(int32_t)cpu->gpr[5];
+    unsigned word;
+    uint32_t mask, bits;
+    if (!valid_irix_sigset(rt, addr)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (irix_sig_bit(signo, &word, &mask) != 0) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    bits = irix_guest_read32be(rt, addr + (IrixGuestAddr)word * 4u);
+    if (rt->trapped) {
+        ret_i32(cpu, -1);
+        return;
+    }
+    ret_i32(cpu, (bits & mask) ? 1 : 0);
+}
 
 static int read_irix_fdset(IrixGuestRuntime *rt, IrixGuestAddr addr,
                            int nfds, fd_set *out)
@@ -152,6 +264,11 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
 {
     IrixGuestFunction fn = irix_posix_bridge_lookup_base(name);
     if (fn || !name) return fn;
+    if (!strcmp(name, "sigemptyset")) return bridge_sigemptyset;
+    if (!strcmp(name, "sigfillset")) return bridge_sigfillset;
+    if (!strcmp(name, "sigaddset")) return bridge_sigaddset;
+    if (!strcmp(name, "sigdelset")) return bridge_sigdelset;
+    if (!strcmp(name, "sigismember")) return bridge_sigismember;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     return 0;
