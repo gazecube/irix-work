@@ -24,3 +24,15 @@ IrixGuestAddr irix_x11_primary_font_to_guest(IrixGuestRuntime *rt, XFontStruct *
 {
     return font_to_guest(rt, font);
 }
+
+void irix_x11_primary_forget_font(IrixGuestAddr addr)
+{
+    size_t i;
+    for (i = 0; i < g_x11.font_count; ++i) {
+        if (g_x11.font_guest[i] == addr) {
+            g_x11.fonts[i] = 0;
+            g_x11.font_guest[i] = 0;
+            return;
+        }
+    }
+}
