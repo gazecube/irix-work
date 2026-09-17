@@ -1,6 +1,7 @@
 #include "IrixLibcBridge.h"
 
 #include <locale.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -470,6 +471,14 @@ static void bridge_setlocale(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = copy_host_string_to_guest(rt, result);
 }
 
+static void bridge_sqrt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    double value;
+    (void)rt;
+    value = irix_guest_fpr_get_d(cpu, 12);
+    irix_guest_fpr_set_d(cpu, 0, sqrt(value));
+}
+
 int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_t heap_size)
 {
     memset(&g_libc, 0, sizeof(g_libc));
@@ -521,5 +530,6 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "getgid")) return bridge_getgid;
     if (!strcmp(name, "getegid")) return bridge_getegid;
     if (!strcmp(name, "setlocale")) return bridge_setlocale;
+    if (!strcmp(name, "sqrt")) return bridge_sqrt;
     return 0;
 }
