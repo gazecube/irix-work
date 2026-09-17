@@ -140,13 +140,7 @@ def pdr_function_ranges(elf, path, symbol_rows):
     return out
 
 def plausible_mips_entry(elf, addr):
-    """Require a strong function-entry signature for pointer-derived starts.
-
-    The hidden SGI/EDG callbacks observed so far use a conventional stack frame.
-    Accept only addiu/daddiu sp,sp,-N with a nonzero negative frame size.  This
-    intentionally misses frameless leaf functions rather than treating random
-    text addresses as callable entry points.
-    """
+    """Require a strong function-entry signature for pointer-derived starts."""
     try:
         w=elf.words(addr,4)[0]
     except Exception:
@@ -154,15 +148,43 @@ def plausible_mips_entry(elf, addr):
     op=(w>>26)&0x3f; rs=(w>>21)&0x1f; rt=(w>>16)&0x1f; imm=w&0xffff
     return op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff
 
-def data_pointer_function_ranges(elf, path, known_starts):
-    """Recover hidden callable starts materialized as data/GOT pointers.
+def validated_pointer_size(elf, start, provisional_size):
+    """Validate or trim a pointer-derived function extent.
 
-    Scan only allocated, non-executable, file-backed sections for aligned
-    32-bit values pointing into executable sections.  A candidate is accepted
-    only when the target begins with a strong MIPS stack-frame prologue.  Range
-    ends are then derived from the next known or pointer-derived callable start
-    in the same executable section.
+    Pointer tables prove a callable start but not its size.  First try to
+    decode the whole provisional range.  If decoding encounters non-code,
+    accept only a complete function ending at the last `jr ra` plus its delay
+    slot before the failure.  If no such return exists, reject the candidate.
     """
+    try:
+        words=elf.words(start,provisional_size)
+    except Exception:
+        return 0
+
+    last_return_end=0
+    for i,word in enumerate(words):
+        addr=start+i*4
+        try:
+            t.decode(addr,word)
+        except Exception:
+            if last_return_end and last_return_end<=addr:
+                size=last_return_end-start
+                if size>0 and size%4==0:
+                    try:
+                        trimmed=elf.words(start,size)
+                        for j,w in enumerate(trimmed): t.decode(start+j*4,w)
+                        return size
+                    except Exception:
+                        return 0
+            return 0
+        # jr $ra; include the mandatory delay-slot instruction in the extent.
+        if word==0x03e00008 and i+1<len(words):
+            last_return_end=addr+8
+
+    return provisional_size
+
+def data_pointer_function_ranges(elf, path, known_starts):
+    """Recover hidden callable starts materialized as data/GOT pointers."""
     p=Path(path).read_bytes()
     candidates=set()
     exec_sections=[]
@@ -199,6 +221,8 @@ def data_pointer_function_ranges(elf, path, known_starts):
         for addr in local:
             end=next_boundary.get(addr,hi); size=end-addr
             if size<=0 or size%4: continue
+            size=validated_pointer_size(elf,addr,size)
+            if not size: continue
             out.append(('__ptr_%08x'%addr,addr,size,sec_index))
     return out
 
