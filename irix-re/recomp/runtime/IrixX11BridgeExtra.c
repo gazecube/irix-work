@@ -18,6 +18,7 @@
 #define IRIX_X11_GC_BASE 0x72500000u
 #define IRIX_X11_TMP_BASE 0x72600000u
 #define IRIX_X11_TMP_SIZE 0x00100000u
+#define IRIX_X11_MAX_FONTS 256u
 
 typedef struct {
     IrixGuestRuntime *rt;
@@ -25,6 +26,9 @@ typedef struct {
     size_t display_count;
     GC gcs[IRIX_X11_MAX_GCS];
     size_t gc_count;
+    XFontStruct *fonts[IRIX_X11_MAX_FONTS];
+    IrixGuestAddr font_guest[IRIX_X11_MAX_FONTS];
+    size_t font_count;
     IrixGuestAddr tmp_cur;
 } IrixX11ExtraState;
 
@@ -109,11 +113,10 @@ static void write_display_shadow(size_t i, Display *dpy)
     int ns = ScreenCount(dpy);
     int s;
 
-    /* Classic 32-bit Xlib Display layout used by Xlib.h macros on IRIX/N32. */
-    wr32(rt, d + 0, 0);                  /* ext_data */
-    wr32(rt, d + 4, 0);                  /* private1 */
+    wr32(rt, d + 0, 0);
+    wr32(rt, d + 4, 0);
     wr32(rt, d + 8, (uint32_t)ConnectionNumber(dpy));
-    wr32(rt, d + 12, 0);                 /* private2 */
+    wr32(rt, d + 12, 0);
     wr32(rt, d + 16, (uint32_t)ProtocolVersion(dpy));
     wr32(rt, d + 20, (uint32_t)ProtocolRevision(dpy));
     wr32(rt, d + 24, vendor);
@@ -145,7 +148,7 @@ static void write_display_shadow(size_t i, Display *dpy)
         wr32(rt, gs + 20, (uint32_t)hs->mwidth);
         wr32(rt, gs + 24, (uint32_t)hs->mheight);
         wr32(rt, gs + 28, (uint32_t)hs->ndepths);
-        wr32(rt, gs + 32, 0);            /* Depth[] needs explicit marshalling if used. */
+        wr32(rt, gs + 32, 0);
         wr32(rt, gs + 36, (uint32_t)hs->root_depth);
         wr32(rt, gs + 40, gv);
         wr32(rt, gs + 44, gc_to_guest(hs->default_gc));
@@ -198,12 +201,84 @@ static IrixGuestAddr gc_to_guest(GC gc)
     return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * 4u);
 }
 
+static void write_char_struct(IrixGuestRuntime *rt, IrixGuestAddr a, const XCharStruct *c)
+{
+    if (!a || !c) return;
+    irix_guest_write16be(rt, a + 0u, (uint16_t)c->lbearing);
+    irix_guest_write16be(rt, a + 2u, (uint16_t)c->rbearing);
+    irix_guest_write16be(rt, a + 4u, (uint16_t)c->width);
+    irix_guest_write16be(rt, a + 6u, (uint16_t)c->ascent);
+    irix_guest_write16be(rt, a + 8u, (uint16_t)c->descent);
+    irix_guest_write16be(rt, a + 10u, c->attributes);
+}
+
+static IrixGuestAddr font_to_guest(IrixGuestRuntime *rt, XFontStruct *f)
+{
+    IrixGuestAddr out, props = 0, per = 0;
+    size_t i;
+    uint64_t rows, cols, nchar = 0;
+
+    if (!f || g_x11.font_count >= IRIX_X11_MAX_FONTS) return 0;
+    out = tmp_alloc(80u);
+    if (!out) return 0;
+
+    if (f->n_properties > 0 && f->properties) {
+        uint64_t nbytes = (uint64_t)(unsigned)f->n_properties * 8u;
+        if (nbytes > UINT32_MAX) return 0;
+        props = tmp_alloc((uint32_t)nbytes);
+        if (!props) return 0;
+        for (i = 0; i < (size_t)f->n_properties; ++i) {
+            wr32(rt, props + (IrixGuestAddr)i * 8u + 0u, (uint32_t)f->properties[i].name);
+            wr32(rt, props + (IrixGuestAddr)i * 8u + 4u, (uint32_t)f->properties[i].card32);
+        }
+    }
+
+    if (f->per_char) {
+        cols = (uint64_t)f->max_char_or_byte2 - (uint64_t)f->min_char_or_byte2 + 1u;
+        rows = (uint64_t)f->max_byte1 - (uint64_t)f->min_byte1 + 1u;
+        if (f->min_byte1 == 0 && f->max_byte1 == 0) rows = 1u;
+        nchar = rows * cols;
+        if (nchar && nchar <= UINT32_MAX / 12u) {
+            per = tmp_alloc((uint32_t)(nchar * 12u));
+            if (!per) return 0;
+            for (i = 0; i < (size_t)nchar; ++i)
+                write_char_struct(rt, per + (IrixGuestAddr)i * 12u, &f->per_char[i]);
+        }
+    }
+
+    wr32(rt, out + 0u, 0u);
+    wr32(rt, out + 4u, (uint32_t)f->fid);
+    wr32(rt, out + 8u, f->direction);
+    wr32(rt, out + 12u, f->min_char_or_byte2);
+    wr32(rt, out + 16u, f->max_char_or_byte2);
+    wr32(rt, out + 20u, f->min_byte1);
+    wr32(rt, out + 24u, f->max_byte1);
+    wr32(rt, out + 28u, (uint32_t)f->all_chars_exist);
+    wr32(rt, out + 32u, f->default_char);
+    wr32(rt, out + 36u, (uint32_t)f->n_properties);
+    wr32(rt, out + 40u, props);
+    write_char_struct(rt, out + 44u, &f->min_bounds);
+    write_char_struct(rt, out + 56u, &f->max_bounds);
+    wr32(rt, out + 68u, per);
+    wr32(rt, out + 72u, (uint32_t)f->ascent);
+    wr32(rt, out + 76u, (uint32_t)f->descent);
+
+    g_x11.fonts[g_x11.font_count] = f;
+    g_x11.font_guest[g_x11.font_count] = out;
+    ++g_x11.font_count;
+    return out;
+}
+
+static void bridge_XLoadQueryFont(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    XFontStruct *f = (d && name) ? XLoadQueryFont(d, name) : 0;
+    cpu->gpr[2] = font_to_guest(rt, f);
+}
+
 static void bridge_XrmParseCommand(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    /* For the current desktop bootstrap argc is one, so there is nothing to
-       consume. Keep the call ABI-correct and leave the Xrm database untouched.
-       Full option-list marshalling can be layered in when command-line options
-       are actually exercised. */
     (void)rt;
     cpu->gpr[2] = 0;
 }
@@ -223,64 +298,55 @@ static void bridge_XCloseDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XDefaultScreen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DefaultScreen(d) : 0;
 }
 
 static void bridge_XRootWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)RootWindow(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XDefaultRootWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DefaultRootWindow(d) : 0;
 }
 
 static void bridge_XDisplayWidth(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DisplayWidth(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XDisplayHeight(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DisplayHeight(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XDefaultDepth(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DefaultDepth(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XBlackPixel(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)BlackPixel(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XWhitePixel(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)WhitePixel(d, (int)cpu->gpr[5]) : 0;
 }
 
 static void bridge_XDefaultColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)DefaultColormap(d, (int)cpu->gpr[5]) : 0;
 }
 
@@ -321,8 +387,7 @@ SIMPLE_DISPLAY0(bridge_XBell, XBell(d, (int)cpu->gpr[5]))
 
 static void bridge_XCreateSimpleWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)XCreateSimpleWindow(d, (Window)(uint32_t)cpu->gpr[5],
         (int)cpu->gpr[6], (int)cpu->gpr[7], (unsigned)cpu->gpr[8], (unsigned)cpu->gpr[9],
         (unsigned)cpu->gpr[10], (unsigned long)cpu->gpr[11], (unsigned long)cpu->gpr[12]) : 0;
@@ -349,8 +414,7 @@ WINDOW_CALL1(bridge_XSetWindowBorder, XSetWindowBorder(d, (Window)(uint32_t)cpu-
 
 static void bridge_XClearArea(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
-    (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2] = d ? (uint32_t)XClearArea(d, (Window)(uint32_t)cpu->gpr[5],
         (int)cpu->gpr[6], (int)cpu->gpr[7], (unsigned)cpu->gpr[8], (unsigned)cpu->gpr[9], (Bool)cpu->gpr[10]) : 0;
 }
@@ -480,32 +544,19 @@ static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr fg_addr = (uint32_t)cpu->gpr[6];
     IrixGuestAddr bg_addr = (uint32_t)cpu->gpr[7];
     XColor fg, bg;
-
     if (!d || !fg_addr || !bg_addr ||
         !irix_guest_ptr(rt, fg_addr, 12u) || !irix_guest_ptr(rt, bg_addr, 12u)) {
         cpu->gpr[2] = 0;
         return;
     }
-
-    memset(&fg, 0, sizeof(fg));
-    memset(&bg, 0, sizeof(bg));
+    memset(&fg, 0, sizeof(fg)); memset(&bg, 0, sizeof(bg));
     fg.pixel = (unsigned long)irix_guest_read32be(rt, fg_addr + 0u);
-    fg.red = irix_guest_read16be(rt, fg_addr + 4u);
-    fg.green = irix_guest_read16be(rt, fg_addr + 6u);
-    fg.blue = irix_guest_read16be(rt, fg_addr + 8u);
-    fg.flags = (char)irix_guest_read8(rt, fg_addr + 10u);
-    fg.pad = (char)irix_guest_read8(rt, fg_addr + 11u);
+    fg.red = irix_guest_read16be(rt, fg_addr + 4u); fg.green = irix_guest_read16be(rt, fg_addr + 6u); fg.blue = irix_guest_read16be(rt, fg_addr + 8u);
+    fg.flags = (char)irix_guest_read8(rt, fg_addr + 10u); fg.pad = (char)irix_guest_read8(rt, fg_addr + 11u);
     bg.pixel = (unsigned long)irix_guest_read32be(rt, bg_addr + 0u);
-    bg.red = irix_guest_read16be(rt, bg_addr + 4u);
-    bg.green = irix_guest_read16be(rt, bg_addr + 6u);
-    bg.blue = irix_guest_read16be(rt, bg_addr + 8u);
-    bg.flags = (char)irix_guest_read8(rt, bg_addr + 10u);
-    bg.pad = (char)irix_guest_read8(rt, bg_addr + 11u);
-    if (rt->trapped) {
-        cpu->gpr[2] = 0;
-        return;
-    }
-
+    bg.red = irix_guest_read16be(rt, bg_addr + 4u); bg.green = irix_guest_read16be(rt, bg_addr + 6u); bg.blue = irix_guest_read16be(rt, bg_addr + 8u);
+    bg.flags = (char)irix_guest_read8(rt, bg_addr + 10u); bg.pad = (char)irix_guest_read8(rt, bg_addr + 11u);
+    if (rt->trapped) { cpu->gpr[2] = 0; return; }
     cpu->gpr[2] = (uint32_t)XRecolorCursor(d, (Cursor)(uint32_t)cpu->gpr[5], &fg, &bg);
 }
 
@@ -564,7 +615,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XrmParseCommand);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
-    MAP(XInternAtom); MAP(XGetAtomName); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
+    MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XFreeGC);
