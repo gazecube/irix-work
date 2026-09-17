@@ -2,6 +2,7 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -72,6 +73,30 @@ static void bridge_XSaveContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+static void diagnose_find_miss(IrixGuestAddr display, uint32_t rid, int32_t context)
+{
+    size_t i;
+    size_t related = 0;
+
+    fprintf(stderr,
+            "XFindContext MISS display=0x%08x rid=0x%08x context=0x%08x entries=%zu\n",
+            (uint32_t)display, rid, (uint32_t)context, g_ctx.count);
+
+    for (i = 0; i < g_ctx.count; ++i) {
+        const IrixX11ContextEntry *e = &g_ctx.entries[i];
+        if (e->display != display) continue;
+        if (e->rid != rid && e->context != context) continue;
+        fprintf(stderr,
+                "  related[%zu] rid=0x%08x context=0x%08x data=0x%08x%s%s\n",
+                i, e->rid, (uint32_t)e->context, e->data,
+                e->rid == rid ? " same-rid" : "",
+                e->context == context ? " same-context" : "");
+        ++related;
+    }
+    if (!related)
+        fprintf(stderr, "  no entries share this display+rid or display+context\n");
+}
+
 static void bridge_XFindContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr display = (uint32_t)cpu->gpr[4];
@@ -81,6 +106,7 @@ static void bridge_XFindContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixX11ContextEntry *e = find_entry(display, rid, context);
 
     if (!e) {
+        diagnose_find_miss(display, rid, context);
         cpu->gpr[2] = (uint32_t)XCNOENT;
         return;
     }
