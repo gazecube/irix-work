@@ -474,6 +474,41 @@ static void bridge_XCreateFontCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2]=d?(uint32_t)XCreateFontCursor(d,(unsigned)cpu->gpr[5]):0;
 }
 
+static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr fg_addr = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr bg_addr = (uint32_t)cpu->gpr[7];
+    XColor fg, bg;
+
+    if (!d || !fg_addr || !bg_addr ||
+        !irix_guest_ptr(rt, fg_addr, 12u) || !irix_guest_ptr(rt, bg_addr, 12u)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    memset(&fg, 0, sizeof(fg));
+    memset(&bg, 0, sizeof(bg));
+    fg.pixel = (unsigned long)irix_guest_read32be(rt, fg_addr + 0u);
+    fg.red = irix_guest_read16be(rt, fg_addr + 4u);
+    fg.green = irix_guest_read16be(rt, fg_addr + 6u);
+    fg.blue = irix_guest_read16be(rt, fg_addr + 8u);
+    fg.flags = (char)irix_guest_read8(rt, fg_addr + 10u);
+    fg.pad = (char)irix_guest_read8(rt, fg_addr + 11u);
+    bg.pixel = (unsigned long)irix_guest_read32be(rt, bg_addr + 0u);
+    bg.red = irix_guest_read16be(rt, bg_addr + 4u);
+    bg.green = irix_guest_read16be(rt, bg_addr + 6u);
+    bg.blue = irix_guest_read16be(rt, bg_addr + 8u);
+    bg.flags = (char)irix_guest_read8(rt, bg_addr + 10u);
+    bg.pad = (char)irix_guest_read8(rt, bg_addr + 11u);
+    if (rt->trapped) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    cpu->gpr[2] = (uint32_t)XRecolorCursor(d, (Cursor)(uint32_t)cpu->gpr[5], &fg, &bg);
+}
+
 WINDOW_CALL1(bridge_XFreeCursor, XFreeCursor(d,(Cursor)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XDefineCursor, XDefineCursor(d,(Window)(uint32_t)cpu->gpr[5],(Cursor)(uint32_t)cpu->gpr[6]))
 WINDOW_CALL1(bridge_XUndefineCursor, XUndefineCursor(d,(Window)(uint32_t)cpu->gpr[5]))
@@ -535,7 +570,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XFreeGC);
     MAP(XSetForeground); MAP(XSetBackground); MAP(XSetFunction); MAP(XSetFillStyle); MAP(XSetClipMask); MAP(XSetClipOrigin); MAP(XSetLineAttributes);
     MAP(XDrawLine); MAP(XDrawRectangle); MAP(XFillRectangle); MAP(XCopyArea); MAP(XGetGeometry); MAP(XTranslateCoordinates);
-    MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
+    MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
     MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
 #undef MAP
     return 0;
