@@ -200,6 +200,27 @@ static void bridge_fprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)n;
 }
 
+static void bridge_vfprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char buf[8192];
+    IrixGuestAddr fmt_addr = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr va_addr = (uint32_t)cpu->gpr[6];
+    int n;
+
+    /*
+     * IRIX N32 va_list is a pointer into the 8-byte argument save area.
+     * Reuse the normal formatter with register consumption disabled so
+     * next_arg() reads successive 64-bit big-endian slots from va_addr.
+     *
+     * The current stdio bridge does not yet expose arbitrary guest FILE *
+     * objects here; match bridge_fprintf() and direct this path to stderr.
+     */
+    n = format_guest(rt, cpu, fmt_addr, 12u, va_addr, buf, sizeof(buf));
+    if (n >= 0)
+        fputs(buf, stderr);
+    cpu->gpr[2] = (uint64_t)(int64_t)n;
+}
+
 static void bridge_puts(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -300,7 +321,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if(!name)return 0;
     if(!strcmp(name,"__vec_new_eh2"))return bridge___vec_new_eh2;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
-    M(sprintf); M(snprintf); M(printf); M(fprintf); M(puts); M(putchar);
+    M(sprintf); M(snprintf); M(printf); M(fprintf); M(vfprintf); M(puts); M(putchar);
     M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod); M(setoserror); M(oserror);
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);
