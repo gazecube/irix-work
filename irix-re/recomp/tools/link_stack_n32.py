@@ -11,6 +11,12 @@ R_MIPS_32=2; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11
 R_MIPS_GOT_DISP=19; R_MIPS_GOT_PAGE=20; R_MIPS_GOT_OFST=21; R_MIPS_SUB=24; R_MIPS_SCN_DISP=32; R_MIPS_JALR=37
 SMALL={'.srdata','.sdata','.sbss','.lit4','.lit8'}
 
+# libXm's VendorS.o intentionally interposes Motif-aware VendorShell class
+# objects over the baseline Xt Vendor.o definitions.  Keep the synthetic
+# section layout stable, but resolve these two duplicate strong symbols the
+# way a normal -lXm -lXt process does.
+MOTIF_VENDOR_OVERRIDES={'vendorShellClassRec','vendorShellWidgetClass'}
+
 def align(v,a): return (v+a-1)&~(a-1) if a>1 else v
 def sx16(x): return x-0x10000 if x&0x8000 else x
 def p16(b,o,v): struct.pack_into('>H',b,o,v&0xffff)
@@ -104,7 +110,10 @@ class StackLink:
     if a is None or not s['name'] or s['bind'] not in (STB_GLOBAL,STB_WEAK): continue
     old=self.globals.get(s['name'])
     if old is None or (old[1]==STB_WEAK and s['bind']==STB_GLOBAL): self.globals[s['name']]=(a,s['bind'],o.name)
-    elif s['bind']==STB_GLOBAL and old[1]==STB_GLOBAL and old[0]!=a: self.duplicates.append((s['name'],old[2],o.name))
+    elif s['bind']==STB_GLOBAL and old[1]==STB_GLOBAL and old[0]!=a:
+     self.duplicates.append((s['name'],old[2],o.name))
+     if s['name'] in MOTIF_VENDOR_OVERRIDES and old[2]=='Vendor.o' and o.name=='VendorS.o':
+      self.globals[s['name']]=(a,s['bind'],o.name)
   # allocate COMMONs in main BSS-like tail
   for o in self.objs:
    for s in o.syms:
