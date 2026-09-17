@@ -3,7 +3,6 @@
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -89,12 +88,8 @@ static void bridge_XrmQuarkToString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XrmUniqueQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    XrmQuark q = XrmUniqueQuark();
-    fprintf(stderr,
-            "XrmUniqueQuark pc=0x%08x s5/extType=%u -> context=0x%08x\n",
-            (uint32_t)rt->current_pc, (unsigned)(uint32_t)cpu->gpr[21],
-            (uint32_t)q);
-    cpu->gpr[2] = (uint32_t)q;
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)XrmUniqueQuark();
 }
 
 static void bridge__XrmBufferToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -104,10 +99,6 @@ static void bridge__XrmBufferToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *src;
     char *tmp;
 
-    /* SGI's private helper interns a byte buffer which is not required to be
-       NUL-terminated. The remaining private arguments are hash/permanence
-       hints; quark identity is preserved by routing the exact byte sequence
-       through the same host Xrm table used by the public bridge family. */
     if (!addr || len > 0x01000000u) {
         cpu->gpr[2] = 0;
         return;
@@ -200,19 +191,11 @@ void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt)
 IrixGuestFunction irix_xrm_quark_bridge_lookup(const char *name)
 {
     if (!name) return 0;
-
-    /* _XQstring is Xlib's private quark-to-string entry point. Keep it on
-       the same guest-string cache as the public XrmQuarkToString API so no
-       host pointer ever escapes into translated IRIX code. */
     if (!strcmp(name, "_XQstring")) return bridge_XrmQuarkToString;
     if (!strcmp(name, "_XrmBufferToQuark")) return bridge__XrmBufferToQuark;
 
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(XrmQuarkToString);
-    /* XrmStringToQuark and XrmPermStringToQuark intentionally fall through
-       to IrixX11Bridge.c. SGI Xt passes negative fast-quark pseudo-pointers
-       to these entry points; only that bridge decodes them through the
-       extracted _SGIXQuarkNameTable before calling host Xrm. */
     MAP(XrmUniqueQuark);
     MAP(XrmStringToQuarkList);
     MAP(XrmStringToBindingQuarkList);
