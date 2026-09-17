@@ -52,6 +52,8 @@ void irix_x11_connection_bridge_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_connection_bridge_lookup(const char *name);
 void irix_x11_bulk_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_bulk_lookup(const char *name);
+void irix_x11_image_bridge_init(IrixGuestRuntime *rt);
+IrixGuestFunction irix_x11_image_bridge_lookup(const char *name);
 
 static IrixGuestFunction resolve_native(const char *name)
 {
@@ -84,6 +86,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_x11_context_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_x11_window_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_x11_image_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_x11_wm_bridge_lookup(name);
     if (fn) return fn;
@@ -256,6 +260,7 @@ int main(int argc, char **argv)
     irix_x11_connection_bridge_init(&rt);
     irix_x11_context_bridge_init(&rt);
     irix_x11_window_bridge_init(&rt);
+    irix_x11_image_bridge_init(&rt);
     irix_x11_wm_bridge_init(&rt);
     irix_runtime_x11_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
