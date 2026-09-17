@@ -4,6 +4,7 @@
 #include "IrixCLibExtraBridge.h"
 #include "IrixRuntimeLibcBridge.h"
 #include "IrixFsBridge.h"
+#include "IrixStdioBridge.h"
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
 #include "IrixRuntimeX11Bridge.h"
@@ -57,6 +58,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_posix_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_fs_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_stdio_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_clib_extra_bridge_lookup(name);
     if (fn) return fn;
@@ -187,6 +190,10 @@ int main(int argc, char **argv)
     }
     irix_posix_bridge_init(&rt);
     irix_fs_bridge_init(&rt);
+    if (irix_stdio_bridge_init(&rt) != 0) {
+        fprintf(stderr, "failed to initialize guest stdio bridge\n");
+        return 1;
+    }
     irix_clib_extra_bridge_init(&rt);
     irix_runtime_libc_bridge_init(&rt);
     irix_xrm_quark_bridge_init(&rt);
