@@ -285,6 +285,15 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     }
     {
         uint64_t caller_gp = cpu->gpr[28];
+        IrixGuestAddr caller_pc = (IrixGuestAddr)(uint32_t)cpu->pc;
+        if (address == 0x097a82d8u) {
+            fprintf(stderr,
+                    "CLASSRM CALL caller=0x%08x ra=0x%08x sp=0x%08x a0-a5=%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    caller_pc, (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[29],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9]);
+        }
         cpu->pc = address;
         rt->current_pc = address;
         /* N32 PIC entry convention: t9 contains the callee address. */
