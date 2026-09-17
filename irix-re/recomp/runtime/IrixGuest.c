@@ -286,6 +286,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     {
         uint64_t caller_gp = cpu->gpr[28];
         IrixGuestAddr caller_pc = (IrixGuestAddr)(uint32_t)cpu->pc;
+        IrixGuestAddr traced_base_object = 0;
+        IrixGuestAddr traced_base_display = 0;
         if (address == 0x097a82d8u) {
             fprintf(stderr,
                     "CLASSRM CALL caller=0x%08x ra=0x%08x sp=0x%08x a0-a5=%08x,%08x,%08x,%08x,%08x,%08x\n",
@@ -294,11 +296,28 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                     (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9]);
         }
+        if (address == 0x097a6d1cu) {
+            traced_base_object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            traced_base_display = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+            fprintf(stderr,
+                    "BASERM CALL caller=0x%08x obj=0x%08x display=0x%08x screen=0x%08x flag=%08x\n",
+                    caller_pc, traced_base_object, traced_base_display,
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7]);
+        }
         cpu->pc = address;
         rt->current_pc = address;
         /* N32 PIC entry convention: t9 contains the callee address. */
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
+        if (address == 0x097a6d1cu && traced_base_object) {
+            uint32_t display_field = 0;
+            if (irix_guest_ptr(rt, traced_base_object + 8u, 4u))
+                display_field = irix_guest_read32be(rt, traced_base_object + 8u);
+            fprintf(stderr,
+                    "BASERM RET obj=0x%08x display_arg=0x%08x obj+8=0x%08x trapped=%d fault=0x%08x\n",
+                    traced_base_object, traced_base_display, display_field,
+                    rt->trapped, rt->fault_addr);
+        }
         /* $gp is callee-saved in the N32 ABI.  Preserve the caller's value
            across all translated/native guest calls, including bridge entries
            that do not execute a guest epilogue themselves. */
