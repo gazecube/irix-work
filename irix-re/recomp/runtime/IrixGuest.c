@@ -180,11 +180,55 @@ void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
     rt->trap_code = code;
 }
 
+static int try_trivial_stripped_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                     IrixGuestAddr address)
+{
+    IrixGuestAddr object;
+    uint32_t w0, w1, w2, w3, w4;
+
+    if (!address || !irix_guest_ptr(rt, address, 20u))
+        return 0;
+
+    w0 = irix_guest_read32be(rt, address + 0u);
+    w1 = irix_guest_read32be(rt, address + 4u);
+    w2 = irix_guest_read32be(rt, address + 8u);
+    w3 = irix_guest_read32be(rt, address + 12u);
+    w4 = irix_guest_read32be(rt, address + 16u);
+
+    /* SGI/EDG emits tiny local constructors that may have no STT_FUNC symbol.
+       Recognize only the exact leaf sequence observed in libimdUtil:
+         move v0,a0
+         sw   zero,8(a0)
+         sw   zero,4(a0)
+         jr   ra
+         sw   zero,0(a0)   # delay slot
+       Anything else remains a hard invalid-call trap. */
+    if (w0 != 0x00801025u || w1 != 0xac800008u ||
+        w2 != 0xac800004u || w3 != 0x03e00008u ||
+        w4 != 0xac800000u)
+        return 0;
+
+    object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    if (!irix_guest_ptr(rt, object, 12u))
+        return 0;
+
+    irix_guest_write32be(rt, object + 8u, 0u);
+    irix_guest_write32be(rt, object + 4u, 0u);
+    irix_guest_write32be(rt, object + 0u, 0u);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)object;
+    cpu->gpr[0] = 0;
+    return 1;
+}
+
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     if (!entry) {
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
+
+        if (try_trivial_stripped_ctor(rt, cpu, address))
+            return rt->trapped ? -1 : 0;
+
         fprintf(stderr,
                 "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x",
                 address, (uint32_t)cpu->pc, s4);
@@ -194,13 +238,14 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                 (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                 (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
                 (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
-        if (address && irix_guest_ptr(rt, address, 16u)) {
+        if (address && irix_guest_ptr(rt, address, 20u)) {
             fprintf(stderr,
-                    " target_words=%08x,%08x,%08x,%08x",
+                    " target_words=%08x,%08x,%08x,%08x,%08x",
                     irix_guest_read32be(rt, address + 0u),
                     irix_guest_read32be(rt, address + 4u),
                     irix_guest_read32be(rt, address + 8u),
-                    irix_guest_read32be(rt, address + 12u));
+                    irix_guest_read32be(rt, address + 12u),
+                    irix_guest_read32be(rt, address + 16u));
         }
         if (s4 && irix_guest_ptr(rt, s4, 28u)) {
             fprintf(stderr,
