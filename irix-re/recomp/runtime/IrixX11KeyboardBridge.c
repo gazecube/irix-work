@@ -106,6 +106,18 @@ static void bridge_XGetModifierMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out;
 }
 
+static void bridge_XFreeModifiermap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr map = (uint32_t)cpu->gpr[4];
+    (void)rt;
+
+    /* XGetModifierMapping above returns a guest-side copy and frees the host
+       XModifierKeymap immediately.  The guest keyboard scratch arena is
+       monotonic, so there is no individual allocation to release here. */
+    (void)map;
+    cpu->gpr[2] = 1;
+}
+
 static void bridge_XKeycodeToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
@@ -155,7 +167,8 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!name) return 0;
     if (!strcmp(name, "XDisplayKeycodes")) return bridge_XDisplayKeycodes;
     if (!strcmp(name, "XGetKeyboardMapping")) return bridge_XGetKeyboardMapping;
-    if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
+    if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifiermap;
+    if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;
     if (!strcmp(name, "XKeysymToKeycode")) return bridge_XKeysymToKeycode;
     if (!strcmp(name, "XKeysymToString")) return bridge_XKeysymToString;
