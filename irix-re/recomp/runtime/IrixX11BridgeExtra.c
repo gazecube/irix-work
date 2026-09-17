@@ -379,6 +379,19 @@ static void bridge_XrmParseCommand(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+/*
+ * SGI-private Xlib preload hint.  IRIX applications pass a variadic list of
+ * atom-name strings here before opening/initializing their display.  The host
+ * Xlib has no matching API, and actual atom creation/lookup is already handled
+ * by the normal XInternAtom/XInternAtoms bridges, so the preload hint can be
+ * ignored without exposing host pointers or inventing guest atom IDs.
+ */
+static void bridge__XSGIAddToPreloadAtomList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_XOpenDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -791,7 +804,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
 {
     if(!name) return 0;
 #define MAP(n) if(!strcmp(name,#n)) return bridge_##n
-    MAP(XrmParseCommand);
+    MAP(XrmParseCommand); MAP(_XSGIAddToPreloadAtomList);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
     MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
