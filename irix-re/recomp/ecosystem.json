@@ -11,6 +11,12 @@
       "prefix": "fm",
       "kind": "runtime",
       "path": "usr/sbin/fm"
+    },
+    {
+      "name": "fam",
+      "prefix": "fam",
+      "kind": "runtime",
+      "path": "usr/etc/fam"
     }
   ],
   "shared_components": [
