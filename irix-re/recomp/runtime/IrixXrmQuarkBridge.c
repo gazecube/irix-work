@@ -92,6 +92,37 @@ static void bridge_XrmUniqueQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)XrmUniqueQuark();
 }
 
+static void bridge__XrmBufferToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    uint32_t len = (uint32_t)cpu->gpr[5];
+    const char *src;
+    char *tmp;
+
+    /* SGI's private helper interns a byte buffer which is not required to be
+       NUL-terminated. The remaining private arguments are hash/permanence
+       hints; quark identity is preserved by routing the exact byte sequence
+       through the same host Xrm table used by the public bridge family. */
+    if (!addr || len > 0x01000000u) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    src = (const char *)irix_guest_ptr(rt, addr, len ? len : 1u);
+    if (!src || rt->trapped) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    tmp = (char *)malloc((size_t)len + 1u);
+    if (!tmp) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    if (len) memcpy(tmp, src, len);
+    tmp[len] = '\0';
+    cpu->gpr[2] = (uint32_t)XrmStringToQuark(tmp);
+    free(tmp);
+}
+
 static void bridge_XrmStringToQuarkList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -169,6 +200,7 @@ IrixGuestFunction irix_xrm_quark_bridge_lookup(const char *name)
        the same guest-string cache as the public XrmQuarkToString API so no
        host pointer ever escapes into translated IRIX code. */
     if (!strcmp(name, "_XQstring")) return bridge_XrmQuarkToString;
+    if (!strcmp(name, "_XrmBufferToQuark")) return bridge__XrmBufferToQuark;
 
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(XrmQuarkToString);
