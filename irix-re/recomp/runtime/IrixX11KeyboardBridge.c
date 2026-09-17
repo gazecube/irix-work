@@ -167,7 +167,7 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!name) return 0;
     if (!strcmp(name, "XDisplayKeycodes")) return bridge_XDisplayKeycodes;
     if (!strcmp(name, "XGetKeyboardMapping")) return bridge_XGetKeyboardMapping;
-    if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifiermap;
+    if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;
     if (!strcmp(name, "XKeysymToKeycode")) return bridge_XKeysymToKeycode;
