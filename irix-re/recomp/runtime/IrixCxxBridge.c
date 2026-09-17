@@ -2,9 +2,143 @@
 #include "IrixLibcBridge.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 static IrixGuestRuntime *g_rt;
+
+#define IRIX_OSTRSTREAM_SLOTS 32u
+#define IRIX_OSTRSTREAM_TEXT 256u
+
+typedef struct IrixOstrstreamState {
+    IrixGuestAddr object;
+    char text[IRIX_OSTRSTREAM_TEXT];
+    size_t len;
+    int used;
+} IrixOstrstreamState;
+
+static IrixOstrstreamState g_ostrstreams[IRIX_OSTRSTREAM_SLOTS];
+
+static IrixOstrstreamState *ostrstream_find(IrixGuestAddr object)
+{
+    unsigned i;
+    for (i = 0; i < IRIX_OSTRSTREAM_SLOTS; ++i)
+        if (g_ostrstreams[i].used && g_ostrstreams[i].object == object)
+            return &g_ostrstreams[i];
+    return 0;
+}
+
+static IrixOstrstreamState *ostrstream_create(IrixGuestAddr object)
+{
+    IrixOstrstreamState *st = ostrstream_find(object);
+    unsigned i;
+
+    if (st) {
+        st->len = 0;
+        st->text[0] = '\0';
+        return st;
+    }
+
+    for (i = 0; i < IRIX_OSTRSTREAM_SLOTS; ++i) {
+        if (!g_ostrstreams[i].used) {
+            st = &g_ostrstreams[i];
+            memset(st, 0, sizeof(*st));
+            st->used = 1;
+            st->object = object;
+            return st;
+        }
+    }
+    return 0;
+}
+
+static void ostrstream_destroy(IrixGuestAddr object)
+{
+    IrixOstrstreamState *st = ostrstream_find(object);
+    if (st)
+        memset(st, 0, sizeof(*st));
+}
+
+static IrixGuestAddr guest_malloc(IrixGuestRuntime *rt, IrixGuestCpu *caller,
+                                  uint32_t size)
+{
+    IrixGuestFunction malloc_fn = irix_libc_bridge_lookup("malloc");
+    IrixGuestCpu call;
+
+    if (!malloc_fn || !size)
+        return 0;
+    call = *caller;
+    call.gpr[4] = size;
+    malloc_fn(rt, &call);
+    return (IrixGuestAddr)(uint32_t)call.gpr[2];
+}
+
+static void bridge_ostrstream_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    (void)rt;
+
+    if (!object || !ostrstream_create(object)) {
+        irix_guest_trap(rt, cpu, 0xeeee2201u);
+        return;
+    }
+    cpu->gpr[2] = object;
+}
+
+static void bridge_ostream_insert_long(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    int32_t value = (int32_t)(uint32_t)cpu->gpr[5];
+    IrixOstrstreamState *st = ostrstream_find(object);
+    int n;
+
+    if (!st) {
+        irix_guest_trap(rt, cpu, 0xeeee2202u);
+        return;
+    }
+
+    n = snprintf(st->text + st->len, sizeof(st->text) - st->len,
+                 "%ld", (long)value);
+    if (n < 0 || (size_t)n >= sizeof(st->text) - st->len) {
+        irix_guest_trap(rt, cpu, 0xeeee2203u);
+        return;
+    }
+    st->len += (size_t)n;
+    cpu->gpr[2] = object;
+}
+
+static void bridge_ostrstream_str(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixOstrstreamState *st = ostrstream_find(object);
+    IrixGuestAddr out;
+    char *dst;
+
+    if (!st) {
+        irix_guest_trap(rt, cpu, 0xeeee2204u);
+        return;
+    }
+
+    out = guest_malloc(rt, cpu, (uint32_t)st->len + 1u);
+    if (!out) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+    dst = (char *)irix_guest_ptr(rt, out, st->len + 1u);
+    if (!dst) {
+        irix_guest_trap(rt, cpu, 0xeeee2205u);
+        return;
+    }
+    memcpy(dst, st->text, st->len + 1u);
+    cpu->gpr[2] = out;
+}
+
+static void bridge_ostrstream_dtor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    (void)rt;
+    ostrstream_destroy(object);
+    cpu->gpr[2] = object;
+}
 
 static int matches_imd_dictionary_slot_dtor(IrixGuestRuntime *rt,
                                             IrixGuestAddr dtor)
@@ -207,6 +341,7 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 void irix_cxx_bridge_init(IrixGuestRuntime *rt)
 {
     g_rt = rt;
+    memset(g_ostrstreams, 0, sizeof(g_ostrstreams));
     (void)g_rt;
 }
 
@@ -214,5 +349,9 @@ IrixGuestFunction irix_cxx_bridge_lookup(const char *name)
 {
     if (!name) return 0;
     if (!strcmp(name, "__vec_delete2")) return bridge___vec_delete2;
+    if (!strcmp(name, "__ct__10ostrstreamGv")) return bridge_ostrstream_ctor;
+    if (!strcmp(name, "__dt__10ostrstreamGv")) return bridge_ostrstream_dtor;
+    if (!strcmp(name, "str__10ostrstreamGv")) return bridge_ostrstream_str;
+    if (!strcmp(name, "__ls__7ostreamGl")) return bridge_ostream_insert_long;
     return 0;
 }
