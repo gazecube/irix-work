@@ -24,6 +24,21 @@ static int call_guest_dtor(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
     return 0;
 }
 
+static int validate_vec_count(IrixGuestRuntime *rt, IrixGuestAddr array,
+                              uint32_t element_size, uint32_t count)
+{
+    uint64_t total;
+
+    if (!array || !element_size || !count || count > 0x00100000u)
+        return -1;
+    total = (uint64_t)count * (uint64_t)element_size;
+    if (total > UINT32_MAX)
+        return -1;
+    if (!irix_guest_ptr(rt, array, (size_t)total))
+        return -1;
+    return 0;
+}
+
 static int recover_vec_count(IrixGuestRuntime *rt, IrixGuestAddr array,
                              uint32_t element_size, uint32_t *count_out,
                              uint32_t *cookie_back_out)
@@ -38,7 +53,6 @@ static int recover_vec_count(IrixGuestRuntime *rt, IrixGuestAddr array,
         uint32_t back = backs[i];
         IrixGuestAddr cookie;
         uint32_t count;
-        uint64_t total;
 
         if (array < back)
             continue;
@@ -47,13 +61,7 @@ static int recover_vec_count(IrixGuestRuntime *rt, IrixGuestAddr array,
             continue;
 
         count = irix_guest_read32be(rt, cookie);
-        if (!count || count > 0x00100000u)
-            continue;
-
-        total = (uint64_t)count * (uint64_t)element_size;
-        if (total > UINT32_MAX)
-            continue;
-        if (!irix_guest_ptr(rt, array, (size_t)total))
+        if (validate_vec_count(rt, array, element_size, count) != 0)
             continue;
 
         *count_out = count;
@@ -71,6 +79,7 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr dtor = (uint32_t)cpu->gpr[7];
     uint32_t delete_flag = (uint32_t)cpu->gpr[8];
     uint32_t dtor_flag = (uint32_t)cpu->gpr[9];
+    uint32_t extended_count = (uint32_t)cpu->gpr[10];
     uint32_t cookie_back = 0;
     uint64_t total;
     uint32_t i;
@@ -80,10 +89,19 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
 
     if (count == UINT32_MAX) {
-        if (recover_vec_count(rt, array, element_size, &count, &cookie_back) != 0) {
+        if (recover_vec_count(rt, array, element_size, &count, &cookie_back) == 0) {
             fprintf(stderr,
-                    "VEC_DELETE2 COOKIE UNKNOWN array=%08x elem=%u pre=%08x,%08x,%08x,%08x\n",
-                    array, element_size,
+                    "VEC_DELETE2 recovered count=%u cookie_back=%u array=%08x elem=%u\n",
+                    count, cookie_back, array, element_size);
+        } else if (validate_vec_count(rt, array, element_size, extended_count) == 0) {
+            count = extended_count;
+            fprintf(stderr,
+                    "VEC_DELETE2 using SGI extended count=%u array=%08x elem=%u\n",
+                    count, array, element_size);
+        } else {
+            fprintf(stderr,
+                    "VEC_DELETE2 COUNT UNKNOWN array=%08x elem=%u a6=%u pre=%08x,%08x,%08x,%08x\n",
+                    array, element_size, extended_count,
                     array >= 16u && irix_guest_ptr(rt, array - 16u, 4u) ? irix_guest_read32be(rt, array - 16u) : 0u,
                     array >= 12u && irix_guest_ptr(rt, array - 12u, 4u) ? irix_guest_read32be(rt, array - 12u) : 0u,
                     array >= 8u && irix_guest_ptr(rt, array - 8u, 4u) ? irix_guest_read32be(rt, array - 8u) : 0u,
@@ -91,9 +109,6 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             irix_guest_trap(rt, cpu, 0xeeee2103u);
             return;
         }
-        fprintf(stderr,
-                "VEC_DELETE2 recovered count=%u cookie_back=%u array=%08x elem=%u\n",
-                count, cookie_back, array, element_size);
     }
 
     total = (uint64_t)count * (uint64_t)element_size;
