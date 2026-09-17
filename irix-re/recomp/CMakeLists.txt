@@ -17,6 +17,7 @@ add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixCLibExtraBridge.c
     runtime/IrixRuntimeLibcBridge.c
     runtime/IrixFsBridge.c
+    runtime/IrixStdioBridge.c
 )
 target_include_directories(irix_recomp_libc_bridge PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
