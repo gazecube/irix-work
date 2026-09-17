@@ -148,8 +148,6 @@ static void bridge_XrmQuarkToString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_XrmUniqueQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
-    /* Preserve identity for callers that use unique quarks internally.  These
-       have no string representation, matching XrmUniqueQuark semantics. */
     cpu->gpr[2] = (uint32_t)XrmUniqueQuark();
 }
 
@@ -241,14 +239,10 @@ static void bridge_XrmStringToRepresentation(IrixGuestRuntime *rt, IrixGuestCpu 
     cpu->gpr[2] = s ? intern_guest_quark(s) : 0;
 }
 
-void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt,
-                                const char *const *fast_quark_names,
-                                size_t fast_quark_count)
+void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt)
 {
     memset(&g_quark, 0, sizeof(g_quark));
     g_quark.rt = rt;
-    g_quark.fast_quark_names = fast_quark_names;
-    g_quark.fast_quark_count = fast_quark_count;
     if (irix_guest_map(rt, IRIX_XRM_QUARK_VALUE_BASE, IRIX_XRM_QUARK_VALUE_SIZE, 3u) == 0 ||
         irix_guest_ptr(rt, IRIX_XRM_QUARK_VALUE_BASE, 1))
         g_quark.value_cur = IRIX_XRM_QUARK_VALUE_BASE;
