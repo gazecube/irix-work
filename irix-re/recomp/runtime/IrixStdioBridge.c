@@ -3,12 +3,14 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define IRIX_STDIO_BASE 0x34000000u
 #define IRIX_STDIO_ARENA_SIZE 0x00010000u
 #define IRIX_STDIO_SLOT_SIZE 16u
 #define IRIX_STDIO_MAX_FILES (IRIX_STDIO_ARENA_SIZE / IRIX_STDIO_SLOT_SIZE)
-#define IRIX_STDIO_MAGIC 0x49524650u
+#define IRIX_IOEOF 0x10u
+#define IRIX_IOERR 0x20u
 
 typedef struct IrixStdioSlot {
     FILE *host;
@@ -28,20 +30,67 @@ static IrixGuestAddr slot_addr(unsigned i)
     return IRIX_STDIO_BASE + i * IRIX_STDIO_SLOT_SIZE;
 }
 
-static FILE *file_from_guest(IrixGuestRuntime *rt, IrixGuestAddr addr)
+static int slot_index(IrixGuestAddr addr)
 {
+    uint32_t off;
     unsigned i;
     if (addr < IRIX_STDIO_BASE || addr >= IRIX_STDIO_BASE + IRIX_STDIO_ARENA_SIZE)
-        return 0;
-    if ((addr - IRIX_STDIO_BASE) % IRIX_STDIO_SLOT_SIZE)
-        return 0;
-    i = (unsigned)((addr - IRIX_STDIO_BASE) / IRIX_STDIO_SLOT_SIZE);
+        return -1;
+    off = addr - IRIX_STDIO_BASE;
+    if (off % IRIX_STDIO_SLOT_SIZE)
+        return -1;
+    i = (unsigned)(off / IRIX_STDIO_SLOT_SIZE);
     if (i >= IRIX_STDIO_MAX_FILES || !g_files[i].used)
-        return 0;
-    if (irix_guest_read32be(rt, addr) != IRIX_STDIO_MAGIC ||
-        irix_guest_read32be(rt, addr + 4u) != i)
-        return 0;
-    return g_files[i].host;
+        return -1;
+    return (int)i;
+}
+
+static FILE *file_from_guest(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    int i = slot_index(addr);
+    (void)rt;
+    return i >= 0 ? g_files[i].host : 0;
+}
+
+static void sync_file_shadow(IrixGuestRuntime *rt, unsigned i)
+{
+    IrixGuestAddr addr;
+    FILE *f;
+    unsigned flag = 0;
+    int fd = -1;
+
+    if (i >= IRIX_STDIO_MAX_FILES || !g_files[i].used) return;
+    f = g_files[i].host;
+    addr = slot_addr(i);
+
+    if (f) {
+        if (feof(f)) flag |= IRIX_IOEOF;
+        if (ferror(f)) flag |= IRIX_IOERR;
+        fd = fileno(f);
+    }
+
+    /* Exact IRIX N32 FILE layout from SGI stdio.h:
+       +0x00 int _cnt
+       +0x04 unsigned char *_ptr
+       +0x08 unsigned char *_base
+       +0x0c unsigned char _flag
+       +0x0d unsigned char _o_file
+       +0x0e unsigned short _file
+
+       Keep _cnt at zero and _ptr/_base null. SGI getc macros therefore take
+       __filbuf on every byte instead of dereferencing a host buffer pointer. */
+    irix_guest_write32be(rt, addr + 0u, 0u);
+    irix_guest_write32be(rt, addr + 4u, 0u);
+    irix_guest_write32be(rt, addr + 8u, 0u);
+    irix_guest_write8(rt, addr + 12u, (uint8_t)flag);
+    irix_guest_write8(rt, addr + 13u, 0u);
+    irix_guest_write16be(rt, addr + 14u, (uint16_t)(fd >= 0 ? fd : 0xffff));
+}
+
+static void sync_file_by_addr(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    int i = slot_index(addr);
+    if (i >= 0) sync_file_shadow(rt, (unsigned)i);
 }
 
 static IrixGuestAddr alloc_file_handle(IrixGuestRuntime *rt, FILE *host)
@@ -54,10 +103,7 @@ static IrixGuestAddr alloc_file_handle(IrixGuestRuntime *rt, FILE *host)
         g_files[i].used = 1;
         g_files[i].host = host;
         addr = slot_addr(i);
-        irix_guest_write32be(rt, addr + 0u, IRIX_STDIO_MAGIC);
-        irix_guest_write32be(rt, addr + 4u, i);
-        irix_guest_write32be(rt, addr + 8u, 0);
-        irix_guest_write32be(rt, addr + 12u, 0);
+        sync_file_shadow(rt, i);
         return addr;
     }
     return 0;
@@ -65,17 +111,13 @@ static IrixGuestAddr alloc_file_handle(IrixGuestRuntime *rt, FILE *host)
 
 static void free_file_handle(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    unsigned i;
-    if (addr < IRIX_STDIO_BASE || addr >= IRIX_STDIO_BASE + IRIX_STDIO_ARENA_SIZE)
-        return;
-    if ((addr - IRIX_STDIO_BASE) % IRIX_STDIO_SLOT_SIZE)
-        return;
-    i = (unsigned)((addr - IRIX_STDIO_BASE) / IRIX_STDIO_SLOT_SIZE);
-    if (i >= IRIX_STDIO_MAX_FILES) return;
+    int i = slot_index(addr);
+    void *p;
+    if (i < 0) return;
     g_files[i].used = 0;
     g_files[i].host = 0;
-    irix_guest_write32be(rt, addr + 0u, 0);
-    irix_guest_write32be(rt, addr + 4u, 0);
+    p = irix_guest_ptr(rt, addr, IRIX_STDIO_SLOT_SIZE);
+    if (p) memset(p, 0, IRIX_STDIO_SLOT_SIZE);
 }
 
 static void bridge_fopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -97,15 +139,69 @@ static void bridge_fclose(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }
 
+static int get_one(IrixGuestRuntime *rt, IrixGuestAddr handle)
+{
+    FILE *f = file_from_guest(rt, handle);
+    int c = f ? fgetc(f) : EOF;
+    sync_file_by_addr(rt, handle);
+    return c;
+}
+
+static void bridge___filbuf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)get_one(rt, (uint32_t)cpu->gpr[4]);
+}
+
+static void bridge___semgetc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)get_one(rt, (uint32_t)cpu->gpr[4]);
+}
+
+static void bridge_fgetc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge___filbuf(rt, cpu);
+}
+
+static void bridge_getc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge___filbuf(rt, cpu);
+}
+
+static void bridge_ungetc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[5];
+    FILE *f = file_from_guest(rt, handle);
+    int r = f ? ungetc((int)(unsigned char)cpu->gpr[4], f) : EOF;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
+}
+
+static void bridge_fputc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[5];
+    FILE *f = file_from_guest(rt, handle);
+    int r = f ? fputc((int)(unsigned char)cpu->gpr[4], f) : EOF;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
+}
+
+static void bridge_putc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge_fputc(rt, cpu);
+}
+
 static void bridge_fread(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
     uint32_t size = (uint32_t)cpu->gpr[5];
     uint32_t count = (uint32_t)cpu->gpr[6];
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[7]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[7];
+    FILE *f = file_from_guest(rt, handle);
     uint64_t total = (uint64_t)size * count;
     void *dst = total <= SIZE_MAX ? irix_guest_ptr(rt, dst_addr, (size_t)total) : 0;
-    cpu->gpr[2] = (f && (total == 0 || dst)) ? (uint64_t)fread(dst, size, count, f) : 0;
+    size_t r = (f && (total == 0 || dst)) ? fread(dst, size, count, f) : 0;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)r;
 }
 
 static void bridge_fwrite(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -113,60 +209,109 @@ static void bridge_fwrite(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr src_addr = (uint32_t)cpu->gpr[4];
     uint32_t size = (uint32_t)cpu->gpr[5];
     uint32_t count = (uint32_t)cpu->gpr[6];
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[7]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[7];
+    FILE *f = file_from_guest(rt, handle);
     uint64_t total = (uint64_t)size * count;
     const void *src = total <= SIZE_MAX ? irix_guest_ptr(rt, src_addr, (size_t)total) : 0;
-    cpu->gpr[2] = (f && (total == 0 || src)) ? (uint64_t)fwrite(src, size, count, f) : 0;
+    size_t r = (f && (total == 0 || src)) ? fwrite(src, size, count, f) : 0;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)r;
 }
 
 static void bridge_fgets(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
     int size = (int)(int32_t)cpu->gpr[5];
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[6]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[6];
+    FILE *f = file_from_guest(rt, handle);
     char *dst = size > 0 ? (char *)irix_guest_ptr(rt, dst_addr, (size_t)size) : 0;
-    cpu->gpr[2] = (f && dst && fgets(dst, size, f)) ? dst_addr : 0;
+    char *r = (f && dst) ? fgets(dst, size, f) : 0;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = r ? dst_addr : 0;
+}
+
+static void bridge_fputs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[5];
+    FILE *f = file_from_guest(rt, handle);
+    int r = (f && s) ? fputs(s, f) : EOF;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
+}
+
+static void bridge_fflush(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+    int r = f ? fflush(f) : fflush(0);
+    if (f) sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }
 
 static void bridge_fseek(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
     long off = (long)(int32_t)cpu->gpr[5];
     int whence = (int)(int32_t)cpu->gpr[6];
-    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)(f ? fseek(f, off, whence) : -1);
+    int r = f ? fseek(f, off, whence) : -1;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }
 
 static void bridge_ftell(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
     long v = f ? ftell(f) : -1L;
+    sync_file_by_addr(rt, handle);
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)v;
 }
 
 static void bridge_rewind(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
     if (f) rewind(f);
+    sync_file_by_addr(rt, handle);
     cpu->gpr[2] = 0;
 }
 
 static void bridge_feof(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = f ? (uint64_t)(uint32_t)feof(f) : 0;
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+    int r = f ? feof(f) : 0;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(uint32_t)r;
 }
 
 static void bridge_ferror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = f ? (uint64_t)(uint32_t)ferror(f) : 0;
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+    int r = f ? ferror(f) : 0;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(uint32_t)r;
 }
 
 static void bridge_clearerr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    FILE *f = file_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
     if (f) clearerr(f);
+    sync_file_by_addr(rt, handle);
     cpu->gpr[2] = 0;
+}
+
+static void bridge_fileno(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
+    FILE *f = file_from_guest(rt, handle);
+    int fd = f ? fileno(f) : -1;
+    sync_file_by_addr(rt, handle);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)fd;
 }
 
 int irix_stdio_bridge_init(IrixGuestRuntime *rt)
@@ -184,8 +329,10 @@ IrixGuestFunction irix_stdio_bridge_lookup(const char *name)
     (void)g_rt;
     if (!name) return 0;
 #define M(n) if (!strcmp(name, #n)) return bridge_##n
-    M(fopen); M(fclose); M(fread); M(fwrite); M(fgets);
-    M(fseek); M(ftell); M(rewind); M(feof); M(ferror); M(clearerr);
+    M(fopen); M(fclose); M(fread); M(fwrite); M(fgets); M(fputs);
+    M(fgetc); M(getc); M(ungetc); M(fputc); M(putc); M(fflush);
+    M(fseek); M(ftell); M(rewind); M(feof); M(ferror); M(clearerr); M(fileno);
+    M(__filbuf); M(__semgetc);
 #undef M
     return 0;
 }
