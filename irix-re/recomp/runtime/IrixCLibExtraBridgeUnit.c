@@ -2,6 +2,8 @@
 #include "IrixCLibExtraBridge.c"
 #undef irix_clib_extra_bridge_lookup
 
+#include <sys/file.h>
+
 static int g_guest_oserror;
 
 static void scan_write_integer(IrixGuestRuntime *rt, IrixGuestAddr dst,
@@ -265,6 +267,21 @@ static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     exit(status);
 }
 
+static void bridge_guest_flock(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int fd = (int)(int32_t)cpu->gpr[4];
+    int operation = (int)(int32_t)cpu->gpr[5];
+    int rc;
+    (void)rt;
+    errno = 0;
+    rc = flock(fd, operation);
+    if (rc < 0)
+        g_guest_oserror = errno;
+    else
+        g_guest_oserror = 0;
+    cpu->gpr[2] = (uint64_t)(int64_t)rc;
+}
+
 static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int old = g_guest_oserror;
@@ -285,6 +302,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if (!name) return 0;
     if (!strcmp(name, "setoserror")) return bridge_guest_setoserror;
     if (!strcmp(name, "oserror")) return bridge_guest_oserror;
+    if (!strcmp(name, "flock")) return bridge_guest_flock;
     fn = irix_clib_extra_bridge_lookup_base(name);
     if (fn) return fn;
     if (!strcmp(name, "sscanf")) return bridge_sscanf;
