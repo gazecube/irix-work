@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate and compile the translated IRIX N32 Xt/Motif/SGI core stack."""
-import argparse, os, subprocess, sys
+import argparse, json, os, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -76,7 +76,15 @@ def main():
         return
 
     obj.mkdir(parents=True, exist_ok=True)
-    sources = sorted((gen / 'c').rglob('*.c')) + [gen / 'registry.c']
+    manifest = json.loads((gen / 'functions.json').read_text())
+    sources = []
+    seen_sources = set()
+    for row in manifest.get('functions', []):
+        src = Path(row['source'])
+        if src not in seen_sources:
+            sources.append(src)
+            seen_sources.add(src)
+    sources.append(gen / 'registry.c')
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'
 
