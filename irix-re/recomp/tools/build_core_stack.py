@@ -13,6 +13,26 @@ LIBS = [
     ('Uil', 'usr/Motif-1.2/lib32/libUil.a'),
 ]
 
+def discover_support_archives(root, primary):
+    primary_real = {p.resolve() for p in primary}
+    roots = [
+        root / 'usr/lib32',
+        root / 'usr/lib',
+        root / 'usr/Motif-1.2/lib32',
+    ]
+    found = []
+    seen = set()
+    for base in roots:
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob('*.a')):
+            real = p.resolve()
+            if real in primary_real or real in seen:
+                continue
+            seen.add(real)
+            found.append(p)
+    return found
+
 def run(cmd, **kw):
     print('+', ' '.join(map(str, cmd)), flush=True)
     subprocess.run(list(map(str, cmd)), check=True, **kw)
@@ -39,8 +59,14 @@ def main():
             raise SystemExit(f'missing N32 {label} archive: {p}')
         archives.append(p)
 
+    support_archives = discover_support_archives(root, archives)
     out.mkdir(parents=True, exist_ok=True)
-    run([sys.executable, here / 'recomp_linked_stack.py', *archives, '-o', gen])
+    print(f'core archives: primary={len(archives)} support_candidates={len(support_archives)}', flush=True)
+    cmd = [sys.executable, here / 'recomp_linked_stack.py', *archives]
+    for p in support_archives:
+        cmd += ['--support-archive', p]
+    cmd += ['-o', gen]
+    run(cmd)
     if a.generate_only:
         return
 
