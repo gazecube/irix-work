@@ -252,16 +252,6 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1047: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
         return;
-    case 1123: /* setregid */
-        result = (int64_t)setregid((gid_t)(uint32_t)cpu->gpr[4],
-                                   (gid_t)(uint32_t)cpu->gpr[5]);
-        syscall_result(cpu, result);
-        return;
-    case 1124: /* setreuid */
-        result = (int64_t)setreuid((uid_t)(uint32_t)cpu->gpr[4],
-                                   (uid_t)(uint32_t)cpu->gpr[5]);
-        syscall_result(cpu, result);
-        return;
     default:
         fprintf(stderr, "UNIMPLEMENTED IRIX SYSCALL %u pc=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
                 number, (uint32_t)cpu->pc,
