@@ -45,7 +45,7 @@ void register_imdFtrDB(IrixGuestRuntime *rt);
 void register_imdFtrGallery(IrixGuestRuntime *rt);
 void register_imdFtrIcon(IrixGuestRuntime *rt);
 void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
-void register_irix_prebound_imports(IrixGuestRuntime *rt);
+void register_irix_prebound_imports(IrixGuestRuntime *rt, IrixGuestAddr (*data_resolver)(const char *));
 void irix_x11_extra_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_extra_lookup(const char *name);
 void irix_x11_connection_bridge_init(IrixGuestRuntime *rt);
@@ -285,7 +285,7 @@ int main(int argc, char **argv)
     register_imdFtrIcon(&rt);
 
     /* Prebound and missing-import forwarders remain fallback entries. */
-    register_irix_prebound_imports(&rt);
+    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
 
     if (setup_argv(&rt, &cpu, argc, argv) != 0) {
         fprintf(stderr, "failed to construct guest argv/stack\n");
