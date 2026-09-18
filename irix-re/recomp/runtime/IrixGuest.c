@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 {
@@ -192,6 +193,84 @@ void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
     rt->trapped = 1;
     rt->trap_pc = cpu->pc;
     rt->trap_code = code;
+}
+
+static void syscall_result(IrixGuestCpu *cpu, int64_t value)
+{
+    if (value < 0) {
+        cpu->gpr[2] = (uint64_t)(int64_t)errno;
+        cpu->gpr[7] = 1;
+    } else {
+        cpu->gpr[2] = (uint64_t)value;
+        cpu->gpr[7] = 0;
+    }
+}
+
+void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t number = (uint32_t)cpu->gpr[2];
+    int64_t result;
+
+    errno = 0;
+    switch (number) {
+    case 1003: { /* read */
+        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t count = (size_t)(uint32_t)cpu->gpr[6];
+        void *p = irix_guest_ptr(rt, addr, count);
+        if (!p && count) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        result = (int64_t)read((int)(int32_t)cpu->gpr[4], p, count);
+        syscall_result(cpu, result);
+        return;
+    }
+    case 1004: { /* write */
+        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t count = (size_t)(uint32_t)cpu->gpr[6];
+        const void *p = irix_guest_ptr(rt, addr, count);
+        if (!p && count) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        result = (int64_t)write((int)(int32_t)cpu->gpr[4], p, count);
+        syscall_result(cpu, result);
+        return;
+    }
+    case 1006: /* close */
+        result = (int64_t)close((int)(int32_t)cpu->gpr[4]);
+        syscall_result(cpu, result);
+        return;
+    case 1020: /* getpid */
+        syscall_result(cpu, (int64_t)getpid());
+        return;
+    case 1024: /* getuid */
+        syscall_result(cpu, (int64_t)getuid());
+        return;
+    case 1047: /* getgid */
+        syscall_result(cpu, (int64_t)getgid());
+        return;
+    case 1123: /* setregid */
+        result = (int64_t)setregid((gid_t)(uint32_t)cpu->gpr[4],
+                                   (gid_t)(uint32_t)cpu->gpr[5]);
+        syscall_result(cpu, result);
+        return;
+    case 1124: /* setreuid */
+        result = (int64_t)setreuid((uid_t)(uint32_t)cpu->gpr[4],
+                                   (uid_t)(uint32_t)cpu->gpr[5]);
+        syscall_result(cpu, result);
+        return;
+    default:
+        fprintf(stderr, "UNIMPLEMENTED IRIX SYSCALL %u pc=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
+                number, (uint32_t)cpu->pc,
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7]);
+        rt->fault_addr = number;
+        irix_guest_trap(rt, cpu, 0xeeee2303u);
+        return;
+    }
 }
 
 static int try_trivial_stripped_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
