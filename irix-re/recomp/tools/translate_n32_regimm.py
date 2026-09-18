@@ -43,6 +43,14 @@ def decode(addr, insn):
     imm = _base.sx16(insn & 0xffff)
 
     if op == 0x00:
+        if fn == 0x01:
+            cc = (rt >> 2) & 7
+            tf = rt & 1
+            bit = 23 if cc == 0 else 24 + cc
+            cond = '(cpu->fcr31 & (1u << %d)) != 0' % bit
+            if not tf:
+                cond = '!(%s)' % cond
+            return ['if (%s) %s = %s;' % (cond, _base.reg(rd), _base.reg(rs))], None
         if fn == 0x0a:
             return ['if (%s == 0) %s = %s;' % (_base.reg(rt), _base.reg(rd), _base.reg(rs))], None
         if fn == 0x0b:
@@ -55,6 +63,24 @@ def decode(addr, insn):
             return ['%s = (uint64_t)%s >> ((uint64_t)%s & 63u);' % (_base.reg(rd), _base.reg(rt), _base.reg(rs))], None
         if fn == 0x17:
             return ['%s = (uint64_t)((int64_t)%s >> ((uint64_t)%s & 63u));' % (_base.reg(rd), _base.reg(rt), _base.reg(rs))], None
+        if fn == 0x11:
+            return ['cpu->hi = %s;' % _base.reg(rs)], None
+        if fn == 0x13:
+            return ['cpu->lo = %s;' % _base.reg(rs)], None
+        if fn == 0x20:
+            return [
+                '{ int64_t a = (int64_t)(int32_t)(uint32_t)%s; int64_t b = (int64_t)(int32_t)(uint32_t)%s; int64_t v = a + b;' % (_base.reg(rs), _base.reg(rt)),
+                '  if (v < INT32_MIN || v > INT32_MAX) { irix_guest_trap(rt, cpu, 0xeeee2301u); return; }',
+                '  %s = (uint64_t)(int64_t)(int32_t)v; }' % _base.reg(rd)
+            ], None
+        if fn == 0x22:
+            return [
+                '{ int64_t a = (int64_t)(int32_t)(uint32_t)%s; int64_t b = (int64_t)(int32_t)(uint32_t)%s; int64_t v = a - b;' % (_base.reg(rs), _base.reg(rt)),
+                '  if (v < INT32_MIN || v > INT32_MAX) { irix_guest_trap(rt, cpu, 0xeeee2302u); return; }',
+                '  %s = (uint64_t)(int64_t)(int32_t)v; }' % _base.reg(rd)
+            ], None
+        if fn == 0x0c:
+            return ['irix_guest_syscall(rt, cpu);', 'if (rt->trapped) return;'], None
         if fn == 0x1c:
             return ['{ __int128 p = (__int128)(int64_t)%s * (__int128)(int64_t)%s;' % (_base.reg(rs), _base.reg(rt)), '  cpu->lo = (uint64_t)p;', '  cpu->hi = (uint64_t)(((__uint128_t)p) >> 64); }'], None
         if fn == 0x1d:
@@ -91,8 +117,32 @@ def decode(addr, insn):
 
     if op == 0x18:
         return ['%s = (uint64_t)%s + (uint64_t)(int64_t)(int16_t)0x%04xu;' % (_base.reg(rt), _base.reg(rs), insn & 0xffff)], None
+    if op == 0x13:
+        index = rt
+        fd = rd
+        a = '(IrixGuestAddr)((uint32_t)%s + (uint32_t)%s)' % (_base.reg(rs), _base.reg(index))
+        if fn == 0x01:
+            return ['cpu->fpr[%d] = irix_guest_read64be(rt, %s);' % (fd, a)], None
+        if fn == 0x09:
+            return ['irix_guest_write64be(rt, %s, cpu->fpr[%d]);' % (a, fd)], None
     if op == 0x27:
         return ['%s = (uint64_t)irix_guest_read32be(rt, %s);' % (_base.reg(rt), _base.mem_addr(rs, imm))], None
+    if op == 0x2c:
+        a = _base.mem_addr(rs, imm)
+        return [
+            '{ IrixGuestAddr a = %s; IrixGuestAddr q = a & ~7u; unsigned n = a & 7u;' % a,
+            '  uint64_t m = irix_guest_read64be(rt, q); uint64_t v = %s;' % _base.reg(rt),
+            '  uint64_t keep = n ? (~UINT64_C(0) << ((8u - n) * 8u)) : 0u;',
+            '  m = (m & keep) | (v >> (n * 8u)); irix_guest_write64be(rt, q, m); }'
+        ], None
+    if op == 0x2d:
+        a = _base.mem_addr(rs, imm)
+        return [
+            '{ IrixGuestAddr a = %s; IrixGuestAddr q = a & ~7u; unsigned n = a & 7u;' % a,
+            '  unsigned sh = (7u - n) * 8u; uint64_t m = irix_guest_read64be(rt, q); uint64_t v = %s;' % _base.reg(rt),
+            '  uint64_t keep = sh ? ((UINT64_C(1) << sh) - 1u) : 0u;',
+            '  m = (m & keep) | (v << sh); irix_guest_write64be(rt, q, m); }'
+        ], None
     if op in (0x2f, 0x33):
         return ['/* cache/pref hint */'], None
     if op == 0x30:
@@ -118,6 +168,18 @@ def decode(addr, insn):
                 return ['cpu->fcr31 = (uint32_t)%s;' % _base.reg(ft)], None
             return ['/* ctc1 to unmodeled control register */'], None
         if fmt in (0x10, 0x11):
+            if funct == 0x11:
+                cc = (ft >> 2) & 7
+                tf = ft & 1
+                bit = 23 if cc == 0 else 24 + cc
+                cond = '(cpu->fcr31 & (1u << %d)) != 0' % bit
+                if not tf:
+                    cond = '!(%s)' % cond
+                return ['if (%s) cpu->fpr[%d] = cpu->fpr[%d];' % (cond, fd, fs)], None
+            if funct == 0x12:
+                return ['if (%s == 0) cpu->fpr[%d] = cpu->fpr[%d];' % (_base.reg(ft), fd, fs)], None
+            if funct == 0x13:
+                return ['if (%s != 0) cpu->fpr[%d] = cpu->fpr[%d];' % (_base.reg(ft), fd, fs)], None
             rounded = _fp_round(fmt, funct, fs, fd)
             if rounded is not None:
                 return rounded
