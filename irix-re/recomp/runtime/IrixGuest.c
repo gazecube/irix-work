@@ -1,5 +1,6 @@
 #include "IrixGuest.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,7 +83,10 @@ uint16_t irix_guest_read16be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 
 uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
+    uint8_t *p;
+    if (rt->errno_proxy_addr && addr == rt->errno_proxy_addr)
+        return (uint32_t)(int32_t)errno;
+    p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
     if (!p) { memory_fault(rt, addr); return 0; }
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
@@ -111,7 +115,12 @@ void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t val
 
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
 {
-    uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
+    uint8_t *p;
+    if (rt->errno_proxy_addr && addr == rt->errno_proxy_addr) {
+        errno = (int)(int32_t)value;
+        return;
+    }
+    p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
     if (!p) { memory_fault(rt, addr); return; }
     p[0] = (uint8_t)(value >> 24); p[1] = (uint8_t)(value >> 16);
     p[2] = (uint8_t)(value >> 8); p[3] = (uint8_t)value;
@@ -121,6 +130,11 @@ void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t val
 {
     irix_guest_write32be(rt, addr, (uint32_t)(value >> 32));
     irix_guest_write32be(rt, addr + 4, (uint32_t)value);
+}
+
+void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr)
+{
+    rt->errno_proxy_addr = addr;
 }
 
 float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg)
