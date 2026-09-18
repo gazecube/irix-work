@@ -86,10 +86,33 @@ class Obj:
 
 class StackLink:
  def __init__(self,base=0x50000000,small_base=0x60000000,import_base=0x70000000):
-  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.globals={}; self.imports={}; self.data_imports={}; self.synthetic_data={}; self.got={}; self.duplicates=[]
+  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.support_members=[]; self.globals={}; self.imports={}; self.data_imports={}; self.synthetic_data={}; self.got={}; self.duplicates=[]
  def add_archive(self,p):
   for name,data in members(Path(p).read_bytes()):
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
+ def add_support_archive(self,p):
+  for name,data in members(Path(p).read_bytes()):
+   if not data.startswith(b'\x7fELF\x01\x02'): continue
+   o=Obj(str(p),name,data)
+   defs={s['name'] for s in o.syms if s['shndx']!=SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}
+   if defs: self.support_members.append((o,defs))
+ def resolve_support_archives(self):
+  if not self.support_members: return 0
+  loaded_defs={s['name'] for o in self.objs for s in o.syms if s['shndx']!=SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}
+  unresolved={s['name'] for o in self.objs for s in o.syms if s['shndx']==SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}-loaded_defs
+  added=0; remaining=list(self.support_members)
+  while unresolved:
+   changed=False; keep=[]
+   for o,defs in remaining:
+    if defs & unresolved:
+     self.objs.append(o); loaded_defs.update(defs); added+=1; changed=True
+     unresolved={s['name'] for x in self.objs for s in x.syms if s['shndx']==SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}-loaded_defs
+    else:
+     keep.append((o,defs))
+   remaining=keep
+   if not changed: break
+  self.support_members=remaining
+  return added
  def layout(self):
   main=self.base; small=self.small_base
   # ordinary runtime sections first
@@ -241,9 +264,12 @@ class StackLink:
   (out/'link.json').write_text(json.dumps(mani,indent=2)+'\n')
 
 def main():
- ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('-o','--output',required=True); a=ap.parse_args(); L=StackLink()
+ ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('--support-archive',action='append',default=[]); ap.add_argument('-o','--output',required=True); a=ap.parse_args(); L=StackLink()
  for p in a.archives:L.add_archive(p)
+ for p in a.support_archive:L.add_support_archive(p)
+ added=L.resolve_support_archives()
  L.layout(); L.relocate(); L.write(a.output)
+ print(f'support_members_added={added}')
  print(f'objects={len(L.objs)} globals={len(L.globals)} imports={len(L.imports)} data_imports={len(L.data_imports)} got={len(L.got)} relocs={L.relocations}')
  print(f'main={L.base:#x}-{L.main_end:#x} small={L.small_base:#x}-{L.nextgot:#x} gp={L.gp:#x} duplicates={len(L.duplicates)}')
 if __name__=='__main__': main()
