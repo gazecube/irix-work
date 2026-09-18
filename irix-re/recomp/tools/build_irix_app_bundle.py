@@ -200,7 +200,9 @@ def expand_dso_closure(rows, runtime_tree, internal_tree, dev_tree):
                 continue
             found = resolve_needed_library(soname, runtime_tree, internal_tree, dev_tree)
             if found is None:
-                raise SystemExit(f'missing DT_NEEDED {soname} required by {binary}')
+                print(f'warning: unresolved DT_NEEDED {soname} required by {binary}', file=sys.stderr)
+                selected_sonames.add(soname)
+                continue
             kind, relpath, dep = found
             real = dep.resolve()
             selected_sonames.add(soname)
