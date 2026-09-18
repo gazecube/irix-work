@@ -197,10 +197,27 @@ class StackLink:
  def patch_rel(self,o,rs):
   ts=o.sec[rs['info']]
   if ts['no'] not in o.image: return 0
-  b=o.image[ts['no']]; count=0; ent=rs['entsz'] or 8
+  b=o.image[ts['no']]; count=0; ent=rs['entsz'] or 8; pending_hi=[]
+  rows=[]
   for q in range(rs['off'],rs['off']+rs['size'],ent):
-   ro,ri=struct.unpack_from('>II',o.data,q); sn=ri>>8; typ=ri&255; sym=o.syms[sn]; S=self.symaddr(o,sym); word=u32(b,ro)
+   ro,ri=struct.unpack_from('>II',o.data,q); rows.append((ro,ri>>8,ri&255))
+  for ro,sn,typ in rows:
+   sym=o.syms[sn]; S=self.symaddr(o,sym); word=u32(b,ro)
    if typ==R_MIPS_32: p32(b,ro,S+word)
+   elif typ==R_MIPS_HI16:
+    pending_hi.append((ro,sn,sym,S,word&0xffff))
+    count+=1
+    continue
+   elif typ==R_MIPS_LO16:
+    lo=sx16(word&0xffff)
+    matched=[x for x in pending_hi if x[1]==sn]
+    if matched:
+     for hro,hsn,hsym,hS,himm in matched:
+      A=(himm<<16)+lo
+      v=(hS+A)&0xffffffff
+      p16(b,hro+2,hi(v))
+     pending_hi=[x for x in pending_hi if x[1]!=sn]
+    p16(b,ro+2,S+lo)
    elif typ==R_MIPS_CALL16:
     G=self.gotaddr(('sym',sym['name'],S),S); d=self.check16(G-self.gp,'CALL16 '+sym['name']); p16(b,ro+2,d)
    elif typ==R_MIPS_SCN_DISP:
@@ -214,6 +231,9 @@ class StackLink:
     self.check16(v,'GPREL16 '+(sym['name'] or '<section>')); p16(b,ro+2,v)
    else: raise ValueError(f'unsupported runtime REL type {typ} {o.name}:{ts["name"]}+{ro:#x}')
    count+=1
+  if pending_hi:
+   names=', '.join((x[2]['name'] or '<section>') for x in pending_hi[:8])
+   raise ValueError(f'unpaired R_MIPS_HI16 in {o.name}:{ts["name"]}: {names}')
   return count
  def patch_rela(self,o,rs):
   ts=o.sec[rs['info']]
