@@ -95,6 +95,36 @@ def elf_needed(path):
     return out
 
 
+def elf_soname(path):
+    data = Path(path).read_bytes()
+    if len(data) < 52 or data[:6] != b'\x7fELF\x01\x02':
+        return None
+    h = struct.unpack_from('>16sHHIIIIIHHHHHH', data, 0)
+    shoff, shentsz, shnum = h[6], h[11], h[12]
+    if not shoff or not shentsz or not shnum:
+        return None
+    secs = [struct.unpack_from('>IIIIIIIIII', data, shoff + i * shentsz)
+            for i in range(shnum)]
+    for s in secs:
+        if s[1] != 6 or not s[9]:  # SHT_DYNAMIC
+            continue
+        if s[6] >= len(secs):
+            continue
+        strings = secs[s[6]]
+        strtab = data[strings[4]:strings[4] + strings[5]]
+        for off in range(s[4], s[4] + s[5], s[9]):
+            tag, value = struct.unpack_from('>II', data, off)
+            if tag == 0:
+                break
+            if tag != 14:  # DT_SONAME
+                continue
+            end = strtab.find(b'\0', value)
+            if end < 0:
+                return None
+            return strtab[value:end].decode('ascii', 'replace')
+    return None
+
+
 def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
     rows = []
     def add(kind, root, rel):
@@ -105,24 +135,35 @@ def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
             rows.append((kind, root, d))
     add('runtime', runtime_tree, 'usr/lib32')
     add('runtime', runtime_tree, 'usr/lib32/internal')
-    add('runtime', runtime_tree, 'usr/lib')
     add('runtime', runtime_tree, 'usr/Motif-1.2/lib32')
     add('runtime', runtime_tree, 'lib32')
-    add('runtime', runtime_tree, 'lib')
     add('internal', internal_tree, 'usr/lib32/internal')
     add('internal', internal_tree, 'usr/lib32')
     add('dev', dev_tree, 'usr/lib32')
-    add('dev', dev_tree, 'usr/lib')
-    add('dev', dev_tree, 'usr/lib/abi')
     add('dev', dev_tree, 'usr/Motif-1.2/lib32')
     return rows
 
 
 def resolve_needed_library(name, runtime_tree, internal_tree, dev_tree):
-    for kind, root, directory in dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
+    search = dependency_search_dirs(runtime_tree, internal_tree, dev_tree)
+    for kind, root, directory in search:
         candidate = directory / name
         if candidate.is_file():
             return kind, candidate.relative_to(root), candidate
+
+    # IRIX trees are not always laid out with a filename identical to the
+    # DT_NEEDED string. Fall back to the ELF DT_SONAME so an unversioned
+    # libC.so carrying SONAME libC.so.2 still resolves correctly.
+    stem = name.split('.so', 1)[0] + '.so'
+    for kind, root, directory in search:
+        for candidate in sorted(directory.glob(stem + '*')):
+            if not candidate.is_file():
+                continue
+            try:
+                if elf_soname(candidate) == name:
+                    return kind, candidate.relative_to(root), candidate
+            except (OSError, ValueError, struct.error):
+                continue
     return None
 
 
