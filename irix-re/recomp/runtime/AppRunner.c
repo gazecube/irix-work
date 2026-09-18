@@ -26,6 +26,9 @@
 #ifndef IRIX_RUNTIME_TREE
 #define IRIX_RUNTIME_TREE ""
 #endif
+#ifndef IRIX_DEV_TREE
+#define IRIX_DEV_TREE ""
+#endif
 #ifndef IRIX_INTERNAL_TREE
 #define IRIX_INTERNAL_TREE ""
 #endif
@@ -38,7 +41,7 @@
 void irix_register_recompiled_stack(IrixGuestRuntime *rt);
 void irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
 typedef struct IrixAppGuestComponent {
-    int kind; /* 0 = runtime tree, 1 = internal tree */
+    int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */
     const char *path;
 } IrixAppGuestComponent;
 
@@ -230,7 +233,13 @@ int main(int argc, char **argv)
         size_t i;
         for (i = 0; i < irix_app_guest_component_count; ++i) {
             const IrixAppGuestComponent *component = &irix_app_guest_components[i];
-            const char *root = component->kind == 0 ? IRIX_RUNTIME_TREE : IRIX_INTERNAL_TREE;
+            const char *root;
+            if (component->kind == 0)
+                root = IRIX_RUNTIME_TREE;
+            else if (component->kind == 1)
+                root = IRIX_INTERNAL_TREE;
+            else
+                root = IRIX_DEV_TREE;
             if (load_elf(&rt, root, component->path) != 0)
                 return 1;
         }
