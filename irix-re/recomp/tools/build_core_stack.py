@@ -17,7 +17,6 @@ def discover_support_archives(root, primary):
     primary_real = {p.resolve() for p in primary}
     roots = [
         root / 'usr/lib32',
-        root / 'usr/lib',
         root / 'usr/Motif-1.2/lib32',
     ]
     found = []
