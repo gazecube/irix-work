@@ -27,6 +27,11 @@ typedef struct IrixLibcBridgeState {
     IrixGuestAddr heap_cur;
     IrixGuestAddr heap_end;
     IrixGuestAddr errno_addr;
+    IrixGuestAddr optarg_addr;
+    IrixGuestAddr opterr_addr;
+    IrixGuestAddr optind_addr;
+    IrixGuestAddr optopt_addr;
+    IrixGuestAddr getopt_sp_addr;
     IrixGuestAllocation allocs[IRIX_LIBC_MAX_ALLOCS];
     size_t alloc_count;
     IrixEnvCacheEntry env_cache[IRIX_ENV_CACHE_MAX];
@@ -392,6 +397,116 @@ static void bridge_bsearch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 }
 
+static void bridge_getoptreset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    irix_guest_write32be(rt, g_libc.optind_addr, 1u);
+    irix_guest_write32be(rt, g_libc.optarg_addr, 0u);
+    irix_guest_write32be(rt, g_libc.optopt_addr, 0u);
+    irix_guest_write32be(rt, g_libc.getopt_sp_addr, 1u);
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_getopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int argc = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr argv_addr = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr opts_addr = (uint32_t)cpu->gpr[6];
+    const char *opts = guest_cstr(rt, opts_addr);
+    uint32_t optind = irix_guest_read32be(rt, g_libc.optind_addr);
+    uint32_t opterr = irix_guest_read32be(rt, g_libc.opterr_addr);
+    uint32_t sp = irix_guest_read32be(rt, g_libc.getopt_sp_addr);
+    IrixGuestAddr arg_addr = 0;
+    IrixGuestAddr optarg = 0;
+    const char *arg = 0;
+    const char *cp;
+    int result = -1;
+    unsigned char ch = 0;
+
+    if (!opts || argc < 0)
+        goto done;
+
+    if (sp == 1u) {
+        if (optind >= (uint32_t)argc)
+            goto done;
+        arg_addr = irix_guest_read32be(rt, argv_addr + optind * 4u);
+        arg = guest_cstr(rt, arg_addr);
+        if (!arg || arg[0] != '-' || arg[1] == '\0')
+            goto done;
+        if (strcmp(arg, "--") == 0) {
+            ++optind;
+            goto done;
+        }
+    } else {
+        if (optind >= (uint32_t)argc)
+            goto done;
+        arg_addr = irix_guest_read32be(rt, argv_addr + optind * 4u);
+        arg = guest_cstr(rt, arg_addr);
+        if (!arg)
+            goto done;
+    }
+
+    ch = (unsigned char)arg[sp];
+    irix_guest_write32be(rt, g_libc.optopt_addr, (uint32_t)ch);
+    cp = strchr(opts, ch);
+
+    if (ch == ':' || !cp) {
+        if (opterr && opts[0] != ':') {
+            IrixGuestAddr prog_addr = irix_guest_read32be(rt, argv_addr);
+            const char *prog = guest_cstr(rt, prog_addr);
+            fprintf(stderr, "%s: Illegal option -- %c\n", prog ? prog : "getopt", ch);
+        }
+        ++sp;
+        if (arg[sp] == '\0') {
+            ++optind;
+            sp = 1u;
+        }
+        result = '?';
+        goto done;
+    }
+
+    if (cp[1] == ':') {
+        if (arg[sp + 1u] != '\0') {
+            optarg = arg_addr + sp + 1u;
+            ++optind;
+        } else {
+            ++optind;
+            if (optind >= (uint32_t)argc) {
+                sp = 1u;
+                if (opts[0] == ':') {
+                    result = ':';
+                    goto done;
+                }
+                if (opterr) {
+                    IrixGuestAddr prog_addr = irix_guest_read32be(rt, argv_addr);
+                    const char *prog = guest_cstr(rt, prog_addr);
+                    fprintf(stderr, "%s: Option requires an argument -- %c\n",
+                            prog ? prog : "getopt", ch);
+                }
+                result = '?';
+                goto done;
+            }
+            optarg = irix_guest_read32be(rt, argv_addr + optind * 4u);
+            ++optind;
+        }
+        sp = 1u;
+    } else {
+        ++sp;
+        if (arg[sp] == '\0') {
+            sp = 1u;
+            ++optind;
+        }
+        optarg = 0;
+    }
+
+    result = (int)ch;
+
+done:
+    irix_guest_write32be(rt, g_libc.optind_addr, optind);
+    irix_guest_write32be(rt, g_libc.optarg_addr, optarg);
+    irix_guest_write32be(rt, g_libc.getopt_sp_addr, sp);
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)result;
+}
+
 static void bridge_getenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -492,9 +607,20 @@ int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_
     g_libc.heap_cur = heap_base;
     g_libc.heap_end = heap_base + heap_size;
     g_libc.errno_addr = alloc_guest(4u, 4u);
-    if (!g_libc.errno_addr)
+    g_libc.optarg_addr = alloc_guest(4u, 4u);
+    g_libc.opterr_addr = alloc_guest(4u, 4u);
+    g_libc.optind_addr = alloc_guest(4u, 4u);
+    g_libc.optopt_addr = alloc_guest(4u, 4u);
+    g_libc.getopt_sp_addr = alloc_guest(4u, 4u);
+    if (!g_libc.errno_addr || !g_libc.optarg_addr || !g_libc.opterr_addr ||
+        !g_libc.optind_addr || !g_libc.optopt_addr || !g_libc.getopt_sp_addr)
         return -1;
     irix_guest_set_errno_proxy(rt, g_libc.errno_addr);
+    irix_guest_write32be(rt, g_libc.optarg_addr, 0u);
+    irix_guest_write32be(rt, g_libc.opterr_addr, 1u);
+    irix_guest_write32be(rt, g_libc.optind_addr, 1u);
+    irix_guest_write32be(rt, g_libc.optopt_addr, 0u);
+    irix_guest_write32be(rt, g_libc.getopt_sp_addr, 1u);
     return 0;
 }
 
@@ -504,6 +630,16 @@ IrixGuestAddr irix_libc_bridge_data_lookup(const char *name)
         return 0;
     if (!strcmp(name, "errno"))
         return g_libc.errno_addr;
+    if (!strcmp(name, "optarg") || !strcmp(name, "_optarg"))
+        return g_libc.optarg_addr;
+    if (!strcmp(name, "opterr") || !strcmp(name, "_opterr"))
+        return g_libc.opterr_addr;
+    if (!strcmp(name, "optind") || !strcmp(name, "_optind"))
+        return g_libc.optind_addr;
+    if (!strcmp(name, "optopt") || !strcmp(name, "_optopt"))
+        return g_libc.optopt_addr;
+    if (!strcmp(name, "_sp"))
+        return g_libc.getopt_sp_addr;
     return 0;
 }
 
@@ -536,6 +672,8 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "memchr")) return bridge_memchr;
     if (!strcmp(name, "qsort")) return bridge_qsort;
     if (!strcmp(name, "bsearch")) return bridge_bsearch;
+    if (!strcmp(name, "getopt") || !strcmp(name, "_getopt")) return bridge_getopt;
+    if (!strcmp(name, "getoptreset") || !strcmp(name, "_getoptreset")) return bridge_getoptreset;
     if (!strcmp(name, "getenv")) return bridge_getenv;
     if (!strcmp(name, "getpid")) return bridge_getpid;
     if (!strcmp(name, "getppid")) return bridge_getppid;
