@@ -6,6 +6,8 @@ from link_stack_n32 import StackLink
 from translate_n32_core import decode
 
 STT_FUNC=2
+BATCH_FUNCTIONS=128
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]','_',s)
 
@@ -20,7 +22,7 @@ def write_if_changed(path, text):
  path.write_text(text)
  return True
 
-def emit_function(path, cname, source, name, start, words):
+def render_function(cname, source, name, start, words):
  w=io.StringIO(); p=lambda x='': print(x,file=w)
  p(f'/* Relocated IRIX N32: {source}: {name} @ 0x{start:08x}, 0x{len(words)*4:x} bytes. */')
  p('#include "IrixGuest.h"'); p('#include <math.h>'); p()
@@ -56,7 +58,7 @@ def emit_function(path, cname, source, name, start, words):
  p('        pc += 4;')
  p('    }')
  p('}')
- return write_if_changed(path,w.getvalue())
+ return w.getvalue()
 
 def main():
  ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('--support-archive',action='append',default=[]); ap.add_argument('-o','--output',required=True); a=ap.parse_args()
@@ -66,19 +68,33 @@ def main():
  for p in a.support_archive:L.add_support_archive(p)
  support_added=L.resolve_support_archives()
  L.layout(); L.relocate(); L.write(out/'image')
- funcs=[]; failed=[]; changed=0; unchanged=0
+ funcs=[]; failed=[]; changed=0; unchanged=0; batch_count=0
  for oi,o in enumerate(L.objs):
   arc=ident(Path(o.archive).stem); obj=ident(Path(o.name).stem); od=out/'c'/f'{oi:04d}_{arc}_{obj}'; od.mkdir(parents=True,exist_ok=True)
+  batch_bodies=[]; batch_rows=[]; object_batch=0
+  def flush_batch():
+   nonlocal batch_bodies,batch_rows,object_batch,batch_count,changed,unchanged
+   if not batch_rows: return
+   dst=od/f'batch_{object_batch:04d}.c'
+   text=BATCH_PREAMBLE+''.join(batch_bodies)
+   if write_if_changed(dst,text): changed+=1
+   else: unchanged+=1
+   for row in batch_rows: row['source']=str(dst)
+   object_batch+=1; batch_count+=1; batch_bodies=[]; batch_rows=[]
   for si,s in enumerate(o.syms):
    if s['type']!=STT_FUNC or not s['size'] or s['shndx'] not in o.image: continue
    if s['value']+s['size']>len(o.image[s['shndx']]) or s['size']%4: failed.append({'object':o.name,'name':s['name'],'error':'invalid function extent'}); continue
    start=o.base[s['shndx']]+s['value']; b=o.image[s['shndx']][s['value']:s['value']+s['size']]; words=struct.unpack('>%dI'%(len(b)//4),b)
-   cname=f'irix_recomp_o{oi:04d}_s{si:04d}_{ident(s["name"])}'; dst=od/f'{si:04d}_{ident(s["name"])}.c'
+   cname=f'irix_recomp_o{oi:04d}_s{si:04d}_{ident(s["name"])}'
    try:
-    if emit_function(dst,cname,f'{Path(o.archive).name}:{o.name}',s['name'],start,words): changed+=1
-    else: unchanged+=1
+    body=render_function(cname,f'{Path(o.archive).name}:{o.name}',s['name'],start,words)
    except Exception as exc: failed.append({'object':o.name,'name':s['name'],'address':start,'error':str(exc)}); continue
-   funcs.append({'address':start,'size':s['size'],'name':s['name'],'c_name':cname,'archive':o.archive,'member':o.name,'source':str(dst)})
+   marker=body.find('void '+cname)
+   if marker<0: failed.append({'object':o.name,'name':s['name'],'address':start,'error':'generated body marker missing'}); continue
+   row={'address':start,'size':s['size'],'name':s['name'],'c_name':cname,'archive':o.archive,'member':o.name}
+   funcs.append(row); batch_rows.append(row); batch_bodies.append(body[marker:].rstrip()+'\n\n')
+   if len(batch_rows)>=BATCH_FUNCTIONS: flush_batch()
+  flush_batch()
  funcs.sort(key=lambda x:x['address'])
  w=io.StringIO(); print('#include "IrixGuest.h"',file=w); print('#include <stdio.h>',file=w); print(file=w)
  print('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);',file=w); print(file=w)
@@ -103,7 +119,7 @@ def main():
  if write_if_changed(out/'registry.c',w.getvalue()): changed+=1
  else: unchanged+=1
  write_if_changed(out/'functions.json',json.dumps({'functions':funcs,'failed':failed,'imports':L.imports,'gp':L.gp},indent=2)+'\n')
- print(f'functions={len(funcs)} failed={len(failed)} imports={len(L.imports)} relocations={L.relocations} support_members={support_added} changed={changed} unchanged={unchanged}')
+ print(f'functions={len(funcs)} batches={batch_count} failed={len(failed)} imports={len(L.imports)} relocations={L.relocations} support_members={support_added} changed={changed} unchanged={unchanged}')
  if failed:
   for x in failed[:30]: print('FAIL',x)
   raise SystemExit(1)
