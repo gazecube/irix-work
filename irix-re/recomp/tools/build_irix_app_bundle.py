@@ -106,6 +106,7 @@ def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
     add('runtime', runtime_tree, 'usr/lib32')
     add('runtime', runtime_tree, 'usr/lib32/internal')
     add('runtime', runtime_tree, 'usr/lib')
+    add('runtime', runtime_tree, 'usr/Motif-1.2/lib32')
     add('runtime', runtime_tree, 'lib32')
     add('runtime', runtime_tree, 'lib')
     add('internal', internal_tree, 'usr/lib32/internal')
