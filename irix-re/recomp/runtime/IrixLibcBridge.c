@@ -26,6 +26,7 @@ typedef struct IrixLibcBridgeState {
     IrixGuestAddr heap_base;
     IrixGuestAddr heap_cur;
     IrixGuestAddr heap_end;
+    IrixGuestAddr errno_addr;
     IrixGuestAllocation allocs[IRIX_LIBC_MAX_ALLOCS];
     size_t alloc_count;
     IrixEnvCacheEntry env_cache[IRIX_ENV_CACHE_MAX];
@@ -490,6 +491,19 @@ int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_
     g_libc.heap_base = heap_base;
     g_libc.heap_cur = heap_base;
     g_libc.heap_end = heap_base + heap_size;
+    g_libc.errno_addr = alloc_guest(4u, 4u);
+    if (!g_libc.errno_addr)
+        return -1;
+    irix_guest_set_errno_proxy(rt, g_libc.errno_addr);
+    return 0;
+}
+
+IrixGuestAddr irix_libc_bridge_data_lookup(const char *name)
+{
+    if (!name)
+        return 0;
+    if (!strcmp(name, "errno"))
+        return g_libc.errno_addr;
     return 0;
 }
 
