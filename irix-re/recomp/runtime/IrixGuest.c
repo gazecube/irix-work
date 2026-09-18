@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
@@ -195,6 +197,107 @@ void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
     rt->trap_code = code;
 }
 
+static uint32_t irix_syscall_dev(dev_t d)
+{
+    return ((uint32_t)major(d) << 18) | ((uint32_t)minor(d) & 0x3ffffu);
+}
+
+static int write_irix_xstat32(IrixGuestRuntime *rt, IrixGuestAddr out,
+                              const struct stat *st)
+{
+    unsigned char *p;
+    if (!out || !st) {
+        errno = EFAULT;
+        return -1;
+    }
+    p = (unsigned char *)irix_guest_ptr(rt, out, 136u);
+    if (!p) {
+        errno = EFAULT;
+        return -1;
+    }
+    memset(p, 0, 136u);
+    irix_guest_write32be(rt, out + 0u, irix_syscall_dev(st->st_dev));
+    irix_guest_write32be(rt, out + 16u, (uint32_t)st->st_ino);
+    irix_guest_write32be(rt, out + 20u, (uint32_t)st->st_mode);
+    irix_guest_write32be(rt, out + 24u, (uint32_t)st->st_nlink);
+    irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_uid);
+    irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_gid);
+    irix_guest_write32be(rt, out + 36u, irix_syscall_dev(st->st_rdev));
+    irix_guest_write32be(rt, out + 48u, (uint32_t)st->st_size);
+#if defined(__APPLE__)
+    irix_guest_write32be(rt, out + 56u, (uint32_t)st->st_atimespec.tv_sec);
+    irix_guest_write32be(rt, out + 60u, (uint32_t)st->st_atimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 64u, (uint32_t)st->st_mtimespec.tv_sec);
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_mtimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_ctimespec.tv_sec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_ctimespec.tv_nsec);
+#else
+    irix_guest_write32be(rt, out + 56u, (uint32_t)st->st_atim.tv_sec);
+    irix_guest_write32be(rt, out + 60u, (uint32_t)st->st_atim.tv_nsec);
+    irix_guest_write32be(rt, out + 64u, (uint32_t)st->st_mtim.tv_sec);
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_mtim.tv_nsec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_ctim.tv_sec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_ctim.tv_nsec);
+#endif
+    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_blksize);
+    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_blocks);
+    memcpy(p + 88u, "efs", 4u);
+    return rt->trapped ? -1 : 0;
+}
+
+static int write_irix_xstat64(IrixGuestRuntime *rt, IrixGuestAddr out,
+                              const struct stat *st)
+{
+    unsigned char *p;
+    if (!out || !st) {
+        errno = EFAULT;
+        return -1;
+    }
+    p = (unsigned char *)irix_guest_ptr(rt, out, 152u);
+    if (!p) {
+        errno = EFAULT;
+        return -1;
+    }
+    memset(p, 0, 152u);
+    irix_guest_write32be(rt, out + 0u, irix_syscall_dev(st->st_dev));
+    irix_guest_write64be(rt, out + 16u, (uint64_t)st->st_ino);
+    irix_guest_write32be(rt, out + 24u, (uint32_t)st->st_mode);
+    irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_nlink);
+    irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_uid);
+    irix_guest_write32be(rt, out + 36u, (uint32_t)st->st_gid);
+    irix_guest_write32be(rt, out + 40u, irix_syscall_dev(st->st_rdev));
+    irix_guest_write64be(rt, out + 56u, (uint64_t)(int64_t)st->st_size);
+#if defined(__APPLE__)
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_atimespec.tv_sec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_atimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_mtimespec.tv_sec);
+    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_mtimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_ctimespec.tv_sec);
+    irix_guest_write32be(rt, out + 88u, (uint32_t)st->st_ctimespec.tv_nsec);
+#else
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_atim.tv_sec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_atim.tv_nsec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_mtim.tv_sec);
+    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_mtim.tv_nsec);
+    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_ctim.tv_sec);
+    irix_guest_write32be(rt, out + 88u, (uint32_t)st->st_ctim.tv_nsec);
+#endif
+    irix_guest_write32be(rt, out + 92u, (uint32_t)st->st_blksize);
+    irix_guest_write64be(rt, out + 96u, (uint64_t)(int64_t)st->st_blocks);
+    return rt->trapped ? -1 : 0;
+}
+
+static int write_irix_xstat(IrixGuestRuntime *rt, uint32_t version,
+                            IrixGuestAddr out, const struct stat *st)
+{
+    if (version == 2u)
+        return write_irix_xstat32(rt, out, st);
+    if (version == 3u)
+        return write_irix_xstat64(rt, out, st);
+    errno = EINVAL;
+    return -1;
+}
+
 static void syscall_result(IrixGuestCpu *cpu, int64_t value)
 {
     if (value < 0) {
@@ -252,6 +355,51 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1047: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
         return;
+    case 1158: { /* xstat(version, path, statbuf) */
+        uint32_t version = (uint32_t)cpu->gpr[4];
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        const char *path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        struct stat st;
+        if (!path) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        result = (int64_t)stat(path, &st);
+        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+            result = -1;
+        syscall_result(cpu, result);
+        return;
+    }
+    case 1159: { /* lxstat(version, path, statbuf) */
+        uint32_t version = (uint32_t)cpu->gpr[4];
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        const char *path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        struct stat st;
+        if (!path) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        result = (int64_t)lstat(path, &st);
+        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+            result = -1;
+        syscall_result(cpu, result);
+        return;
+    }
+    case 1160: { /* fxstat(version, fd, statbuf) */
+        uint32_t version = (uint32_t)cpu->gpr[4];
+        int fd = (int)(int32_t)cpu->gpr[5];
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        struct stat st;
+        result = (int64_t)fstat(fd, &st);
+        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+            result = -1;
+        syscall_result(cpu, result);
+        return;
+    }
     default:
         fprintf(stderr, "UNIMPLEMENTED IRIX SYSCALL %u pc=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
                 number, (uint32_t)cpu->pc,
