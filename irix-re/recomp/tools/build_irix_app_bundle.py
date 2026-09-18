@@ -16,6 +16,14 @@ def run(cmd, **kw):
     subprocess.run(list(map(str, cmd)), check=True, **kw)
 
 
+def write_if_changed(path, text):
+    path = Path(path)
+    if path.is_file() and path.read_text() == text:
+        return False
+    path.write_text(text)
+    return True
+
+
 def load_manifest(path):
     data = json.loads(Path(path).read_text())
     if not isinstance(data.get('apps'), list):
@@ -286,25 +294,26 @@ def main():
          *bundles, '-o', bind])
 
     descriptor = gen / 'app_components.c'
-    with descriptor.open('w') as w:
-        w.write('#include "IrixGuest.h"\n#include <stddef.h>\n\n')
-        w.write('typedef struct IrixAppGuestComponent {\n')
-        w.write('    int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */\n')
-        w.write('    const char *path;\n')
-        w.write('} IrixAppGuestComponent;\n\n')
-        for row in rows:
-            w.write(f"void register_{row['prefix']}(IrixGuestRuntime *rt);\n")
-        w.write('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
-        for row in rows:
-            kind = {'runtime': 0, 'internal': 1, 'dev': 2}[row['kind']]
-            w.write(f'    {{{kind}, {json.dumps(row["path"])}}},\n')
-        w.write('};\n')
-        w.write('const size_t irix_app_guest_component_count =\n')
-        w.write('    sizeof(irix_app_guest_components) / sizeof(irix_app_guest_components[0]);\n\n')
-        w.write('void irix_register_app_bundle(IrixGuestRuntime *rt)\n{\n')
-        for row in rows:
-            w.write(f"    register_{row['prefix']}(rt);\n")
-        w.write('}\n')
+    descriptor_text = []
+    descriptor_text.append('#include "IrixGuest.h"\n#include <stddef.h>\n\n')
+    descriptor_text.append('typedef struct IrixAppGuestComponent {\n')
+    descriptor_text.append('    int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */\n')
+    descriptor_text.append('    const char *path;\n')
+    descriptor_text.append('} IrixAppGuestComponent;\n\n')
+    for row in rows:
+        descriptor_text.append(f"void register_{row['prefix']}(IrixGuestRuntime *rt);\n")
+    descriptor_text.append('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
+    for row in rows:
+        kind = {'runtime': 0, 'internal': 1, 'dev': 2}[row['kind']]
+        descriptor_text.append(f'    {{{kind}, {json.dumps(row["path"])}}},\n')
+    descriptor_text.append('};\n')
+    descriptor_text.append('const size_t irix_app_guest_component_count =\n')
+    descriptor_text.append('    sizeof(irix_app_guest_components) / sizeof(irix_app_guest_components[0]);\n\n')
+    descriptor_text.append('void irix_register_app_bundle(IrixGuestRuntime *rt)\n{\n')
+    for row in rows:
+        descriptor_text.append(f"    register_{row['prefix']}(rt);\n")
+    descriptor_text.append('}\n')
+    write_if_changed(descriptor, ''.join(descriptor_text))
 
     summary = {
         'app': app,
@@ -312,15 +321,24 @@ def main():
         'core_link': str(a.core_link),
         'bindings': str(bind / 'bindings.json'),
     }
-    (out / f"{a.app}.json").write_text(json.dumps(summary, indent=2) + '\n')
+    write_if_changed(out / f"{a.app}.json", json.dumps(summary, indent=2) + '\n')
     if a.generate_only:
         return
 
     obj.mkdir(parents=True, exist_ok=True)
     sources = []
+    seen_sources = set()
     for bundle in bundles:
-        d = bundle.parent
-        sources.extend(sorted(d.glob('*.c')))
+        meta = json.loads(bundle.read_text())
+        for row in meta.get('functions', []):
+            src = Path(row['source'])
+            if src not in seen_sources:
+                sources.append(src)
+                seen_sources.add(src)
+        registry = bundle.parent / 'registry.c'
+        if registry not in seen_sources:
+            sources.append(registry)
+            seen_sources.add(registry)
     sources.append(bind / 'bindings.c')
     sources.append(descriptor)
 
