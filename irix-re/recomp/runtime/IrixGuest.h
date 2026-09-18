@@ -81,6 +81,7 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
+void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
                              IrixGuestAddr *entry_out);
 
