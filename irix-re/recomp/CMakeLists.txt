@@ -187,6 +187,7 @@ if(IRIX_DEV_TREE)
                             --app "${_app_name}"
                             --runtime-tree "${IRIX_RUNTIME_TREE}"
                             --internal-tree "${IRIX_INTERNAL_TREE}"
+                            --dev-tree "${IRIX_DEV_TREE}"
                             --core-link "${IRIX_RECOMP_CORE_LINK}"
                             -o "${_app_dir}"
                             --cc "${CMAKE_C_COMPILER}"
@@ -222,6 +223,7 @@ if(IRIX_DEV_TREE)
                 target_compile_definitions(${_app_runner_target} PRIVATE
                     IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
                     IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                    IRIX_DEV_TREE="${IRIX_DEV_TREE}"
                     IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
                     IRIX_APP_NAME="${_app_name}"
                     IRIX_APP_PATH="${_app_path}"
