@@ -10,7 +10,7 @@ extern "C" {
 
 #define IRIX_GUEST_GPR_COUNT 32
 #define IRIX_GUEST_MAX_SEGMENTS 256
-#define IRIX_GUEST_MAX_FUNCTIONS 32768
+#define IRIX_GUEST_MAX_FUNCTIONS 131072
 
 typedef uint32_t IrixGuestAddr;
 
