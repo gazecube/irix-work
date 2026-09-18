@@ -95,6 +95,9 @@ class StackLink:
   if raw[:8]!=b'!<arch>\n': return
   for name,data in members(raw):
    if not data.startswith(b'\x7fELF\x01\x02'): continue
+   if len(data)<40: continue
+   e_flags=struct.unpack_from('>I',data,36)[0]
+   if not (e_flags&0x20): continue  # EF_MIPS_ABI2: N32 only
    o=Obj(str(p),name,data)
    defs={s['name'] for s in o.syms if s['shndx']!=SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}
    if defs: self.support_members.append((o,defs))
