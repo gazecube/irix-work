@@ -114,6 +114,30 @@ static void bridge_ostream_insert_long(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = object;
 }
 
+static void bridge_ostream_insert_cstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr string_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixOstrstreamState *st = ostrstream_find(object);
+    const char *s = (const char *)irix_guest_ptr(rt, string_addr, 1);
+    size_t n;
+
+    if (!st || !s) {
+        irix_guest_trap(rt, cpu, 0xeeee2206u);
+        return;
+    }
+
+    n = strlen(s);
+    if (n >= sizeof(st->text) - st->len) {
+        irix_guest_trap(rt, cpu, 0xeeee2207u);
+        return;
+    }
+
+    memcpy(st->text + st->len, s, n + 1u);
+    st->len += n;
+    cpu->gpr[2] = object;
+}
+
 static void bridge_ostrstream_str(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
@@ -361,5 +385,7 @@ IrixGuestFunction irix_cxx_bridge_lookup(const char *name)
     if (!strcmp(name, "__dt__10ostrstreamGv")) return bridge_ostrstream_dtor;
     if (!strcmp(name, "str__10ostrstreamGv")) return bridge_ostrstream_str;
     if (!strcmp(name, "__ls__7ostreamGl")) return bridge_ostream_insert_long;
+    if (!strcmp(name, "__ls__7ostreamGi")) return bridge_ostream_insert_long;
+    if (!strcmp(name, "__ls__7ostreamGPCc")) return bridge_ostream_insert_cstr;
     return 0;
 }
