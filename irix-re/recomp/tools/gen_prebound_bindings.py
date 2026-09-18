@@ -59,8 +59,7 @@ def main():
             if row['shndx']!=0 or row['type']!=STT_OBJECT:
                 continue
             target=link['globals'].get(name,0)
-            if target:
-                data_patches.append((row['got'],target,name,b['prefix'],row['value']))
+            data_patches.append((row['got'],target,name,b['prefix'],row['value']))
 
     by={}; conflicts=[]
     for e in entries:
@@ -77,9 +76,13 @@ def main():
     data_by={}
     for e in data_patches:
         got_addr,target,name,owner,old=e; prev=data_by.get(got_addr)
-        if prev and prev[1]!=target:
-            raise SystemExit(f'data binding conflict at 0x{got_addr:08x}: {prev} vs {e}')
-        data_by[got_addr]=e
+        if prev:
+            if target and prev[1] and prev[1]!=target:
+                raise SystemExit(f'data binding conflict at 0x{got_addr:08x}: {prev} vs {e}')
+            if target and not prev[1]:
+                data_by[got_addr]=e
+        else:
+            data_by[got_addr]=e
     data_patches=sorted(data_by.values())
 
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
@@ -89,6 +92,7 @@ def main():
     with (out/'bindings.c').open('w') as w:
         w.write('#include "IrixGuest.h"\n#include <stdio.h>\n#include <stddef.h>\n#include <string.h>\n')
         w.write('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);\n')
+        w.write('typedef IrixGuestAddr (*IrixGuestDataResolver)(const char *);\n')
         w.write('typedef struct { IrixGuestAddr stub,target; const char *name; } Fwd;\nstatic const Fwd fwds[]={\n')
         for addr,target,name,owner in resolved: w.write(f'{{0x{addr:08x}u,0x{target:08x}u,"{owner}:{name}"}},\n')
         w.write('};\n')
@@ -115,9 +119,13 @@ def main():
             label=json.dumps('native-target:'+name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
         w.write('}\n')
-        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0;\n')
+        w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt,IrixGuestDataResolver data_resolver){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0;IrixGuestAddr data_target;\n')
         for got_addr,target,name,owner,old in data_patches:
-            w.write(f'irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
+            if target:
+                w.write(f'irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
+            else:
+                q=json.dumps(name)
+                w.write(f'data_target=data_resolver?data_resolver({q}):0;if(data_target)irix_guest_write32be(rt,0x{got_addr:08x}u,data_target); /* {owner}:{name}, was 0x{old:08x} */\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
         w.write('for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0]);++i){\n')
         w.write('  if(missing_imports[i].native){++native_addresses;}else{++unresolved_addresses;irix_guest_register_function(rt,missing_imports[i].address,missing_import,missing_imports[i].name);}\n')
