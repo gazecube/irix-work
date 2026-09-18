@@ -10,6 +10,16 @@ SHF_WRITE=0x1; SHF_ALLOC=0x2; SHF_EXECINSTR=0x4
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
+BATCH_FUNCTIONS=128
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
+
+def function_body(text):
+    marker='void irix_recomp_'
+    pos=text.find(marker)
+    if pos<0:
+        raise ValueError('generated function body marker not found')
+    return text[pos:].rstrip()+'\n\n'
+
 def write_if_changed(path, text):
     path=Path(path)
     if path.is_file() and path.read_text()==text:
@@ -474,6 +484,17 @@ def main():
 
     seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
     all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,key=lambda x:(x[1],x[0]))
+    batches=[]; batch_bodies=[]; batch_rows=[]
+    def flush_batch():
+        nonlocal batch_bodies,batch_rows
+        if not batch_rows: return
+        batch_no=len(batches)
+        dst=out/f'batch_{batch_no:04d}.c'
+        write_if_changed(dst,BATCH_PREAMBLE+''.join(batch_bodies))
+        for row in batch_rows: row['source']=str(dst)
+        batches.append(dst)
+        batch_bodies=[]; batch_rows=[]
+
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
         if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
@@ -482,7 +503,7 @@ def main():
                 dropped_count+=1
                 continue
             size=checked_size
-        seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
+        seen_addr.add(addr)
         generated=io.StringIO()
         with contextlib.redirect_stdout(generated):
             if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
@@ -493,13 +514,15 @@ def main():
         if '        rt->current_pc = pc;\n' not in text:
             text=text.replace('        cpu->pc = pc;\n',
                               '        cpu->pc = pc;\n        rt->current_pc = pc;\n')
-        write_if_changed(dst,text)
-        functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst),source_kind=source_kind))
+        row=dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source_kind=source_kind)
+        functions.append(row); batch_rows.append(row); batch_bodies.append(function_body(text))
+        if len(batch_rows)>=BATCH_FUNCTIONS: flush_batch()
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
         if source_kind=='data_ptr': ptr_count+=1
         if source_kind=='code_link': link_count+=1
         if source_kind=='boundary_entry': boundary_count+=1
+    flush_batch()
 
     imports=[s for s in raw_syms if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
@@ -512,5 +535,5 @@ def main():
     for r in functions: registry.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
     registry.write('}\n')
     write_if_changed(out/'registry.c',registry.getvalue())
-    print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} batches={len(batches)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
 if __name__=='__main__': main()
