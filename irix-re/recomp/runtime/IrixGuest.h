@@ -51,6 +51,7 @@ typedef struct IrixGuestRuntime {
     IrixGuestAddr fault_addr;
     uint32_t trap_code;
     int trapped;
+    IrixGuestAddr errno_proxy_addr;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     size_t function_count;
 } IrixGuestRuntime;
@@ -68,6 +69,7 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value);
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value);
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value);
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value);
+void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr);
 float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg);
 double irix_guest_fpr_get_d(const IrixGuestCpu *cpu, unsigned reg);
 void irix_guest_fpr_set_s(IrixGuestCpu *cpu, unsigned reg, float value);
