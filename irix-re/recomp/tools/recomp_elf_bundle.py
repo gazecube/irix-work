@@ -484,6 +484,7 @@ def main():
         w.write('#include "IrixGuest.h"\n')
         for r in functions: w.write(f'extern void {r["c_name"]}(IrixGuestRuntime*, IrixGuestCpu*);\n')
         w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
+        w.write('  (void)rt;\n')
         for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
         w.write('}\n')
     print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
