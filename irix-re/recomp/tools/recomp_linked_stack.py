@@ -59,10 +59,12 @@ def emit_function(path, cname, source, name, start, words):
  return write_if_changed(path,w.getvalue())
 
 def main():
- ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('-o','--output',required=True); a=ap.parse_args()
+ ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('--support-archive',action='append',default=[]); ap.add_argument('-o','--output',required=True); a=ap.parse_args()
  out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
  L=StackLink()
  for p in a.archives:L.add_archive(p)
+ for p in a.support_archive:L.add_support_archive(p)
+ support_added=L.resolve_support_archives()
  L.layout(); L.relocate(); L.write(out/'image')
  funcs=[]; failed=[]; changed=0; unchanged=0
  for oi,o in enumerate(L.objs):
@@ -101,7 +103,7 @@ def main():
  if write_if_changed(out/'registry.c',w.getvalue()): changed+=1
  else: unchanged+=1
  write_if_changed(out/'functions.json',json.dumps({'functions':funcs,'failed':failed,'imports':L.imports,'gp':L.gp},indent=2)+'\n')
- print(f'functions={len(funcs)} failed={len(failed)} imports={len(L.imports)} relocations={L.relocations} changed={changed} unchanged={unchanged}')
+ print(f'functions={len(funcs)} failed={len(failed)} imports={len(L.imports)} relocations={L.relocations} support_members={support_added} changed={changed} unchanged={unchanged}')
  if failed:
   for x in failed[:30]: print('FAIL',x)
   raise SystemExit(1)
