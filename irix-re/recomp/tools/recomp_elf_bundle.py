@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Translate callable functions in an IRIX N32 executable or DSO."""
-import argparse, contextlib, json, re, struct, sys
+import argparse, contextlib, io, json, re, struct, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import translate_n32_regimm as t
@@ -9,6 +9,13 @@ SHT_SYMTAB=2; SHT_DYNSYM=11; SHT_NOBITS=8; STT_FUNC=2
 SHF_WRITE=0x1; SHF_ALLOC=0x2; SHF_EXECINSTR=0x4
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
+
+def write_if_changed(path, text):
+    path=Path(path)
+    if path.is_file() and path.read_text()==text:
+        return False
+    path.write_text(text)
+    return True
 
 def raw_function_symbols(path):
     p=Path(path).read_bytes(); h=struct.unpack_from('>16sHHIIIIIHHHHHH',p,0)
@@ -362,13 +369,25 @@ def _nonfallthrough_control(word):
         return True
     return op==0x04 and rs==0 and rt==0
 
+def _return_control(word):
+    return word==0x03e00008
+
+def _extent_has_return(elf, start, size):
+    try:
+        return 0x03e00008 in elf.words(start,size)
+    except Exception:
+        return False
+
 def boundary_entry_function_ranges(elf, known_starts):
     """Recover callback-only hidden entries at strong code boundaries.
 
     SGI/EDG sometimes places separately callable helpers inside a larger
     symbol's nominal address range and passes their addresses indirectly to Xt.
-    Require both a non-fallthrough predecessor (plus its delay slot) and a real
-    negative stack-frame setup in the first two instructions of the new block.
+    Require a non-fallthrough predecessor plus its delay slot. Normal helpers
+    still require a real negative stack-frame setup in the first two
+    instructions. A block immediately following an exact `jr ra` may also be
+    accepted as a leaf helper, provided its recovered extent contains its own
+    return. This covers callback comparators that legitimately need no frame.
     """
     exec_sections=[]
     for i,sec in enumerate(elf.sections):
@@ -391,10 +410,13 @@ def boundary_entry_function_ranges(elf, known_starts):
             addr=lo+i*4
             if addr in known_starts:
                 continue
-            if not _nonfallthrough_control(words[i-2]):
+            predecessor=words[i-2]
+            if not _nonfallthrough_control(predecessor):
                 continue
             w0=words[i]; w1=words[i+1]
-            if _stack_frame_setup(w0) or (_simple_entry_prefix(w0) and _stack_frame_setup(w1)):
+            framed=_stack_frame_setup(w0) or (_simple_entry_prefix(w0) and _stack_frame_setup(w1))
+            leaf_after_return=_return_control(predecessor) and w0!=0
+            if framed or leaf_after_return:
                 candidates.add(addr)
 
     barriers=set(known_starts)|candidates
@@ -407,6 +429,7 @@ def boundary_entry_function_ranges(elf, known_starts):
         if not size: continue
         size=validated_recovered_size(elf,addr,size)
         if not size: continue
+        if not _extent_has_return(elf,addr,size): continue
         out.append(('__boundary_%08x'%addr,addr,size,sec_index))
     return out
 
@@ -460,16 +483,17 @@ def main():
                 continue
             size=checked_size
         seen_addr.add(addr); dst=out/(f'{i:04d}_{ident(n)}.c')
-        with dst.open('w') as f, contextlib.redirect_stdout(f):
+        generated=io.StringIO()
+        with contextlib.redirect_stdout(generated):
             if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
-        text=dst.read_text()
+        text=generated.getvalue()
         if '        rt->current_pc = pc;\n' not in text:
             text=text.replace('        cpu->pc = pc;\n',
                               '        cpu->pc = pc;\n        rt->current_pc = pc;\n')
-            dst.write_text(text)
+        write_if_changed(dst,text)
         functions.append(dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source=str(dst),source_kind=source_kind))
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
@@ -479,13 +503,14 @@ def main():
 
     imports=[s for s in raw_syms if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
-    (out/'bundle.json').write_text(json.dumps(meta,indent=2)+'\n')
-    with (out/'registry.c').open('w') as w:
-        w.write('#include "IrixGuest.h"\n')
-        for r in functions: w.write(f'extern void {r["c_name"]}(IrixGuestRuntime*, IrixGuestCpu*);\n')
-        w.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
-        w.write('  (void)rt;\n')
-        for r in functions: w.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
-        w.write('}\n')
+    write_if_changed(out/'bundle.json',json.dumps(meta,indent=2)+'\n')
+    registry=io.StringIO()
+    registry.write('#include "IrixGuest.h"\n')
+    for r in functions: registry.write(f'extern void {r["c_name"]}(IrixGuestRuntime*, IrixGuestCpu*);\n')
+    registry.write(f'void register_{ident(prefix)}(IrixGuestRuntime *rt){{\n')
+    registry.write('  (void)rt;\n')
+    for r in functions: registry.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
+    registry.write('}\n')
+    write_if_changed(out/'registry.c',registry.getvalue())
     print(f'{path}: functions={len(functions)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
 if __name__=='__main__': main()
