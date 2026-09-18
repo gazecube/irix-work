@@ -29,6 +29,12 @@ def discover_support_archives(root, primary):
             real = p.resolve()
             if real in primary_real or real in seen:
                 continue
+            try:
+                with p.open('rb') as f:
+                    if f.read(8) != b'!<arch>\n':
+                        continue
+            except OSError:
+                continue
             seen.add(real)
             found.append(p)
     return found
