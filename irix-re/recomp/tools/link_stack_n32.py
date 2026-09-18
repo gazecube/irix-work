@@ -91,7 +91,9 @@ class StackLink:
   for name,data in members(Path(p).read_bytes()):
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
  def add_support_archive(self,p):
-  for name,data in members(Path(p).read_bytes()):
+  raw=Path(p).read_bytes()
+  if raw[:8]!=b'!<arch>\n': return
+  for name,data in members(raw):
    if not data.startswith(b'\x7fELF\x01\x02'): continue
    o=Obj(str(p),name,data)
    defs={s['name'] for s in o.syms if s['shndx']!=SHN_UNDEF and s['name'] and s['bind'] in (STB_GLOBAL,STB_WEAK)}
