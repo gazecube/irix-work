@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import struct
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -28,7 +29,7 @@ def validate_component(row, label):
     for key in ('prefix', 'kind', 'path'):
         if not row.get(key):
             raise SystemExit(f'{label} is missing {key}')
-    if row['kind'] not in ('runtime', 'internal'):
+    if row['kind'] not in ('runtime', 'internal', 'dev'):
         raise SystemExit(f"{label} has invalid kind {row['kind']!r}")
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', row['prefix']):
         raise SystemExit(f"{label} has invalid C prefix {row['prefix']!r}")
@@ -43,12 +44,137 @@ def find_app(manifest, name):
     return app
 
 
-def resolve_binary(row, runtime_tree, internal_tree):
-    root = runtime_tree if row['kind'] == 'runtime' else internal_tree
+def root_for_kind(kind, runtime_tree, internal_tree, dev_tree):
+    if kind == 'runtime':
+        return runtime_tree
+    if kind == 'internal':
+        return internal_tree
+    if kind == 'dev':
+        return dev_tree
+    raise SystemExit(f'unknown component kind {kind!r}')
+
+
+def resolve_binary(row, runtime_tree, internal_tree, dev_tree):
+    root = root_for_kind(row['kind'], runtime_tree, internal_tree, dev_tree)
     binary = root / row['path']
     if not binary.is_file():
         raise SystemExit(f"missing {row['prefix']}: {binary}")
     return binary
+
+
+def elf_needed(path):
+    data = Path(path).read_bytes()
+    if len(data) < 52 or data[:6] != b'\x7fELF\x01\x02':
+        return []
+    h = struct.unpack_from('>16sHHIIIIIHHHHHH', data, 0)
+    shoff, shentsz, shnum = h[6], h[11], h[12]
+    if not shoff or not shentsz or not shnum:
+        return []
+    secs = [struct.unpack_from('>IIIIIIIIII', data, shoff + i * shentsz)
+            for i in range(shnum)]
+    out = []
+    for s in secs:
+        if s[1] != 6 or not s[9]:  # SHT_DYNAMIC
+            continue
+        if s[6] >= len(secs):
+            continue
+        strings = secs[s[6]]
+        strtab = data[strings[4]:strings[4] + strings[5]]
+        for off in range(s[4], s[4] + s[5], s[9]):
+            tag, value = struct.unpack_from('>II', data, off)
+            if tag == 0:
+                break
+            if tag != 1:  # DT_NEEDED
+                continue
+            end = strtab.find(b'\0', value)
+            if end < 0:
+                continue
+            name = strtab[value:end].decode('ascii', 'replace')
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
+def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
+    rows = []
+    def add(kind, root, rel):
+        if root is None:
+            return
+        d = root / rel
+        if d.is_dir():
+            rows.append((kind, root, d))
+    add('runtime', runtime_tree, 'usr/lib32')
+    add('runtime', runtime_tree, 'usr/lib32/internal')
+    add('runtime', runtime_tree, 'usr/lib')
+    add('runtime', runtime_tree, 'lib32')
+    add('runtime', runtime_tree, 'lib')
+    add('internal', internal_tree, 'usr/lib32/internal')
+    add('internal', internal_tree, 'usr/lib32')
+    add('dev', dev_tree, 'usr/lib32')
+    add('dev', dev_tree, 'usr/lib')
+    add('dev', dev_tree, 'usr/lib/abi')
+    add('dev', dev_tree, 'usr/Motif-1.2/lib32')
+    return rows
+
+
+def resolve_needed_library(name, runtime_tree, internal_tree, dev_tree):
+    for kind, root, directory in dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
+        candidate = directory / name
+        if candidate.is_file():
+            return kind, candidate.relative_to(root), candidate
+    return None
+
+
+def dependency_prefix(name, used):
+    stem = 'dso_' + re.sub(r'[^A-Za-z0-9_]', '_', name)
+    if not re.match(r'[A-Za-z_]', stem):
+        stem = 'dso_' + stem
+    prefix = stem
+    n = 2
+    while prefix in used:
+        prefix = f'{stem}_{n}'
+        n += 1
+    used.add(prefix)
+    return prefix
+
+
+def expand_dso_closure(rows, runtime_tree, internal_tree, dev_tree):
+    expanded = list(rows)
+    used_prefixes = {row['prefix'] for row in expanded}
+    selected_paths = set()
+    selected_sonames = set()
+    queue = []
+
+    for row in expanded:
+        binary = resolve_binary(row, runtime_tree, internal_tree, dev_tree)
+        selected_paths.add(binary.resolve())
+        selected_sonames.add(binary.name)
+        queue.append((row, binary))
+
+    while queue:
+        parent, binary = queue.pop(0)
+        for soname in elf_needed(binary):
+            if soname in selected_sonames:
+                continue
+            found = resolve_needed_library(soname, runtime_tree, internal_tree, dev_tree)
+            if found is None:
+                raise SystemExit(f'missing DT_NEEDED {soname} required by {binary}')
+            kind, relpath, dep = found
+            real = dep.resolve()
+            selected_sonames.add(soname)
+            if real in selected_paths:
+                continue
+            row = {
+                'prefix': dependency_prefix(soname, used_prefixes),
+                'kind': kind,
+                'path': str(relpath),
+                'needed_by': str(binary),
+            }
+            expanded.append(row)
+            selected_paths.add(real)
+            queue.append((row, dep))
+
+    return expanded
 
 
 def main():
@@ -58,6 +184,7 @@ def main():
     ap.add_argument('--app')
     ap.add_argument('--runtime-tree', type=Path)
     ap.add_argument('--internal-tree', type=Path)
+    ap.add_argument('--dev-tree', type=Path)
     ap.add_argument('--core-link', type=Path)
     ap.add_argument('-o', '--output', type=Path)
     ap.add_argument('--cc', default=os.environ.get('CC', 'cc'))
@@ -76,7 +203,7 @@ def main():
             print(f"{name}|{app['prefix']}|{app['kind']}|{app['path']}")
         return
 
-    missing = [name for name in ('app', 'runtime_tree', 'internal_tree', 'core_link', 'output')
+    missing = [name for name in ('app', 'runtime_tree', 'internal_tree', 'dev_tree', 'core_link', 'output')
                if getattr(a, name) is None]
     if missing:
         ap.error('missing build arguments: ' + ', '.join('--' + x.replace('_', '-') for x in missing))
@@ -91,10 +218,14 @@ def main():
     obj = out / 'obj'
     gen.mkdir(parents=True, exist_ok=True)
 
-    rows = [app] + list(manifest['shared_components'])
+    rows = expand_dso_closure([app] + list(manifest['shared_components']),
+                              a.runtime_tree, a.internal_tree, a.dev_tree)
     components = []
     for row in rows:
-        components.append((row['prefix'], resolve_binary(row, a.runtime_tree, a.internal_tree)))
+        components.append((row['prefix'],
+                           resolve_binary(row, a.runtime_tree, a.internal_tree, a.dev_tree)))
+    print(f'DSO closure: components={len(rows)} auto_dependencies={len(rows) - 1 - len(manifest["shared_components"])}',
+          flush=True)
 
     # Audit the complete app closure first so decoder holes are reported once.
     run([sys.executable, here / 'audit_n32_bundle.py', *[p for _, p in components]])
@@ -114,14 +245,14 @@ def main():
     with descriptor.open('w') as w:
         w.write('#include "IrixGuest.h"\n#include <stddef.h>\n\n')
         w.write('typedef struct IrixAppGuestComponent {\n')
-        w.write('    int kind; /* 0 = runtime tree, 1 = internal tree */\n')
+        w.write('    int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */\n')
         w.write('    const char *path;\n')
         w.write('} IrixAppGuestComponent;\n\n')
         for row in rows:
             w.write(f"void register_{row['prefix']}(IrixGuestRuntime *rt);\n")
         w.write('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
         for row in rows:
-            kind = 0 if row['kind'] == 'runtime' else 1
+            kind = {'runtime': 0, 'internal': 1, 'dev': 2}[row['kind']]
             w.write(f'    {{{kind}, {json.dumps(row["path"])}}},\n')
         w.write('};\n')
         w.write('const size_t irix_app_guest_component_count =\n')
