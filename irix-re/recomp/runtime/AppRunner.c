@@ -46,7 +46,7 @@ extern const IrixAppGuestComponent irix_app_guest_components[];
 extern const size_t irix_app_guest_component_count;
 void irix_register_app_bundle(IrixGuestRuntime *rt);
 void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
-void register_irix_prebound_imports(IrixGuestRuntime *rt);
+void register_irix_prebound_imports(IrixGuestRuntime *rt, IrixGuestAddr (*data_resolver)(const char *));
 void irix_x11_extra_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_extra_lookup(const char *name);
 void irix_x11_connection_bridge_init(IrixGuestRuntime *rt);
@@ -274,7 +274,7 @@ int main(int argc, char **argv)
     irix_register_recompiled_stack(&rt);
     irix_register_app_bundle(&rt);
 
-    register_irix_prebound_imports(&rt);
+    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
 
     if (setup_argv(&rt, &cpu, argc, argv) != 0) {
         fprintf(stderr, "failed to construct guest argv/stack\n");
