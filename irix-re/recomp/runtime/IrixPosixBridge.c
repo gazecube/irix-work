@@ -355,20 +355,27 @@ static void bridge_uname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int rc = uname(&u);
     if (rc != 0 || !out) { ret_i32(cpu, rc); return; }
     p = (unsigned char *)irix_guest_ptr(rt, out, 5u * 257u);
-    if (!p) { ret_i32(cpu, -1); return; }
+    if (!p) { errno = EFAULT; ret_i32(cpu, -1); return; }
+
+    /*
+     * Do not leak the x86/Linux host identity into IRIX feature selection.
+     * This is the same compatibility boundary as systeminfo(): guest software
+     * must see a coherent SGI/IRIX machine.
+     */
     memset(p, 0, 5u * 257u);
-    strncpy((char *)p + 0u * 257u, u.sysname, 256u);
-    strncpy((char *)p + 1u * 257u, u.nodename, 256u);
-    strncpy((char *)p + 2u * 257u, u.release, 256u);
-    strncpy((char *)p + 3u * 257u, u.version, 256u);
-    strncpy((char *)p + 4u * 257u, u.machine, 256u);
+    strncpy((char *)p + 0u * 257u, "IRIX", 256u);
+    strncpy((char *)p + 1u * 257u, u.nodename[0] ? u.nodename : "IRIS", 256u);
+    strncpy((char *)p + 2u * 257u, "6.5", 256u);
+    strncpy((char *)p + 3u * 257u, "6.5.7", 256u);
+    strncpy((char *)p + 4u * 257u, "IP30", 256u);
     cpu->gpr[2] = 0;
 }
 
 static void bridge_getpagesize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
-    cpu->gpr[2] = (uint32_t)getpagesize();
+    /* IRIX/MIPS uses 16 KiB pages; host x86 page size is irrelevant here. */
+    cpu->gpr[2] = 16384u;
 }
 
 static void bridge_sysconf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
