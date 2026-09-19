@@ -441,6 +441,26 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     errno = 0;
     switch (number) {
+    case 1000: { /* syscall(indirect_number, ...) */
+        uint32_t indirect = (uint32_t)cpu->gpr[4];
+        unsigned i;
+        if (indirect == 1000u) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        /*
+         * IRIX libc uses syscall(2) as an indirect entry for calls such as
+         * sysmp().  The real syscall number is in a0 and its arguments begin
+         * in a1, so shift the N32 argument registers down one slot and reuse
+         * the normal dispatcher.
+         */
+        for (i = 4u; i < 11u; ++i)
+            cpu->gpr[i] = cpu->gpr[i + 1u];
+        cpu->gpr[2] = indirect;
+        irix_guest_syscall(rt, cpu);
+        return;
+    }
     case 1003: { /* read */
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
@@ -529,6 +549,35 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1047: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
         return;
+    case 1056: { /* sysmp(cmd, ...) */
+        uint32_t cmd = (uint32_t)cpu->gpr[4];
+        long n;
+        switch (cmd) {
+        case 1u: /* MP_NPROCS */
+            n = sysconf(_SC_NPROCESSORS_CONF);
+            if (n < 1) n = 1;
+            syscall_result(cpu, (int64_t)n);
+            return;
+        case 2u: /* MP_NAPROCS */
+            n = sysconf(_SC_NPROCESSORS_ONLN);
+            if (n < 1) n = 1;
+            syscall_result(cpu, (int64_t)n);
+            return;
+        case 14u: /* MP_PGSIZE */
+            syscall_result(cpu, 4096);
+            return;
+        default:
+            fprintf(stderr,
+                    "UNIMPLEMENTED IRIX sysmp command %u pc=0x%08x "
+                    "a1-a3=%08x,%08x,%08x\n",
+                    cmd, (uint32_t)cpu->pc,
+                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7]);
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+    }
     case 1158: { /* xstat(version, path, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
