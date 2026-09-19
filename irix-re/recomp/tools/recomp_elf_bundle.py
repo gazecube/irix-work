@@ -598,8 +598,15 @@ def main():
     # DWARF FDEs are authoritative procedure extents.  Prefer them even when
     # a symbol exists at the same address, and do not let the heuristic passes
     # manufacture callable entries in the middle of an FDE-covered procedure.
-    frame_defs=[(n,addr,size,sh,'debug_frame')
-                for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms)]
+    explicit_starts={s['address'] for s in raw_syms
+                     if s['shndx']!=0 and s['address']}
+    frame_defs=[]
+    for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms):
+        later=[a for a in explicit_starts if addr < a < addr+size]
+        if later:
+            size=min(later)-addr
+        if size:
+            frame_defs.append((n,addr,size,sh,'debug_frame'))
     frame_starts={addr for _,addr,_,_,_ in frame_defs}
     frame_ranges=[(addr,addr+size) for _,addr,size,_,_ in frame_defs]
     defs=[d for d in defs if d[1] not in frame_starts]
