@@ -1,5 +1,6 @@
 #define irix_posix_bridge_lookup irix_posix_bridge_lookup_base
 #include "IrixPosixBridge.c"
+#include "IrixCompat.h"
 #undef irix_posix_bridge_lookup
 
 #include <fcntl.h>
@@ -675,6 +676,72 @@ static void bridge_select(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+static void bridge_putenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char *s = (char *)irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], 1u);
+    (void)rt;
+    ret_i32(cpu, s ? putenv(s) : (errno = EFAULT, -1));
+}
+
+static void bridge_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)alarm((unsigned)(uint32_t)cpu->gpr[4]);
+}
+
+static void bridge_kill(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    ret_i32(cpu, kill((pid_t)(int32_t)cpu->gpr[4], (int)(int32_t)cpu->gpr[5]));
+}
+
+static void bridge_setsid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    ret_i32(cpu, (int)setsid());
+}
+
+static void bridge_gethostid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)gethostid();
+}
+
+static void bridge_system(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *cmd = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    ret_i32(cpu, system(cmd));
+}
+
+static void bridge_ffs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t v = (uint32_t)cpu->gpr[4];
+    int bit = 0;
+    (void)rt;
+    while (v) { ++bit; if (v & 1u) break; v >>= 1; }
+    ret_i32(cpu, bit);
+}
+
+static void bridge_mprotect_compat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    irix_compat_mprotect(rt, cpu);
+}
+
+static void bridge_prctl_compat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    irix_compat_prctl(rt, cpu);
+}
+
+static void bridge_syssgi_compat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    irix_compat_syssgi(rt, cpu);
+}
+
+static void bridge_sysmp_compat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    irix_compat_sysmp(rt, cpu);
+}
+
 static void bridge_sginap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int32_t ticks = (int32_t)cpu->gpr[4];
@@ -733,5 +800,16 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
+    if (!strcmp(name, "putenv")) return bridge_putenv;
+    if (!strcmp(name, "alarm")) return bridge_alarm;
+    if (!strcmp(name, "kill")) return bridge_kill;
+    if (!strcmp(name, "setsid")) return bridge_setsid;
+    if (!strcmp(name, "gethostid")) return bridge_gethostid;
+    if (!strcmp(name, "system")) return bridge_system;
+    if (!strcmp(name, "ffs")) return bridge_ffs;
+    if (!strcmp(name, "mprotect")) return bridge_mprotect_compat;
+    if (!strcmp(name, "prctl")) return bridge_prctl_compat;
+    if (!strcmp(name, "syssgi")) return bridge_syssgi_compat;
+    if (!strcmp(name, "sysmp")) return bridge_sysmp_compat;
     return 0;
 }
