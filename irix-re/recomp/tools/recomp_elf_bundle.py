@@ -478,6 +478,25 @@ def boundary_entry_function_ranges(elf, known_starts):
         sec_index,lo,hi=sec
         size=_reachable_code_extent(elf,addr,lo,hi,barriers)
         if not size: continue
+
+        # Some rld helpers branch to a tiny shared epilogue immediately before
+        # the next recovered function boundary.  The reachability walk may stop
+        # at the epilogue entry when that address is also discovered as a
+        # callable boundary elsewhere.  If the gap to the next barrier is tiny,
+        # decode it as part of this function and keep it when it ends in a
+        # normal jr $ra + delay-slot return sequence.
+        next_barrier=min((b for b in barriers if b>addr),default=hi)
+        provisional_end=addr+size
+        if provisional_end<next_barrier and next_barrier-provisional_end<=16:
+            try:
+                extra=elf.words(provisional_end,next_barrier-provisional_end)
+                joined=elf.words(addr,next_barrier-addr)
+                if (0x03e00008 in extra and
+                    validated_recovered_size(elf,addr,next_barrier-addr)==next_barrier-addr):
+                    size=next_barrier-addr
+            except Exception:
+                pass
+
         size=validated_recovered_size(elf,addr,size)
         if not size: continue
         # Strong prologues can legitimately tail-transfer into the next known
