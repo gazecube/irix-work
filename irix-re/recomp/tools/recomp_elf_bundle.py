@@ -80,7 +80,7 @@ def emit_explicit(path, name, start, size, c_prefix):
         for line in lines: print('            '+line)
         print('            break;')
     print('        default:'); print('            return;'); print('        }'); print('')
-    print('        cpu->gpr[0] = 0;')
+    print('        if (rt->trapped)'); print('            return;'); print('        cpu->gpr[0] = 0;')
     print('        if (old_pending == IRIX_PENDING_RETURN)')
     print('            return;')
     print('        if (old_pending == IRIX_PENDING_CALL) {')
