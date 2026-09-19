@@ -163,13 +163,48 @@ def pdr_function_ranges(elf, path, symbol_rows):
     return out
 
 def plausible_mips_entry(elf, addr):
-    """Require a strong function-entry signature for pointer-derived starts."""
+    """Require a strong function-entry signature for pointer-derived starts.
+
+    Besides the ordinary addiu/daddiu $sp,$sp,-N prologue, IRIX rld contains
+    small callback helpers that test a GP-relative guard byte *before* their
+    stack adjustment.  One observed form is:
+
+        lbu     $at,off($gp)
+        beq/bne $at,$zero,...
+        addiu   $sp,$sp,-N       # branch delay slot
+
+    These routines are passed indirectly (for example through foreach_obj), so
+    direct-link recovery cannot discover them.  Accept that tightly constrained
+    three-instruction shape as a callable start as well.
+    """
     try:
-        w=elf.words(addr,4)[0]
+        words=elf.words(addr,12)
     except Exception:
-        return False
+        try:
+            words=elf.words(addr,4)
+        except Exception:
+            return False
+
+    w=words[0]
     op=(w>>26)&0x3f; rs=(w>>21)&0x1f; rt=(w>>16)&0x1f; imm=w&0xffff
-    return op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff
+    if op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff:
+        return True
+
+    if len(words) >= 3:
+        w0,w1,w2=words[:3]
+        op0=(w0>>26)&0x3f; rs0=(w0>>21)&0x1f; rt0=(w0>>16)&0x1f
+        op1=(w1>>26)&0x3f; rs1=(w1>>21)&0x1f; rt1=(w1>>16)&0x1f
+        op2=(w2>>26)&0x3f; rs2=(w2>>21)&0x1f; rt2=(w2>>16)&0x1f
+        imm2=w2&0xffff
+        gp_guard=(op0 in (0x20,0x24) and rs0==28 and rt0!=0)
+        guard_branch=(op1 in (0x04,0x05) and
+                      ((rs1==rt0 and rt1==0) or (rt1==rt0 and rs1==0)))
+        stack_delay=(op2 in (0x09,0x19) and rs2==29 and rt2==29 and
+                     (imm2&0x8000)!=0 and imm2!=0xffff)
+        if gp_guard and guard_branch and stack_delay:
+            return True
+
+    return False
 
 def validated_recovered_size(elf, start, provisional_size):
     """Validate or trim a metadata-recovered function extent.
