@@ -653,7 +653,11 @@ def main():
     # from the registry and traps immediately at process startup.
     early_link_defs=[]
     for n,addr,size,sh in code_link_function_ranges(elf,recovered_addrs):
-        if addr not in recovered_addrs and not covered_by_frame(addr):
+        if addr not in recovered_addrs:
+            # A direct JAL/BAL target is hard executable-entry evidence.  Do
+            # not let a broad DWARF FDE suppress it merely because the target
+            # lies inside the FDE's nominal procedure range.  rld's
+            # __exec_rld links directly to such an adjacent hidden entry.
             early_link_defs.append((n,addr,size,sh,'code_link'))
     recovered_addrs|={addr for _,addr,_,_,_ in early_link_defs}
 
