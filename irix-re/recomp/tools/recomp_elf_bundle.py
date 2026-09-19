@@ -595,22 +595,18 @@ def main():
         if addr not in symbol_addrs:
             zero_defs.append((n,addr,size,sh,'zero_size'))
 
-    # DWARF FDEs are authoritative procedure extents.  Prefer them even when
-    # a symbol exists at the same address, and do not let the heuristic passes
-    # manufacture callable entries in the middle of an FDE-covered procedure.
-    explicit_starts={s['address'] for s in raw_syms
-                     if s['shndx']!=0 and s['address']}
+    # DWARF FDEs are authoritative for otherwise-unrecovered procedures.
+    # Do not replace a real ELF function symbol at the same start: some IRIX
+    # DSOs have broad FDEs around prebound/linker entry regions, and replacing
+    # those symbol ranges changes the import-stub ownership seen by the binding
+    # generator.  The FDE still suppresses heuristic interior entries when its
+    # start is not already represented by a symbol.
+    recovered_before_frames=symbol_addrs|{addr for _,addr,_,_,_ in zero_defs}
     frame_defs=[]
     for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms):
-        later=[a for a in explicit_starts if addr < a < addr+size]
-        if later:
-            size=min(later)-addr
-        if size:
+        if addr not in recovered_before_frames:
             frame_defs.append((n,addr,size,sh,'debug_frame'))
-    frame_starts={addr for _,addr,_,_,_ in frame_defs}
     frame_ranges=[(addr,addr+size) for _,addr,size,_,_ in frame_defs]
-    defs=[d for d in defs if d[1] not in frame_starts]
-    zero_defs=[d for d in zero_defs if d[1] not in frame_starts]
 
     def covered_by_frame(addr):
         return any(lo < addr < hi for lo,hi in frame_ranges)
