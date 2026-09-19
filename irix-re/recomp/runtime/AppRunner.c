@@ -454,14 +454,35 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    entry = find_named(&rt, "main");
+    /*
+     * Enter at the executable's ELF entry point, not at main().
+     *
+     * Jumping directly to main bypasses the original IRIX crt/libc startup
+     * path, including runtime-linker and library initialization.  The guest
+     * stack above is now shaped as an N32 process entry stack, so give the
+     * translated executable the same entry point the kernel would.
+     *
+     * Keep the named-main fallback only for incomplete binaries while the
+     * entry-point recovery work is still being hardened.
+     */
+    entry = have_app_elf ? app_elf.entry : 0u;
+    if (!entry || !irix_guest_find_function(&rt, entry)) {
+        IrixGuestAddr main_entry = find_named(&rt, "main");
+        fprintf(stderr,
+                "warning: translated ELF entry 0x%08x unavailable; "
+                "falling back to main=0x%08x\n",
+                entry, main_entry);
+        entry = main_entry;
+    }
     if (!entry) {
-        fprintf(stderr, "translated %s main not found\n", IRIX_APP_NAME);
+        fprintf(stderr, "translated %s process entry not found\n", IRIX_APP_NAME);
         return 1;
     }
 
-    fprintf(stderr, "IRIX %s bootstrap: functions=%zu main=0x%08x DISPLAY=%s\n",
-            IRIX_APP_NAME, rt.function_count, entry,
+    fprintf(stderr,
+            "IRIX %s bootstrap: functions=%zu process_entry=0x%08x "
+            "main=0x%08x DISPLAY=%s\n",
+            IRIX_APP_NAME, rt.function_count, entry, find_named(&rt, "main"),
             getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)");
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
         IrixGuestFunctionEntry *e = irix_guest_find_function(&rt, rt.trap_pc);
