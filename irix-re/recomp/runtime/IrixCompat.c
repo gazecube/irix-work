@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+#include <fcntl.h>
 
 /*
  * This file ports the useful semantics of Linux/MIPS' historical IRIX
@@ -182,6 +183,191 @@ static int compat_copy_string(IrixGuestRuntime *rt, IrixGuestAddr out,
     if (required > count)
         dst[count - 1u] = '\0';
     return 0;
+}
+
+static int compat_range_overlaps(IrixGuestRuntime *rt,
+                                 IrixGuestAddr addr, uint32_t len)
+{
+    uint64_t lo = addr;
+    uint64_t hi = lo + len;
+    size_t i;
+
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        uint64_t slo = seg->guest_base;
+        uint64_t shi = slo + seg->size;
+        if (lo < shi && hi > slo)
+            return 1;
+    }
+    return 0;
+}
+
+static IrixGuestAddr compat_find_mmap_addr(IrixGuestRuntime *rt, uint32_t len)
+{
+    const uint32_t page = 16384u;
+    IrixGuestAddr addr = 0x20000000u;
+    uint32_t rounded = (len + page - 1u) & ~(page - 1u);
+
+    while (addr < 0x2f000000u) {
+        if (!compat_range_overlaps(rt, addr, rounded))
+            return addr;
+        addr += page;
+    }
+    return 0;
+}
+
+void irix_compat_mmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const uint32_t IRIX_MAP_SHARED = 0x1u;
+    const uint32_t IRIX_MAP_PRIVATE = 0x2u;
+    const uint32_t IRIX_MAP_TYPE = 0xfu;
+    const uint32_t IRIX_MAP_FIXED = 0x10u;
+    const uint32_t page = 16384u;
+    IrixGuestAddr requested = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    uint32_t len = (uint32_t)cpu->gpr[5];
+    uint32_t prot = (uint32_t)cpu->gpr[6];
+    uint32_t flags = (uint32_t)cpu->gpr[7];
+    int fd = (int)(int32_t)cpu->gpr[8];
+    uint32_t off = (uint32_t)cpu->gpr[9];
+    IrixGuestAddr addr;
+    uint32_t rounded;
+    void *dst;
+    ssize_t got;
+
+    if (!len) {
+        errno = ENXIO;
+        compat_result(cpu, -1);
+        return;
+    }
+    if (off & (page - 1u)) {
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+    if ((flags & IRIX_MAP_TYPE) != IRIX_MAP_SHARED &&
+        (flags & IRIX_MAP_TYPE) != IRIX_MAP_PRIVATE) {
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    rounded = (len + page - 1u) & ~(page - 1u);
+    if (flags & IRIX_MAP_FIXED) {
+        if (!requested || (requested & (page - 1u))) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        addr = requested;
+    } else if (requested && !(requested & (page - 1u)) &&
+               !compat_range_overlaps(rt, requested, rounded)) {
+        addr = requested;
+    } else {
+        addr = compat_find_mmap_addr(rt, rounded);
+    }
+
+    if (!addr || compat_range_overlaps(rt, addr, rounded)) {
+        errno = ENOMEM;
+        compat_result(cpu, -1);
+        return;
+    }
+    if (irix_guest_map(rt, addr, rounded, prot) != 0) {
+        errno = ENOMEM;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    dst = irix_guest_ptr(rt, addr, rounded);
+    if (!dst) {
+        errno = EFAULT;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    /*
+     * /dev/zero and other zero-length special mappings are already satisfied
+     * by irix_guest_map()'s zero-filled allocation.  For regular file
+     * mappings, populate the requested bytes from the descriptor.
+     */
+    if (fd >= 0) {
+        got = pread(fd, dst, len, (off_t)off);
+        if (got < 0) {
+            compat_result(cpu, -1);
+            return;
+        }
+        if ((uint32_t)got < len)
+            memset((unsigned char *)dst + got, 0, len - (uint32_t)got);
+    }
+
+    fprintf(stderr,
+            "IRIX mmap: addr=0x%08x len=0x%x prot=0x%x flags=0x%x "
+            "fd=%d off=0x%x -> 0x%08x\n",
+            requested, len, prot, flags, fd, off, addr);
+    compat_result(cpu, (int64_t)(uint32_t)addr);
+}
+
+void irix_compat_munmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    uint32_t len = (uint32_t)cpu->gpr[5];
+    size_t i;
+
+    if (!len || (addr & 0x3fffu)) {
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        if (seg->guest_base == addr && seg->size == len) {
+            free(seg->host_base);
+            memmove(seg, seg + 1,
+                    (rt->memory.count - i - 1u) * sizeof(*seg));
+            --rt->memory.count;
+            compat_result(cpu, 0);
+            return;
+        }
+    }
+
+    /*
+     * Full VMA splitting is not yet needed by startup.  Report unsupported
+     * partial unmaps rather than silently corrupting the guest map.
+     */
+    errno = EINVAL;
+    compat_result(cpu, -1);
+}
+
+void irix_compat_mprotect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    uint32_t len = (uint32_t)cpu->gpr[5];
+    unsigned prot = (unsigned)(uint32_t)cpu->gpr[6];
+    uint64_t lo = addr, hi = lo + len;
+    size_t i;
+    int touched = 0;
+
+    if (!len || (addr & 0x3fffu)) {
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        uint64_t slo = seg->guest_base, shi = slo + seg->size;
+        if (lo <= slo && hi >= shi) {
+            seg->flags = prot;
+            touched = 1;
+        }
+    }
+
+    if (!touched) {
+        errno = ENOMEM;
+        compat_result(cpu, -1);
+        return;
+    }
+    compat_result(cpu, 0);
 }
 
 void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
