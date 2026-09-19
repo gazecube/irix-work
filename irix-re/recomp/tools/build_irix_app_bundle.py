@@ -141,6 +141,12 @@ def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
         d = root / rel
         if d.is_dir():
             rows.append((kind, root, d))
+    # Prefer SGI's generic N32 SERVER graphics personality for the initial
+    # desktop bring-up.  This keeps the original IRIS GL -> IGLOO -> OpenGL
+    # binary chain intact without pulling in the IP30/MGRAS kernel interface.
+    # libgl.so itself remains the normal runtime-tree IGLOO DSO; its libGL
+    # dependency is resolved from SERVER32 here.
+    add('runtime', runtime_tree, 'usr/gfx/arch/SERVER32')
     add('runtime', runtime_tree, 'usr/lib32')
     add('runtime', runtime_tree, 'usr/lib32/internal')
     add('runtime', runtime_tree, 'usr/Motif-1.2/lib32')
