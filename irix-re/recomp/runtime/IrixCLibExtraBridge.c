@@ -258,6 +258,53 @@ static void bridge_labs(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gp
 static void bridge_rand(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;cpu->gpr[2]=(uint32_t)rand();}
 static void bridge_srand(IrixGuestRuntime *rt,IrixGuestCpu *cpu){(void)rt;srand((unsigned)cpu->gpr[4]);cpu->gpr[2]=0;}
 
+/*
+ * IRIX N32 hard-float calls pass scalar FP arguments in the matching FPRs.
+ * Keep these wrappers explicit: the guest register file is not host ABI
+ * state, so directly exposing libm symbols would read the wrong arguments.
+ */
+#define BRIDGE_MATH_D1(n) static void bridge_##n(IrixGuestRuntime *rt,IrixGuestCpu *cpu){double x=irix_guest_fpr_get_d(cpu,12u);(void)rt;irix_guest_fpr_set_d(cpu,0u,n(x));}
+#define BRIDGE_MATH_D2(n) static void bridge_##n(IrixGuestRuntime *rt,IrixGuestCpu *cpu){double x=irix_guest_fpr_get_d(cpu,12u),y=irix_guest_fpr_get_d(cpu,13u);(void)rt;irix_guest_fpr_set_d(cpu,0u,n(x,y));}
+#define BRIDGE_MATH_F1(n) static void bridge_##n(IrixGuestRuntime *rt,IrixGuestCpu *cpu){float x=irix_guest_fpr_get_s(cpu,12u);(void)rt;irix_guest_fpr_set_s(cpu,0u,n(x));}
+#define BRIDGE_MATH_F2(n) static void bridge_##n(IrixGuestRuntime *rt,IrixGuestCpu *cpu){float x=irix_guest_fpr_get_s(cpu,12u),y=irix_guest_fpr_get_s(cpu,13u);(void)rt;irix_guest_fpr_set_s(cpu,0u,n(x,y));}
+
+BRIDGE_MATH_D1(ceil)
+BRIDGE_MATH_D1(floor)
+BRIDGE_MATH_D1(sqrt)
+BRIDGE_MATH_D1(rint)
+BRIDGE_MATH_D1(trunc)
+BRIDGE_MATH_D1(cos)
+BRIDGE_MATH_D1(exp)
+BRIDGE_MATH_D1(hypot)
+BRIDGE_MATH_D1(log)
+BRIDGE_MATH_D1(log10)
+BRIDGE_MATH_D1(sin)
+BRIDGE_MATH_D1(sinh)
+BRIDGE_MATH_D1(cosh)
+BRIDGE_MATH_D2(atan2)
+BRIDGE_MATH_D2(pow)
+
+BRIDGE_MATH_F1(fabsf)
+BRIDGE_MATH_F1(ceilf)
+BRIDGE_MATH_F1(floorf)
+BRIDGE_MATH_F1(sqrtf)
+BRIDGE_MATH_F1(cosf)
+BRIDGE_MATH_F1(expf)
+BRIDGE_MATH_F1(hypotf)
+BRIDGE_MATH_F1(logf)
+BRIDGE_MATH_F1(log10f)
+BRIDGE_MATH_F1(sinf)
+BRIDGE_MATH_F1(sinhf)
+BRIDGE_MATH_F1(coshf)
+BRIDGE_MATH_F2(atan2f)
+BRIDGE_MATH_F2(fmodf)
+BRIDGE_MATH_F2(powf)
+
+#undef BRIDGE_MATH_D1
+#undef BRIDGE_MATH_D2
+#undef BRIDGE_MATH_F1
+#undef BRIDGE_MATH_F2
+
 static IrixGuestAddr alloc_guest_for_vec(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t size)
 {
     IrixGuestFunction malloc_fn = irix_libc_bridge_lookup("malloc");
@@ -326,6 +373,10 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);
     M(abs); M(labs); M(rand); M(srand);
+    M(ceil); M(floor); M(sqrt); M(rint); M(trunc); M(atan2); M(cos); M(exp);
+    M(hypot); M(log); M(log10); M(pow); M(sin); M(sinh); M(cosh);
+    M(fabsf); M(ceilf); M(floorf); M(sqrtf); M(atan2f); M(cosf); M(expf);
+    M(hypotf); M(logf); M(log10f); M(fmodf); M(powf); M(sinf); M(sinhf); M(coshf);
 #undef M
     return 0;
 }
