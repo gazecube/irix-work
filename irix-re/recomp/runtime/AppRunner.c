@@ -236,7 +236,7 @@ static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
 static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                                int argc, char **argv,
                                const IrixGuestElfInfo *app,
-                               const IrixGuestElfInfo *rld)
+                               const IrixGuestElfInfo *interp)
 {
     enum {
         AT_NULL = 0,
@@ -262,7 +262,7 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         {AT_PHENT, app ? app->phent : 0u},
         {AT_PHNUM, app ? app->phnum : 0u},
         {AT_PAGESZ, 16384u},
-        {AT_BASE, rld ? rld->load_base : 0u},
+        {AT_BASE, interp ? interp->load_base : 0u},
         {AT_ENTRY, app ? app->entry : 0u},
         {AT_UID, (uint32_t)getuid()},
         {AT_EUID, (uint32_t)geteuid()},
@@ -326,13 +326,13 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     fprintf(stderr,
             "IRIX process stack: sp=0x%08x argv=0x%08x envp=0x%08x envc=%zu "
             "phdr=0x%08x phent=%u phnum=%u entry=0x%08x gp=0x%08x "
-            "interp=%s rld_base=0x%08x\n",
+            "interp=%s interp_base=0x%08x\n",
             sp, argv_addr, envp_addr, envc,
             app ? app->phdr : 0u, app ? (unsigned)app->phent : 0u,
             app ? (unsigned)app->phnum : 0u, app ? app->entry : 0u,
             app ? app->gp_value : 0u,
             app && app->interp[0] ? app->interp : "(none)",
-            rld ? rld->load_base : 0u);
+            interp ? interp->load_base : 0u);
 
     free(argv_guest);
     free(env_guest);
@@ -381,6 +381,20 @@ int main(int argc, char **argv)
                 root = IRIX_DEV_TREE;
             {
                 IrixGuestElfInfo info;
+
+                /*
+                 * Kernel/exec bootstrap owns the executable and PT_INTERP.
+                 * libc then maps /lib32/rld itself.  Ordinary dependency DSOs
+                 * must remain unmapped here so the original IRIX rld can own
+                 * their PT_LOAD mappings and relocation lifecycle.
+                 *
+                 * The translated functions for those DSOs are still
+                 * registered below; only their guest memory image is deferred
+                 * to rld.
+                 */
+                if (i != 0u && component->role == 0)
+                    continue;
+
                 if (load_elf(&rt, root, component->path, &info) != 0)
                     return 1;
                 if (i == 0u) {
@@ -457,7 +471,7 @@ int main(int argc, char **argv)
 
     if (setup_process_stack(&rt, &cpu, argc, argv,
                             have_app_elf ? &app_elf : 0,
-                            have_rld_elf ? &rld_elf : 0) != 0) {
+                            have_interp_elf ? &interp_elf : 0) != 0) {
         fprintf(stderr, "failed to construct IRIX N32 process stack\n");
         return 1;
     }
