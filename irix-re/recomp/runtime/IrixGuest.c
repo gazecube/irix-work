@@ -466,6 +466,18 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1056: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
+    case 1134: /* mmap */
+        irix_compat_mmap(rt, cpu);
+        return;
+    case 1135: /* munmap */
+        irix_compat_munmap(rt, cpu);
+        return;
+    case 1136: /* mprotect */
+        irix_compat_mprotect(rt, cpu);
+        return;
+    case 1140: /* getpagesize */
+        syscall_result(cpu, 16384);
+        return;
     case 1156: /* sysinfo(command, buf, count) */
         irix_compat_systeminfo(rt, cpu);
         return;
