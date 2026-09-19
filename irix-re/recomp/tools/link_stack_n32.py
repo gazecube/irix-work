@@ -7,7 +7,7 @@ from extract_ar import members
 SHT_PROGBITS=1; SHT_SYMTAB=2; SHT_RELA=4; SHT_NOBITS=8; SHT_REL=9
 SHF_ALLOC=2; SHN_UNDEF=0; SHN_ABS=0xfff1; SHN_COMMON=0xfff2
 STB_LOCAL=0; STB_GLOBAL=1; STB_WEAK=2; STT_OBJECT=1; STT_FUNC=2; STT_SECTION=3
-R_MIPS_32=2; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11
+R_MIPS_32=2; R_MIPS_26=4; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11
 R_MIPS_GOT_DISP=19; R_MIPS_GOT_PAGE=20; R_MIPS_GOT_OFST=21; R_MIPS_SUB=24; R_MIPS_SCN_DISP=32; R_MIPS_JALR=37
 SMALL={'.srdata','.sdata','.sbss','.lit4','.lit8'}
 
@@ -207,6 +207,8 @@ class StackLink:
   for ro,sn,typ in rows:
    sym=o.syms[sn]; S=self.symaddr(o,sym); word=u32(b,ro)
    if typ==R_MIPS_32: p32(b,ro,S+word)
+   elif typ==R_MIPS_26:
+    A=(word&0x03ffffff)<<2; p32(b,ro,(word&0xfc000000)|(((S+A)>>2)&0x03ffffff))
    elif typ==R_MIPS_HI16:
     pending_hi.append((ro,sn,sym,S,word&0xffff))
     count+=1
@@ -263,6 +265,8 @@ class StackLink:
     page=(S+A+0x8000)&~0xffff; p16(b,ro+2,S+A-page)
    elif typ==R_MIPS_32:
     p32(b,ro,S+A)
+   elif typ==R_MIPS_26:
+    p32(b,ro,(u32(b,ro)&0xfc000000)|(((S+A)>>2)&0x03ffffff))
    elif typ==R_MIPS_HI16:
     p16(b,ro+2,hi(S+A))
    elif typ==R_MIPS_LO16:
