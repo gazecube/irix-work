@@ -151,9 +151,9 @@ def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
     add('runtime', runtime_tree, 'usr/lib32/internal')
     add('runtime', runtime_tree, 'usr/Motif-1.2/lib32')
     add('runtime', runtime_tree, 'lib32')
-    # IRIX keeps some N32 system DSOs, notably libm.so, under /lib rather
-    # than the lib32 directories used by most of this closure.
-    add('runtime', runtime_tree, 'lib')
+    # N32 ISA-runtime fallback.  Keep dependency discovery strictly inside
+    # the lib32 ABI universe; /usr/lib and /usr/lib64 are O32/N64.
+    add('runtime', runtime_tree, 'usr/lib32/mips3')
     add('internal', internal_tree, 'usr/lib32/internal')
     add('internal', internal_tree, 'usr/lib32')
     add('dev', dev_tree, 'usr/lib32')
