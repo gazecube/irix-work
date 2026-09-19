@@ -18,6 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+extern char **environ;
 
 #ifdef IRIX_HAVE_FAST_QUARKS
 #include "irix_fast_quarks.inc"
@@ -128,15 +131,18 @@ static int load_core_image(IrixGuestRuntime *rt)
     return 0;
 }
 
-static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel)
+static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
+                    IrixGuestElfInfo *info_out)
 {
     char path[4096];
-    IrixGuestAddr entry = 0;
+    IrixGuestElfInfo info;
     snprintf(path, sizeof(path), "%s/%s", root, rel);
-    if (irix_guest_load_elf32be(rt, path, &entry) != 0) {
+    if (irix_guest_load_elf32be_info(rt, path, &info) != 0) {
         fprintf(stderr, "failed to load guest ELF: %s\n", path);
         return -1;
     }
+    if (info_out)
+        *info_out = info;
     return 0;
 }
 
@@ -190,29 +196,132 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
 }
 
-static int setup_argv(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int argc, char **argv)
+static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
+                             IrixGuestAddr *top, const char *s,
+                             IrixGuestAddr *addr_out)
 {
+    size_t n = strlen(s) + 1u;
+    void *p;
+    if ((uint64_t)*top < (uint64_t)base + n)
+        return -1;
+    *top -= (IrixGuestAddr)n;
+    p = irix_guest_ptr(rt, *top, n);
+    if (!p)
+        return -1;
+    memcpy(p, s, n);
+    *addr_out = *top;
+    return 0;
+}
+
+static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                               int argc, char **argv,
+                               const IrixGuestElfInfo *app,
+                               const IrixGuestElfInfo *rld)
+{
+    enum {
+        AT_NULL = 0,
+        AT_PHDR = 3,
+        AT_PHENT = 4,
+        AT_PHNUM = 5,
+        AT_PAGESZ = 6,
+        AT_BASE = 7,
+        AT_ENTRY = 9,
+        AT_UID = 11,
+        AT_EUID = 12,
+        AT_GID = 13,
+        AT_EGID = 14
+    };
     const IrixGuestAddr base = 0x7fd00000u;
     const uint32_t size = 0x00100000u;
-    IrixGuestAddr cur = base + 0x1000u;
-    IrixGuestAddr argv_addr = base + 0x100u;
-    int i;
-    if (irix_guest_map(rt, base, size, 3u) != 0) return -1;
-    for (i = 0; i < argc; ++i) {
-        size_t n = strlen(argv[i]) + 1u;
-        void *p;
-        if ((uint64_t)cur + n >= (uint64_t)base + size) return -1;
-        p = irix_guest_ptr(rt, cur, n);
-        if (!p) return -1;
-        memcpy(p, argv[i], n);
-        irix_guest_write32be(rt, argv_addr + (IrixGuestAddr)(i * 4), cur);
-        cur += (IrixGuestAddr)n;
+    IrixGuestAddr top = base + size - 0x100u;
+    IrixGuestAddr sp, argv_addr, envp_addr;
+    IrixGuestAddr *argv_guest = 0, *env_guest = 0;
+    size_t envc = 0, i;
+    const uint32_t auxv[][2] = {
+        {AT_PHDR, app ? app->phdr : 0u},
+        {AT_PHENT, app ? app->phent : 0u},
+        {AT_PHNUM, app ? app->phnum : 0u},
+        {AT_PAGESZ, 4096u},
+        {AT_BASE, rld ? rld->load_base : 0u},
+        {AT_ENTRY, app ? app->entry : 0u},
+        {AT_UID, (uint32_t)getuid()},
+        {AT_EUID, (uint32_t)geteuid()},
+        {AT_GID, (uint32_t)getgid()},
+        {AT_EGID, (uint32_t)getegid()},
+        {AT_NULL, 0u}
+    };
+
+    while (environ && environ[envc])
+        ++envc;
+    if (irix_guest_map(rt, base, size, 3u) != 0)
+        return -1;
+
+    argv_guest = (IrixGuestAddr *)calloc((size_t)argc + 1u, sizeof(*argv_guest));
+    env_guest = (IrixGuestAddr *)calloc(envc + 1u, sizeof(*env_guest));
+    if (!argv_guest || !env_guest)
+        goto fail;
+
+    for (i = envc; i > 0; --i)
+        if (push_guest_string(rt, base, &top, environ[i - 1u], &env_guest[i - 1u]) != 0)
+            goto fail;
+    for (i = (size_t)argc; i > 0; --i)
+        if (push_guest_string(rt, base, &top, argv[i - 1u], &argv_guest[i - 1u]) != 0)
+            goto fail;
+
+    /* N32 process entry uses a 16-byte aligned stack. Build the canonical
+       argc/argv/envp/auxv vectors below the copied strings. */
+    top &= ~15u;
+    {
+        size_t words = 1u + ((size_t)argc + 1u) + (envc + 1u) +
+                       (sizeof(auxv) / sizeof(auxv[0])) * 2u;
+        uint64_t bytes = (uint64_t)words * 4u;
+        IrixGuestAddr p;
+        if ((uint64_t)top < (uint64_t)base + bytes)
+            goto fail;
+        sp = (IrixGuestAddr)((top - (IrixGuestAddr)bytes) & ~15u);
+        p = sp;
+        irix_guest_write32be(rt, p, (uint32_t)argc); p += 4u;
+        argv_addr = p;
+        for (i = 0; i < (size_t)argc; ++i) {
+            irix_guest_write32be(rt, p, argv_guest[i]); p += 4u;
+        }
+        irix_guest_write32be(rt, p, 0u); p += 4u;
+        envp_addr = p;
+        for (i = 0; i < envc; ++i) {
+            irix_guest_write32be(rt, p, env_guest[i]); p += 4u;
+        }
+        irix_guest_write32be(rt, p, 0u); p += 4u;
+        for (i = 0; i < sizeof(auxv) / sizeof(auxv[0]); ++i) {
+            irix_guest_write32be(rt, p, auxv[i][0]); p += 4u;
+            irix_guest_write32be(rt, p, auxv[i][1]); p += 4u;
+        }
     }
-    irix_guest_write32be(rt, argv_addr + (IrixGuestAddr)(argc * 4), 0);
+
     cpu->gpr[4] = (uint64_t)(uint32_t)argc;
     cpu->gpr[5] = argv_addr;
-    cpu->gpr[29] = base + size - 0x100u;
-    return 0;
+    cpu->gpr[6] = envp_addr;
+    cpu->gpr[28] = app ? app->gp_value : 0u;
+    cpu->gpr[29] = sp;
+
+    fprintf(stderr,
+            "IRIX process stack: sp=0x%08x argv=0x%08x envp=0x%08x envc=%zu "
+            "phdr=0x%08x phent=%u phnum=%u entry=0x%08x gp=0x%08x "
+            "interp=%s rld_base=0x%08x\n",
+            sp, argv_addr, envp_addr, envc,
+            app ? app->phdr : 0u, app ? (unsigned)app->phent : 0u,
+            app ? (unsigned)app->phnum : 0u, app ? app->entry : 0u,
+            app ? app->gp_value : 0u,
+            app && app->interp[0] ? app->interp : "(none)",
+            rld ? rld->load_base : 0u);
+
+    free(argv_guest);
+    free(env_guest);
+    return rt->trapped ? -1 : 0;
+
+fail:
+    free(argv_guest);
+    free(env_guest);
+    return -1;
 }
 
 int main(int argc, char **argv)
@@ -220,7 +329,13 @@ int main(int argc, char **argv)
     IrixGuestRuntime rt;
     IrixGuestCpu cpu;
     IrixGuestAddr entry;
+    IrixGuestElfInfo app_elf;
+    IrixGuestElfInfo rld_elf;
+    int have_app_elf = 0;
+    int have_rld_elf = 0;
 
+    memset(&app_elf, 0, sizeof(app_elf));
+    memset(&rld_elf, 0, sizeof(rld_elf));
     irix_guest_runtime_init(&rt);
     memset(&cpu, 0, sizeof(cpu));
 
@@ -240,8 +355,22 @@ int main(int argc, char **argv)
                 root = IRIX_INTERNAL_TREE;
             else
                 root = IRIX_DEV_TREE;
-            if (load_elf(&rt, root, component->path) != 0)
-                return 1;
+            {
+                IrixGuestElfInfo info;
+                if (load_elf(&rt, root, component->path, &info) != 0)
+                    return 1;
+                if (i == 0u) {
+                    app_elf = info;
+                    have_app_elf = 1;
+                }
+                if (strcmp(component->path, "lib32/rld") == 0 ||
+                    strcmp(component->path, "lib32/rld.debug") == 0 ||
+                    strcmp(component->path, "usr/lib32/rld") == 0 ||
+                    strcmp(component->path, "usr/lib32/rld.debug") == 0) {
+                    rld_elf = info;
+                    have_rld_elf = 1;
+                }
+            }
         }
     }
 
@@ -299,8 +428,10 @@ int main(int argc, char **argv)
     irix_register_recompiled_stack(&rt);
     irix_register_app_bundle(&rt);
 
-    if (setup_argv(&rt, &cpu, argc, argv) != 0) {
-        fprintf(stderr, "failed to construct guest argv/stack\n");
+    if (setup_process_stack(&rt, &cpu, argc, argv,
+                            have_app_elf ? &app_elf : 0,
+                            have_rld_elf ? &rld_elf : 0) != 0) {
+        fprintf(stderr, "failed to construct IRIX N32 process stack\n");
         return 1;
     }
 
