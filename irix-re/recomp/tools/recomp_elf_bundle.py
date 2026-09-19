@@ -485,12 +485,18 @@ def boundary_entry_function_ranges(elf, known_starts):
         # callable boundary elsewhere.  If the gap to the next barrier is tiny,
         # decode it as part of this function and keep it when it ends in a
         # normal jr $ra + delay-slot return sequence.
-        next_barrier=min((b for b in barriers if b>addr),default=hi)
+        # Do not use every tentative boundary candidate here. A weak
+        # candidate can later be rejected, yet still split a valid predecessor
+        # during reachability. That is exactly what happened with rld:
+        # 0x0fb66878 is a shared return epilogue, was tentatively considered a
+        # boundary, then dropped, leaving 0x0fb6685c permanently truncated.
+        # For this tiny-epilogue repair, only a previously proven start is a
+        # hard boundary.
+        next_barrier=min((b for b in known_starts if b>addr),default=hi)
         provisional_end=addr+size
         if provisional_end<next_barrier and next_barrier-provisional_end<=16:
             try:
                 extra=elf.words(provisional_end,next_barrier-provisional_end)
-                joined=elf.words(addr,next_barrier-addr)
                 if (0x03e00008 in extra and
                     validated_recovered_size(elf,addr,next_barrier-addr)==next_barrier-addr):
                     size=next_barrier-addr
