@@ -360,6 +360,7 @@ int main(int argc, char **argv)
     memset(&interp_elf, 0, sizeof(interp_elf));
     memset(&rld_elf, 0, sizeof(rld_elf));
     irix_guest_runtime_init(&rt);
+    irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
 
     if (load_core_image(&rt) != 0) {
