@@ -497,8 +497,13 @@ def boundary_entry_function_ranges(elf, known_starts):
         if provisional_end<next_barrier and next_barrier-provisional_end<=16:
             try:
                 extra=elf.words(provisional_end,next_barrier-provisional_end)
-                if (0x03e00008 in extra and
-                    validated_recovered_size(elf,addr,next_barrier-addr)==next_barrier-addr):
+                # A tiny suffix ending in jr $ra plus its delay slot is an
+                # epilogue, not a separate function.  Extend first and let the
+                # normal recovered-range validator below decide whether the
+                # complete joined range is decodable.  Requiring the validator
+                # to return the full size here was circular and left rld's
+                # 0x0fb66878 epilogue outside the 0x0fb6685c callback.
+                if len(extra)>=2 and extra[-2]==0x03e00008:
                     size=next_barrier-addr
             except Exception:
                 pass
