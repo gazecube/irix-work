@@ -349,11 +349,14 @@ int main(int argc, char **argv)
     IrixGuestCpu cpu;
     IrixGuestAddr entry;
     IrixGuestElfInfo app_elf;
+    IrixGuestElfInfo interp_elf;
     IrixGuestElfInfo rld_elf;
     int have_app_elf = 0;
+    int have_interp_elf = 0;
     int have_rld_elf = 0;
 
     memset(&app_elf, 0, sizeof(app_elf));
+    memset(&interp_elf, 0, sizeof(interp_elf));
     memset(&rld_elf, 0, sizeof(rld_elf));
     irix_guest_runtime_init(&rt);
     memset(&cpu, 0, sizeof(cpu));
@@ -381,6 +384,13 @@ int main(int argc, char **argv)
                 if (i == 0u) {
                     app_elf = info;
                     have_app_elf = 1;
+                } else if (have_app_elf && app_elf.interp[0]) {
+                    const char *interp_rel = app_elf.interp[0] == '/' ?
+                                             app_elf.interp + 1 : app_elf.interp;
+                    if (strcmp(component->path, interp_rel) == 0) {
+                        interp_elf = info;
+                        have_interp_elf = 1;
+                    }
                 }
                 if (strcmp(component->path, "lib32/rld") == 0 ||
                     strcmp(component->path, "lib32/rld.debug") == 0 ||
@@ -455,21 +465,30 @@ int main(int argc, char **argv)
     }
 
     /*
-     * Enter at the executable's ELF entry point, not at main().
-     *
-     * Jumping directly to main bypasses the original IRIX crt/libc startup
-     * path, including runtime-linker and library initialization.  The guest
-     * stack above is now shaped as an N32 process entry stack, so give the
-     * translated executable the same entry point the kernel would.
-     *
-     * Keep the named-main fallback only for incomplete binaries while the
-     * entry-point recovery work is still being hardened.
+     * For an ELF executable with PT_INTERP, the kernel transfers control to
+     * the interpreter's entry point, while AT_ENTRY carries the executable's
+     * own e_entry.  IRIX N32 desktop binaries use /usr/lib32/libc.so.1 as that
+     * interpreter.  Entering the executable directly still skips the libc/rld
+     * bootstrap, which is exactly what the previous run demonstrated.
      */
-    entry = have_app_elf ? app_elf.entry : 0u;
+    entry = have_interp_elf ? interp_elf.entry :
+            (have_app_elf ? app_elf.entry : 0u);
+    if (have_interp_elf)
+        cpu.gpr[28] = interp_elf.gp_value;
+    if (!entry || !irix_guest_find_function(&rt, entry)) {
+        IrixGuestAddr app_entry = have_app_elf ? app_elf.entry : 0u;
+        fprintf(stderr,
+                "warning: translated process entry 0x%08x unavailable; "
+                "falling back to executable entry=0x%08x\n",
+                entry, app_entry);
+        entry = app_entry;
+        if (have_app_elf)
+            cpu.gpr[28] = app_elf.gp_value;
+    }
     if (!entry || !irix_guest_find_function(&rt, entry)) {
         IrixGuestAddr main_entry = find_named(&rt, "main");
         fprintf(stderr,
-                "warning: translated ELF entry 0x%08x unavailable; "
+                "warning: translated executable entry 0x%08x unavailable; "
                 "falling back to main=0x%08x\n",
                 entry, main_entry);
         entry = main_entry;
@@ -481,8 +500,12 @@ int main(int argc, char **argv)
 
     fprintf(stderr,
             "IRIX %s bootstrap: functions=%zu process_entry=0x%08x "
+            "interp_entry=0x%08x app_entry=0x%08x gp=0x%08x "
             "main=0x%08x DISPLAY=%s\n",
-            IRIX_APP_NAME, rt.function_count, entry, find_named(&rt, "main"),
+            IRIX_APP_NAME, rt.function_count, entry,
+            have_interp_elf ? interp_elf.entry : 0u,
+            have_app_elf ? app_elf.entry : 0u,
+            (uint32_t)cpu.gpr[28], find_named(&rt, "main"),
             getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)");
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
         IrixGuestFunctionEntry *e = irix_guest_find_function(&rt, rt.trap_pc);
