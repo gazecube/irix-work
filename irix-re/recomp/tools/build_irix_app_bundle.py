@@ -315,17 +315,38 @@ def main():
     interp = elf_interp(app_binary)
     if interp:
         interp_rel = interp[1:] if interp.startswith('/') else interp
-        interp_path = a.runtime_tree / interp_rel
-        if interp_path.is_file():
+        interp_candidates = [interp_rel]
+        # Some extracted IRIX trees place libc under /lib64 even when the
+        # executable's PT_INTERP string names /usr/lib32/libc.so.1. Accept
+        # that extracted-layout variant without rewriting the guest-visible
+        # interpreter identity.
+        if interp_rel == 'usr/lib32/libc.so.1':
+            interp_candidates += [
+                'lib64/libc.so.1',
+                'lib32/libc.so.1',
+            ]
+
+        interp_found = None
+        for candidate in interp_candidates:
+            candidate_path = a.runtime_tree / candidate
+            if candidate_path.is_file():
+                interp_found = (candidate, candidate_path)
+                break
+
+        if interp_found is not None:
+            candidate, interp_path = interp_found
             seed_rows.append({
                 'prefix': 'irix_interp',
                 'kind': 'runtime',
-                'path': interp_rel,
+                'path': candidate,
                 'implicit_runtime': True,
+                'interp_name': interp,
             })
             print(f'IRIX PT_INTERP: {interp} -> {interp_path}', file=sys.stderr)
         else:
-            print(f'warning: missing IRIX PT_INTERP {interp}: {interp_path}',
+            checked = ', '.join(str(a.runtime_tree / p)
+                                for p in interp_candidates)
+            print(f'warning: missing IRIX PT_INTERP {interp}; checked: {checked}',
                   file=sys.stderr)
 
     # rld is the IRIX N32 runtime linker, not an ordinary DT_NEEDED DSO.  SGI
