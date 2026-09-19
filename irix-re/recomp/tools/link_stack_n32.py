@@ -261,6 +261,12 @@ class StackLink:
     page=(S+A+0x8000)&~0xffff; G=self.gotaddr(('page',page),page); d=self.check16(G-self.gp,'GOT_PAGE '+sym['name']); p16(b,ro+2,d)
    elif typ==R_MIPS_GOT_OFST:
     page=(S+A+0x8000)&~0xffff; p16(b,ro+2,S+A-page)
+   elif typ==R_MIPS_32:
+    p32(b,ro,S+A)
+   elif typ==R_MIPS_HI16:
+    p16(b,ro+2,hi(S+A))
+   elif typ==R_MIPS_LO16:
+    p16(b,ro+2,S+A)
    elif typ==R_MIPS_JALR: pass
    else: raise ValueError(f'unsupported runtime RELA type {typ} in {o.name}:{ts["name"]}+{ro:#x}')
    count+=1
