@@ -233,6 +233,32 @@ static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
     return 0;
 }
 
+static int guest_env_is_loader_control(const char *s)
+{
+    static const char *const exact[] = {
+        "LD_LIBRARY_PATH=",
+        "LD_LIBRARYN32_PATH=",
+        "LD_LIBRARY64_PATH=",
+        "LD_PRELOAD=",
+        "_RLD_PATH=",
+        "_RLD_ROOT=",
+        "_RLD_LIST=",
+        "_RLDN32_LIST=",
+        "_RLD64_LIST=",
+        "_RLD_ARGS="
+    };
+    size_t i;
+
+    if (!s)
+        return 0;
+    for (i = 0; i < sizeof(exact) / sizeof(exact[0]); ++i) {
+        size_t n = strlen(exact[i]);
+        if (strncmp(s, exact[i], n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                                int argc, char **argv,
                                const IrixGuestElfInfo *app,
@@ -271,8 +297,19 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         {AT_NULL, 0u}
     };
 
-    while (environ && environ[envc])
-        ++envc;
+    /*
+     * Do not blindly leak the host dynamic-linker environment into the IRIX
+     * process.  In a MaXX session, variables such as LD_LIBRARY_PATH point at
+     * /opt/MaXX/lib64 and cause the real IRIX rld to search Linux/x86 host
+     * paths before its own N32 defaults.  Preserve ordinary environment state
+     * (DISPLAY, HOME, LANG, etc.) but strip controls understood by IRIX rld.
+     */
+    if (environ) {
+        for (i = 0; environ[i]; ++i)
+            if (!guest_env_is_loader_control(environ[i]))
+                ++envc;
+    }
+
     if (irix_guest_map(rt, base, size, 3u) != 0)
         return -1;
 
@@ -281,9 +318,23 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     if (!argv_guest || !env_guest)
         goto fail;
 
-    for (i = envc; i > 0; --i)
-        if (push_guest_string(rt, base, &top, environ[i - 1u], &env_guest[i - 1u]) != 0)
-            goto fail;
+    if (environ) {
+        size_t dst = envc;
+        size_t src = 0;
+        while (environ[src])
+            ++src;
+        while (src > 0) {
+            const char *e = environ[--src];
+            if (guest_env_is_loader_control(e)) {
+                fprintf(stderr, "IRIX env: suppress host loader variable %.*s\n",
+                        (int)(strchr(e, '=') ? strchr(e, '=') - e : strlen(e)), e);
+                continue;
+            }
+            --dst;
+            if (push_guest_string(rt, base, &top, e, &env_guest[dst]) != 0)
+                goto fail;
+        }
+    }
     for (i = (size_t)argc; i > 0; --i)
         if (push_guest_string(rt, base, &top, argv[i - 1u], &argv_guest[i - 1u]) != 0)
             goto fail;
