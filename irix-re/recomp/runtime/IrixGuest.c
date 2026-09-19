@@ -396,18 +396,19 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_syscall(rt, cpu);
         return;
     }
-    case 1001: /* exit */
+    case 1001: { /* exit */
         /*
-         * IRIX _exit(2): terminate the guest process immediately.  The
-         * recompiler runtime models a single guest process, so return the
-         * status through v0 and unwind back to AppRunner instead of exiting
-         * the host process from inside the syscall bridge.
+         * IRIX _exit(2) never returns.  Use a distinguished runtime trap to
+         * unwind translated call frames; AppRunner converts it back into the
+         * guest process exit status instead of reporting it as a fault.
          */
-        cpu->gpr[2] = (uint64_t)(uint32_t)cpu->gpr[4];
+        uint32_t status = (uint32_t)cpu->gpr[4] & 0xffu;
+        cpu->gpr[2] = status;
         cpu->gpr[7] = 0;
-        rt->trap_code = 0;
-        rt->trapped = 0;
+        rt->fault_addr = status;
+        irix_guest_trap(rt, cpu, 0xeeee23ffu);
         return;
+    }
     case 1003: { /* read */
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
