@@ -1,5 +1,6 @@
 add_library(irix_recomp_runtime STATIC
     runtime/IrixGuest.c
+    runtime/IrixCompat.c
     runtime/IrixElf.c
 )
 
