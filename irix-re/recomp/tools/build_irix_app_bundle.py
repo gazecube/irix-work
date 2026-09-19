@@ -316,15 +316,12 @@ def main():
     if interp:
         interp_rel = interp[1:] if interp.startswith('/') else interp
         interp_candidates = [interp_rel]
-        # Some extracted IRIX trees place libc under /lib64 even when the
-        # executable's PT_INTERP string names /usr/lib32/libc.so.1. Accept
-        # that extracted-layout variant without rewriting the guest-visible
-        # interpreter identity.
+        # IRIX N32 executables may name /usr/lib32/libc.so.1 in PT_INTERP
+        # while the extracted runtime tree carries that interpreter at
+        # /lib32/libc.so.1. Accept the extracted-layout variant without
+        # rewriting the guest-visible interpreter identity.
         if interp_rel == 'usr/lib32/libc.so.1':
-            interp_candidates += [
-                'lib64/libc.so.1',
-                'lib32/libc.so.1',
-            ]
+            interp_candidates.append('lib32/libc.so.1')
 
         interp_found = None
         for candidate in interp_candidates:
