@@ -643,6 +643,44 @@ static int try_trivial_stripped_ctor(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     return 1;
 }
 
+static int try_shared_return_epilogue(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                      IrixGuestAddr address)
+{
+    uint32_t w0, w1, w2;
+    int32_t frame;
+    uint32_t sp;
+
+    if (!address || !irix_guest_ptr(rt, address, 12u))
+        return 0;
+
+    w0 = irix_guest_read32be(rt, address + 0u);
+    w1 = irix_guest_read32be(rt, address + 4u);
+    w2 = irix_guest_read32be(rt, address + 8u);
+
+    /*
+     * Some stripped IRIX DSOs expose tiny shared failure epilogues as
+     * independently callable targets even though no ELF function symbol starts
+     * here.  Keep this recovery deliberately exact: li v0,-1; jr ra; then a
+     * positive addiu/daddiu sp,sp,N in the return delay slot.
+     */
+    if (w0 != 0x2402ffffu || w1 != 0x03e00008u)
+        return 0;
+    if (((w2 >> 26) & 0x3fu) != 0x09u && ((w2 >> 26) & 0x3fu) != 0x19u)
+        return 0;
+    if (((w2 >> 21) & 0x1fu) != 29u || ((w2 >> 16) & 0x1fu) != 29u)
+        return 0;
+
+    frame = (int16_t)(w2 & 0xffffu);
+    if (frame <= 0 || (frame & 7) != 0)
+        return 0;
+
+    cpu->gpr[2] = UINT64_C(0xffffffffffffffff);
+    sp = (uint32_t)cpu->gpr[29] + (uint32_t)frame;
+    cpu->gpr[29] = (uint64_t)(int64_t)(int32_t)sp;
+    cpu->gpr[0] = 0;
+    return 1;
+}
+
 static void report_nearest_functions(IrixGuestRuntime *rt, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *below = 0;
@@ -681,6 +719,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
 
         if (try_trivial_stripped_ctor(rt, cpu, address))
+            return rt->trapped ? -1 : 0;
+        if (try_shared_return_epilogue(rt, cpu, address))
             return rt->trapped ? -1 : 0;
 
         fprintf(stderr,
