@@ -166,16 +166,22 @@ def plausible_mips_entry(elf, addr):
     """Require a strong function-entry signature for pointer-derived starts.
 
     Besides the ordinary addiu/daddiu $sp,$sp,-N prologue, IRIX rld contains
-    small callback helpers that test a GP-relative guard byte *before* their
-    stack adjustment.  One observed form is:
+    callback helpers that perform a small read before their stack adjustment.
+    Observed forms include:
 
         lbu     $at,off($gp)
         beq/bne $at,$zero,...
         addiu   $sp,$sp,-N       # branch delay slot
 
+    and:
+
+        lw      $at,off($a0)
+        addiu   $sp,$sp,-N
+
     These routines are passed indirectly (for example through foreach_obj), so
-    direct-link recovery cannot discover them.  Accept that tightly constrained
-    three-instruction shape as a callable start as well.
+    direct-link recovery cannot discover them.  Accept only these tightly
+    constrained entry shapes rather than treating arbitrary interior loads as
+    callable starts.
     """
     try:
         words=elf.words(addr,12)
@@ -189,6 +195,17 @@ def plausible_mips_entry(elf, addr):
     op=(w>>26)&0x3f; rs=(w>>21)&0x1f; rt=(w>>16)&0x1f; imm=w&0xffff
     if op in (0x09,0x19) and rs==29 and rt==29 and (imm&0x8000)!=0 and imm!=0xffff:
         return True
+
+    if len(words) >= 2:
+        w0,w1=words[:2]
+        op0=(w0>>26)&0x3f; rs0=(w0>>21)&0x1f; rt0=(w0>>16)&0x1f
+        op1=(w1>>26)&0x3f; rs1=(w1>>21)&0x1f; rt1=(w1>>16)&0x1f
+        imm1=w1&0xffff
+        arg_load=(op0==0x23 and 4<=rs0<=11 and rt0!=0)
+        stack_after_load=(op1 in (0x09,0x19) and rs1==29 and rt1==29 and
+                          (imm1&0x8000)!=0 and imm1!=0xffff)
+        if arg_load and stack_after_load:
+            return True
 
     if len(words) >= 3:
         w0,w1,w2=words[:3]
