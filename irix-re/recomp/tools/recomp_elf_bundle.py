@@ -595,34 +595,41 @@ def main():
         if addr not in symbol_addrs:
             zero_defs.append((n,addr,size,sh,'zero_size'))
 
-    recovered_addrs=symbol_addrs|{addr for _,addr,_,_,_ in zero_defs}
-    frame_defs=[]
-    for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms):
-        if addr not in recovered_addrs:
-            frame_defs.append((n,addr,size,sh,'debug_frame'))
+    # DWARF FDEs are authoritative procedure extents.  Prefer them even when
+    # a symbol exists at the same address, and do not let the heuristic passes
+    # manufacture callable entries in the middle of an FDE-covered procedure.
+    frame_defs=[(n,addr,size,sh,'debug_frame')
+                for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms)]
+    frame_starts={addr for _,addr,_,_,_ in frame_defs}
+    frame_ranges=[(addr,addr+size) for _,addr,size,_,_ in frame_defs]
+    defs=[d for d in defs if d[1] not in frame_starts]
+    zero_defs=[d for d in zero_defs if d[1] not in frame_starts]
 
-    recovered_addrs|={addr for _,addr,_,_,_ in frame_defs}
+    def covered_by_frame(addr):
+        return any(lo < addr < hi for lo,hi in frame_ranges)
+
+    recovered_addrs={addr for _,addr,_,_,_ in defs+zero_defs+frame_defs}
     pdr_defs=[]
     for n,addr,size,sh in pdr_function_ranges(elf,path,raw_syms):
-        if addr not in recovered_addrs:
+        if addr not in recovered_addrs and not covered_by_frame(addr):
             pdr_defs.append((n,addr,size,sh,'pdr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in pdr_defs}
     ptr_defs=[]
     for n,addr,size,sh in data_pointer_function_ranges(elf,path,recovered_addrs):
-        if addr not in recovered_addrs:
+        if addr not in recovered_addrs and not covered_by_frame(addr):
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in ptr_defs}
     link_defs=[]
     for n,addr,size,sh in code_link_function_ranges(elf,recovered_addrs):
-        if addr not in recovered_addrs:
+        if addr not in recovered_addrs and not covered_by_frame(addr):
             link_defs.append((n,addr,size,sh,'code_link'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in link_defs}
     boundary_defs=[]
     for n,addr,size,sh in boundary_entry_function_ranges(elf,recovered_addrs):
-        if addr not in recovered_addrs:
+        if addr not in recovered_addrs and not covered_by_frame(addr):
             boundary_defs.append((n,addr,size,sh,'boundary_entry'))
 
     seen_addr=set(); functions=[]; frame_count=0; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
