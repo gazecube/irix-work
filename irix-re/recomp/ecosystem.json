@@ -25,12 +25,6 @@
       "path": "usr/bin/X11/toolchest"
     },
     {
-      "name": "endsession",
-      "prefix": "endsession",
-      "kind": "runtime",
-      "path": "usr/bin/X11/endsession"
-    },
-    {
       "name": "wait4wm",
       "prefix": "wait4wm",
       "kind": "runtime",
