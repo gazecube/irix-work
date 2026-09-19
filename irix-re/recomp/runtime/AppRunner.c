@@ -520,6 +520,13 @@ int main(int argc, char **argv)
             (uint32_t)cpu.gpr[28], find_named(&rt, "main"),
             getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)");
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
+        if (rt.trapped && rt.trap_code == 0xeeee23ffu) {
+            int status = (int)(rt.fault_addr & 0xffu);
+            fprintf(stderr, "IRIX %s exited: status=%d\n",
+                    IRIX_APP_NAME, status);
+            irix_guest_runtime_destroy(&rt);
+            return status;
+        }
         IrixGuestFunctionEntry *e = irix_guest_find_function(&rt, rt.trap_pc);
         IrixGuestFunctionEntry *fault_e = irix_guest_find_function(&rt, rt.fault_addr);
         IrixGuestFunctionEntry *caller = irix_guest_find_function(&rt, (IrixGuestAddr)cpu.pc);
