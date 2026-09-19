@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <limits.h>
 
 static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 {
@@ -138,6 +140,11 @@ void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t val
 void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     rt->errno_proxy_addr = addr;
+}
+
+void irix_guest_set_rootfs(IrixGuestRuntime *rt, const char *rootfs)
+{
+    rt->rootfs = rootfs;
 }
 
 float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg)
@@ -298,6 +305,58 @@ static int write_irix_xstat(IrixGuestRuntime *rt, uint32_t version,
     return -1;
 }
 
+static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
+                                  char *buf, size_t bufsz)
+{
+    struct stat st;
+    int n;
+    if (!guest)
+        return 0;
+    if (guest[0] != '/' || !rt->rootfs || !rt->rootfs[0])
+        return guest;
+
+    n = snprintf(buf, bufsz, "%s%s", rt->rootfs, guest);
+    if (n <= 0 || (size_t)n >= bufsz) {
+        errno = ENAMETOOLONG;
+        return 0;
+    }
+
+    /* Prefer the extracted IRIX filesystem when that path exists there.
+       Otherwise leave ordinary host paths such as /tmp available. */
+    if (stat(buf, &st) == 0)
+        return buf;
+    return guest;
+}
+
+static int irix_open_flags(uint32_t f)
+{
+    int out = 0;
+    switch (f & 3u) {
+    case 1u: out |= O_WRONLY; break;
+    case 2u: out |= O_RDWR; break;
+    default: out |= O_RDONLY; break;
+    }
+    if (f & 0x0004u) out |= O_NONBLOCK; /* O_NDELAY */
+    if (f & 0x0008u) out |= O_APPEND;
+#ifdef O_SYNC
+    if (f & 0x0010u) out |= O_SYNC;
+#endif
+#ifdef O_ASYNC
+    if (f & 0x0040u) out |= O_ASYNC;
+#endif
+    if (f & 0x0080u) out |= O_NONBLOCK;
+    if (f & 0x0100u) out |= O_CREAT;
+    if (f & 0x0200u) out |= O_TRUNC;
+    if (f & 0x0400u) out |= O_EXCL;
+#ifdef O_NOCTTY
+    if (f & 0x0800u) out |= O_NOCTTY;
+#endif
+#ifdef O_DIRECT
+    if (f & 0x8000u) out |= O_DIRECT;
+#endif
+    return out;
+}
+
 static void syscall_result(IrixGuestCpu *cpu, int64_t value)
 {
     if (value < 0) {
@@ -339,6 +398,31 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         result = (int64_t)write((int)(int32_t)cpu->gpr[4], p, count);
+        syscall_result(cpu, result);
+        return;
+    }
+    case 1005: { /* open */
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const char *guest_path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        char host_path[PATH_MAX];
+        const char *path;
+        uint32_t flags = (uint32_t)cpu->gpr[5];
+        mode_t mode = (mode_t)(uint32_t)cpu->gpr[6];
+        if (!guest_path) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+        if (!path) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        result = (int64_t)open(path, irix_open_flags(flags), mode);
+        fprintf(stderr, "IRIX open: %s -> %s flags=0x%x = %lld%s%s\n",
+                guest_path, path, flags, (long long)result,
+                result < 0 ? " errno=" : "",
+                result < 0 ? strerror(errno) : "");
         syscall_result(cpu, result);
         return;
     }
