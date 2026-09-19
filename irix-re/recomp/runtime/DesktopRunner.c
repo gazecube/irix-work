@@ -219,6 +219,15 @@ int main(int argc, char **argv)
     irix_guest_runtime_init(&rt);
     memset(&cpu, 0, sizeof(cpu));
 
+    /* rld's save_pixie_regs/restore_pixie_regs use a fixed IRIX scratch area
+       at 0x00200780 for s0-s7 and fp (9 x 8-byte slots).  IRIX uses 16 KiB
+       pages, so provide the containing page rather than special-casing the
+       individual stores in the memory accessor. */
+    if (irix_guest_map(&rt, 0x00200000u, 0x00004000u, 3u) != 0) {
+        fprintf(stderr, "failed to map rld pixie register scratch page\n");
+        return 1;
+    }
+
     if (load_core_image(&rt) != 0) {
         fprintf(stderr, "failed to load synthetic core image\n");
         return 1;
