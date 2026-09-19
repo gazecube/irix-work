@@ -414,6 +414,14 @@ int main(int argc, char **argv)
     irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
 
+    /* rld's save_pixie_regs/restore_pixie_regs use fixed scratch storage at
+       0x00200780.  Map the containing IRIX 16 KiB page so the original rld
+       can save and restore its callee-saved registers normally. */
+    if (irix_guest_map(&rt, 0x00200000u, 0x00004000u, 3u) != 0) {
+        fprintf(stderr, "failed to map rld pixie register scratch page\n");
+        return 1;
+    }
+
     if (load_core_image(&rt) != 0) {
         fprintf(stderr, "failed to load synthetic core image\n");
         return 1;
