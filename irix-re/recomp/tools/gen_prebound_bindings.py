@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bind IRIX executable/DSO quickstart and prebound GOT imports by symbol name."""
-import argparse, json, struct
+import argparse, json, struct, sys
 from pathlib import Path
 
 STT_NOTYPE=0
@@ -121,6 +121,23 @@ def main():
     data_patches=sorted(data_by.values())
 
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
+
+    # Fail the build rather than reaching runtime with a private rld import
+    # that should have been satisfied by the explicitly seeded SGI rld.
+    rld_defs = {
+        f['name']: f['address']
+        for b in bundles if b.get('prefix') == 'irix_rld'
+        for f in b['functions'] if f['address']
+    }
+    if '_rld_new_interface' in rld_defs:
+        expected = rld_defs['_rld_new_interface']
+        bad = [e for e in missing if e[2] == '_rld_new_interface']
+        bound = [e for e in resolved if e[2] == '_rld_new_interface']
+        print(f'RLD BIND TRACE provider=0x{expected:08x} resolved={bound} missing={bad}', file=sys.stderr)
+        if bad:
+            raise SystemExit('_rld_new_interface remains unresolved despite explicit irix_rld provider')
+    else:
+        print('RLD BIND TRACE: irix_rld bundle has no _rld_new_interface definition', file=sys.stderr)
     target_entries=sorted({(target,name) for addr,target,name,owner in resolved if target})
     missing_index={addr:i for i,(addr,target,name,owner) in enumerate(missing)}
     out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
