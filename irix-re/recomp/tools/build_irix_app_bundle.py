@@ -103,6 +103,32 @@ def elf_needed(path):
     return out
 
 
+def elf_interp(path):
+    """Return an ELF32 big-endian PT_INTERP path, or None."""
+    data = Path(path).read_bytes()
+    if len(data) < 52 or data[:6] != b'\x7fELF\x01\x02':
+        return None
+    h = struct.unpack_from('>16sHHIIIIIHHHHHH', data, 0)
+    phoff, phentsz, phnum = h[5], h[9], h[10]
+    if not phoff or phentsz < 32 or not phnum:
+        return None
+    if phoff + phentsz * phnum > len(data):
+        return None
+    for i in range(phnum):
+        off = phoff + i * phentsz
+        p_type, p_offset, _, _, p_filesz, _, _, _ = struct.unpack_from('>IIIIIIII', data, off)
+        if p_type != 3:  # PT_INTERP
+            continue
+        if not p_filesz or p_offset + p_filesz > len(data):
+            return None
+        raw = data[p_offset:p_offset + p_filesz]
+        end = raw.find(b'\0')
+        if end >= 0:
+            raw = raw[:end]
+        return raw.decode('ascii', 'replace') or None
+    return None
+
+
 def elf_soname(path):
     data = Path(path).read_bytes()
     if len(data) < 52 or data[:6] != b'\x7fELF\x01\x02':
@@ -280,6 +306,27 @@ def main():
     gen.mkdir(parents=True, exist_ok=True)
 
     seed_rows = [app] + list(manifest['shared_components'])
+
+    # PT_INTERP is not DT_NEEDED.  For IRIX N32 executables this is normally
+    # /usr/lib32/libc.so.1, whose entry point is the actual kernel transfer
+    # target.  Seed it explicitly so the runner can enter the original
+    # libc/rld startup path instead of jumping straight to the executable.
+    app_binary = resolve_binary(app, a.runtime_tree, a.internal_tree, a.dev_tree)
+    interp = elf_interp(app_binary)
+    if interp:
+        interp_rel = interp[1:] if interp.startswith('/') else interp
+        interp_path = a.runtime_tree / interp_rel
+        if interp_path.is_file():
+            seed_rows.append({
+                'prefix': 'irix_interp',
+                'kind': 'runtime',
+                'path': interp_rel,
+                'implicit_runtime': True,
+            })
+            print(f'IRIX PT_INTERP: {interp} -> {interp_path}', file=sys.stderr)
+        else:
+            print(f'warning: missing IRIX PT_INTERP {interp}: {interp_path}',
+                  file=sys.stderr)
 
     # rld is the IRIX N32 runtime linker, not an ordinary DT_NEEDED DSO.  SGI
     # libc reaches its private _rld_* interface directly, so DT_NEEDED-only
