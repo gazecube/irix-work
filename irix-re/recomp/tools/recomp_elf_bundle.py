@@ -669,7 +669,13 @@ def main():
     recovered_addrs|={addr for _,addr,_,_,_ in pdr_defs}
     ptr_defs=[]
     for n,addr,size,sh in data_pointer_function_ranges(elf,path,recovered_addrs):
-        if addr not in recovered_addrs and not covered_by_frame(addr):
+        if addr not in recovered_addrs:
+            # A materialized executable address in allocated non-code data is
+            # hard callable-entry evidence just like a direct JAL/BAL target.
+            # SGI widget/class tables and GOT data use these pointers for
+            # indirect jalr calls, and broad FDEs can span many such entries.
+            # Do not let FDE coverage suppress an independently materialized
+            # function pointer.
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in ptr_defs}
