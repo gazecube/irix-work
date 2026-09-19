@@ -39,6 +39,8 @@ def main():
     for b in bundles:
         for f in b['functions']: defs.setdefault(f['name'],f['address'])
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
+    defined_addrs={f['address'] for b in bundles for f in b['functions'] if f['address']}
+    defined_addrs.update(addr for addr in link['globals'].values() if addr)
 
     entries=[]; data_patches=[]
     for b in bundles:
@@ -47,7 +49,17 @@ def main():
             name=imp['name']; addrs=[]; row=got.get(name)
             if imp['address']: addrs.append(imp['address'])
             if row and row['value']: addrs.append(row['value'])
-            for stub in addrs: entries.append((stub,defs.get(name,0),name,b['prefix']))
+            target=defs.get(name,0)
+            for stub in addrs:
+                # MIPS GOT entries for unresolved functions may initially
+                # contain a shared lazy-binding trampoline. They are not
+                # necessarily unique symbol stubs. If the candidate address
+                # is already a translated definition, dispatch it directly
+                # instead of installing a name-based forwarder over another
+                # real function (or a self-forwarder over its own target).
+                if stub in defined_addrs:
+                    continue
+                entries.append((stub,target,name,b['prefix']))
 
         # The desktop/internal DSOs are loaded at their original virtual
         # addresses, but their prebound GOT may still contain pointers into
