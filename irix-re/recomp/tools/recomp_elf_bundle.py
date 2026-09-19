@@ -465,8 +465,9 @@ def boundary_entry_function_ranges(elf, known_starts):
                 continue
             w0=words[i]; w1=words[i+1]
             framed=_stack_frame_setup(w0) or (_simple_entry_prefix(w0) and _stack_frame_setup(w1))
+            guarded=plausible_mips_entry(elf,addr)
             leaf_after_return=_return_control(predecessor) and w0!=0
-            if framed or leaf_after_return:
+            if framed or guarded or leaf_after_return:
                 candidates.add(addr)
 
     barriers=set(known_starts)|candidates
@@ -479,7 +480,12 @@ def boundary_entry_function_ranges(elf, known_starts):
         if not size: continue
         size=validated_recovered_size(elf,addr,size)
         if not size: continue
-        if not _extent_has_return(elf,addr,size): continue
+        # Strong prologues can legitimately tail-transfer into the next known
+        # entry and therefore contain no local jr $ra.  The guarded rld
+        # callbacks are one such case.  Keep the return requirement only for
+        # the weaker "block after a return" heuristic.
+        strong_entry=plausible_mips_entry(elf,addr)
+        if not strong_entry and not _extent_has_return(elf,addr,size): continue
         out.append(('__boundary_%08x'%addr,addr,size,sec_index))
     return out
 
