@@ -123,6 +123,50 @@ def zero_size_function_ranges(elf, symbol_rows):
             out.append((s['name'],s['address'],size,sec_index))
     return out
 
+def debug_frame_function_ranges(elf, path, symbol_rows):
+    """Recover exact procedure ranges from DWARF .debug_frame FDEs.
+
+    IRIX debug rld carries useful FDEs even when local function symbols are
+    absent.  Unlike heuristic boundary recovery, an FDE explicitly describes
+    the complete procedure extent.  The N32 files handled here use the normal
+    32-bit DWARF2 .debug_frame layout: length, CIE pointer, initial PC, range.
+    """
+    p=Path(path).read_bytes()
+    sec=next((s for s in elf.sections if s.get('name')=='.debug_frame'),None)
+    if not sec or sec['size']<12:
+        return []
+
+    exec_sections=[]
+    for i,s in enumerate(elf.sections):
+        if (s['flags']&SHF_EXECINSTR) and s['size']:
+            exec_sections.append((i,s['addr'],s['addr']+s['size']))
+
+    named_by_addr={}
+    for s in symbol_rows:
+        if s['shndx']!=0 and s['address']:
+            named_by_addr.setdefault(s['address'],s['name'])
+
+    out=[]; off=sec['offset']; end=off+sec['size']
+    while off+4<=end:
+        length=struct.unpack_from('>I',p,off)[0]
+        if length==0:
+            off+=4
+            continue
+        entry_end=off+4+length
+        if length==0xffffffff or entry_end>end or off+12>entry_end:
+            break
+        cie=struct.unpack_from('>I',p,off+4)[0]
+        if cie!=0xffffffff:
+            start,size=struct.unpack_from('>II',p,off+8)
+            if size and size%4==0:
+                for sec_index,lo,hi in exec_sections:
+                    if lo<=start<hi and start+size<=hi:
+                        name=named_by_addr.get(start,'__debug_frame_%08x'%start)
+                        out.append((name,start,size,sec_index))
+                        break
+        off=entry_end
+    return out
+
 def pdr_function_ranges(elf, path, symbol_rows):
     """Recover procedure starts/ranges from the MIPS ELF .pdr section."""
     p=Path(path).read_bytes()
@@ -552,6 +596,12 @@ def main():
             zero_defs.append((n,addr,size,sh,'zero_size'))
 
     recovered_addrs=symbol_addrs|{addr for _,addr,_,_,_ in zero_defs}
+    frame_defs=[]
+    for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms):
+        if addr not in recovered_addrs:
+            frame_defs.append((n,addr,size,sh,'debug_frame'))
+
+    recovered_addrs|={addr for _,addr,_,_,_ in frame_defs}
     pdr_defs=[]
     for n,addr,size,sh in pdr_function_ranges(elf,path,raw_syms):
         if addr not in recovered_addrs:
@@ -575,8 +625,8 @@ def main():
         if addr not in recovered_addrs:
             boundary_defs.append((n,addr,size,sh,'boundary_entry'))
 
-    seen_addr=set(); functions=[]; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
-    all_defs=sorted(defs+zero_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,key=lambda x:(x[1],x[0]))
+    seen_addr=set(); functions=[]; frame_count=0; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
+    all_defs=sorted(defs+zero_defs+frame_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,key=lambda x:(x[1],x[0]))
     batches=[]; batch_bodies=[]; batch_rows=[]
     def flush_batch():
         nonlocal batch_bodies,batch_rows
@@ -590,7 +640,7 @@ def main():
 
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
-        if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
+        if source_kind in ('debug_frame','pdr','zero_size','data_ptr','code_link','boundary_entry'):
             checked_size=validated_recovered_size(elf,addr,size)
             if not checked_size:
                 dropped_count+=1
@@ -599,7 +649,7 @@ def main():
         seen_addr.add(addr)
         generated=io.StringIO()
         with contextlib.redirect_stdout(generated):
-            if source_kind in ('pdr','zero_size','data_ptr','code_link','boundary_entry'):
+            if source_kind in ('debug_frame','pdr','zero_size','data_ptr','code_link','boundary_entry'):
                 emit_explicit(str(path),n,addr,size,prefix+'_')
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
@@ -610,6 +660,7 @@ def main():
         row=dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source_kind=source_kind)
         functions.append(row); batch_rows.append(row); batch_bodies.append(function_body(text))
         if len(batch_rows)>=BATCH_FUNCTIONS: flush_batch()
+        if source_kind=='debug_frame': frame_count+=1
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
         if source_kind=='data_ptr': ptr_count+=1
@@ -628,5 +679,5 @@ def main():
     for r in functions: registry.write(f'  irix_guest_register_function(rt,0x{r["address"]:08x}u,{r["c_name"]},"{r["name"]}");\n')
     registry.write('}\n')
     write_if_changed(out/'registry.c',registry.getvalue())
-    print(f'{path}: functions={len(functions)} batches={len(batches)} zero_size_recovered={zero_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
+    print(f'{path}: functions={len(functions)} batches={len(batches)} zero_size_recovered={zero_count} debug_frame_recovered={frame_count} pdr_recovered={pdr_count} data_ptr_recovered={ptr_count} code_link_recovered={link_count} boundary_entry_recovered={boundary_count} recovered_dropped={dropped_count} imports={len(imports)}')
 if __name__=='__main__': main()
