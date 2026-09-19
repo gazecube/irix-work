@@ -466,6 +466,9 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1056: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
+    case 1130: /* prctl */
+        irix_compat_prctl(rt, cpu);
+        return;
     case 1134: /* mmap */
         irix_compat_mmap(rt, cpu);
         return;
