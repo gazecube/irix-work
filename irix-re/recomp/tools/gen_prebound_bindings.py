@@ -69,8 +69,22 @@ def main():
         got=dyn_got(b['path'])
         for imp in b['imports']:
             name=imp['name']; addrs=[]; row=got.get(name)
-            if imp['address']: addrs.append(imp['address'])
-            if row and row['value']: addrs.append(row['value'])
+            # st_value on an undefined ELF symbol is not necessarily a PLT
+            # entry.  SGI prelinked N32 DSOs commonly leave the provider's
+            # prebound address there.  Treating it as an owner-local stub
+            # aliases unrelated imports from different images (for example
+            # imdUtil:open and libC:_nsproc) and can overwrite real code.
+            #
+            # A nonzero GOT entry, on the other hand, is the actual address
+            # used by this prebound image and is therefore the only safe
+            # forwarding candidate here.
+            if row and row['value']:
+                addrs.append(row['value'])
+            elif imp['address'] and imp['address'] in defined_addrs:
+                # Keep genuine executable import stubs recovered from the
+                # image itself.  Do not manufacture one from arbitrary
+                # undefined-symbol st_value metadata.
+                addrs.append(imp['address'])
             target=defs.get(name,0)
             for stub in addrs:
                 # An undefined symbol may carry the address of an executable
