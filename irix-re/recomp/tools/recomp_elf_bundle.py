@@ -585,7 +585,40 @@ def main():
     a=ap.parse_args(); path=Path(a.binary); out=Path(a.output); prefix=a.prefix or path.stem; out.mkdir(parents=True,exist_ok=True)
     elf=t.Elf32BE(str(path)); defs=[]
     for n,addr,size,sh in elf.symbols():
-        if size: defs.append((n,addr,size,sh,'symbol'))
+        if size:
+            # Some SGI dynamic symbols have a nominal st_size that ends before
+            # the function's real sequential body.  __exec_rld is one example:
+            # its symbol range stops after two instructions, immediately before
+            # an ordinary stack-frame prologue.  Feeding that truncated range
+            # to the translator turns fallthrough into a fake guest call.
+            #
+            # Only repair the very strong form: the symbol ends in executable
+            # code with no control transfer, and the next instruction begins a
+            # conventional negative stack-frame adjustment.  Extend from that
+            # point with the same conservative CFG walker used for recovered
+            # hidden entries.  Real returns/jumps at the nominal end are left
+            # untouched.
+            repaired_size=size
+            end=(addr+size)&0xffffffff
+            try:
+                last=elf.words(end-4,4)[0]
+                nxt=elf.words(end,4)[0]
+                op=(last>>26)&0x3f; fn=last&0x3f
+                terminal=(op in (0x02,0x03) or
+                          (op==0x00 and fn in (0x08,0x09)))
+                if not terminal and _stack_frame_setup(nxt):
+                    sec=next((s for s in elf.sections
+                              if (s['flags']&SHF_EXECINSTR) and
+                                 s['addr']<=addr<s['addr']+s['size'] and
+                                 end<s['addr']+s['size']),None)
+                    if sec is not None:
+                        tail=_reachable_code_extent(
+                            elf,end,sec['addr'],sec['addr']+sec['size'],set())
+                        if tail:
+                            repaired_size=size+tail
+            except Exception:
+                pass
+            defs.append((n,addr,repaired_size,sh,'symbol'))
 
     raw_syms=raw_function_symbols(path)
     symbol_addrs={addr for _,addr,_,_,_ in defs}
