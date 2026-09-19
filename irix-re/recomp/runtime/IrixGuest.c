@@ -466,6 +466,9 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1056: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
+    case 1156: /* sysinfo(command, buf, count) */
+        irix_compat_systeminfo(rt, cpu);
+        return;
     case 1158: { /* xstat(version, path, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
