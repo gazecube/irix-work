@@ -18,6 +18,7 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_compat_mmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_compat_munmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_compat_mprotect(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+void irix_compat_prctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 
 #ifdef __cplusplus
 }
