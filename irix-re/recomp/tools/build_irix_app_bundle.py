@@ -406,6 +406,7 @@ def main():
     descriptor_text.append('#include "IrixGuest.h"\n#include <stddef.h>\n\n')
     descriptor_text.append('typedef struct IrixAppGuestComponent {\n')
     descriptor_text.append('    int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */\n')
+    descriptor_text.append('    int role; /* 0 = ordinary, 1 = PT_INTERP, 2 = rld */\n')
     descriptor_text.append('    const char *path;\n')
     descriptor_text.append('} IrixAppGuestComponent;\n\n')
     for row in rows:
@@ -413,7 +414,8 @@ def main():
     descriptor_text.append('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
     for row in rows:
         kind = {'runtime': 0, 'internal': 1, 'dev': 2}[row['kind']]
-        descriptor_text.append(f'    {{{kind}, {json.dumps(row["path"])}}},\n')
+        role = 1 if row['prefix'] == 'irix_interp' else (2 if row['prefix'] == 'irix_rld' else 0)
+        descriptor_text.append(f'    {{{kind}, {role}, {json.dumps(row["path"])}}},\n')
     descriptor_text.append('};\n')
     descriptor_text.append('const size_t irix_app_guest_component_count =\n')
     descriptor_text.append('    sizeof(irix_app_guest_components) / sizeof(irix_app_guest_components[0]);\n\n')
