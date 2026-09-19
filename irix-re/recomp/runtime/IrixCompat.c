@@ -370,6 +370,61 @@ void irix_compat_mprotect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     compat_result(cpu, 0);
 }
 
+void irix_compat_prctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t option = (uint32_t)cpu->gpr[4];
+    long n;
+
+    (void)rt;
+    switch (option) {
+    case 1u: /* PR_MAXPROCS */
+    case 5u: /* PR_MAXPPROCS */
+        n = sysconf(_SC_CHILD_MAX);
+        if (n < 1) n = 1;
+        compat_result(cpu, (int64_t)n);
+        return;
+
+    case 4u: /* PR_GETSTACKSIZE */
+        /* Match the 1 MiB N32 stack currently constructed by AppRunner. */
+        compat_result(cpu, 0x00100000);
+        return;
+
+    case 13u: /* PR_GETSHMASK */
+        /* No sproc share-group attributes are active in the host process. */
+        compat_result(cpu, 0);
+        return;
+
+    case 14u: /* PR_GETNSHARE */
+        /*
+         * The translated process is currently single-threaded/single-member.
+         * libc's __exit() uses this as the compatibility fallback when
+         * PR_LASTSHEXIT is unavailable.
+         */
+        compat_result(cpu, 1);
+        return;
+
+    case 22u: /* PR_LASTSHEXIT */
+        /*
+         * IRIX 6.5.3+ asks whether this is the last member of an sproc share
+         * group before running process-wide atexit/rld shutdown handlers.
+         * We currently model one guest process/member, so the answer is yes.
+         */
+        compat_result(cpu, 1);
+        return;
+
+    default:
+        fprintf(stderr,
+                "UNIMPLEMENTED IRIX prctl option %u pc=0x%08x "
+                "a1-a3=%08x,%08x,%08x\n",
+                option, (uint32_t)cpu->pc,
+                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                (uint32_t)cpu->gpr[7]);
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+}
+
 void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t cmd = (uint32_t)cpu->gpr[4];
