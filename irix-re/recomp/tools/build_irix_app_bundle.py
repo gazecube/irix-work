@@ -279,7 +279,25 @@ def main():
     obj = out / 'obj'
     gen.mkdir(parents=True, exist_ok=True)
 
-    rows = expand_dso_closure([app] + list(manifest['shared_components']),
+    seed_rows = [app] + list(manifest['shared_components'])
+
+    # rld is the IRIX N32 runtime linker, not an ordinary DT_NEEDED DSO.  SGI
+    # libc reaches its private _rld_* interface directly, so DT_NEEDED-only
+    # closure discovery cannot pull it in.  Keep the original N32 rld binary
+    # in the guest closure rather than replacing that interface with a host
+    # shim.
+    rld = a.runtime_tree / 'usr/lib32/rld'
+    if rld.is_file():
+        seed_rows.append({
+            'prefix': 'irix_rld',
+            'kind': 'runtime',
+            'path': 'usr/lib32/rld',
+            'implicit_runtime': True,
+        })
+    else:
+        print(f'warning: missing N32 IRIX runtime linker: {rld}', file=sys.stderr)
+
+    rows = expand_dso_closure(seed_rows,
                               a.runtime_tree, a.internal_tree, a.dev_tree)
     components = []
     for row in rows:
