@@ -492,8 +492,8 @@ def boundary_entry_function_ranges(elf, known_starts):
         # boundary, then dropped, leaving 0x0fb6685c permanently truncated.
         # For this tiny-epilogue repair, only a previously proven start is a
         # hard boundary.
-        next_barrier=min((b for b in known_starts if b>addr),default=hi)
         provisional_end=addr+size
+        next_barrier=min((b for b in known_starts if b>provisional_end),default=hi)
         if provisional_end<next_barrier and next_barrier-provisional_end<=16:
             try:
                 extra=elf.words(provisional_end,next_barrier-provisional_end)
