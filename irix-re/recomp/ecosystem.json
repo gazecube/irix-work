@@ -13,10 +13,40 @@
       "path": "usr/sbin/fm"
     },
     {
-      "name": "fam",
-      "prefix": "fam",
+      "name": "4dwm",
+      "prefix": "d4wm",
       "kind": "runtime",
-      "path": "usr/etc/fam"
+      "path": "usr/bin/X11/4Dwm"
+    },
+    {
+      "name": "toolchest",
+      "prefix": "toolchest",
+      "kind": "runtime",
+      "path": "usr/bin/X11/toolchest"
+    },
+    {
+      "name": "endsession",
+      "prefix": "endsession",
+      "kind": "runtime",
+      "path": "usr/bin/X11/endsession"
+    },
+    {
+      "name": "wait4wm",
+      "prefix": "wait4wm",
+      "kind": "runtime",
+      "path": "usr/bin/X11/wait4wm"
+    },
+    {
+      "name": "tellwm",
+      "prefix": "tellwm",
+      "kind": "runtime",
+      "path": "usr/bin/X11/tellwm"
+    },
+    {
+      "name": "userenv",
+      "prefix": "userenv",
+      "kind": "runtime",
+      "path": "usr/bin/X11/userenv"
     }
   ],
   "shared_components": [
