@@ -286,12 +286,17 @@ def main():
     # closure discovery cannot pull it in.  Keep the original N32 rld binary
     # in the guest closure rather than replacing that interface with a host
     # shim.
-    # The IRIX media may ship the N32 runtime linker as either rld or the
-    # symbol-rich rld.debug image. Prefer the normal pathname when present,
-    # but accept rld.debug as the authoritative runtime-linker provider rather
-    # than silently dropping rld from the guest closure.
+    # IRIX installs the N32 runtime linker in /lib32, not /usr/lib32.
+    # Prefer the normal runtime image; retain the /usr/lib32 and debug
+    # locations only as fallbacks for alternate/extracted media layouts.
     rld_rel = None
-    for candidate in ('usr/lib32/rld', 'usr/lib32/rld.debug'):
+    rld_candidates = (
+        'lib32/rld',
+        'lib32/rld.debug',
+        'usr/lib32/rld',
+        'usr/lib32/rld.debug',
+    )
+    for candidate in rld_candidates:
         if (a.runtime_tree / candidate).is_file():
             rld_rel = candidate
             break
@@ -304,9 +309,9 @@ def main():
         })
         print(f'IRIX N32 runtime linker: {a.runtime_tree / rld_rel}', file=sys.stderr)
     else:
-        print(f'warning: missing N32 IRIX runtime linker: '
-              f'{a.runtime_tree / "usr/lib32/rld"} '
-              f'(also checked rld.debug)', file=sys.stderr)
+        checked = ', '.join(str(a.runtime_tree / p) for p in rld_candidates)
+        print(f'warning: missing N32 IRIX runtime linker; checked: {checked}',
+              file=sys.stderr)
 
     rows = expand_dso_closure(seed_rows,
                               a.runtime_tree, a.internal_tree, a.dev_tree)
