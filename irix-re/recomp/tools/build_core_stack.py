@@ -25,6 +25,11 @@ def discover_support_archives(root, primary):
         if not base.is_dir():
             continue
         for p in sorted(base.rglob('*.a')):
+            # Architecture-tuned subtrees are alternate MIPS3/MIPS4 runtime
+            # universes, not generic N32 support archives for this closure.
+            rel_parts = p.relative_to(base).parts[:-1]
+            if any(part in ('mips3', 'mips4') for part in rel_parts):
+                continue
             real = p.resolve()
             if real in primary_real or real in seen:
                 continue
