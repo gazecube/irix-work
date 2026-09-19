@@ -14,6 +14,16 @@ extern "C" {
 
 typedef uint32_t IrixGuestAddr;
 
+typedef struct IrixGuestElfInfo {
+    IrixGuestAddr entry;
+    IrixGuestAddr phdr;
+    uint16_t phent;
+    uint16_t phnum;
+    IrixGuestAddr gp_value;
+    IrixGuestAddr load_base;
+    char interp[256];
+} IrixGuestElfInfo;
+
 typedef struct IrixGuestCpu {
     uint64_t gpr[IRIX_GUEST_GPR_COUNT];
     uint64_t hi;
@@ -82,6 +92,8 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+int irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
+                                  IrixGuestElfInfo *info_out);
 int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
                              IrixGuestAddr *entry_out);
 
