@@ -174,10 +174,10 @@ def main():
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt,IrixGuestDataResolver data_resolver){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0;IrixGuestAddr data_target;\n')
         for got_addr,target,name,owner,old in data_patches:
             if target:
-                w.write(f'irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
+                w.write(f'if(irix_guest_ptr(rt,0x{got_addr:08x}u,4u))irix_guest_write32be(rt,0x{got_addr:08x}u,0x{target:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
             else:
                 q=json.dumps(name)
-                w.write(f'data_target=data_resolver?data_resolver({q}):0;if(data_target)irix_guest_write32be(rt,0x{got_addr:08x}u,data_target); /* {owner}:{name}, was 0x{old:08x} */\n')
+                w.write(f'data_target=data_resolver?data_resolver({q}):0;if(data_target&&irix_guest_ptr(rt,0x{got_addr:08x}u,4u))irix_guest_write32be(rt,0x{got_addr:08x}u,data_target); /* {owner}:{name}, was 0x{old:08x} */\n')
         for addr,target,name,owner in resolved: w.write(f'irix_guest_register_function(rt,0x{addr:08x}u,forward_import,"{owner}:{name}");\n')
         w.write('for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0]);++i){\n')
         w.write('  if(missing_imports[i].native){++native_addresses;}else{++unresolved_addresses;irix_guest_register_function(rt,missing_imports[i].address,missing_import,missing_imports[i].name);}\n')
