@@ -277,13 +277,27 @@ int main(int argc, char **argv)
     irix_runtime_x11_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
 
+    /*
+     * Registration priority is first-match in irix_guest_find_function().
+     *
+     * Keep native overrides first.  Then install prebound/missing import
+     * handlers before translated functions: SGI executables and DSOs may
+     * contain executable import stubs which metadata recovery also emits as
+     * ordinary translated functions.  If those translated stubs are
+     * registered first, they shadow the name-based forwarder and private
+     * runtime imports such as libc->_rld_new_interface execute the stub
+     * itself instead of the real /usr/lib32/rld provider.
+     *
+     * The forwarder target does not need to be registered yet; lookup happens
+     * when the import is actually called, after the complete bundle below has
+     * been registered.
+     */
     irix_register_recompiled_stack_imports(&rt, resolve_native);
     register_irix_bridge_imports(&rt, resolve_native);
+    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
 
     irix_register_recompiled_stack(&rt);
     irix_register_app_bundle(&rt);
-
-    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
 
     if (setup_argv(&rt, &cpu, argc, argv) != 0) {
         fprintf(stderr, "failed to construct guest argv/stack\n");
