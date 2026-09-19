@@ -155,6 +155,21 @@ static IrixGuestAddr find_named(IrixGuestRuntime *rt, const char *name)
     return 0;
 }
 
+static void report_guest_words(IrixGuestRuntime *rt, const char *label, IrixGuestAddr addr)
+{
+    unsigned i;
+    if (!addr || !irix_guest_ptr(rt, addr, 4u))
+        return;
+    fprintf(stderr, "  mem %s@0x%08x:", label, addr);
+    for (i = 0; i < 6u; ++i) {
+        IrixGuestAddr p = addr + i * 4u;
+        if (!irix_guest_ptr(rt, p, 4u))
+            break;
+        fprintf(stderr, " +%02x=%08x", i * 4u, irix_guest_read32be(rt, p));
+    }
+    fputc('\n', stderr);
+}
+
 static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestFunctionEntry *below = 0, *above = 0, *ra_fn = 0;
@@ -194,6 +209,10 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
             (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
             (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    report_guest_words(rt, "v0", (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
+    report_guest_words(rt, "a0", (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
+    report_guest_words(rt, "a1", (IrixGuestAddr)(uint32_t)cpu->gpr[5]);
+    report_guest_words(rt, "a3", (IrixGuestAddr)(uint32_t)cpu->gpr[7]);
 }
 
 static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
