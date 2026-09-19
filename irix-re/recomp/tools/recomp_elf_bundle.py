@@ -328,8 +328,12 @@ def data_pointer_function_ranges(elf, path, known_starts):
                 continue
             if exec_section_for(addr) is None:
                 continue
-            if plausible_mips_entry(elf,addr):
-                candidates.add(addr)
+            # A word in allocated non-code data that exactly names an
+            # executable address is itself strong entry evidence.  Do not
+            # require a conventional prologue here: SGI callback veneers and
+            # ABI stubs commonly begin with gp-relative loads or an immediate
+            # jalr rather than stack setup.
+            candidates.add(addr)
 
     out=[]
     for sec_index,lo,hi in exec_sections:
