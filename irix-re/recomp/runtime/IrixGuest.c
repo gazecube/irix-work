@@ -524,7 +524,21 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     case 1040: { /* syssgi */
         uint32_t request = (uint32_t)cpu->gpr[4];
-        if (request == 68u) { /* SGI_ELFMAP */
+        switch (request) {
+        case 21u: /* SGI_SETPGID */
+            result = (int64_t)setpgid((pid_t)(int32_t)cpu->gpr[5],
+                                     (pid_t)(int32_t)cpu->gpr[6]);
+            syscall_result(cpu, result);
+            return;
+        case 62u: /* SGI_SSYNC */
+            sync();
+            syscall_result(cpu, 0);
+            return;
+        case 65u: /* SGI_GETSID */
+            result = (int64_t)getsid((pid_t)(int32_t)cpu->gpr[5]);
+            syscall_result(cpu, result);
+            return;
+        case 68u: { /* SGI_ELFMAP */
             int fd = (int)(int32_t)cpu->gpr[5];
             IrixGuestAddr phdr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
             uint32_t count = (uint32_t)cpu->gpr[7];
@@ -536,15 +550,34 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             syscall_result(cpu, (int64_t)(uint32_t)first);
             return;
         }
-        fprintf(stderr,
-                "UNIMPLEMENTED IRIX syssgi request %u pc=0x%08x "
-                "a1-a3=%08x,%08x,%08x\n",
-                request, (uint32_t)cpu->pc,
-                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
-                (uint32_t)cpu->gpr[7]);
-        rt->fault_addr = request;
-        irix_guest_trap(rt, cpu, 0xeeee2304u);
-        return;
+        case 92u:
+            /*
+             * IRIX 6.5 rld issues syssgi(0x5c, ...) during early loader
+             * setup.  Real IRIX traces show success with no user-visible
+             * result data for this call, so model it as the compatibility
+             * no-op used by the historical kernel boundary.
+             */
+            syscall_result(cpu, 0);
+            return;
+        case 108u: /* SGI_TOSSTSAVE */
+            /* Historical Linux IRIX compatibility treated this as a no-op. */
+            syscall_result(cpu, 0);
+            return;
+        case 129u: /* SGI_USE_FP_BCOPY / SGI_FP_BCOPY */
+            /* Report that no special FPU bcopy path is required. */
+            syscall_result(cpu, 0);
+            return;
+        default:
+            fprintf(stderr,
+                    "UNIMPLEMENTED IRIX syssgi request %u pc=0x%08x "
+                    "a1-a3=%08x,%08x,%08x\n",
+                    request, (uint32_t)cpu->pc,
+                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7]);
+            rt->fault_addr = request;
+            irix_guest_trap(rt, cpu, 0xeeee2304u);
+            return;
+        }
     }
     case 1047: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
@@ -564,7 +597,8 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             syscall_result(cpu, (int64_t)n);
             return;
         case 14u: /* MP_PGSIZE */
-            syscall_result(cpu, 4096);
+            /* IRIX MIPS user processes use 16 KiB pages. */
+            syscall_result(cpu, 16384);
             return;
         default:
             fprintf(stderr,
