@@ -45,6 +45,7 @@ void irix_register_recompiled_stack(IrixGuestRuntime *rt);
 void irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
 typedef struct IrixAppGuestComponent {
     int kind; /* 0 = runtime tree, 1 = internal tree, 2 = development tree */
+    int role; /* 0 = ordinary, 1 = PT_INTERP, 2 = rld */
     const char *path;
 } IrixAppGuestComponent;
 
@@ -384,18 +385,14 @@ int main(int argc, char **argv)
                 if (i == 0u) {
                     app_elf = info;
                     have_app_elf = 1;
-                } else if (have_app_elf && app_elf.interp[0]) {
-                    const char *interp_rel = app_elf.interp[0] == '/' ?
-                                             app_elf.interp + 1 : app_elf.interp;
-                    if (strcmp(component->path, interp_rel) == 0) {
-                        interp_elf = info;
-                        have_interp_elf = 1;
-                    }
                 }
-                if (strcmp(component->path, "lib32/rld") == 0 ||
-                    strcmp(component->path, "lib32/rld.debug") == 0 ||
-                    strcmp(component->path, "usr/lib32/rld") == 0 ||
-                    strcmp(component->path, "usr/lib32/rld.debug") == 0) {
+                if (component->role == 1) {
+                    interp_elf = info;
+                    have_interp_elf = 1;
+                    fprintf(stderr,
+                            "IRIX PT_INTERP component: %s entry=0x%08x gp=0x%08x\n",
+                            component->path, info.entry, info.gp_value);
+                } else if (component->role == 2) {
                     rld_elf = info;
                     have_rld_elf = 1;
                 }
