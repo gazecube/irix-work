@@ -51,6 +51,15 @@ def main():
             if old_rank is None or bi>=old_rank:
                 defs[name]=addr
                 def_rank[name]=bi
+    # Explicit runtime providers outrank auto-expanded DSOs regardless of
+    # closure order.  Auto dependencies are appended after seed components,
+    # so "last definition wins" alone can let a later recovered import stub
+    # steal a name back from rld.
+    for b in bundles:
+        if b.get('prefix') == 'irix_rld':
+            for f in b['functions']:
+                if f['address']:
+                    defs[f['name']] = f['address']
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
     defined_addrs={f['address'] for b in bundles for f in b['functions'] if f['address']}
     defined_addrs.update(addr for addr in link['globals'].values() if addr)
