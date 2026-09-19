@@ -306,11 +306,21 @@ static int write_irix_xstat(IrixGuestRuntime *rt, uint32_t version,
     return -1;
 }
 
+static int irix_is_guest_system_path(const char *guest)
+{
+    return strncmp(guest, "/usr/lib32/", 11u) == 0 ||
+           strncmp(guest, "/lib32/", 7u) == 0 ||
+           strncmp(guest, "/usr/lib/", 9u) == 0 ||
+           strncmp(guest, "/lib/", 5u) == 0 ||
+           strncmp(guest, "/usr/gfx/", 9u) == 0;
+}
+
 static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
                                   char *buf, size_t bufsz)
 {
     struct stat st;
     int n;
+
     if (!guest)
         return 0;
     if (guest[0] != '/' || !rt->rootfs || !rt->rootfs[0])
@@ -322,10 +332,58 @@ static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
         return 0;
     }
 
-    /* Prefer the extracted IRIX filesystem when that path exists there.
-       Otherwise leave ordinary host paths such as /tmp available. */
     if (stat(buf, &st) == 0)
         return buf;
+
+    /*
+     * The extracted install tree contains the ISA-specific N32 runtime
+     * libraries but not all of the canonical top-level aliases that exist on
+     * an installed IRIX system.  Our emulated machine is an R10000/MIPS-IV
+     * profile, so resolve a missing direct /usr/lib32/<soname> through the
+     * mips4 directory first, with mips3 as the compatible fallback.
+     *
+     * Keep this deliberately narrow: do not recursively search arbitrary
+     * subdirectories, and do not apply it to internal/ libraries.
+     */
+    if (strncmp(guest, "/usr/lib32/", 11u) == 0) {
+        const char *name = guest + 11u;
+        if (*name && !strchr(name, '/')) {
+            n = snprintf(buf, bufsz, "%s/usr/lib32/mips4/%s",
+                         rt->rootfs, name);
+            if (n > 0 && (size_t)n < bufsz && stat(buf, &st) == 0) {
+                fprintf(stderr,
+                        "IRIX path alias: %s -> /usr/lib32/mips4/%s\n",
+                        guest, name);
+                return buf;
+            }
+
+            n = snprintf(buf, bufsz, "%s/usr/lib32/mips3/%s",
+                         rt->rootfs, name);
+            if (n > 0 && (size_t)n < bufsz && stat(buf, &st) == 0) {
+                fprintf(stderr,
+                        "IRIX path alias: %s -> /usr/lib32/mips3/%s\n",
+                        guest, name);
+                return buf;
+            }
+        }
+    }
+
+    /*
+     * Never let an unresolved IRIX system-library path escape into the host
+     * filesystem.  A host /usr/lib32/libm.so may be x86 and can be opened
+     * successfully, only for the guest rld to reject it later.
+     *
+     * Ordinary device/temp paths still intentionally fall back to the host.
+     */
+    if (irix_is_guest_system_path(guest)) {
+        n = snprintf(buf, bufsz, "%s%s", rt->rootfs, guest);
+        if (n <= 0 || (size_t)n >= bufsz) {
+            errno = ENAMETOOLONG;
+            return 0;
+        }
+        return buf;
+    }
+
     return guest;
 }
 
