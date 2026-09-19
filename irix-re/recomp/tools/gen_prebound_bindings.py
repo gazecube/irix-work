@@ -36,8 +36,21 @@ def dyn_got(path):
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('stack_link_json'); ap.add_argument('bundles',nargs='+'); ap.add_argument('-o','--output',required=True)
     a=ap.parse_args(); bundles=[json.loads(Path(p).read_text()) for p in a.bundles]; link=json.loads(Path(a.stack_link_json).read_text()); defs={}
-    for b in bundles:
-        for f in b['functions']: defs.setdefault(f['name'],f['address'])
+    # Later components are the more specific runtime providers.  In
+    # particular, usr/lib32/rld is seeded after the normal DSO closure and
+    # must be allowed to satisfy libc's private _rld_* imports even when an
+    # earlier image contributed an import-stub-shaped symbol with the same
+    # name.
+    def_rank={}
+    for bi,b in enumerate(bundles):
+        for f in b['functions']:
+            name=f['name']; addr=f['address']
+            if not addr:
+                continue
+            old_rank=def_rank.get(name)
+            if old_rank is None or bi>=old_rank:
+                defs[name]=addr
+                def_rank[name]=bi
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
     defined_addrs={f['address'] for b in bundles for f in b['functions'] if f['address']}
     defined_addrs.update(addr for addr in link['globals'].values() if addr)
