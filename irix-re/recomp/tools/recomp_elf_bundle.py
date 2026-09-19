@@ -645,6 +645,18 @@ def main():
         return any(lo < addr < hi for lo,hi in frame_ranges)
 
     recovered_addrs={addr for _,addr,_,_,_ in defs+zero_defs+frame_defs}
+
+    # Direct link targets are hard callable-entry evidence and must be
+    # recovered before weaker metadata passes.  In particular SGI's
+    # __exec_rld uses a branch-and-link into an adjacent hidden body; treating
+    # that target as an ordinary continuation leaves the BAL target absent
+    # from the registry and traps immediately at process startup.
+    early_link_defs=[]
+    for n,addr,size,sh in code_link_function_ranges(elf,recovered_addrs):
+        if addr not in recovered_addrs and not covered_by_frame(addr):
+            early_link_defs.append((n,addr,size,sh,'code_link'))
+    recovered_addrs|={addr for _,addr,_,_,_ in early_link_defs}
+
     pdr_defs=[]
     for n,addr,size,sh in pdr_function_ranges(elf,path,raw_syms):
         if addr not in recovered_addrs and not covered_by_frame(addr):
@@ -657,10 +669,7 @@ def main():
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in ptr_defs}
-    link_defs=[]
-    for n,addr,size,sh in code_link_function_ranges(elf,recovered_addrs):
-        if addr not in recovered_addrs and not covered_by_frame(addr):
-            link_defs.append((n,addr,size,sh,'code_link'))
+    link_defs=early_link_defs
 
     recovered_addrs|={addr for _,addr,_,_,_ in link_defs}
     boundary_defs=[]
