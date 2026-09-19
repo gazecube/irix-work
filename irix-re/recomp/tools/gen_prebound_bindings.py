@@ -64,13 +64,14 @@ def main():
             if row and row['value']: addrs.append(row['value'])
             target=defs.get(name,0)
             for stub in addrs:
-                # MIPS GOT entries for unresolved functions may initially
-                # contain a shared lazy-binding trampoline. They are not
-                # necessarily unique symbol stubs. If the candidate address
-                # is already a translated definition, dispatch it directly
-                # instead of installing a name-based forwarder over another
-                # real function (or a self-forwarder over its own target).
-                if stub in defined_addrs:
+                # An undefined symbol may carry the address of an executable
+                # import/PLT stub.  recomp_elf_bundle also recovers that stub
+                # as callable code, so its address can appear in
+                # defined_addrs even though it is NOT the provider of this
+                # symbol.  Only suppress a candidate when it is the actual
+                # selected definition.  Otherwise install the name-based
+                # forwarder over the import stub.
+                if target and stub == target:
                     continue
                 entries.append((stub,target,name,b['prefix']))
 
