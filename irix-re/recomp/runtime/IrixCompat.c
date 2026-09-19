@@ -5,6 +5,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/utsname.h>
 
 /*
  * This file ports the useful semantics of Linux/MIPS' historical IRIX
@@ -153,6 +154,139 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_trap(rt, cpu, 0xeeee2304u);
         return;
     }
+}
+
+static int compat_copy_string(IrixGuestRuntime *rt, IrixGuestAddr out,
+                              uint32_t count, const char *value,
+                              uint32_t *required_out)
+{
+    size_t len = strlen(value);
+    size_t required = len + 1u;
+    size_t n;
+    char *dst;
+
+    if (required_out)
+        *required_out = (uint32_t)required;
+    if (!count)
+        return 0;
+
+    dst = (char *)irix_guest_ptr(rt, out, count);
+    if (!dst) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    n = required <= count ? required : count;
+    if (n)
+        memcpy(dst, value, n);
+    if (required > count)
+        dst[count - 1u] = '\0';
+    return 0;
+}
+
+void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t cmd = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    uint32_t count = (uint32_t)cpu->gpr[6];
+    struct utsname u;
+    char scratch[64];
+    const char *value = 0;
+    uint32_t required = 0;
+    long ncpu;
+
+    /*
+     * IRIX 6.5.7 systeminfo(2), from irix/kern/os/name.c and
+     * irix/kern/sys/systeminfo.h.  The syscall returns the full string size,
+     * including the terminating NUL, even when the caller's buffer truncates.
+     */
+    memset(&u, 0, sizeof(u));
+    (void)uname(&u);
+
+    switch (cmd) {
+    case 1u:   /* SI_SYSNAME */
+        value = "IRIX";
+        break;
+    case 2u:   /* SI_HOSTNAME */
+        value = u.nodename[0] ? u.nodename : "IRIS";
+        break;
+    case 3u:   /* SI_RELEASE */
+        value = "6.5";
+        break;
+    case 4u:   /* SI_VERSION */
+        value = "6.5.7";
+        break;
+    case 5u:   /* SI_MACHINE */
+        value = "IP30";
+        break;
+    case 6u:   /* SI_ARCHITECTURE */
+        value = "mips";
+        break;
+    case 7u:   /* SI_HW_SERIAL */
+    case 111u: /* _MIPS_SI_SERIAL */
+        value = "0";
+        break;
+    case 8u:   /* SI_HW_PROVIDER */
+        value = "sgi";
+        break;
+    case 10u:  /* SI_INITTAB_NAME */
+        value = "/etc/inittab";
+        break;
+    case 100u: /* _MIPS_SI_VENDOR */
+    case 101u: /* _MIPS_SI_OS_PROVIDER */
+        value = "Silicon Graphics, Inc.";
+        break;
+    case 102u: /* _MIPS_SI_OS_NAME */
+        value = "IRIX";
+        break;
+    case 103u: /* _MIPS_SI_HW_NAME */
+        value = "IP30";
+        break;
+    case 104u: /* _MIPS_SI_NUM_PROCESSORS */
+    case 110u: /* _MIPS_SI_AVAIL_PROCESSORS */
+        ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (ncpu < 1) ncpu = 1;
+        snprintf(scratch, sizeof(scratch), "%ld", ncpu);
+        value = scratch;
+        break;
+    case 105u: /* _MIPS_SI_HOSTID */
+        value = "0";
+        break;
+    case 106u: /* _MIPS_SI_OSREL_MAJ */
+        value = "6";
+        break;
+    case 107u: /* _MIPS_SI_OSREL_MIN */
+        value = "5";
+        break;
+    case 108u: /* _MIPS_SI_OSREL_PATCH */
+        value = "0";
+        break;
+    case 109u: /* _MIPS_SI_PROCESSORS */
+        /*
+         * rld asks this immediately after mapping itself.  Present a stable
+         * MIPS-IV R10000 identity instead of leaking the x86 host CPU into
+         * IRIX runtime selection.
+         */
+        value = "R10000 2.6";
+        break;
+    default:
+        fprintf(stderr,
+                "UNIMPLEMENTED IRIX sysinfo command %u pc=0x%08x "
+                "buf=%08x count=%u\n",
+                cmd, (uint32_t)cpu->pc, out, count);
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    if (compat_copy_string(rt, out, count, value, &required) != 0) {
+        compat_result(cpu, -1);
+        return;
+    }
+
+    fprintf(stderr, "IRIX sysinfo: cmd=%u value=\"%s\" size=%u\n",
+            cmd, value, required);
+    compat_result(cpu, (int64_t)required);
 }
 
 void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
