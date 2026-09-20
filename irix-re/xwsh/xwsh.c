@@ -62,6 +62,9 @@ static int osc_len;
 static char csi[MAX_CSI];
 static int csi_len;
 
+static int clampi(int v, int lo, int hi);
+static void set_view(int off);
+
 static Cell *cell_at(int x, int y) { return &cells[y * cols + x]; }
 
 static void clear_row(int y, int from, int to)
