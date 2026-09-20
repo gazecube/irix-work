@@ -281,6 +281,23 @@ static void bridge_memcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
     IrixGuestAddr src_addr = (uint32_t)cpu->gpr[5];
     uint32_t n = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr caller = (IrixGuestAddr)((uint32_t)cpu->gpr[31] - 8u);
+    if ((caller >= 0x0fa88c00u && caller < 0x0fa89300u) ||
+        (caller >= 0x0fa45c00u && caller < 0x0fa45e00u)) {
+        fprintf(stderr,
+                "IRIX passwd-path memcpy: callsite=%08x ra=%08x dst=%08x src=%08x n=%u a3=%08x sp=%08x gp=%08x\n",
+                caller, (uint32_t)cpu->gpr[31], dst_addr, src_addr, n,
+                (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[29],
+                (uint32_t)cpu->gpr[28]);
+        if (src_addr && irix_guest_ptr(rt, src_addr, n ? n : 1u)) {
+            unsigned i, lim = n < 48u ? n : 48u;
+            fputs("  src:", stderr);
+            for (i = 0; i < lim; ++i)
+                fprintf(stderr, " %02x",
+                        (unsigned)*(const unsigned char *)irix_guest_ptr(rt, src_addr + i, 1u));
+            fputc('\n', stderr);
+        }
+    }
     void *dst = irix_guest_ptr(rt, dst_addr, n);
     const void *src = irix_guest_ptr(rt, src_addr, n);
     if (dst && src && n) memcpy(dst, src, n);
