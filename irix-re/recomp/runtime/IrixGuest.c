@@ -954,6 +954,31 @@ static int trace_dialog_call(const char *name)
            strstr(name, "waitForDialog__15VkDialogManager") != 0;
 }
 
+static int trace_passwd_call(const char *name)
+{
+    if (!name) return 0;
+    return strcmp(name, "getpwuid") == 0 ||
+           strcmp(name, "getpwnam") == 0 ||
+           strcmp(name, "getpwuid_r") == 0 ||
+           strcmp(name, "getpwnam_r") == 0;
+}
+
+static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
+                             IrixGuestAddr addr, uint32_t count)
+{
+    unsigned i;
+    uint32_t limit = count < 64u ? count : 64u;
+    fprintf(stderr, "%s addr=%08x len=%u", label, addr, count);
+    if (!addr || !limit || !irix_guest_ptr(rt, addr, limit)) {
+        fputc('\n', stderr);
+        return;
+    }
+    fputs(" bytes:", stderr);
+    for (i = 0; i < limit; ++i)
+        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, addr + i));
+    fputc('\n', stderr);
+}
+
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
@@ -1008,6 +1033,11 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
+        IrixGuestAddr memcpy_dst = 0;
+        IrixGuestAddr memcpy_src = 0;
+        uint32_t memcpy_len = 0;
+        int passwd_memcpy_trace = 0;
+        int passwd_function_trace = trace_passwd_call(entry->name);
         unsigned saved_i;
 
         /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
@@ -1026,6 +1056,21 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
                     (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
                     (uint32_t)cpu->gpr[11]);
+        }
+        if (passwd_function_trace) {
+            fprintf(stderr,
+                    "IRIX passwd guest entry: callee=%08x:%s caller=%08x ra=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x\n",
+                    address, entry->name, caller_pc, (uint32_t)cpu->gpr[31],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                    (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
+            if ((strcmp(entry->name, "getpwnam") == 0 ||
+                 strcmp(entry->name, "getpwnam_r") == 0) &&
+                cpu->gpr[4])
+                dump_guest_bytes(rt, "  passwd name",
+                                 (IrixGuestAddr)(uint32_t)cpu->gpr[4], 64u);
         }
         if (entry->name && strcmp(entry->name, "strcpy") == 0) {
             fprintf(stderr,
@@ -1062,6 +1107,12 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             int passwd_trace =
                 (caller_pc >= 0x0fa88c00u && caller_pc < 0x0fa89300u) ||
                 (caller_pc >= 0x0fa45c00u && caller_pc < 0x0fa45e00u);
+            if (passwd_trace) {
+                memcpy_dst = dst;
+                memcpy_src = src;
+                memcpy_len = len;
+                passwd_memcpy_trace = 1;
+            }
             fprintf(stderr,
                     "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
                     address, entry->address, entry->size,
@@ -1099,20 +1150,23 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
-        if (!rt->trapped && address >= 0x0fa36900u && address < 0x0fa37700u &&
-            ((caller_pc >= 0x0fa88c00u && caller_pc < 0x0fa89300u) ||
-             (caller_pc >= 0x0fa45c00u && caller_pc < 0x0fa45e00u))) {
-            IrixGuestAddr dst = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-            uint32_t len = (uint32_t)cpu->gpr[6];
-            unsigned i, limit = len < 64u ? len : 64u;
-            fprintf(stderr, "  passwd memcpy after: v0=%08x dst=%08x len=%u\n",
-                    (uint32_t)cpu->gpr[2], dst, len);
-            if (dst && irix_guest_ptr(rt, dst, limit ? limit : 1u)) {
-                fputs("    dst:", stderr);
-                for (i = 0; i < limit; ++i)
-                    fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, dst + i));
-                fputc('\n', stderr);
-            }
+        if (!rt->trapped && passwd_memcpy_trace) {
+            fprintf(stderr,
+                    "  passwd memcpy after: v0=%08x dst=%08x src=%08x len=%u\n",
+                    (uint32_t)cpu->gpr[2], memcpy_dst, memcpy_src, memcpy_len);
+            dump_guest_bytes(rt, "    dst", memcpy_dst, memcpy_len);
+        }
+        if (passwd_function_trace) {
+            fprintf(stderr,
+                    "IRIX passwd guest return: callee=%08x:%s trapped=%d v0=%08x v1=%08x a0-a3=%08x,%08x,%08x,%08x sp=%08x\n",
+                    address, entry->name, rt->trapped,
+                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[29]);
+            if (!rt->trapped && cpu->gpr[2])
+                dump_guest_bytes(rt, "  passwd return object",
+                                 (IrixGuestAddr)(uint32_t)cpu->gpr[2], 36u);
         }
         /* A completed N32 call must return with the caller's callee-saved
            register set and stack pointer intact. Do not rewrite state on a
