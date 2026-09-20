@@ -50,6 +50,7 @@ typedef void (*IrixGuestFunction)(struct IrixGuestRuntime *rt, IrixGuestCpu *cpu
 
 typedef struct IrixGuestFunctionEntry {
     IrixGuestAddr address;
+    uint32_t size;
     IrixGuestFunction function;
     const char *name;
 } IrixGuestFunctionEntry;
@@ -89,6 +90,9 @@ void irix_guest_fpr_set_d(IrixGuestCpu *cpu, unsigned reg, double value);
 
 int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
                                  IrixGuestFunction function, const char *name);
+int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                       uint32_t size, IrixGuestFunction function,
+                                       const char *name);
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
