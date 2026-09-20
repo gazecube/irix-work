@@ -961,9 +961,10 @@ static int trace_passwd_call(const char *name)
 
 static int trace_xwsh_passwd_decision(IrixGuestAddr pc)
 {
-    /* fprintf is also only the messenger.  xwsh calls it from 0x10039d28;
-     * trace the application-side decision that selected the fatal diagnostic. */
-    return pc >= 0x10039c00u && pc < 0x10039e00u;
+    /* We found the decision function: authenticateUser__6wshAppGv at
+     * 0x10039c50.  Trace the calls it makes so we can identify the lookup
+     * which returns NULL, rather than tracing the fatal fprintf itself. */
+    return pc >= 0x10039c50u && pc < 0x10039d0cu;
 }
 
 static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
