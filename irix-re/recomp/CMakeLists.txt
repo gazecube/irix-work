@@ -264,6 +264,7 @@ if(IRIX_DEV_TREE)
                     IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
                     IRIX_APP_NAME="${_app_name}"
                     IRIX_APP_PATH="${_app_path}"
+                    IRIX_APP_BUILD_DIR="${_app_dir}"
                     IRIX_APP_REGISTER=register_${_app_prefix}
                 )
                 target_link_libraries(${_app_runner_target} PRIVATE
@@ -273,6 +274,7 @@ if(IRIX_DEV_TREE)
                     irix_recomp_x11_bridge
                     irix_recomp_runtime
                     X11::X11
+                    ${CMAKE_DL_LIBS}
                     m
                 )
                 add_dependencies(irix_ecosystem ${_app_runner_target})
