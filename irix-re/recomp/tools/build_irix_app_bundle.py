@@ -412,7 +412,9 @@ def main():
     descriptor_text.append('    int role; /* 0 = ordinary, 1 = PT_INTERP, 2 = rld */\n')
     descriptor_text.append('    const char *path;\n')
     descriptor_text.append('} IrixAppGuestComponent;\n\n')
-    for row in rows:
+    process_rows = [row for row in rows
+                    if row is app or row.get('implicit_runtime')]
+    for row in process_rows:
         descriptor_text.append(f"void register_{row['prefix']}(IrixGuestRuntime *rt);\n")
     descriptor_text.append('\nconst IrixAppGuestComponent irix_app_guest_components[] = {\n')
     for row in rows:
@@ -423,7 +425,7 @@ def main():
     descriptor_text.append('const size_t irix_app_guest_component_count =\n')
     descriptor_text.append('    sizeof(irix_app_guest_components) / sizeof(irix_app_guest_components[0]);\n\n')
     descriptor_text.append('void irix_register_app_bundle(IrixGuestRuntime *rt)\n{\n')
-    for row in rows:
+    for row in process_rows:
         descriptor_text.append(f"    register_{row['prefix']}(rt);\n")
     descriptor_text.append('}\n')
     write_if_changed(descriptor, ''.join(descriptor_text))
@@ -552,13 +554,34 @@ def main():
         run(link_cmd)
         shared_outputs.append(dso)
 
+    # The bootstrap archive now contains only process-image translation
+    # (application, PT_INTERP, rld) plus bindings/descriptor glue. Shared
+    # libraries stay exclusively in their native DSO artifacts above.
+    process_sources = []
+    process_seen = set()
+    for row, bundle in zip(rows, bundles):
+        if row is not app and not row.get('implicit_runtime'):
+            continue
+        meta = json.loads(bundle.read_text())
+        for fn in meta.get('functions', []):
+            src = Path(fn['source'])
+            if src not in process_seen:
+                process_sources.append(src)
+                process_seen.add(src)
+        registry = bundle.parent / 'registry.c'
+        if registry not in process_seen:
+            process_sources.append(registry)
+            process_seen.add(registry)
+    process_sources += [bind / 'bindings.c', descriptor]
+    process_objects = [object_by_source[src] for src in process_sources]
+
     lib = out / f"libirix_{a.app}_bundle.a"
     mri = out / 'archive.mri'
     if lib.exists():
         lib.unlink()
     with mri.open('w') as w:
         w.write(f'CREATE {lib}\n')
-        for p in sorted(objects):
+        for p in sorted(process_objects):
             w.write(f'ADDMOD {p}\n')
         w.write('SAVE\nEND\n')
     with mri.open('rb') as f:
