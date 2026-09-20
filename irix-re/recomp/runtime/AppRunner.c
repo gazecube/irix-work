@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 extern char **environ;
 
@@ -102,6 +103,62 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_runtime_x11_bridge_lookup(name);
     if (fn) return fn;
     return irix_x11_bulk_lookup(name);
+}
+
+typedef void (*IrixDsoRegister)(IrixGuestRuntime *);
+
+static void register_native_dsos(IrixGuestRuntime *rt)
+{
+    size_t i;
+    for (i = 0; i < irix_app_guest_component_count; ++i) {
+        const IrixAppGuestComponent *component = &irix_app_guest_components[i];
+        char path[4096];
+        char symbol[512];
+        const char *base, *p;
+        void *handle;
+        IrixDsoRegister reg;
+
+        if (component->role != 0 || i == 0u)
+            continue;
+        base = strrchr(component->path, '/');
+        base = base ? base + 1 : component->path;
+        snprintf(path, sizeof(path), "%s/lib/%s", IRIX_APP_BUILD_DIR, base);
+        handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+        if (!handle) {
+            fprintf(stderr, "failed to load translated DSO %s: %s\n",
+                    path, dlerror());
+            exit(1);
+        }
+
+        /* Auto dependency rows use dso_<sanitized SONAME>; manifest shared
+           components retain their explicit prefixes. Prefer a registry symbol
+           exported by this DSO rather than guessing from the filename. */
+        reg = 0;
+        for (p = base; *p; ++p) (void)p;
+        snprintf(symbol, sizeof(symbol), "register_dso_%s", base);
+        for (p = symbol; *p; ++p)
+            if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                  (*p >= '0' && *p <= '9') || *p == '_'))
+                *(char *)p = '_';
+        reg = (IrixDsoRegister)dlsym(handle, symbol);
+        if (!reg) {
+            /* Explicit IID components use the basename without lib/.so. */
+            size_t n = strlen(base);
+            const char *name = base;
+            if (strncmp(name, "lib", 3) == 0) name += 3;
+            snprintf(symbol, sizeof(symbol), "register_%s", name);
+            {
+                char *dot = strstr(symbol, ".so");
+                if (dot) *dot = '\0';
+            }
+            reg = (IrixDsoRegister)dlsym(handle, symbol);
+        }
+        if (!reg) {
+            fprintf(stderr, "translated DSO %s has no registry entry\n", path);
+            exit(1);
+        }
+        reg(rt);
+    }
 }
 
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
@@ -578,6 +635,7 @@ int main(int argc, char **argv)
                 irix_guest_read32be(&rt, 0x0fb5291cu));
 
     irix_register_recompiled_stack(&rt);
+    register_native_dsos(&rt);
     irix_register_app_bundle(&rt);
 
     if (setup_process_stack(&rt, &cpu, argc, argv,
