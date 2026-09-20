@@ -276,6 +276,8 @@ def main():
     ap.add_argument('-o', '--output', type=Path)
     ap.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     ap.add_argument('--ar', default=os.environ.get('AR', 'ar'))
+    ap.add_argument('--runtime-lib', type=Path,
+                    help='native libirixre shared runtime to link generated DSOs against')
     ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
     ap.add_argument('--generate-only', action='store_true')
     a = ap.parse_args()
@@ -303,6 +305,7 @@ def main():
     out = a.output.resolve()
     gen = out / 'generated'
     obj = out / 'obj'
+    dso_dir = out / 'lib'
     gen.mkdir(parents=True, exist_ok=True)
 
     seed_rows = [app] + list(manifest['shared_components'])
@@ -454,7 +457,7 @@ def main():
 
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'
-    compile_flags = '-std=c11 -O0 -Wall -Wextra -Werror\n'
+    compile_flags = '-std=c11 -O0 -Wall -Wextra -Werror -fPIC\n'
     flags_stamp = out / 'compile_flags.txt'
     if not flags_stamp.is_file() or flags_stamp.read_text() != compile_flags:
         flags_stamp.write_text(compile_flags)
@@ -465,7 +468,7 @@ def main():
         newest_input = max(src.stat().st_mtime_ns, header.stat().st_mtime_ns, flags_stamp.stat().st_mtime_ns)
         if dst.is_file() and dst.stat().st_mtime_ns >= newest_input:
             return src, dst, None
-        cmd = [a.cc, '-std=c11', '-O0', '-Wall', '-Wextra', '-Werror',
+        cmd = [a.cc, '-std=c11', '-O0', '-Wall', '-Wextra', '-Werror', '-fPIC',
                '-I', str(inc), '-c', str(src), '-o', str(dst)]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return src, dst, p
@@ -488,6 +491,44 @@ def main():
             if i % 250 == 0 or i == len(futures):
                 print(f'processed {i}/{len(futures)} rebuilt={rebuilt} reused={reused}', flush=True)
 
+    # Emit each original IRIX shared component as its own native ELF DSO.
+    # Keep the app, PT_INTERP and rld in the bootstrap archive for now: those
+    # are process-image components, not libraries.
+    runtime_lib = a.runtime_lib.resolve() if a.runtime_lib else None
+    if runtime_lib is not None and not runtime_lib.is_file():
+        raise SystemExit(f'missing shared recomp runtime: {runtime_lib}')
+    dso_dir.mkdir(parents=True, exist_ok=True)
+    object_by_source = {src: dst for src, dst in
+                        ((src, obj / (str(src.relative_to(gen)).replace('/', '__') + '.o'))
+                         for src in sources)}
+    shared_outputs = []
+    for row, bundle in zip(rows, bundles):
+        if row.get('implicit_runtime') or row is app:
+            continue
+        binary = resolve_binary(row, a.runtime_tree, a.internal_tree, a.dev_tree)
+        soname = elf_soname(binary) or binary.name
+        if '.so' not in soname:
+            continue
+        meta = json.loads(bundle.read_text())
+        component_sources = []
+        seen = set()
+        for fn in meta.get('functions', []):
+            src = Path(fn['source'])
+            if src not in seen:
+                component_sources.append(src)
+                seen.add(src)
+        registry = bundle.parent / 'registry.c'
+        component_sources.append(registry)
+        component_objects = [object_by_source[src] for src in component_sources]
+        dso = dso_dir / soname
+        link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
+                    '-o', dso, *component_objects]
+        if runtime_lib is not None:
+            link_cmd.append(str(runtime_lib))
+        link_cmd.append('-lm')
+        run(link_cmd)
+        shared_outputs.append(dso)
+
     lib = out / f"libirix_{a.app}_bundle.a"
     mri = out / 'archive.mri'
     if lib.exists():
@@ -502,6 +543,8 @@ def main():
 
     print(f'archive rebuilt from objects: rebuilt={rebuilt} reused={reused}')
     print(lib)
+    for dso in shared_outputs:
+        print(dso)
 
 
 if __name__ == '__main__':
