@@ -501,7 +501,11 @@ def main():
     object_by_source = {src: dst for src, dst in
                         ((src, obj / (str(src.relative_to(gen)).replace('/', '__') + '.o'))
                          for src in sources)}
-    shared_outputs = []
+    # First assign every translated DSO its output path. The second pass can
+    # then reproduce the source ELF's DT_NEEDED edges without depending on
+    # manifest/closure order.
+    dso_rows = []
+    dso_by_soname = {}
     for row, bundle in zip(rows, bundles):
         if row.get('implicit_runtime') or row is app:
             continue
@@ -509,6 +513,12 @@ def main():
         soname = elf_soname(binary) or binary.name
         if '.so' not in soname:
             continue
+        dso = dso_dir / soname
+        dso_rows.append((row, bundle, binary, soname, dso))
+        dso_by_soname[soname] = dso
+
+    shared_outputs = []
+    for row, bundle, binary, soname, dso in dso_rows:
         meta = json.loads(bundle.read_text())
         component_sources = []
         seen = set()
@@ -520,11 +530,24 @@ def main():
         registry = bundle.parent / 'registry.c'
         component_sources.append(registry)
         component_objects = [object_by_source[src] for src in component_sources]
-        dso = dso_dir / soname
         link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
-                    '-o', dso, *component_objects]
+                    '-Wl,--no-as-needed', '-o', dso, *component_objects]
         if runtime_lib is not None:
             link_cmd.append(str(runtime_lib))
+
+        # Preserve every original IRIX DT_NEEDED edge whose provider is part
+        # of this translated closure. --no-as-needed matters here: translated
+        # guest calls dispatch by guest address, so the host linker cannot see
+        # a normal ELF symbol reference even though the dependency is real.
+        for needed in elf_needed(binary):
+            dep = dso_by_soname.get(needed)
+            if dep is not None and dep != dso:
+                link_cmd.append(str(dep))
+            elif needed not in dso_by_soname:
+                print(f'warning: native DSO {soname}: translated provider for '
+                      f'DT_NEEDED {needed} is not in this closure',
+                      file=sys.stderr)
+
         link_cmd.append('-lm')
         run(link_cmd)
         shared_outputs.append(dso)
