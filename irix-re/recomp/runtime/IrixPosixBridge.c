@@ -142,6 +142,29 @@ static void ret_i32(IrixGuestCpu *cpu, int v)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)v;
 }
 
+static void bridge_setreuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uid_t ruid = (uid_t)(uint32_t)cpu->gpr[4];
+    uid_t euid = (uid_t)(uint32_t)cpu->gpr[5];
+    (void)rt;
+
+    /*
+     * Keep guest credential changes inside the IRIX personality. xwsh drops
+     * to the passwd entry's uid during startup; applying that to the host
+     * runner would mutate the compatibility process itself. For the common
+     * unprivileged no-op case, preserve the IRIX success result. Reject an
+     * attempted transition to identities the host process does not already
+     * possess rather than changing host credentials.
+     */
+    if ((ruid == (uid_t)-1 || ruid == getuid() || ruid == geteuid()) &&
+        (euid == (uid_t)-1 || euid == getuid() || euid == geteuid())) {
+        ret_i32(cpu, 0);
+        return;
+    }
+    errno = EPERM;
+    ret_i32(cpu, -1);
+}
+
 static void bridge_gethostname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
@@ -429,7 +452,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
 {
     if (!name) return 0;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
-    MAP(gethostname); MAP(getcwd); MAP(chdir); MAP(access);
+    MAP(gethostname); MAP(getcwd); MAP(chdir); MAP(access); MAP(setreuid);
     MAP(stat); MAP(lstat); MAP(fstat);
     MAP(open); MAP(close); MAP(read); MAP(write); MAP(lseek);
     MAP(unlink); MAP(rmdir); MAP(mkdir); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
