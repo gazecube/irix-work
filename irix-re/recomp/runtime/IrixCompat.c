@@ -176,6 +176,38 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    case 40u: { /* SGI_SETGROUPS */
+        int count = (int)(int32_t)cpu->gpr[5];
+        IrixGuestAddr list_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        gid_t *groups = NULL;
+        int i;
+
+        if (count < 0 || count > 65536) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        if (count) {
+            if (!irix_guest_ptr(rt, list_addr, (size_t)count * 4u)) {
+                errno = EFAULT;
+                compat_result(cpu, -1);
+                return;
+            }
+            groups = (gid_t *)calloc((size_t)count, sizeof(*groups));
+            if (!groups) {
+                errno = ENOMEM;
+                compat_result(cpu, -1);
+                return;
+            }
+            for (i = 0; i < count; ++i)
+                groups[i] = (gid_t)irix_guest_read32be(rt, list_addr + (IrixGuestAddr)i * 4u);
+        }
+
+        compat_result(cpu, (int64_t)setgroups((size_t)count, groups));
+        free(groups);
+        return;
+    }
+
     case 62u: /* SGI_SSYNC */
         sync();
         compat_result(cpu, 0);
