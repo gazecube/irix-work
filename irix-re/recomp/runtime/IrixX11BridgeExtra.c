@@ -203,7 +203,16 @@ static void write_display_shadow(size_t i, Display *dpy)
     IrixGuestAddr vendor = copy_host_string(ServerVendor(dpy));
     IrixGuestAddr name = copy_host_string(DisplayString(dpy));
     int ns = ScreenCount(dpy);
+    int min_keycode = 0, max_keycode = 0;
     int s;
+
+    /*
+     * Match the public IRIX Xlib.h _XDisplay prefix exactly. Old Xlib clients
+     * are allowed to reach these fields through macros even though Display is
+     * nominally opaque. In the IRIX/N32 layout motion_buffer/private16 live at
+     * +144/+148 and min_keycode/max_keycode at +152/+156.
+     */
+    XDisplayKeycodes(dpy, &min_keycode, &max_keycode);
 
     wr32(rt, d + 0, 0);
     wr32(rt, d + 4, 0);
@@ -224,6 +233,14 @@ static void write_display_shadow(size_t i, Display *dpy)
     wr32(rt, d + 132, (uint32_t)DefaultScreen(dpy));
     wr32(rt, d + 136, (uint32_t)ns);
     wr32(rt, d + 140, screens);
+    wr32(rt, d + 144, (uint32_t)XDisplayMotionBufferSize(dpy));
+    wr32(rt, d + 148, 0u);
+    wr32(rt, d + 152, (uint32_t)min_keycode);
+    wr32(rt, d + 156, (uint32_t)max_keycode);
+
+    fprintf(stderr,
+            "IRIX Display shadow: guest=%08x min_keycode=%d max_keycode=%d screens=%d\\n",
+            d, min_keycode, max_keycode, ns);
 
     if (ns > 16) ns = 16;
     for (s = 0; s < ns; ++s) {
