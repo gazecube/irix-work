@@ -53,6 +53,8 @@ static int history_count, view_offset;
 static int master_fd = -1;
 static pid_t child = -1;
 static int esc_state;
+static char osc[1024];
+static int osc_len;
 static char csi[MAX_CSI];
 static int csi_len;
 
@@ -119,6 +121,7 @@ static void normalize_cursor(void)
 
 static void put_char(unsigned char v)
 {
+    if (v == '\a') { XBell(dpy, 0); return; }
     if (v == '\r') { cx = 0; return; }
     if (v == '\n') { if (cy == scroll_bottom) scroll_region_up(scroll_top,scroll_bottom); else ++cy; normalize_cursor(); return; }
     if (v == '\b') { if (cx > 0) --cx; return; }
@@ -215,6 +218,7 @@ static void feed(const unsigned char *p, size_t n)
             else put_char(v);
         } else if (esc_state == 1) {
             if (v == '[') { esc_state = 2; csi_len = 0; }
+            else if (v == ']') { esc_state = 3; osc_len = 0; osc[0] = 0; }
             else if (v == '=') { app_keypad=1; esc_state=0; }
             else if (v == '>') { app_keypad=0; esc_state=0; }
             else if (v == '7') { saved_cx=cx; saved_cy=cy; esc_state=0; }
@@ -223,6 +227,31 @@ static void feed(const unsigned char *p, size_t n)
             else if (v == 'M') { if(cy==scroll_top)scroll_region_down(scroll_top,scroll_bottom);else --cy; esc_state=0; }
             else if (v == 'c') { inverse=bold=app_cursor=app_keypad=0; clear_all(); esc_state=0; }
             else esc_state = 0;
+        } else if (esc_state == 3) {
+            if (v == '\a') {
+                char *semi;
+                osc[osc_len] = 0;
+                semi = strchr(osc, ';');
+                if (semi) {
+                    *semi++ = 0;
+                    if (!strcmp(osc,"0") || !strcmp(osc,"2")) XStoreName(dpy,win,semi);
+                    if (!strcmp(osc,"0") || !strcmp(osc,"1")) XSetIconName(dpy,win,semi);
+                }
+                esc_state = 0;
+            } else if (v == 0x1b) esc_state = 4;
+            else if (osc_len < (int)sizeof(osc)-1) osc[osc_len++] = (char)v;
+        } else if (esc_state == 4) {
+            if (v == '\\') {
+                char *semi;
+                osc[osc_len] = 0;
+                semi = strchr(osc, ';');
+                if (semi) {
+                    *semi++ = 0;
+                    if (!strcmp(osc,"0") || !strcmp(osc,"2")) XStoreName(dpy,win,semi);
+                    if (!strcmp(osc,"0") || !strcmp(osc,"1")) XSetIconName(dpy,win,semi);
+                }
+            }
+            esc_state = 0;
         } else {
             if (v >= 0x40 && v <= 0x7e) {
                 do_csi(v);
@@ -307,8 +336,8 @@ static void make_selection(void)
     if (y0>y1 || (y0==y1 && x0>x1)) { int t=x0;x0=x1;x1=t; t=y0;y0=y1;y1=t; }
     for (y=y0;y<=y1;++y) {
         int a=(y==y0?x0:0), b=(y==y1?x1:cols-1), x, end=b;
-        while (end>=a && cell_at(end,y)->ch==' ') --end;
-        for (x=a;x<=end && n+2<cap;++x) selection_text[n++]=(char)cell_at(x,y)->ch;
+        while (end>=a && display_cell(end,y)->ch==' ') --end;
+        for (x=a;x<=end && n+2<cap;++x) selection_text[n++]=(char)display_cell(x,y)->ch;
         if (y!=y1 && n+2<cap) selection_text[n++]='\n';
     }
     selection_text[n]=0;
@@ -562,7 +591,15 @@ int main(int argc, char **argv)
                         for (y = 0; y < oldr && y < rows; ++y)
                             memcpy(cells + y*cols, old + y*oldc, (size_t)copyc*sizeof(*cells));
                         free(old);
-                        free(history); history=calloc((size_t)RETAIN_LIMIT*cols,sizeof(*history)); history_count=view_offset=0;
+                        {
+                            Cell *oh=history, *nh=calloc((size_t)RETAIN_LIMIT*cols,sizeof(*nh));
+                            int hc=history_count, yy, cc=oldc<cols?oldc:cols;
+                            if(!nh) exit(1);
+                            for(yy=0; yy<hc; ++yy)
+                                memcpy(nh+(size_t)yy*cols,oh+(size_t)yy*oldc,(size_t)cc*sizeof(*nh));
+                            history=nh; free(oh);
+                            if(view_offset>history_count)view_offset=history_count;
+                        }
                         scroll_top=0; scroll_bottom=rows-1;
                         normalize_cursor();
                         resize_pty();
