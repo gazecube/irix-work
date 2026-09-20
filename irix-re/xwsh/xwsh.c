@@ -317,9 +317,9 @@ static void draw_scrollbar(void)
     XDrawLine(dpy,win,gc,mid,b/3,3,2*b/3);
     XDrawLine(dpy,win,gc,mid,b/3,b-4,2*b/3);
     XDrawLine(dpy,win,gc,3,2*b/3,b-4,2*b/3);
-    XDrawLine(dpy,win,gc,3,h-b/3,b-4,h-2*b/3);
-    XDrawLine(dpy,win,gc,b-4,h-2*b/3,mid,h-b/3);
-    XDrawLine(dpy,win,gc,mid,h-b/3,3,h-2*b/3);
+    XDrawLine(dpy,win,gc,3,h-2*b/3,mid,h-b/3);
+    XDrawLine(dpy,win,gc,mid,h-b/3,b-4,h-2*b/3);
+    XDrawLine(dpy,win,gc,b-4,h-2*b/3,3,h-2*b/3);
     XSetForeground(dpy,gc,term_fg);
     XFillRectangle(dpy,win,gc,2,ty,b-4,(unsigned)th);
     /* tuSlider's divot: give the thumb a visible center grip. */
@@ -380,8 +380,8 @@ static void redraw(void)
     draw_scrollbar();
     if (view_offset) { XFlush(dpy); return; }
     XSetForeground(dpy, gc, cursor_bg);
-    XFillRectangle(dpy, win, gc, text_x0()+x*cw, cy*ch, (unsigned)cw, (unsigned)ch);
-    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,text_x0()+x*cw,cy*ch+ascent,s,1); } }
+    XFillRectangle(dpy, win, gc, text_x0()+cx*cw, cy*ch, (unsigned)cw, (unsigned)ch);
+    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,text_x0()+cx*cw,cy*ch+ascent,s,1); } }
     XFlush(dpy);
 }
 
