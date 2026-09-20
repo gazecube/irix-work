@@ -1,4 +1,5 @@
 #include "IrixCompat.h"
+#include "IrixSyssgiNumbers.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -131,13 +132,13 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int64_t result;
 
     switch (request) {
-    case 21u: /* SGI_SETPGID */
+    case SGI_SETPGID: /* SGI_SETPGID */
         result = (int64_t)setpgid((pid_t)(int32_t)cpu->gpr[5],
                                  (pid_t)(int32_t)cpu->gpr[6]);
         compat_result(cpu, result);
         return;
 
-    case 22u: { /* SGI_SYSCONF */
+    case SGI_SYSCONF: { /* SGI_SYSCONF */
         int name = (int)(int32_t)cpu->gpr[5];
         long value;
 
@@ -176,7 +177,7 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    case 40u: { /* SGI_SETGROUPS */
+    case SGI_SETGROUPS: { /* SGI_SETGROUPS */
         int count = (int)(int32_t)cpu->gpr[5];
         IrixGuestAddr list_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
         gid_t *groups = NULL;
@@ -208,17 +209,17 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    case 62u: /* SGI_SSYNC */
+    case SGI_SSYNC: /* SGI_SSYNC */
         sync();
         compat_result(cpu, 0);
         return;
 
-    case 65u: /* SGI_GETSID */
+    case SGI_GETSID: /* SGI_GETSID */
         result = (int64_t)getsid((pid_t)(int32_t)cpu->gpr[5]);
         compat_result(cpu, result);
         return;
 
-    case 68u: { /* SGI_ELFMAP */
+    case SGI_ELFMAP: { /* SGI_ELFMAP */
         int fd = (int)(int32_t)cpu->gpr[5];
         IrixGuestAddr phdr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
         uint32_t count = (uint32_t)cpu->gpr[7];
@@ -231,20 +232,27 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    case 92u:
+    case SGI_RXEV_GET:
         /*
-         * Used by the IRIX 6.5 runtime loader during early startup.  The
-         * compatibility behavior needed by rld is successful completion with
-         * no returned payload.
+         * SGI_RXEV_GET is a Trusted IRIX receive-event interface.  The old
+         * compatibility shim treated request 92 as an rld no-op without an
+         * authoritative command identity.  Do not silently preserve that
+         * guess now that the SGI command table identifies it.
          */
+        fprintf(stderr,
+                "UNIMPLEMENTED IRIX SGI_RXEV_GET pc=0x%08x a1-a3=%08x,%08x,%08x\n",
+                (uint32_t)cpu->pc,
+                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                (uint32_t)cpu->gpr[7]);
+        rt->fault_addr = request;
+        irix_guest_trap(rt, cpu, 0xeeee2304u);
+        return;
+
+    case SGI_TOSSTSAVE: /* SGI_TOSSTSAVE */
         compat_result(cpu, 0);
         return;
 
-    case 108u: /* SGI_TOSSTSAVE */
-        compat_result(cpu, 0);
-        return;
-
-    case 129u: /* SGI_USE_FP_BCOPY / SGI_FP_BCOPY */
+    case SGI_USE_FP_BCOPY: /* SGI_USE_FP_BCOPY / SGI_FP_BCOPY */
         compat_result(cpu, 0);
         return;
 
@@ -507,7 +515,7 @@ void irix_compat_prctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         compat_result(cpu, 1);
         return;
 
-    case 22u: /* PR_LASTSHEXIT */
+    case SGI_SYSCONF: /* PR_LASTSHEXIT */
         /*
          * IRIX 6.5.3+ asks whether this is the last member of an sproc share
          * group before running process-wide atexit/rld shutdown handlers.
@@ -603,7 +611,7 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 107u: /* _MIPS_SI_OSREL_MIN */
         value = "5";
         break;
-    case 108u: /* _MIPS_SI_OSREL_PATCH */
+    case SGI_TOSSTSAVE: /* _MIPS_SI_OSREL_PATCH */
         value = "0";
         break;
     case 109u: /* _MIPS_SI_PROCESSORS */
