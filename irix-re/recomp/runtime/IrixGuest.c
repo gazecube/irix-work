@@ -963,6 +963,17 @@ static int trace_passwd_call(const char *name)
            strcmp(name, "getpwnam_r") == 0;
 }
 
+static int trace_xwsh_passwd_decision(IrixGuestAddr pc)
+{
+    /*
+     * xwsh reaches its "no password entry" diagnostic through this libc
+     * formatter path.  No named getpw* dispatcher entry fires, so trace the
+     * preceding libc execution window itself to recover the local/internal
+     * call chain that produced the NULL argument.
+     */
+    return pc >= 0x0fa88b00u && pc < 0x0fa89300u;
+}
+
 static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
                              IrixGuestAddr addr, uint32_t count)
 {
@@ -982,6 +993,23 @@ static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    if (trace_xwsh_passwd_decision(address)) {
+        fprintf(stderr,
+                "IRIX passwd window call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
+                address,
+                entry ? entry->address : 0u,
+                entry && entry->name ? entry->name : "?",
+                (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31],
+                (uint32_t)cpu->gpr[2],
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28],
+                (uint32_t)cpu->gpr[25]);
+        report_nearest_functions(rt, address);
+        fputc('\n', stderr);
+    }
     if (!entry) {
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
 
@@ -1150,6 +1178,15 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
+        if (trace_xwsh_passwd_decision(address)) {
+            fprintf(stderr,
+                    "IRIX passwd window return: target=%08x owner=%08x:%s trapped=%d v0=%08x v1=%08x a0-a3=%08x,%08x,%08x,%08x sp=%08x gp=%08x\n",
+                    address, entry->address, entry->name ? entry->name : "?",
+                    rt->trapped, (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
+        }
         if (!rt->trapped && passwd_memcpy_trace) {
             fprintf(stderr,
                     "  passwd memcpy after: v0=%08x dst=%08x src=%08x len=%u\n",
