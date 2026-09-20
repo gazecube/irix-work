@@ -171,7 +171,14 @@ static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    cpu->gpr[2] = copy_host_string_to_guest(rt, guest_cstr(rt, (uint32_t)cpu->gpr[4]));
+    IrixGuestAddr src = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, src);
+    IrixGuestAddr out = copy_host_string_to_guest(rt, s);
+    fprintf(stderr,
+            "IRIX strdup: pc=%08x ra=%08x src=%08x value=%s out=%08x\\n",
+            (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[31], src,
+            s ? s : "<NULL>", out);
+    cpu->gpr[2] = out;
 }
 
 static void bridge_strlen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
