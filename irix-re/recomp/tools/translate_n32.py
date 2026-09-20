@@ -308,10 +308,10 @@ def emit(path,name,section_base=None,c_prefix=''):
         addr=start+i*4; lines,control=decode(addr,word); decoded.append((addr,word,lines,control))
     fn='irix_recomp_%s%s'%(c_name(c_prefix),c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */'%(path,sym_name,start,size))
-    print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
+    print('#include "IrixGuest.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
-    print('    IrixGuestAddr pc = cpu->pc;'); print('    IrixGuestAddr pending_target = 0;'); print('    IrixGuestAddr pending_return = 0;'); print('    int pending_kind = IRIX_PENDING_NONE;'); print('    int old_pending;'); print('    IrixGuestAddr old_target;'); print('    IrixGuestAddr old_return;'); print(''); print('    for (;;) {'); print('        old_pending = pending_kind;'); print('        old_target = pending_target;'); print('        old_return = pending_return;'); print('        pending_kind = IRIX_PENDING_NONE;'); print('        cpu->pc = pc;'); print(''); print('        switch (pc) {')
+    print('    IrixGuestAddr pc = cpu->pc;'); print('    IrixGuestAddr pending_target = 0;'); print('    IrixGuestAddr pending_return = 0;'); print('    int pending_kind = IRIX_PENDING_NONE;'); print('    int old_pending;'); print('    IrixGuestAddr old_target;'); print('    IrixGuestAddr old_return;'); print(''); print('    for (;;) {'); print('        old_pending = pending_kind;'); print('        old_target = pending_target;'); print('        old_return = pending_return;'); print('        pending_kind = IRIX_PENDING_NONE;'); print('        cpu->pc = pc;'); print('        rt->current_pc = pc;'); print('        if (pc >= 0x0fa36900u && pc <= 0x0fa36a04u)'); print('            fprintf(stderr, "IRIX memcpy step: pc=%08x a3=%08x gp=%08x sp=%08x ra=%08x old_pending=%d old_target=%08x pending=%d pending_target=%08x\\n", (uint32_t)pc, (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[31], old_pending, (uint32_t)old_target, pending_kind, (uint32_t)pending_target);'); print(''); print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
         for line in lines: print('            '+line)
