@@ -202,9 +202,12 @@ static void write_display_shadow(size_t i, Display *dpy)
     IrixGuestAddr visuals = IRIX_X11_VISUAL_BASE + (IrixGuestAddr)(i * IRIX_X11_VISUAL_STRIDE);
     IrixGuestAddr vendor = copy_host_string(ServerVendor(dpy));
     IrixGuestAddr name = copy_host_string(DisplayString(dpy));
+    IrixGuestAddr formats = 0;
     int ns = ScreenCount(dpy);
     int min_keycode = 0, max_keycode = 0;
+    int nformats = 0;
     int s;
+    XPixmapFormatValues *host_formats = XListPixmapFormats(dpy, &nformats);
 
     /*
      * Match the public IRIX Xlib.h _XDisplay prefix exactly. Old Xlib clients
@@ -213,6 +216,22 @@ static void write_display_shadow(size_t i, Display *dpy)
      * +144/+148 and min_keycode/max_keycode at +152/+156.
      */
     XDisplayKeycodes(dpy, &min_keycode, &max_keycode);
+    if (host_formats && nformats > 0) {
+        uint64_t bytes = (uint64_t)(unsigned)nformats * 16u;
+        if (bytes <= UINT32_MAX) {
+            formats = tmp_alloc((uint32_t)bytes);
+            if (formats) {
+                int fi;
+                for (fi = 0; fi < nformats; ++fi) {
+                    IrixGuestAddr gf = formats + (IrixGuestAddr)fi * 16u;
+                    wr32(rt, gf + 0u, 0u);
+                    wr32(rt, gf + 4u, (uint32_t)host_formats[fi].depth);
+                    wr32(rt, gf + 8u, (uint32_t)host_formats[fi].bits_per_pixel);
+                    wr32(rt, gf + 12u, (uint32_t)host_formats[fi].scanline_pad);
+                }
+            }
+        }
+    }
 
     wr32(rt, d + 0, 0);
     wr32(rt, d + 4, 0);
@@ -221,14 +240,33 @@ static void write_display_shadow(size_t i, Display *dpy)
     wr32(rt, d + 16, (uint32_t)ProtocolVersion(dpy));
     wr32(rt, d + 20, (uint32_t)ProtocolRevision(dpy));
     wr32(rt, d + 24, vendor);
+    /* +28..+44 are XID/private allocator state. Do not fabricate host
+       pointers; translated clients must not execute host resource_alloc. */
+    wr32(rt, d + 28, 0u);
+    wr32(rt, d + 32, 0u);
+    wr32(rt, d + 36, 0u);
+    wr32(rt, d + 40, 0u);
+    wr32(rt, d + 44, 0u);
     wr32(rt, d + 48, (uint32_t)ImageByteOrder(dpy));
     wr32(rt, d + 52, (uint32_t)BitmapUnit(dpy));
     wr32(rt, d + 56, (uint32_t)BitmapPad(dpy));
     wr32(rt, d + 60, (uint32_t)BitmapBitOrder(dpy));
+    wr32(rt, d + 64, (uint32_t)nformats);
+    wr32(rt, d + 68, formats);
+    wr32(rt, d + 72, 0u);
     wr32(rt, d + 76, (uint32_t)VendorRelease(dpy));
+    wr32(rt, d + 80, 0u);
+    wr32(rt, d + 84, 0u);
     wr32(rt, d + 88, (uint32_t)QLength(dpy));
     wr32(rt, d + 92, (uint32_t)LastKnownRequestProcessed(dpy));
     wr32(rt, d + 96, (uint32_t)(NextRequest(dpy) - 1));
+    wr32(rt, d + 100, 0u);
+    wr32(rt, d + 104, 0u);
+    wr32(rt, d + 108, 0u);
+    wr32(rt, d + 112, 0u);
+    wr32(rt, d + 116, (uint32_t)XMaxRequestSize(dpy));
+    wr32(rt, d + 120, 0u);
+    wr32(rt, d + 124, 0u);
     wr32(rt, d + 128, name);
     wr32(rt, d + 132, (uint32_t)DefaultScreen(dpy));
     wr32(rt, d + 136, (uint32_t)ns);
@@ -237,6 +275,12 @@ static void write_display_shadow(size_t i, Display *dpy)
     wr32(rt, d + 148, 0u);
     wr32(rt, d + 152, (uint32_t)min_keycode);
     wr32(rt, d + 156, (uint32_t)max_keycode);
+    wr32(rt, d + 160, 0u);
+    wr32(rt, d + 164, 0u);
+    wr32(rt, d + 168, 0u);
+    wr32(rt, d + 172, 0u);
+
+    if (host_formats) XFree(host_formats);
 
     fprintf(stderr,
             "IRIX Display shadow: guest=%08x min_keycode=%d max_keycode=%d screens=%d\\n",
