@@ -46,7 +46,9 @@ static const char *opt_title="Winterm", *opt_font="fixed";
 static const char *opt_fg="#d6d6d6", *opt_bg="#00003f", *opt_bold="#ffff00";
 static const char *opt_selfg="#000000", *opt_selbg="#adadad";
 static const char *filter_cmd1="nr -newwin '%s'";
-static int hold_on_exit;
+static int hold_on_exit, login_shell, iconic, no_keyboard, transient;
+static const char *opt_display;
+static Window transient_for;
 static Cell *cells;
 static Cell *history;
 static int history_count, view_offset;
@@ -460,6 +462,13 @@ static void spawn_shell(char **cmd)
     if (child == 0) {
         setenv("TERM", "xterm", 1);
         if (cmd && *cmd) execvp(cmd[0], cmd);
+        if (login_shell) {
+            const char *base=strrchr(shell,'/');
+            char av0[256];
+            base=base?base+1:shell;
+            snprintf(av0,sizeof(av0),"-%s",base);
+            execl(shell,av0,(char *)0);
+        }
         execlp(shell, shell, (char *)0);
         perror("exec");
         _exit(127);
@@ -487,9 +496,14 @@ int main(int argc, char **argv)
         else if ((!strcmp(argv[i],"-geometry") || !strcmp(argv[i],"-geom")) && i+1<argc) geom=argv[++i];
         else if ((!strcmp(argv[i],"-sl") || !strcmp(argv[i],"-retain")) && i+1<argc) { ++i; /* fixed backing store remains 1000 for now */ }
         else if (!strcmp(argv[i],"-hold") || !strcmp(argv[i],"-holdonerror")) hold_on_exit=1;
+        else if (!strcmp(argv[i],"-ls") || !strcmp(argv[i],"-login")) login_shell=1;
+        else if (!strcmp(argv[i],"-iconic")) iconic=1;
+        else if (!strcmp(argv[i],"-nokeyboard")) no_keyboard=1;
+        else if (!strcmp(argv[i],"-transient")) transient=1;
+        else if (!strcmp(argv[i],"-display") && i+1<argc) opt_display=argv[++i];
     }
 
-    dpy = XOpenDisplay(0);
+    dpy = XOpenDisplay(opt_display);
     if (!dpy) { fprintf(stderr, "xwsh: cannot open display\n"); return 1; }
     { Colormap cm=DefaultColormap(dpy,DefaultScreen(dpy)); XColor a,b;
       term_fg=WhitePixel(dpy,DefaultScreen(dpy)); term_bg=BlackPixel(dpy,DefaultScreen(dpy));
@@ -524,6 +538,14 @@ int main(int argc, char **argv)
     XSelectInput(dpy, win, ExposureMask|KeyPressMask|StructureNotifyMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask);
     gc = XCreateGC(dpy, win, 0, 0);
     XSetFont(dpy, gc, font->fid);
+    if (transient) {
+        transient_for=DefaultRootWindow(dpy);
+        XSetTransientForHint(dpy,win,transient_for);
+    }
+    if (iconic) {
+        XWMHints wh; memset(&wh,0,sizeof(wh)); wh.flags=StateHint; wh.initial_state=IconicState;
+        XSetWMHints(dpy,win,&wh);
+    }
     XMapWindow(dpy, win);
 
     spawn_shell(cmd);
@@ -553,7 +575,7 @@ int main(int argc, char **argv)
             while (XPending(dpy)) {
                 XNextEvent(dpy, &ev);
                 if (ev.type == Expose) redraw();
-                else if (ev.type == KeyPress) send_key(&ev.xkey);
+                else if (ev.type == KeyPress && !no_keyboard) send_key(&ev.xkey);
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
                     filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
