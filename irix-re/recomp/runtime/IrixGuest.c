@@ -1056,12 +1056,36 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             fputc('\n', stderr);
         }
         if (address >= 0x0fa36900u && address < 0x0fa37700u) {
+            IrixGuestAddr dst = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            IrixGuestAddr src = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+            uint32_t len = (uint32_t)cpu->gpr[6];
+            int passwd_trace =
+                (caller_pc >= 0x0fa88c00u && caller_pc < 0x0fa89300u) ||
+                (caller_pc >= 0x0fa45c00u && caller_pc < 0x0fa45e00u);
             fprintf(stderr,
-                    "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a3=0x%08x\n",
+                    "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
                     address, entry->address, entry->size,
                     entry->name ? entry->name : "?", caller_pc,
                     (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[28],
-                    (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[7]);
+                    (uint32_t)cpu->gpr[25], dst, src, len,
+                    (uint32_t)cpu->gpr[7]);
+            if (passwd_trace) {
+                unsigned i, limit = len < 64u ? len : 64u;
+                fprintf(stderr, "  passwd memcpy before: dst=%08x src=%08x len=%u\n",
+                        dst, src, len);
+                if (src && irix_guest_ptr(rt, src, limit ? limit : 1u)) {
+                    fputs("    src:", stderr);
+                    for (i = 0; i < limit; ++i)
+                        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, src + i));
+                    fputc('\n', stderr);
+                }
+                if (dst && irix_guest_ptr(rt, dst, limit ? limit : 1u)) {
+                    fputs("    dst:", stderr);
+                    for (i = 0; i < limit; ++i)
+                        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, dst + i));
+                    fputc('\n', stderr);
+                }
+            }
         }
         cpu->pc = address;
         rt->current_pc = address;
@@ -1075,6 +1099,21 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
+        if (!rt->trapped && address >= 0x0fa36900u && address < 0x0fa37700u &&
+            ((caller_pc >= 0x0fa88c00u && caller_pc < 0x0fa89300u) ||
+             (caller_pc >= 0x0fa45c00u && caller_pc < 0x0fa45e00u))) {
+            IrixGuestAddr dst = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            uint32_t len = (uint32_t)cpu->gpr[6];
+            unsigned i, limit = len < 64u ? len : 64u;
+            fprintf(stderr, "  passwd memcpy after: v0=%08x dst=%08x len=%u\n",
+                    (uint32_t)cpu->gpr[2], dst, len);
+            if (dst && irix_guest_ptr(rt, dst, limit ? limit : 1u)) {
+                fputs("    dst:", stderr);
+                for (i = 0; i < limit; ++i)
+                    fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, dst + i));
+                fputc('\n', stderr);
+            }
+        }
         /* A completed N32 call must return with the caller's callee-saved
            register set and stack pointer intact. Do not rewrite state on a
            trap: the fault report needs the exact machine state at failure. */
