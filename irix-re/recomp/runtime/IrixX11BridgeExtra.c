@@ -27,6 +27,7 @@
 typedef struct {
     IrixGuestRuntime *rt;
     Display *displays[IRIX_X11_MAX_DISPLAYS];
+    IrixGuestAddr display_free_funcs[IRIX_X11_MAX_DISPLAYS];
     size_t display_count;
     GC gcs[IRIX_X11_MAX_GCS];
     size_t gc_count;
@@ -208,6 +209,7 @@ static void write_display_shadow(size_t i, Display *dpy)
     int nformats = 0;
     int s;
     XPixmapFormatValues *host_formats = XListPixmapFormats(dpy, &nformats);
+    IrixGuestAddr free_funcs = g_x11.display_free_funcs[i];
 
     /*
      * Match the public IRIX Xlib.h _XDisplay prefix exactly. Old Xlib clients
@@ -216,6 +218,27 @@ static void write_display_shadow(size_t i, Display *dpy)
      * +144/+148 and min_keycode/max_keycode at +152/+156.
      */
     XDisplayKeycodes(dpy, &min_keycode, &max_keycode);
+
+    /*
+     * Xlib's public Xlib.h calls this slot private1, but Xlibint.h names it
+     * free_funcs. Translated Xlib writes callback addresses into this table
+     * during lazy initialization (for example modifiermap at +4). It must
+     * therefore be real writable guest storage, not NULL and not a host
+     * pointer.
+     */
+    if (!free_funcs) {
+        free_funcs = tmp_alloc(64u);
+        if (free_funcs) {
+            void *p = irix_guest_ptr(rt, free_funcs, 64u);
+            if (p) {
+                memset(p, 0, 64u);
+                g_x11.display_free_funcs[i] = free_funcs;
+            } else {
+                free_funcs = 0;
+            }
+        }
+    }
+
     if (host_formats && nformats > 0) {
         uint64_t bytes = (uint64_t)(unsigned)nformats * 16u;
         if (bytes <= UINT32_MAX) {
@@ -234,7 +257,7 @@ static void write_display_shadow(size_t i, Display *dpy)
     }
 
     wr32(rt, d + 0, 0);
-    wr32(rt, d + 4, 0);
+    wr32(rt, d + 4, free_funcs);
     wr32(rt, d + 8, (uint32_t)ConnectionNumber(dpy));
     wr32(rt, d + 12, 0);
     wr32(rt, d + 16, (uint32_t)ProtocolVersion(dpy));
@@ -275,16 +298,19 @@ static void write_display_shadow(size_t i, Display *dpy)
     wr32(rt, d + 148, 0u);
     wr32(rt, d + 152, (uint32_t)min_keycode);
     wr32(rt, d + 156, (uint32_t)max_keycode);
-    wr32(rt, d + 160, 0u);
-    wr32(rt, d + 164, 0u);
-    wr32(rt, d + 168, 0u);
-    wr32(rt, d + 172, 0u);
+
+    /*
+     * +160 keysyms, +164 modifiermap, +168 keysyms_per_keycode and +172
+     * xdefaults are guest Xlib-owned mutable state. Do not clear them while
+     * refreshing the host-backed public shadow: _XKeyInitialize/InitModMap
+     * populate these lazily and expect the values to survive bridge calls.
+     */
 
     if (host_formats) XFree(host_formats);
 
     fprintf(stderr,
-            "IRIX Display shadow: guest=%08x min_keycode=%d max_keycode=%d screens=%d\\n",
-            d, min_keycode, max_keycode, ns);
+            "IRIX Display shadow: guest=%08x free_funcs=%08x min_keycode=%d max_keycode=%d screens=%d\\n",
+            d, free_funcs, min_keycode, max_keycode, ns);
 
     if (ns > 16) ns = 16;
     for (s = 0; s < ns; ++s) {
