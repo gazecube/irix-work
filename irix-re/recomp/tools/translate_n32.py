@@ -235,7 +235,13 @@ def decode(addr, insn):
         a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = w; break;','  case 1: old = (old & 0x000000ffu) | (w << 8); break;','  case 2: old = (old & 0x0000ffffu) | (w << 16); break;','  default: old = (old & 0x00ffffffu) | (w << 24); break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
     if op==0x26:
         a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = (old & 0xffffff00u) | (w >> 24); break;','  case 1: old = (old & 0xffff0000u) | (w >> 16); break;','  case 2: old = (old & 0xff000000u) | (w >> 8); break;','  default: old = w; break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
-    if op==0x23: return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x23:
+        a=mem_addr(rs,imm)
+        if addr==0x0fa34c9c:
+            return ['{ IrixGuestAddr a = %s; uint32_t v = irix_guest_read32be(rt, a);'%a,
+                    '  fprintf(stderr, "IRIX malloc GOT load: pc=0x%08x addr=0x%08x value=%08x gp=%08x\\n", 0x0fa34c9cu, a, v, (uint32_t)%s);'%reg(28),
+                    '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
+        return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);'%(reg(rt),a)],None
     if op==0x31: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | irix_guest_read32be(rt, %s);'%(rt,rt,mem_addr(rs,imm))],None
     if op==0x37: return ['%s = irix_guest_read64be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
     if op==0x28: return ['irix_guest_write8(rt, %s, (uint8_t)%s);'%(mem_addr(rs,imm),reg(rt))],None
