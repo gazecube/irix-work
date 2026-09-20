@@ -1066,15 +1066,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
-        if (trace_xwsh_passwd_decision(address)) {
-            fprintf(stderr,
-                    "IRIX passwd window return: target=%08x owner=%08x:%s trapped=%d v0=%08x v1=%08x a0-a3=%08x,%08x,%08x,%08x sp=%08x gp=%08x\n",
-                    address, entry->address, entry->name ? entry->name : "?",
-                    rt->trapped, (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
-        }
+
 
         /* A completed N32 call must return with the caller's callee-saved
            register set and stack pointer intact. Do not rewrite state on a
