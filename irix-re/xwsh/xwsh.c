@@ -21,6 +21,7 @@
 typedef struct {
     unsigned char ch;
     unsigned char inverse;
+    unsigned char bold;
 } Cell;
 
 static Display *dpy;
@@ -31,6 +32,10 @@ static int cw, ch, ascent;
 static int cols = COLS, rows = ROWS;
 static int cx, cy;
 static int inverse;
+static int bold;
+static Atom wm_delete, xa_clipboard, xa_utf8;
+static int selecting, sel_x0, sel_y0, sel_x1, sel_y1;
+static char *selection_text;
 static Cell *cells;
 static int master_fd = -1;
 static pid_t child = -1;
@@ -50,6 +55,7 @@ static void clear_row(int y, int from, int to)
         Cell *c = cell_at(x, y);
         c->ch = ' ';
         c->inverse = 0;
+        c->bold = 0;
     }
 }
 
@@ -84,6 +90,7 @@ static void put_char(unsigned char v)
     if (v < 0x20 || v == 0x7f) return;
     cell_at(cx, cy)->ch = v;
     cell_at(cx, cy)->inverse = (unsigned char)inverse;
+    cell_at(cx, cy)->bold = (unsigned char)bold;
     if (++cx >= cols) { cx = 0; ++cy; normalize_cursor(); }
 }
 
@@ -135,8 +142,10 @@ static void do_csi(unsigned char final)
         for (;;) {
             int a = csi_arg(i++, -1);
             if (a < 0) break;
-            if (a == 0) inverse = 0;
+            if (a == 0) { inverse = 0; bold = 0; }
+            else if (a == 1) bold = 1;
             else if (a == 7) inverse = 1;
+            else if (a == 22) bold = 0;
             else if (a == 27) inverse = 0;
         }
         break;
@@ -188,6 +197,7 @@ static void redraw(void)
                 XSetForeground(dpy, gc, bg);
             } else XSetForeground(dpy, gc, fg);
             XDrawString(dpy, win, gc, x*cw, y*ch + ascent, s, 1);
+            if (c->bold) XDrawString(dpy, win, gc, x*cw + 1, y*ch + ascent, s, 1);
         }
     }
     XSetForeground(dpy, gc, fg);
@@ -206,12 +216,65 @@ static void resize_pty(void)
     if (master_fd >= 0) ioctl(master_fd, TIOCSWINSZ, &ws);
 }
 
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+static void make_selection(void)
+{
+    int x0=sel_x0, y0=sel_y0, x1=sel_x1, y1=sel_y1, y;
+    size_t cap=(size_t)(rows*(cols+1)+1), n=0;
+    free(selection_text); selection_text=malloc(cap);
+    if (!selection_text) return;
+    if (y0>y1 || (y0==y1 && x0>x1)) { int t=x0;x0=x1;x1=t; t=y0;y0=y1;y1=t; }
+    for (y=y0;y<=y1;++y) {
+        int a=(y==y0?x0:0), b=(y==y1?x1:cols-1), x, end=b;
+        while (end>=a && cell_at(end,y)->ch==' ') --end;
+        for (x=a;x<=end && n+2<cap;++x) selection_text[n++]=(char)cell_at(x,y)->ch;
+        if (y!=y1 && n+2<cap) selection_text[n++]='\n';
+    }
+    selection_text[n]=0;
+    XSetSelectionOwner(dpy, XA_PRIMARY, win, CurrentTime);
+    XSetSelectionOwner(dpy, xa_clipboard, win, CurrentTime);
+}
+
+static void request_paste(Atom which)
+{
+    XConvertSelection(dpy, which, xa_utf8, xa_utf8, win, CurrentTime);
+}
+
+static void selection_request(XSelectionRequestEvent *r)
+{
+    XSelectionEvent e;
+    memset(&e,0,sizeof(e)); e.type=SelectionNotify; e.display=r->display;
+    e.requestor=r->requestor; e.selection=r->selection; e.target=r->target;
+    e.time=r->time; e.property=None;
+    if (selection_text && (r->target==xa_utf8 || r->target==XA_STRING)) {
+        Atom prop=r->property ? r->property : r->target;
+        XChangeProperty(dpy,r->requestor,prop,r->target,8,PropModeReplace,
+                        (unsigned char*)selection_text,(int)strlen(selection_text));
+        e.property=prop;
+    }
+    XSendEvent(dpy,r->requestor,False,0,(XEvent*)&e);
+}
+
+static void selection_notify(XSelectionEvent *e)
+{
+    Atom type; int format; unsigned long n,left; unsigned char *p=0;
+    if (e->property==None) return;
+    if (XGetWindowProperty(dpy,win,e->property,0,1<<20,True,AnyPropertyType,
+                           &type,&format,&n,&left,&p)==Success && p) {
+        if (format==8 && n) write(master_fd,p,n);
+        XFree(p);
+    }
+}
+
 static void send_key(XKeyEvent *e)
 {
     char buf[64];
     KeySym ks;
     int n = XLookupString(e, buf, sizeof(buf), &ks, 0);
     const char *seq = 0;
+    if ((e->state & ControlMask) && (e->state & ShiftMask) && (ks==XK_V || ks==XK_v)) { request_paste(xa_clipboard); return; }
+    if ((e->state & ShiftMask) && ks==XK_Insert) { request_paste(XA_PRIMARY); return; }
     switch (ks) {
     case XK_Left: seq = "\033[D"; break;
     case XK_Right: seq = "\033[C"; break;
@@ -273,7 +336,10 @@ int main(int argc, char **argv)
                               BlackPixel(dpy, DefaultScreen(dpy)),
                               WhitePixel(dpy, DefaultScreen(dpy)));
     XStoreName(dpy, win, "Winterm");
-    XSelectInput(dpy, win, ExposureMask|KeyPressMask|StructureNotifyMask);
+    { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=0; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
+    wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
+    xa_clipboard=XInternAtom(dpy,"CLIPBOARD",False); xa_utf8=XInternAtom(dpy,"UTF8_STRING",False);
+    XSelectInput(dpy, win, ExposureMask|KeyPressMask|StructureNotifyMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask);
     gc = XCreateGC(dpy, win, 0, 0);
     XSetFont(dpy, gc, font->fid);
     XMapWindow(dpy, win);
@@ -305,6 +371,16 @@ int main(int argc, char **argv)
                 XNextEvent(dpy, &ev);
                 if (ev.type == Expose) redraw();
                 else if (ev.type == KeyPress) send_key(&ev.xkey);
+                else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
+                    selecting=1; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1);
+                } else if (ev.type == MotionNotify && selecting) {
+                    sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1);
+                } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
+                    sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); selecting=0; make_selection();
+                } else if (ev.type == ButtonPress && ev.xbutton.button == Button2) request_paste(XA_PRIMARY);
+                else if (ev.type == SelectionRequest) selection_request(&ev.xselectionrequest);
+                else if (ev.type == SelectionNotify) selection_notify(&ev.xselection);
+                else if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == wm_delete) goto done;
                 else if (ev.type == ConfigureNotify) {
                     int nc = ev.xconfigure.width / cw;
                     int nr = ev.xconfigure.height / ch;
@@ -329,6 +405,8 @@ int main(int argc, char **argv)
         }
         if (waitpid(child, 0, WNOHANG) == child) break;
     }
+done:
     if (child > 0) kill(child, SIGHUP);
+    free(selection_text);
     return 0;
 }
