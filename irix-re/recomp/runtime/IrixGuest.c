@@ -790,6 +790,14 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
                     (uint32_t)cpu->gpr[11]);
         }
+        if (address >= 0x0fa36900u && address < 0x0fa37700u) {
+            fprintf(stderr,
+                    "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a3=0x%08x\n",
+                    address, entry->address, entry->size,
+                    entry->name ? entry->name : "?", caller_pc,
+                    (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[28],
+                    (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[7]);
+        }
         cpu->pc = address;
         rt->current_pc = address;
         /* N32 PIC entry convention: t9 contains the callee address. */
