@@ -40,7 +40,7 @@ static int saved_cx, saved_cy;
 static int scroll_top, scroll_bottom;
 static unsigned long term_fg, term_bg, bold_pixel, cursor_fg, cursor_bg, select_fg, select_bg;
 static Atom wm_delete, xa_clipboard, xa_utf8;
-static int selecting, sel_x0, sel_y0, sel_x1, sel_y1;
+static int selecting, selection_visible, suppress_select_release, sel_x0, sel_y0, sel_x1, sel_y1;
 static char *selection_text;
 static const char *opt_title="Winterm", *opt_font="fixed";
 static const char *opt_fg="#d6d6d6", *opt_bg="#00003f", *opt_bold="#ffff00";
@@ -247,7 +247,7 @@ static Cell *display_cell(int x, int y)
 static int point_selected(int x,int y)
 {
     int x0=sel_x0,y0=sel_y0,x1=sel_x1,y1=sel_y1;
-    if (!selecting && !selection_text) return 0;
+    if (!selection_visible) return 0;
     if(y0>y1 || (y0==y1 && x0>x1)){int t=x0;x0=x1;x1=t;t=y0;y0=y1;y1=t;}
     return y>=y0 && y<=y1 && (y!=y0 || x>=x0) && (y!=y1 || x<=x1);
 }
@@ -312,6 +312,7 @@ static void make_selection(void)
         if (y!=y1 && n+2<cap) selection_text[n++]='\n';
     }
     selection_text[n]=0;
+    selection_visible=1;
     XSetSelectionOwner(dpy, XA_PRIMARY, win, CurrentTime);
     XSetSelectionOwner(dpy, xa_clipboard, win, CurrentTime);
 }
@@ -527,15 +528,21 @@ int main(int argc, char **argv)
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
                     filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
-                    if (selection_text) {
-                        free(selection_text); selection_text=0; selecting=0; redraw();
+                    if (selection_visible) {
+                        selection_visible=0; selecting=0; suppress_select_release=1; redraw();
                     } else {
-                        selecting=1; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
+                        selecting=1; suppress_select_release=0;
+                        free(selection_text); selection_text=0;
+                        sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                     }
                 } else if (ev.type == MotionNotify && selecting) {
                     sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
-                    sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); make_selection(); selecting=0; redraw();
+                    if (suppress_select_release) {
+                        suppress_select_release=0;
+                    } else if (selecting) {
+                        sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); make_selection(); selecting=0; redraw();
+                    }
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button2) request_paste(XA_PRIMARY);
                 else if (ev.type == SelectionRequest) selection_request(&ev.xselectionrequest);
                 else if (ev.type == SelectionNotify) selection_notify(&ev.xselection);
