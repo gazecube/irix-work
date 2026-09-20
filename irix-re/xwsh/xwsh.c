@@ -19,6 +19,7 @@
 #define ROWS 24
 #define MAX_CSI 64
 #define RETAIN_LIMIT 1000
+#define SCROLLBAR_W 15
 
 typedef struct {
     unsigned char ch;
@@ -52,6 +53,7 @@ static Window transient_for;
 static Cell *cells;
 static Cell *history;
 static int history_count, view_offset;
+static int scrollbar_drag, scrollbar_drag_y, scrollbar_drag_view;
 static int master_fd = -1;
 static pid_t child = -1;
 static int esc_state;
@@ -283,13 +285,37 @@ static int point_selected(int x,int y)
     return y>=y0 && y<=y1 && (y!=y0 || x>=x0) && (y!=y1 || x<=x1);
 }
 
+static void draw_scrollbar(void)
+{
+    int x0=cols*cw, h=rows*ch, total=history_count+rows;
+    int thumb_h, thumb_y, track=h-4;
+    unsigned long trough=select_bg, thumb=term_fg;
+    if(track<1)return;
+    thumb_h = total ? (rows*track)/total : track;
+    if(thumb_h<12)thumb_h=12; if(thumb_h>track)thumb_h=track;
+    thumb_y = 2 + (history_count ? ((history_count-view_offset)*(track-thumb_h))/history_count : 0);
+    XSetForeground(dpy,gc,trough); XFillRectangle(dpy,win,gc,x0,0,SCROLLBAR_W,(unsigned)h);
+    XSetForeground(dpy,gc,term_bg); XDrawRectangle(dpy,win,gc,x0+1,1,SCROLLBAR_W-3,(unsigned)(h-3));
+    XSetForeground(dpy,gc,thumb); XFillRectangle(dpy,win,gc,x0+3,thumb_y,SCROLLBAR_W-6,(unsigned)thumb_h);
+}
+
+static void scrollbar_to_y(int y)
+{
+    int h=rows*ch, track=h-4, total=history_count+rows, thumb_h, span, pos;
+    if(!history_count){set_view(0);return;}
+    thumb_h=(rows*track)/total; if(thumb_h<12)thumb_h=12; if(thumb_h>track)thumb_h=track;
+    span=track-thumb_h; if(span<=0){set_view(0);return;}
+    pos=clampi(y-2-thumb_h/2,0,span);
+    set_view(history_count-(pos*history_count)/span);
+}
+
 static void redraw(void)
 {
     int x, y;
     unsigned long fg = term_fg;
     unsigned long bg = term_bg;
     XSetForeground(dpy, gc, bg);
-    XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw), (unsigned)(rows * ch));
+    XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw + SCROLLBAR_W), (unsigned)(rows * ch));
     for (y = 0; y < rows; ++y) {
         for (x = 0; x < cols; ++x) {
             Cell *c = display_cell(x, y);
@@ -309,6 +335,7 @@ static void redraw(void)
             if (c->bold) XDrawString(dpy, win, gc, x*cw + 1, y*ch + ascent, s, 1);
         }
     }
+    draw_scrollbar();
     if (view_offset) { XFlush(dpy); return; }
     XSetForeground(dpy, gc, cursor_bg);
     XFillRectangle(dpy, win, gc, cx*cw, cy*ch, (unsigned)cw, (unsigned)ch);
@@ -528,11 +555,11 @@ int main(int argc, char **argv)
     clear_all();
 
     win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), gx, gy,
-                              (unsigned)(cols*cw), (unsigned)(rows*ch), 1,
+                              (unsigned)(cols*cw+SCROLLBAR_W), (unsigned)(rows*ch), 1,
                               term_fg, term_bg);
     XStoreName(dpy, win, opt_title);
     XSetIconName(dpy, win, opt_title);
-    { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=0; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
+    { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=SCROLLBAR_W; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
     wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
     xa_clipboard=XInternAtom(dpy,"CLIPBOARD",False); xa_utf8=XInternAtom(dpy,"UTF8_STRING",False);
     XSelectInput(dpy, win, ExposureMask|KeyPressMask|StructureNotifyMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask);
@@ -578,6 +605,9 @@ int main(int argc, char **argv)
                 else if (ev.type == KeyPress && !no_keyboard) send_key(&ev.xkey);
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
                     filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
+                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && ev.xbutton.x >= cols*cw) {
+                    scrollbar_drag=1; scrollbar_drag_y=ev.xbutton.y; scrollbar_drag_view=view_offset;
+                    scrollbar_to_y(ev.xbutton.y);
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
                     if (selection_visible) {
                         selection_visible=0; selecting=0; suppress_select_release=1; redraw();
@@ -586,8 +616,12 @@ int main(int argc, char **argv)
                         free(selection_text); selection_text=0;
                         sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                     }
+                } else if (ev.type == MotionNotify && scrollbar_drag) {
+                    scrollbar_to_y(ev.xmotion.y);
                 } else if (ev.type == MotionNotify && selecting) {
                     sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
+                } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1 && scrollbar_drag) {
+                    scrollbar_drag=0;
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
                     if (suppress_select_release) {
                         suppress_select_release=0;
@@ -599,7 +633,7 @@ int main(int argc, char **argv)
                 else if (ev.type == SelectionNotify) selection_notify(&ev.xselection);
                 else if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == wm_delete) goto done;
                 else if (ev.type == ConfigureNotify) {
-                    int nc = ev.xconfigure.width / cw;
+                    int nc = (ev.xconfigure.width - SCROLLBAR_W) / cw;
                     int nr = ev.xconfigure.height / ch;
                     if (nc < 2) nc = 2; if (nr < 2) nr = 2;
                     if (nc != cols || nr != rows) {
