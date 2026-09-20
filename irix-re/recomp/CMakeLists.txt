@@ -77,9 +77,17 @@ if(IRIX_DEV_TREE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(IRIX_RECOMP_CORE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-core")
     set(IRIX_RECOMP_CORE_LIB "${IRIX_RECOMP_CORE_DIR}/libirix_recompiled_stack.a")
+    set(IRIX_RECOMP_CORE_DSOS
+        "${IRIX_RECOMP_CORE_DIR}/libXt.so"
+        "${IRIX_RECOMP_CORE_DIR}/libXm.so"
+        "${IRIX_RECOMP_CORE_DIR}/libSgm.so"
+        "${IRIX_RECOMP_CORE_DIR}/libvk.so"
+        "${IRIX_RECOMP_CORE_DIR}/libMrm.so"
+        "${IRIX_RECOMP_CORE_DIR}/libUil.so"
+    )
 
     add_custom_command(
-        OUTPUT "${IRIX_RECOMP_CORE_LIB}"
+        OUTPUT "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS}
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_RECOMP_CORE_DIR}"
         COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_core_stack.py"
@@ -97,10 +105,21 @@ if(IRIX_DEV_TREE)
         VERBATIM
     )
 
-    add_custom_target(irix_recompiled_core ALL DEPENDS "${IRIX_RECOMP_CORE_LIB}")
+    add_custom_target(irix_recompiled_core ALL
+        DEPENDS "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS})
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
     set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
     add_dependencies(irix_recompiled_stack irix_recompiled_core)
+
+    # Native ELF containers for the statically translated IRIX libraries.
+    # They preserve the original library boundaries while the existing
+    # monolithic archive remains available to bootstrap the current runners.
+    foreach(_irix_core_name Xt Xm Sgm vk Mrm Uil)
+        add_library(irix_recompiled_${_irix_core_name}_so SHARED IMPORTED GLOBAL)
+        set_target_properties(irix_recompiled_${_irix_core_name}_so PROPERTIES
+            IMPORTED_LOCATION "${IRIX_RECOMP_CORE_DIR}/lib${_irix_core_name}.so")
+        add_dependencies(irix_recompiled_${_irix_core_name}_so irix_recompiled_core)
+    endforeach()
 
     if(IRIX_RUNTIME_TREE AND IRIX_INTERNAL_TREE)
         set(IRIX_RECOMP_CORE_LINK "${IRIX_RECOMP_CORE_DIR}/generated/image/link.json")
