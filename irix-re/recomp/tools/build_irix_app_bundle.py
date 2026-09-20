@@ -308,7 +308,10 @@ def main():
     dso_dir = out / 'lib'
     gen.mkdir(parents=True, exist_ok=True)
 
-    seed_rows = [app] + list(manifest['shared_components'])
+    shared_components = app.get('shared_components', manifest['shared_components'])
+    for i, row in enumerate(shared_components):
+        validate_component(row, f'app {a.app} shared component {i}')
+    seed_rows = [app] + list(shared_components)
 
     # PT_INTERP is not DT_NEEDED.  For IRIX N32 executables this is normally
     # /usr/lib32/libc.so.1, whose entry point is the actual kernel transfer
@@ -387,7 +390,7 @@ def main():
     for row in rows:
         components.append((row['prefix'],
                            resolve_binary(row, a.runtime_tree, a.internal_tree, a.dev_tree)))
-    print(f'DSO closure: components={len(rows)} auto_dependencies={len(rows) - 1 - len(manifest["shared_components"])}',
+    print(f'DSO closure: components={len(rows)} auto_dependencies={len(rows) - 1 - len(shared_components)}',
           flush=True)
 
     # Audit the complete app closure first so decoder holes are reported once.
