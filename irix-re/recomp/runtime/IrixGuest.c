@@ -961,8 +961,9 @@ static int trace_passwd_call(const char *name)
 
 static int trace_xwsh_passwd_decision(IrixGuestAddr pc)
 {
-    /* _doprnt is only the messenger. Trace its immediate caller instead. */
-    return pc >= 0x0fa46d80u && pc < 0x0fa47000u;
+    /* fprintf is also only the messenger.  xwsh calls it from 0x10039d28;
+     * trace the application-side decision that selected the fatal diagnostic. */
+    return pc >= 0x10039c00u && pc < 0x10039e00u;
 }
 
 static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
