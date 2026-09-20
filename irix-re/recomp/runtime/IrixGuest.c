@@ -1,5 +1,6 @@
 #include "IrixGuest.h"
 #include "IrixCompat.h"
+#include "IrixSyscallNumbers.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -567,7 +568,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     errno = 0;
     switch (number) {
-    case 1000: { /* syscall(indirect_number, ...) */
+    case SYS_syscall: { /* syscall(indirect_number, ...) */
         uint32_t indirect = (uint32_t)cpu->gpr[4];
         unsigned i;
         if (indirect == 1000u) {
@@ -587,7 +588,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_syscall(rt, cpu);
         return;
     }
-    case 1001: { /* exit */
+    case SYS_exit: { /* exit */
         /*
          * IRIX _exit(2) never returns.  Use a distinguished runtime trap to
          * unwind translated call frames; AppRunner converts it back into the
@@ -600,7 +601,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_trap(rt, cpu, 0xeeee23ffu);
         return;
     }
-    case 1003: { /* read */
+    case SYS_read: { /* read */
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
         void *p = irix_guest_ptr(rt, addr, count);
@@ -613,7 +614,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, result);
         return;
     }
-    case 1004: { /* write */
+    case SYS_write: { /* write */
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
         const void *p = irix_guest_ptr(rt, addr, count);
@@ -626,7 +627,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, result);
         return;
     }
-    case 1005: { /* open */
+    case SYS_open: { /* open */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         const char *guest_path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
         char host_path[PATH_MAX];
@@ -651,11 +652,11 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, result);
         return;
     }
-    case 1006: /* close */
+    case SYS_close: /* close */
         result = (int64_t)close((int)(int32_t)cpu->gpr[4]);
         syscall_result(cpu, result);
         return;
-    case 1017: { /* break */
+    case SYS_brk: { /* break */
         IrixGuestAddr requested = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         const uint32_t page_size = 16384u;
         IrixGuestAddr old_break = rt->program_break;
@@ -760,13 +761,13 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, 0);
         return;
     }
-    case 1020: /* getpid */
+    case SYS_getpid: /* getpid */
         syscall_result(cpu, (int64_t)getpid());
         return;
-    case 1024: /* getuid */
+    case SYS_getuid: /* getuid */
         syscall_result(cpu, (int64_t)getuid());
         return;
-    case 1033: { /* access */
+    case SYS_access: { /* access */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         int mode = (int)(int32_t)cpu->gpr[5];
         const char *path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
@@ -778,52 +779,46 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, (int64_t)access(path, mode));
         return;
     }
-    case 1040: /* syssgi */
+    case SYS_syssgi: /* syssgi */
         irix_compat_syssgi(rt, cpu);
         return;
-    case 1047: /* getgid */
+    case SYS_getgid: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
         return;
-    case 1056: /* sysmp(cmd, ...) */
+    case SYS_sysmp: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
-    case 1123: { /* setregid */
+    case SYS_setregid: { /* setregid */
         gid_t rgid = (gid_t)(uint32_t)cpu->gpr[4];
         gid_t egid = (gid_t)(uint32_t)cpu->gpr[5];
         syscall_result(cpu, (int64_t)setregid(rgid, egid));
         return;
     }
-    case 1124: { /* setreuid */
+    case SYS_setreuid: { /* setreuid */
         uid_t ruid = (uid_t)(uint32_t)cpu->gpr[4];
         uid_t euid = (uid_t)(uint32_t)cpu->gpr[5];
         syscall_result(cpu, (int64_t)setreuid(ruid, euid));
         return;
     }
-    case 1125: /* getegid */
-        syscall_result(cpu, (int64_t)getegid());
-        return;
-    case 1126: /* geteuid */
-        syscall_result(cpu, (int64_t)geteuid());
-        return;
-    case 1130: /* prctl */
+    case SYS_prctl: /* prctl */
         irix_compat_prctl(rt, cpu);
         return;
-    case 1134: /* mmap */
+    case SYS_mmap: /* mmap */
         irix_compat_mmap(rt, cpu);
         return;
-    case 1135: /* munmap */
+    case SYS_munmap: /* munmap */
         irix_compat_munmap(rt, cpu);
         return;
-    case 1136: /* mprotect */
+    case SYS_mprotect: /* mprotect */
         irix_compat_mprotect(rt, cpu);
         return;
-    case 1140: /* getpagesize */
+    case SYS_getpagesize: /* getpagesize */
         syscall_result(cpu, 16384);
         return;
-    case 1156: /* sysinfo(command, buf, count) */
+    case SYS_sysinfo: /* sysinfo(command, buf, count) */
         irix_compat_systeminfo(rt, cpu);
         return;
-    case 1158: { /* xstat(version, path, statbuf) */
+    case SYS_xstat: { /* xstat(version, path, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
@@ -840,7 +835,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, result);
         return;
     }
-    case 1159: { /* lxstat(version, path, statbuf) */
+    case SYS_lxstat: { /* lxstat(version, path, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
@@ -857,7 +852,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, result);
         return;
     }
-    case 1160: { /* fxstat(version, fd, statbuf) */
+    case SYS_fxstat: { /* fxstat(version, fd, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         int fd = (int)(int32_t)cpu->gpr[5];
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
