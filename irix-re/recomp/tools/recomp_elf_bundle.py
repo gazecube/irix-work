@@ -626,6 +626,18 @@ def main():
 
     raw_syms=raw_function_symbols(path)
     symbol_addrs={addr for _,addr,_,_,_ in defs}
+    # A real nonzero-size ELF function symbol owns its interior.  Exact
+    # executable words materialized in data can prove hidden callable entries,
+    # but they must not split an ordinary named function merely because some
+    # data happens to contain the address of one of its internal instructions.
+    # This matters for libc routines such as memcpy, whose internal labels may
+    # be present in prebound/GOT data while execution must still enter through
+    # the enclosing function and preserve its setup state.
+    symbol_ranges=[(addr,addr+size) for _,addr,size,_,kind in defs
+                   if kind=='symbol' and size>0]
+
+    def covered_by_symbol(addr):
+        return any(lo < addr < hi for lo,hi in symbol_ranges)
 
     zero_defs=[]
     for n,addr,size,sh in zero_size_function_ranges(elf,raw_syms):
@@ -673,13 +685,15 @@ def main():
     recovered_addrs|={addr for _,addr,_,_,_ in pdr_defs}
     ptr_defs=[]
     for n,addr,size,sh in data_pointer_function_ranges(elf,path,recovered_addrs):
-        if addr not in recovered_addrs:
+        if addr not in recovered_addrs and not covered_by_symbol(addr):
             # A materialized executable address in allocated non-code data is
             # hard callable-entry evidence just like a direct JAL/BAL target.
             # SGI widget/class tables and GOT data use these pointers for
             # indirect jalr calls, and broad FDEs can span many such entries.
             # Do not let FDE coverage suppress an independently materialized
-            # function pointer.
+            # function pointer.  A real nonzero-size ELF symbol is stronger
+            # ownership evidence, however, so never manufacture an entry in
+            # the middle of one.
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in ptr_defs}
