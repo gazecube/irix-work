@@ -137,6 +137,45 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         compat_result(cpu, result);
         return;
 
+    case 22u: { /* SGI_SYSCONF */
+        int name = (int)(int32_t)cpu->gpr[5];
+        long value;
+
+        /*
+         * IRIX libc routes kernel-backed sysconf names through syssgi.
+         * Keep IRIX selector numbers here rather than passing them directly
+         * to host sysconf(), whose _SC_* numbering is ABI-specific.
+         */
+        switch (name) {
+        case 1: /* _SC_ARG_MAX */
+#ifdef ARG_MAX
+            value = ARG_MAX;
+#else
+            value = 131072;
+#endif
+            break;
+        case 2: /* _SC_CHILD_MAX */
+            value = sysconf(_SC_CHILD_MAX);
+            break;
+        case 3: /* _SC_CLK_TCK */
+            value = sysconf(_SC_CLK_TCK);
+            break;
+        case 4: /* _SC_NGROUPS_MAX */
+            value = sysconf(_SC_NGROUPS_MAX);
+            break;
+        case 5: /* _SC_OPEN_MAX */
+            value = sysconf(_SC_OPEN_MAX);
+            break;
+        default:
+            fprintf(stderr, "UNIMPLEMENTED IRIX SGI_SYSCONF name %d\n", name);
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        compat_result(cpu, (int64_t)value);
+        return;
+    }
+
     case 62u: /* SGI_SSYNC */
         sync();
         compat_result(cpu, 0);
