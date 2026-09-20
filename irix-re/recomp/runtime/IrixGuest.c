@@ -1009,6 +1009,20 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         report_nearest_functions(rt, address);
         fputc('\n', stderr);
     }
+    if (((uint32_t)cpu->pc == 0x10039c7cu ||
+         (uint32_t)cpu->pc == 0x10039c88u ||
+         (uint32_t)cpu->pc == 0x10039cd0u ||
+         (uint32_t)cpu->pc == 0x10039d04u) &&
+        address != 0x10039c50u) {
+        IrixGuestAddr cs = (IrixGuestAddr)(uint32_t)cpu->pc;
+        fprintf(stderr, "  authenticateUser callsite %08x:", cs);
+        if (irix_guest_ptr(rt, cs - 16u, 40u)) {
+            unsigned j;
+            for (j = 0; j < 10u; ++j)
+                fprintf(stderr, " %08x", irix_guest_read32be(rt, cs - 16u + j * 4u));
+        }
+        fputc('\n', stderr);
+    }
     if (trace_xwsh_passwd_decision(address)) {
         fprintf(stderr,
                 "IRIX passwd window call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
