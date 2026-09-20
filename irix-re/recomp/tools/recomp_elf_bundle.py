@@ -58,7 +58,7 @@ def emit_explicit(path, name, start, size, c_prefix):
     fn='irix_recomp_%s%s'%(t.c_name(c_prefix),t.c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (explicit range). */'%(path,name,start,size))
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
-    print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };'); print('')
+    print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
     print('    IrixGuestAddr pc = cpu->pc;')
     print('    IrixGuestAddr pending_target = 0;')
@@ -74,6 +74,8 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        pending_kind = IRIX_PENDING_NONE;')
     print('        cpu->pc = pc;')
     print('        rt->current_pc = pc;'); print('')
+    print('        if (pc >= 0x0fb69b60u && pc < 0x0fb69c60u)')
+    print('            fprintf(stderr, "IRIX rld update trace: pc=%08x s0=%08x a0=%08x a1=%08x gp=%08x t9=%08x sp=%08x ra=%08x old_pending=%d old_target=%08x\\n", (uint32_t)pc, (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[31], old_pending, (uint32_t)old_target);')
     print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
