@@ -961,13 +961,8 @@ static int trace_passwd_call(const char *name)
 
 static int trace_xwsh_passwd_decision(IrixGuestAddr pc)
 {
-    /*
-     * xwsh reaches its "no password entry" diagnostic through this libc
-     * formatter path.  No named getpw* dispatcher entry fires, so trace the
-     * preceding libc execution window itself to recover the local/internal
-     * call chain that produced the NULL argument.
-     */
-    return pc >= 0x0fa88b00u && pc < 0x0fa89300u;
+    /* _doprnt is only the messenger. Trace its immediate caller instead. */
+    return pc >= 0x0fa46d80u && pc < 0x0fa47000u;
 }
 
 static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
