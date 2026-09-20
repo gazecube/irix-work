@@ -106,9 +106,8 @@ def decode(addr, insn):
         lines = [
             '%s = %s;' % (_base.reg(31), _base.sx32_expr('0x%08xu' % (addr + 8))),
             'if (%s) {' % cond,
-            '    pending_kind = IRIX_PENDING_CALL;',
+            '    pending_kind = IRIX_PENDING_JUMP;',
             '    pending_target = 0x%08xu;' % dst,
-            '    pending_return = 0x%08xu;' % (addr + 8),
             '}'
         ]
         if likely:
