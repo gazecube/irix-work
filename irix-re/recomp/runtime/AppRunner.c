@@ -720,6 +720,7 @@ int main(int argc, char **argv)
             {0x1001f28cu, "__nwa__GUi"},
             {0x1001f41cu, "getpwnam"},
             {0x1001f430u, "getpwuid"},
+            {0x1001f50cu, "bcopy"},
             {0x1001f5acu, "calloc"},
             {0x1001fa48u, "malloc"},
         };
@@ -734,7 +735,12 @@ int main(int argc, char **argv)
          * preserves the imported symbol semantics.
          *
          * Keep this table limited to addresses verified from xwsh's dynamic
-         * symbol table. In particular tuBase::operator new calls calloc
+         * symbol table. The resource database setup also copies the caller's
+         * 16-byte tuResourceItem records through the 0x1001f50c bcopy veneer;
+         * executing that recovered veneer as an ordinary translated function
+         * leaves the destination zeroed and later feeds NULL to strcmp.
+         *
+         * In particular tuBase::operator new calls calloc
          * through its GOT with (1, size); allowing the anonymous 0x1001f5ac
          * veneer to execute as ordinary translated code loses that return
          * value and produces the NULL tuResourceDB seen during startup.
