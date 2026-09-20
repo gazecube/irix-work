@@ -311,7 +311,7 @@ def emit(path,name,section_base=None,c_prefix=''):
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
-    print('    IrixGuestAddr pc = 0x%08xu;'%start); print('    IrixGuestAddr pending_target = 0;'); print('    IrixGuestAddr pending_return = 0;'); print('    int pending_kind = IRIX_PENDING_NONE;'); print('    int old_pending;'); print('    IrixGuestAddr old_target;'); print('    IrixGuestAddr old_return;'); print(''); print('    for (;;) {'); print('        old_pending = pending_kind;'); print('        old_target = pending_target;'); print('        old_return = pending_return;'); print('        pending_kind = IRIX_PENDING_NONE;'); print('        cpu->pc = pc;'); print(''); print('        switch (pc) {')
+    print('    IrixGuestAddr pc = cpu->pc;'); print('    IrixGuestAddr pending_target = 0;'); print('    IrixGuestAddr pending_return = 0;'); print('    int pending_kind = IRIX_PENDING_NONE;'); print('    int old_pending;'); print('    IrixGuestAddr old_target;'); print('    IrixGuestAddr old_return;'); print(''); print('    for (;;) {'); print('        old_pending = pending_kind;'); print('        old_target = pending_target;'); print('        old_return = pending_return;'); print('        pending_kind = IRIX_PENDING_NONE;'); print('        cpu->pc = pc;'); print(''); print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
         for line in lines: print('            '+line)
