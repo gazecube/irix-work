@@ -761,6 +761,25 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, 0);
         return;
     }
+    case 1108u: { /* IRIX gethostname(char *name, size_t len) */
+        IrixGuestAddr name_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        size_t len = (size_t)(uint32_t)cpu->gpr[5];
+        char *name;
+
+        if (!len) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        name = (char *)irix_guest_ptr(rt, name_addr, len);
+        if (!name) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)gethostname(name, len));
+        return;
+    }
     case SYS_getpid: /* getpid */
         syscall_result(cpu, (int64_t)getpid());
         return;
