@@ -247,7 +247,7 @@ static Cell *display_cell(int x, int y)
 static int point_selected(int x,int y)
 {
     int x0=sel_x0,y0=sel_y0,x1=sel_x1,y1=sel_y1;
-    if (!selection_visible) return 0;
+    if (!selecting && !selection_visible) return 0;
     if(y0>y1 || (y0==y1 && x0>x1)){int t=x0;x0=x1;x1=t;t=y0;y0=y1;y1=t;}
     return y>=y0 && y<=y1 && (y!=y0 || x>=x0) && (y!=y1 || x<=x1);
 }
@@ -531,7 +531,7 @@ int main(int argc, char **argv)
                     if (selection_visible) {
                         selection_visible=0; selecting=0; suppress_select_release=1; redraw();
                     } else {
-                        selecting=1; suppress_select_release=0;
+                        selecting=1; selection_visible=0; suppress_select_release=0;
                         free(selection_text); selection_text=0;
                         sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                     }
