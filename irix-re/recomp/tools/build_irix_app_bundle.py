@@ -278,6 +278,8 @@ def main():
     ap.add_argument('--ar', default=os.environ.get('AR', 'ar'))
     ap.add_argument('--runtime-lib', type=Path,
                     help='native libirixre shared runtime to link generated DSOs against')
+    ap.add_argument('--rootfs', type=Path,
+                    help='shared reconstructed IRIX root; DSOs are emitted at original guest paths')
     ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
     ap.add_argument('--generate-only', action='store_true')
     a = ap.parse_args()
@@ -305,8 +307,9 @@ def main():
     out = a.output.resolve()
     gen = out / 'generated'
     obj = out / 'obj'
-    dso_dir = out / 'lib'
+    rootfs = a.rootfs.resolve() if a.rootfs else (out / 'root').resolve()
     gen.mkdir(parents=True, exist_ok=True)
+    rootfs.mkdir(parents=True, exist_ok=True)
 
     shared_components = app.get('shared_components', manifest['shared_components'])
     for i, row in enumerate(shared_components):
@@ -435,6 +438,7 @@ def main():
 
     summary = {
         'app': app,
+        'rootfs': str(rootfs),
         'components': [json.loads(p.read_text()) for p in bundles],
         'core_link': str(a.core_link),
         'bindings': str(bind / 'bindings.json'),
@@ -502,7 +506,7 @@ def main():
     runtime_lib = a.runtime_lib.resolve() if a.runtime_lib else None
     if runtime_lib is not None and not runtime_lib.is_file():
         raise SystemExit(f'missing shared recomp runtime: {runtime_lib}')
-    dso_dir.mkdir(parents=True, exist_ok=True)
+    rootfs.mkdir(parents=True, exist_ok=True)
     object_by_source = {src: dst for src, dst in
                         ((src, obj / (str(src.relative_to(gen)).replace('/', '__') + '.o'))
                          for src in sources)}
@@ -518,7 +522,12 @@ def main():
         soname = elf_soname(binary) or binary.name
         if '.so' not in soname:
             continue
-        dso = dso_dir / soname
+        # Preserve the original IRIX filesystem location in the reconstructed
+        # root. The SONAME remains ELF identity; the pathname remains IRIX
+        # filesystem identity.
+        guest_rel = Path(row['path'])
+        dso = rootfs / guest_rel
+        dso.parent.mkdir(parents=True, exist_ok=True)
         dso_rows.append((row, bundle, binary, soname, dso))
         dso_by_soname[soname] = dso
 
