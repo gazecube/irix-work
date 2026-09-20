@@ -533,7 +533,8 @@ def main():
         component_sources.append(registry)
         component_objects = [object_by_source[src] for src in component_sources]
         link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
-                    '-Wl,--no-as-needed', '-o', dso, *component_objects]
+                    '-Wl,--no-as-needed', "-Wl,-rpath,$ORIGIN",
+                    '-o', dso, *component_objects]
         if runtime_lib is not None:
             link_cmd.append(str(runtime_lib))
 
