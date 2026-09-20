@@ -527,7 +527,11 @@ int main(int argc, char **argv)
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
                     filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
-                    selecting=1; free(selection_text); selection_text=0; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
+                    if (selection_text) {
+                        free(selection_text); selection_text=0; selecting=0; redraw();
+                    } else {
+                        selecting=1; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
+                    }
                 } else if (ev.type == MotionNotify && selecting) {
                     sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
