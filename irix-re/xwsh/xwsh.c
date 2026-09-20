@@ -18,6 +18,7 @@
 #define COLS 80
 #define ROWS 24
 #define MAX_CSI 64
+#define RETAIN_LIMIT 1000
 
 typedef struct {
     unsigned char ch;
@@ -42,6 +43,8 @@ static Atom wm_delete, xa_clipboard, xa_utf8;
 static int selecting, sel_x0, sel_y0, sel_x1, sel_y1;
 static char *selection_text;
 static Cell *cells;
+static Cell *history;
+static int history_count, view_offset;
 static int master_fd = -1;
 static pid_t child = -1;
 static int esc_state;
@@ -72,8 +75,17 @@ static void clear_all(void)
     scroll_top = 0; scroll_bottom = rows - 1;
 }
 
+static void save_history_row(void)
+{
+    if (!history) return;
+    if (history_count < RETAIN_LIMIT) ++history_count;
+    else memmove(history, history + cols, (size_t)(RETAIN_LIMIT-1)*cols*sizeof(*history));
+    memcpy(history + (history_count-1)*cols, cells, (size_t)cols*sizeof(*history));
+}
+
 static void scroll_region_up(int top, int bottom)
 {
+    if (top==0 && bottom==rows-1) save_history_row();
     if (top < 0) top=0; if (bottom >= rows) bottom=rows-1; if (top >= bottom) return;
     memmove(cells + top*cols, cells + (top+1)*cols, (size_t)(bottom-top)*cols*sizeof(*cells));
     clear_row(bottom,0,cols);
@@ -218,6 +230,23 @@ static void feed(const unsigned char *p, size_t n)
     }
 }
 
+static Cell *display_cell(int x, int y)
+{
+    int line = history_count + y - view_offset;
+    if (view_offset && line < history_count) return &history[line*cols+x];
+    line -= history_count;
+    if (line < 0) line=0; if (line >= rows) line=rows-1;
+    return cell_at(x,line);
+}
+
+static int point_selected(int x,int y)
+{
+    int x0=sel_x0,y0=sel_y0,x1=sel_x1,y1=sel_y1;
+    if (!selecting && !selection_text) return 0;
+    if(y0>y1 || (y0==y1 && x0>x1)){int t=x0;x0=x1;x1=t;t=y0;y0=y1;y1=t;}
+    return y>=y0 && y<=y1 && (y!=y0 || x>=x0) && (y!=y1 || x<=x1);
+}
+
 static void redraw(void)
 {
     int x, y;
@@ -227,10 +256,14 @@ static void redraw(void)
     XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw), (unsigned)(rows * ch));
     for (y = 0; y < rows; ++y) {
         for (x = 0; x < cols; ++x) {
-            Cell *c = cell_at(x, y);
+            Cell *c = display_cell(x, y);
             char s[1];
-            if (c->ch == ' ') continue;
             s[0] = (char)c->ch;
+            if (point_selected(x,y)) {
+                XSetForeground(dpy,gc,select_bg); XFillRectangle(dpy,win,gc,x*cw,y*ch,(unsigned)cw,(unsigned)ch);
+                if(c->ch!=' '){XSetForeground(dpy,gc,select_fg);XDrawString(dpy,win,gc,x*cw,y*ch+ascent,s,1);} continue;
+            }
+            if (c->ch == ' ') continue;
             if (c->inverse) {
                 XSetForeground(dpy, gc, fg);
                 XFillRectangle(dpy, win, gc, x*cw, y*ch, (unsigned)cw, (unsigned)ch);
@@ -240,6 +273,7 @@ static void redraw(void)
             if (c->bold) XDrawString(dpy, win, gc, x*cw + 1, y*ch + ascent, s, 1);
         }
     }
+    if (view_offset) { XFlush(dpy); return; }
     XSetForeground(dpy, gc, cursor_bg);
     XFillRectangle(dpy, win, gc, cx*cw, cy*ch, (unsigned)cw, (unsigned)ch);
     { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,cx*cw,cy*ch+ascent,s,1); } }
@@ -308,6 +342,11 @@ static void selection_notify(XSelectionEvent *e)
     }
 }
 
+static void set_view(int off)
+{
+    if(off<0)off=0; if(off>history_count)off=history_count; view_offset=off; redraw();
+}
+
 static void send_key(XKeyEvent *e)
 {
     char buf[64];
@@ -316,20 +355,36 @@ static void send_key(XKeyEvent *e)
     const char *seq = 0;
     if ((e->state & ControlMask) && (e->state & ShiftMask) && (ks==XK_V || ks==XK_v)) { request_paste(xa_clipboard); return; }
     if ((e->state & ShiftMask) && ks==XK_Insert) { request_paste(XA_PRIMARY); return; }
+    /* XWsh keyMapping1: these are local wsh functions, not escape sequences. */
+    if (ks==XK_Home) { set_view(history_count); return; }
+    if (ks==XK_End) { set_view(0); return; }
+    if (ks==XK_Prior) { set_view(view_offset + rows); return; }
+    if (ks==XK_Next) { set_view(view_offset - rows); return; }
+    if (ks==XK_F4) { if(n>0)write(master_fd,buf,(size_t)n); return; }
     switch (ks) {
     case XK_Left: seq = app_cursor ? "\033OD" : "\033[D"; break;
     case XK_Right: seq = app_cursor ? "\033OC" : "\033[C"; break;
     case XK_Up: seq = app_cursor ? "\033OA" : "\033[A"; break;
     case XK_Down: seq = app_cursor ? "\033OB" : "\033[B"; break;
-    case XK_F9: seq = "\033OP"; break;
-    case XK_F10: seq = "\033OQ"; break;
-    case XK_F11: seq = "\033OR"; break;
-    case XK_F12: seq = "\033OS"; break;
-    case XK_Home: seq = "\033[H"; break;
-    case XK_End: seq = "\033[F"; break;
+    case XK_KP_Insert: if(app_keypad)seq="\033Op"; break;
+    case XK_KP_End: if(app_keypad)seq="\033Oq"; break;
+    case XK_KP_Down: if(app_keypad)seq="\033Or"; break;
+    case XK_KP_Next: if(app_keypad)seq="\033Os"; break;
+    case XK_KP_Left: if(app_keypad)seq="\033Ot"; break;
+    case XK_KP_Begin: if(app_keypad)seq="\033Ou"; break;
+    case XK_KP_Right: if(app_keypad)seq="\033Ov"; break;
+    case XK_KP_Home: if(app_keypad)seq="\033Ow"; break;
+    case XK_KP_Up: if(app_keypad)seq="\033Ox"; break;
+    case XK_KP_Prior: if(app_keypad)seq="\033Oy"; break;
+    case XK_KP_Subtract: if(app_keypad)seq="\033Om"; break;
+    case XK_KP_Separator: case XK_KP_Add: if(app_keypad)seq="\033Ol"; break;
+    case XK_KP_Delete: if(app_keypad)seq="\033On"; break;
+    case XK_KP_Enter: if(app_keypad)seq="\033OM"; break;
+    case XK_F9: if(app_keypad)seq = "\033OP"; break;
+    case XK_F10: if(app_keypad)seq = "\033OQ"; break;
+    case XK_F11: if(app_keypad)seq = "\033OR"; break;
+    case XK_F12: if(app_keypad)seq = "\033OS"; break;
     case XK_Delete: seq = "\033[3~"; break;
-    case XK_Page_Up: seq = "\033[5~"; break;
-    case XK_Page_Down: seq = "\033[6~"; break;
     default: break;
     }
     if (seq) write(master_fd, seq, strlen(seq));
@@ -384,7 +439,8 @@ int main(int argc, char **argv)
     ch = font->ascent + font->descent;
     ascent = font->ascent;
     cells = calloc((size_t)cols * rows, sizeof(*cells));
-    if (!cells) return 1;
+    history = calloc((size_t)RETAIN_LIMIT * cols, sizeof(*history));
+    if (!cells || !history) return 1;
     clear_all();
 
     win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 40, 40,
@@ -419,6 +475,7 @@ int main(int argc, char **argv)
             ssize_t n = read(master_fd, buf, sizeof(buf));
             if (n <= 0) break;
             feed(buf, (size_t)n);
+            view_offset=0;
             redraw();
         }
         if (FD_ISSET(xfd, &rfds)) {
@@ -427,11 +484,11 @@ int main(int argc, char **argv)
                 if (ev.type == Expose) redraw();
                 else if (ev.type == KeyPress) send_key(&ev.xkey);
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
-                    selecting=1; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1);
+                    selecting=1; free(selection_text); selection_text=0; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                 } else if (ev.type == MotionNotify && selecting) {
-                    sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1);
+                    sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
-                    sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); selecting=0; make_selection();
+                    sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); make_selection(); selecting=0; redraw();
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button2) request_paste(XA_PRIMARY);
                 else if (ev.type == SelectionRequest) selection_request(&ev.xselectionrequest);
                 else if (ev.type == SelectionNotify) selection_notify(&ev.xselection);
@@ -451,6 +508,7 @@ int main(int argc, char **argv)
                         for (y = 0; y < oldr && y < rows; ++y)
                             memcpy(cells + y*cols, old + y*oldc, (size_t)copyc*sizeof(*cells));
                         free(old);
+                        free(history); history=calloc((size_t)RETAIN_LIMIT*cols,sizeof(*history)); history_count=view_offset=0;
                         scroll_top=0; scroll_bottom=rows-1;
                         normalize_cursor();
                         resize_pty();
@@ -464,5 +522,6 @@ int main(int argc, char **argv)
 done:
     if (child > 0) kill(child, SIGHUP);
     free(selection_text);
+    free(history);
     return 0;
 }
