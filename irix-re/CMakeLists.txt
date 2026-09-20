@@ -16,4 +16,8 @@ add_subdirectory(libimdApp)
 add_subdirectory(fm)
 add_subdirectory(toolchest)
 add_subdirectory(4Dwm)
-add_subdirectory(xwsh)
+
+# xwsh is supplied by the original IRIX ELF through recomp/ecosystem.json.
+# Do not build the old native approximation as the public xwsh target; the
+# translated program is built as irix_xwsh_runner and emitted at the original
+# guest pathname under the reconstructed root.
