@@ -121,7 +121,10 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
      * provider instead.
      *
      * Once every translated provider has registered, replace each named
-     * function for which resolve_native() has an implementation.  This makes
+     * function for which resolve_native() has an implementation. Generated
+     * import registrations are owner-qualified as "component:symbol", so
+     * strip that diagnostic owner prefix before asking the native resolver.
+     * This makes
      * native ABI bridges authoritative regardless of whether a caller reaches
      * them through a generated import forwarder or through rld's resolved
      * guest address.
@@ -130,9 +133,13 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
         IrixGuestFunctionEntry *entry = &rt->functions[i];
         IrixGuestFunction native;
 
+        const char *name;
+
         if (!entry->name)
             continue;
-        native = resolve_native(entry->name);
+        name = strrchr(entry->name, ':');
+        name = name ? name + 1 : entry->name;
+        native = resolve_native(name);
         if (!native || entry->function == native)
             continue;
         entry->function = native;
