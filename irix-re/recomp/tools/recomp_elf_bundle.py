@@ -74,6 +74,12 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        pending_kind = IRIX_PENDING_NONE;')
     print('        cpu->pc = pc;')
     print('        rt->current_pc = pc;'); print('')
+    print('        if (pc == 0x0fb69b84u)')
+    print('            irix_guest_rld_watch_enter(rt, cpu);')
+    print('        else if (pc == 0x0fb69bccu)')
+    print('            irix_guest_rld_watch_restore(rt, cpu);')
+    print('        else if (pc == 0x0fb69bd0u)')
+    print('            irix_guest_rld_watch_leave(rt, cpu);')
     print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
