@@ -1034,19 +1034,24 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
                     (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[29],
                     (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25]);
-            if (caller_pc >= 16u && irix_guest_ptr(rt, caller_pc - 16u, 40u)) {
-                fprintf(stderr,
-                        " caller_words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
-                        irix_guest_read32be(rt, caller_pc - 16u),
-                        irix_guest_read32be(rt, caller_pc - 12u),
-                        irix_guest_read32be(rt, caller_pc - 8u),
-                        irix_guest_read32be(rt, caller_pc - 4u),
-                        irix_guest_read32be(rt, caller_pc),
-                        irix_guest_read32be(rt, caller_pc + 4u),
-                        irix_guest_read32be(rt, caller_pc + 8u),
-                        irix_guest_read32be(rt, caller_pc + 12u),
-                        irix_guest_read32be(rt, caller_pc + 16u),
-                        irix_guest_read32be(rt, caller_pc + 20u));
+            {
+                IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
+                IrixGuestAddr callsite = ra >= 8u ? ra - 8u : ra;
+                if (callsite >= 16u && irix_guest_ptr(rt, callsite - 16u, 40u)) {
+                    fprintf(stderr,
+                            " callsite=%08x call_words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+                            (uint32_t)callsite,
+                            irix_guest_read32be(rt, callsite - 16u),
+                            irix_guest_read32be(rt, callsite - 12u),
+                            irix_guest_read32be(rt, callsite - 8u),
+                            irix_guest_read32be(rt, callsite - 4u),
+                            irix_guest_read32be(rt, callsite),
+                            irix_guest_read32be(rt, callsite + 4u),
+                            irix_guest_read32be(rt, callsite + 8u),
+                            irix_guest_read32be(rt, callsite + 12u),
+                            irix_guest_read32be(rt, callsite + 16u),
+                            irix_guest_read32be(rt, callsite + 20u));
+                }
             }
             fputc('\n', stderr);
         }
