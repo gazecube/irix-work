@@ -787,6 +787,12 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1056: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
+    case 1124: { /* setreuid */
+        uid_t ruid = (uid_t)(uint32_t)cpu->gpr[4];
+        uid_t euid = (uid_t)(uint32_t)cpu->gpr[5];
+        syscall_result(cpu, (int64_t)setreuid(ruid, euid));
+        return;
+    }
     case 1130: /* prctl */
         irix_compat_prctl(rt, cpu);
         return;
