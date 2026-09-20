@@ -42,6 +42,9 @@ extern char **environ;
 #ifndef IRIX_APP_NAME
 #define IRIX_APP_NAME "desktop"
 #endif
+#ifndef IRIX_RECOMP_ROOT
+#define IRIX_RECOMP_ROOT ""
+#endif
 void irix_register_recompiled_stack(IrixGuestRuntime *rt);
 void irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
 typedef struct IrixAppGuestComponent {
@@ -122,7 +125,10 @@ static void register_native_dsos(IrixGuestRuntime *rt)
             continue;
         base = strrchr(component->path, '/');
         base = base ? base + 1 : component->path;
-        snprintf(path, sizeof(path), "%s/lib/%s", IRIX_APP_BUILD_DIR, base);
+        /* Native translated DSOs live at their original IRIX paths inside
+           the shared reconstructed root, not in an application-private lib
+           directory. */
+        snprintf(path, sizeof(path), "%s/%s", IRIX_RECOMP_ROOT, component->path);
         handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         if (!handle) {
             fprintf(stderr, "failed to load translated DSO %s: %s\n",
