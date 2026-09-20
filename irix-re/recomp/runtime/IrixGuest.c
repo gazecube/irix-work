@@ -556,8 +556,61 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          * segment table and is harmless until that address range is reused.
          */
         if (!old_break) {
-            old_break = requested;
+            /*
+             * The first break request is not merely initialization: libc may
+             * immediately use memory below that requested break.  Back the
+             * complete heap extent from the end of the main executable's
+             * existing data mapping up through the requested break.
+             *
+             * Find the highest mapped address below the requested break.  In
+             * the normal desktop image this is the executable's data/bss end;
+             * page-align it down so a partially mapped final page is covered.
+             */
+            IrixGuestAddr heap_base = 0;
+            IrixGuestAddr heap_page;
+            IrixGuestAddr request_page;
+            size_t i;
+
+            for (i = 0; i < rt->memory.count; ++i) {
+                IrixGuestSegment *seg = &rt->memory.segments[i];
+                uint64_t end = (uint64_t)seg->guest_base + seg->size;
+                if (end <= requested && end > heap_base)
+                    heap_base = (IrixGuestAddr)end;
+            }
+            if (!heap_base) {
+                errno = ENOMEM;
+                syscall_result(cpu, -1);
+                return;
+            }
+
+            heap_page = heap_base & ~(page_size - 1u);
+            request_page = (requested + page_size - 1u) & ~(page_size - 1u);
+            if (request_page > heap_page) {
+                uint32_t grow = (uint32_t)(request_page - heap_page);
+                if (!irix_guest_ptr(rt, heap_page, grow) &&
+                    irix_guest_map(rt, heap_page, grow, 3u) != 0) {
+                    /*
+                     * A partial overlap is common at the executable's final
+                     * data page.  Start immediately after that mapping and
+                     * back only the still-unmapped tail.
+                     */
+                    IrixGuestAddr tail = heap_base;
+                    if (tail < request_page &&
+                        !irix_guest_ptr(rt, tail,
+                                        (uint32_t)(request_page - tail)) &&
+                        irix_guest_map(rt, tail,
+                                       (uint32_t)(request_page - tail),
+                                       3u) != 0) {
+                        errno = ENOMEM;
+                        syscall_result(cpu, -1);
+                        return;
+                    }
+                }
+            }
+
             rt->program_break = requested;
+            fprintf(stderr, "IRIX break: init heap 0x%08x -> 0x%08x\n",
+                    heap_base, requested);
             syscall_result(cpu, 0);
             return;
         }
