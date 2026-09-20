@@ -750,6 +750,7 @@ int main(int argc, char **argv)
         };
         static const struct XwshImportVeneer veneers[] = {
             {0x1001f19cu, "__nw__GUi"},
+            {0x1001f1b0u, "strdup"},
             {0x1001f28cu, "__nwa__GUi"},
             {0x1001f41cu, "getpwnam"},
             {0x1001f430u, "getpwuid"},
