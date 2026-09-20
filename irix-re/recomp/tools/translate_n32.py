@@ -205,8 +205,11 @@ def decode(addr, insn):
         elif rt==0x11: cond='(int64_t)%s >= 0'%reg(rs)
         else: raise ValueError('unsupported REGIMM rt=0x%x at 0x%08x word=0x%08x'%(rt,addr,insn))
         likely=rt in (2,3); lines=[]
-        if rt==0x11: lines.append('%s = %s;'%(reg(31),sx32_expr('0x%08xu'%(addr+8))))
-        lines.extend(['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'])
+        if rt==0x11:
+            lines.append('%s = %s;'%(reg(31),sx32_expr('0x%08xu'%(addr+8))))
+            lines.extend(['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'])
+        else:
+            lines.extend(['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'}'])
         if likely: lines=['if (%s) {'%cond,'    pending_kind = IRIX_PENDING_JUMP;','    pending_target = 0x%08xu;'%dst,'} else {','    pc += 4;','}']
         return lines,'control'
     if op in (0x08,0x09): return ['%s = %s;'%(reg(rt),sx32_expr('(uint32_t)%s + (uint32_t)(int32_t)%d'%(reg(rs),imm)))],None
