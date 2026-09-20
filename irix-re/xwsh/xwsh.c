@@ -18,8 +18,8 @@
 #define COLS 80
 #define ROWS 24
 #define MAX_CSI 64
-#define RETAIN_LIMIT 1000
-#define SCROLLBAR_W 15
+#define DEFAULT_retain_limit 1000
+#define DEFAULT_scrollbar_w 15
 
 typedef struct {
     unsigned char ch;
@@ -46,6 +46,8 @@ static char *selection_text;
 static const char *opt_title="Winterm", *opt_font="fixed";
 static const char *opt_fg="#d6d6d6", *opt_bg="#00003f", *opt_bold="#ffff00";
 static const char *opt_selfg="#000000", *opt_selbg="#adadad";
+static const char *opt_cursorfg="#00003f", *opt_cursorbg="#00ff00", *opt_icontitle;
+static int retain_limit=DEFAULT_retain_limit, scrollbar_w=DEFAULT_scrollbar_w;
 static const char *filter_cmd1="nr -newwin '%s'";
 static int hold_on_exit, login_shell, iconic, no_keyboard, transient, use_scrollbar=1;
 static const char *opt_display;
@@ -63,8 +65,8 @@ static char csi[MAX_CSI];
 static int csi_len;
 
 static int clampi(int v, int lo, int hi);
-static int text_x0(void) { return use_scrollbar ? SCROLLBAR_W : 0; }
-static int window_extra_width(void) { return use_scrollbar ? SCROLLBAR_W : 0; }
+static int text_x0(void) { return use_scrollbar ? scrollbar_w : 0; }
+static int window_extra_width(void) { return use_scrollbar ? scrollbar_w : 0; }
 static void set_view(int off);
 
 static Cell *cell_at(int x, int y) { return &cells[y * cols + x]; }
@@ -94,8 +96,9 @@ static void clear_all(void)
 static void save_history_row(void)
 {
     if (!history) return;
-    if (history_count < RETAIN_LIMIT) ++history_count;
-    else memmove(history, history + cols, (size_t)(RETAIN_LIMIT-1)*cols*sizeof(*history));
+    if (retain_limit <= 0) return;
+    if (history_count < retain_limit) ++history_count;
+    else memmove(history, history + cols, (size_t)(retain_limit-1)*cols*sizeof(*history));
     memcpy(history + (history_count-1)*cols, cells, (size_t)cols*sizeof(*history));
 }
 
@@ -292,7 +295,7 @@ static int point_selected(int x,int y)
 
 static void scrollbar_metrics(int *thumb_y, int *thumb_h)
 {
-    int h=rows*ch, button=SCROLLBAR_W, track_y=button, track_h=h-2*button;
+    int h=rows*ch, button=scrollbar_w, track_y=button, track_h=h-2*button;
     int total=history_count+rows, span;
     if(track_h<1){*thumb_y=track_y;*thumb_h=1;return;}
     *thumb_h=total ? (rows*track_h)/total : track_h;
@@ -303,7 +306,7 @@ static void scrollbar_metrics(int *thumb_y, int *thumb_h)
 
 static void draw_scrollbar(void)
 {
-    int h=rows*ch, b=SCROLLBAR_W, ty,th, mid=b/2;
+    int h=rows*ch, b=scrollbar_w, ty,th, mid=b/2;
     if(!use_scrollbar)return;
     scrollbar_metrics(&ty,&th);
     /* Original xwsh constructs a wshScrollBar/tuScrollBar with separate
@@ -332,8 +335,8 @@ static void scrollbar_action(int y)
     int h=rows*ch, ty,th;
     if(!use_scrollbar)return;
     scrollbar_metrics(&ty,&th);
-    if(y<SCROLLBAR_W){set_view(view_offset+1);return;}
-    if(y>=h-SCROLLBAR_W){set_view(view_offset-1);return;}
+    if(y<scrollbar_w){set_view(view_offset+1);return;}
+    if(y>=h-scrollbar_w){set_view(view_offset-1);return;}
     if(y<ty){set_view(view_offset+rows);return;}
     if(y>=ty+th){set_view(view_offset-rows);return;}
     scrollbar_drag=1; scrollbar_drag_y=y; scrollbar_drag_view=view_offset;
@@ -341,7 +344,7 @@ static void scrollbar_action(int y)
 
 static void scrollbar_to_y(int y)
 {
-    int h=rows*ch, track_y=SCROLLBAR_W, track_h=h-2*SCROLLBAR_W;
+    int h=rows*ch, track_y=scrollbar_w, track_h=h-2*scrollbar_w;
     int total=history_count+rows, thumb_h, span, pos;
     if(!use_scrollbar||!history_count){set_view(0);return;}
     thumb_h=total ? (rows*track_h)/total : track_h;
@@ -563,7 +566,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-selfg") && i+1<argc) opt_selfg=argv[++i];
         else if (!strcmp(argv[i],"-selbg") && i+1<argc) opt_selbg=argv[++i];
         else if ((!strcmp(argv[i],"-geometry") || !strcmp(argv[i],"-geom")) && i+1<argc) geom=argv[++i];
-        else if ((!strcmp(argv[i],"-sl") || !strcmp(argv[i],"-retain")) && i+1<argc) { ++i; /* fixed backing store remains 1000 for now */ }
+        else if ((!strcmp(argv[i],"-sl") || !strcmp(argv[i],"-retain")) && i+1<argc) { retain_limit=atoi(argv[++i]); if(retain_limit<0)retain_limit=0; }
+        else if (!strcmp(argv[i],"-cursorfg") && i+1<argc) opt_cursorfg=argv[++i];
+        else if (!strcmp(argv[i],"-cursorbg") && i+1<argc) opt_cursorbg=argv[++i];
+        else if (!strcmp(argv[i],"-icontitle") && i+1<argc) opt_icontitle=argv[++i];
+        else if (!strcmp(argv[i],"-scrollbarwidth") && i+1<argc) { scrollbar_w=atoi(argv[++i]); if(scrollbar_w<5)scrollbar_w=5; }
         else if (!strcmp(argv[i],"-hold") || !strcmp(argv[i],"-holdonerror")) hold_on_exit=1;
         else if (!strcmp(argv[i],"-ls") || !strcmp(argv[i],"-login")) login_shell=1;
         else if (!strcmp(argv[i],"-iconic")) iconic=1;
@@ -581,8 +588,8 @@ int main(int argc, char **argv)
       if(XAllocNamedColor(dpy,cm,opt_fg,&a,&b))term_fg=a.pixel;
       if(XAllocNamedColor(dpy,cm,opt_bg,&a,&b))term_bg=a.pixel;
       if(XAllocNamedColor(dpy,cm,opt_bold,&a,&b))bold_pixel=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#00003f",&a,&b))cursor_fg=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#00ff00",&a,&b))cursor_bg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_cursorfg,&a,&b))cursor_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_cursorbg,&a,&b))cursor_bg=a.pixel;
       if(XAllocNamedColor(dpy,cm,opt_selfg,&a,&b))select_fg=a.pixel;
       if(XAllocNamedColor(dpy,cm,opt_selbg,&a,&b))select_bg=a.pixel;
     }
@@ -593,15 +600,15 @@ int main(int argc, char **argv)
     ascent = font->ascent;
     if (geom) { int mask=XParseGeometry(geom,&gx,&gy,(unsigned*)&gw,(unsigned*)&gh); if(mask&WidthValue)cols=gw; if(mask&HeightValue)rows=gh; }
     cells = calloc((size_t)cols * rows, sizeof(*cells));
-    history = calloc((size_t)RETAIN_LIMIT * cols, sizeof(*history));
-    if (!cells || !history) return 1;
+    history = retain_limit ? calloc((size_t)retain_limit * cols, sizeof(*history)) : 0;
+    if (!cells || (retain_limit && !history)) return 1;
     clear_all();
 
     win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), gx, gy,
                               (unsigned)(cols*cw+window_extra_width()), (unsigned)(rows*ch), 1,
                               term_fg, term_bg);
     XStoreName(dpy, win, opt_title);
-    XSetIconName(dpy, win, opt_title);
+    XSetIconName(dpy, win, opt_icontitle ? opt_icontitle : opt_title);
     { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=window_extra_width(); h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
     wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
     xa_clipboard=XInternAtom(dpy,"CLIPBOARD",False); xa_utf8=XInternAtom(dpy,"UTF8_STRING",False);
@@ -648,7 +655,7 @@ int main(int argc, char **argv)
                 else if (ev.type == KeyPress && !no_keyboard) send_key(&ev.xkey);
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
                     filter_url_at(clampi((ev.xbutton.x-text_x0())/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
-                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && use_scrollbar && ev.xbutton.x < SCROLLBAR_W) {
+                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && use_scrollbar && ev.xbutton.x < scrollbar_w) {
                     scrollbar_action(ev.xbutton.y);
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
                     if (selection_visible) {
@@ -690,10 +697,10 @@ int main(int argc, char **argv)
                             memcpy(cells + y*cols, old + y*oldc, (size_t)copyc*sizeof(*cells));
                         free(old);
                         {
-                            Cell *oh=history, *nh=calloc((size_t)RETAIN_LIMIT*cols,sizeof(*nh));
+                            Cell *oh=history, *nh=retain_limit ? calloc((size_t)retain_limit*cols,sizeof(*nh)) : 0;
                             int hc=history_count, yy, cc=oldc<cols?oldc:cols;
-                            if(!nh) exit(1);
-                            for(yy=0; yy<hc; ++yy)
+                            if(retain_limit && !nh) exit(1);
+                            for(yy=0; yy<hc && nh; ++yy)
                                 memcpy(nh+(size_t)yy*cols,oh+(size_t)yy*oldc,(size_t)cc*sizeof(*nh));
                             history=nh; free(oh);
                             if(view_offset>history_count)view_offset=history_count;
