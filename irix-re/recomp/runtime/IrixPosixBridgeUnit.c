@@ -385,15 +385,48 @@ static IrixGuestAddr copy_guest_passwd_n32(IrixGuestRuntime *rt, const struct pa
 
 static void bridge_getpwuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    struct passwd *pw = getpwuid((uid_t)(uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = copy_guest_passwd_n32(rt, pw);
+    uid_t uid = (uid_t)(uint32_t)cpu->gpr[4];
+    struct passwd *pw = getpwuid(uid);
+    IrixGuestAddr out = copy_guest_passwd_n32(rt, pw);
+    fprintf(stderr, "IRIX getpwuid: uid=%lu host=%s guest=0x%08x\n",
+            (unsigned long)uid, pw && pw->pw_name ? pw->pw_name : "(null)",
+            (unsigned)out);
+    cpu->gpr[2] = out;
 }
 
 static void bridge_getpwnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     struct passwd *pw = name ? getpwnam(name) : 0;
-    cpu->gpr[2] = copy_guest_passwd_n32(rt, pw);
+    IrixGuestAddr out = copy_guest_passwd_n32(rt, pw);
+    fprintf(stderr, "IRIX getpwnam: name=%s host=%s guest=0x%08x\n",
+            name ? name : "(null)", pw && pw->pw_name ? pw->pw_name : "(null)",
+            (unsigned)out);
+    cpu->gpr[2] = out;
+}
+
+static void bridge_getuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)getuid();
+}
+
+static void bridge_geteuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)geteuid();
+}
+
+static void bridge_getgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)getgid();
+}
+
+static void bridge_getegid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = (uint32_t)getegid();
 }
 
 static void bridge_initgroups(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -841,6 +874,10 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
     if (!strcmp(name, "getpwuid")) return bridge_getpwuid;
     if (!strcmp(name, "getpwnam")) return bridge_getpwnam;
+    if (!strcmp(name, "getuid")) return bridge_getuid;
+    if (!strcmp(name, "geteuid")) return bridge_geteuid;
+    if (!strcmp(name, "getgid")) return bridge_getgid;
+    if (!strcmp(name, "getegid")) return bridge_getegid;
     if (!strcmp(name, "initgroups")) return bridge_initgroups;
     if (!strcmp(name, "realpath")) return bridge_realpath;
     if (!strcmp(name, "execl")) return bridge_execl;
