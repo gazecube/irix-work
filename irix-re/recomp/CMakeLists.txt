@@ -97,7 +97,9 @@ if(IRIX_DEV_TREE)
                 "${IRIX_DEV_TREE}"
                 -o "${IRIX_RECOMP_CORE_DIR}"
                 --cc "${CMAKE_C_COMPILER}"
+                --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
         DEPENDS
+            irix_recomp_runtime
             tools/build_core_stack.py
             tools/recomp_linked_stack.py
             tools/link_stack_n32.py
