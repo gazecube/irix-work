@@ -571,6 +571,11 @@ int main(int argc, char **argv)
     irix_register_recompiled_stack_imports(&rt, resolve_native);
     register_irix_bridge_imports(&rt, resolve_native);
     register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
+    if (irix_guest_ptr(&rt, 0x0fb5291cu, 4u))
+        fprintf(stderr,
+                "IRIX libc GOT startup watch: after import patching "
+                "[0x0fb5291c]=%08x\n",
+                irix_guest_read32be(&rt, 0x0fb5291cu));
 
     irix_register_recompiled_stack(&rt);
     irix_register_app_bundle(&rt);
