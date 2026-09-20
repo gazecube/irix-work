@@ -34,6 +34,10 @@ static int cols = COLS, rows = ROWS;
 static int cx, cy;
 static int inverse;
 static int bold;
+static int app_cursor, app_keypad;
+static int saved_cx, saved_cy;
+static int scroll_top, scroll_bottom;
+static unsigned long term_fg, term_bg, bold_pixel, cursor_fg, cursor_bg, select_fg, select_bg;
 static Atom wm_delete, xa_clipboard, xa_utf8;
 static int selecting, sel_x0, sel_y0, sel_x1, sel_y1;
 static char *selection_text;
@@ -65,13 +69,27 @@ static void clear_all(void)
     int y;
     for (y = 0; y < rows; ++y) clear_row(y, 0, cols);
     cx = cy = 0;
+    scroll_top = 0; scroll_bottom = rows - 1;
+}
+
+static void scroll_region_up(int top, int bottom)
+{
+    if (top < 0) top=0; if (bottom >= rows) bottom=rows-1; if (top >= bottom) return;
+    memmove(cells + top*cols, cells + (top+1)*cols, (size_t)(bottom-top)*cols*sizeof(*cells));
+    clear_row(bottom,0,cols);
+}
+
+static void scroll_region_down(int top, int bottom)
+{
+    if (top < 0) top=0; if (bottom >= rows) bottom=rows-1; if (top >= bottom) return;
+    memmove(cells + (top+1)*cols, cells + top*cols, (size_t)(bottom-top)*cols*sizeof(*cells));
+    clear_row(top,0,cols);
 }
 
 static void scroll_up(void)
 {
-    memmove(cells, cells + cols, (size_t)(rows - 1) * cols * sizeof(*cells));
-    clear_row(rows - 1, 0, cols);
-    if (cy > 0) --cy;
+    scroll_region_up(scroll_top, scroll_bottom);
+    if (cy > scroll_top) --cy;
 }
 
 static void normalize_cursor(void)
@@ -85,7 +103,7 @@ static void normalize_cursor(void)
 static void put_char(unsigned char v)
 {
     if (v == '\r') { cx = 0; return; }
-    if (v == '\n') { ++cy; normalize_cursor(); return; }
+    if (v == '\n') { if (cy == scroll_bottom) scroll_region_up(scroll_top,scroll_bottom); else ++cy; normalize_cursor(); return; }
     if (v == '\b') { if (cx > 0) --cx; return; }
     if (v == '\t') { cx = (cx + 8) & ~7; if (cx >= cols) { cx = 0; ++cy; } normalize_cursor(); return; }
     if (v < 0x20 || v == 0x7f) return;
@@ -117,11 +135,25 @@ static void do_csi(unsigned char final)
 {
     int n = csi_arg(0, 1);
     int mode = csi_arg(0, 0);
+    if (csi[0]=='?' && (final=='h' || final=='l')) {
+        int on=(final=='h'), m=csi_arg(0,0);
+        /* csi_arg sees '?' as a non-digit, so parse the DEC private mode here. */
+        m=atoi(csi+1);
+        if (m==1) app_cursor=on;
+        return;
+    }
     switch (final) {
     case 'A': cy -= n; break;
+    case '@': { int x; if(n>cols-cx)n=cols-cx; for(x=cols-1;x>=cx+n;--x)*cell_at(x,cy)=*cell_at(x-n,cy); for(x=cx;x<cx+n;++x){cell_at(x,cy)->ch=' ';cell_at(x,cy)->inverse=cell_at(x,cy)->bold=0;} break; }
+    case 'P': { int x; if(n>cols-cx)n=cols-cx; for(x=cx;x<cols-n;++x)*cell_at(x,cy)=*cell_at(x+n,cy); clear_row(cy,cols-n,cols); break; }
+    case 'L': while(n-->0) scroll_region_down(cy,scroll_bottom); break;
+    case 'M': while(n-->0) scroll_region_up(cy,scroll_bottom); break;
     case 'B': cy += n; break;
     case 'C': cx += n; break;
     case 'D': cx -= n; break;
+    case 's': saved_cx=cx; saved_cy=cy; break;
+    case 'u': cx=saved_cx; cy=saved_cy; break;
+    case 'r': scroll_top=csi_arg(0,1)-1; scroll_bottom=csi_arg(1,rows)-1; if(scroll_top<0)scroll_top=0; if(scroll_bottom>=rows)scroll_bottom=rows-1; cx=0;cy=scroll_top; break;
     case 'H': case 'f':
         cy = csi_arg(0, 1) - 1;
         cx = csi_arg(1, 1) - 1;
@@ -166,6 +198,13 @@ static void feed(const unsigned char *p, size_t n)
             else put_char(v);
         } else if (esc_state == 1) {
             if (v == '[') { esc_state = 2; csi_len = 0; }
+            else if (v == '=') { app_keypad=1; esc_state=0; }
+            else if (v == '>') { app_keypad=0; esc_state=0; }
+            else if (v == '7') { saved_cx=cx; saved_cy=cy; esc_state=0; }
+            else if (v == '8') { cx=saved_cx; cy=saved_cy; normalize_cursor(); esc_state=0; }
+            else if (v == 'D') { if(cy==scroll_bottom)scroll_region_up(scroll_top,scroll_bottom);else ++cy; esc_state=0; }
+            else if (v == 'M') { if(cy==scroll_top)scroll_region_down(scroll_top,scroll_bottom);else --cy; esc_state=0; }
+            else if (v == 'c') { inverse=bold=app_cursor=app_keypad=0; clear_all(); esc_state=0; }
             else esc_state = 0;
         } else {
             if (v >= 0x40 && v <= 0x7e) {
@@ -182,8 +221,8 @@ static void feed(const unsigned char *p, size_t n)
 static void redraw(void)
 {
     int x, y;
-    unsigned long fg = BlackPixel(dpy, DefaultScreen(dpy));
-    unsigned long bg = WhitePixel(dpy, DefaultScreen(dpy));
+    unsigned long fg = term_fg;
+    unsigned long bg = term_bg;
     XSetForeground(dpy, gc, bg);
     XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw), (unsigned)(rows * ch));
     for (y = 0; y < rows; ++y) {
@@ -196,13 +235,14 @@ static void redraw(void)
                 XSetForeground(dpy, gc, fg);
                 XFillRectangle(dpy, win, gc, x*cw, y*ch, (unsigned)cw, (unsigned)ch);
                 XSetForeground(dpy, gc, bg);
-            } else XSetForeground(dpy, gc, fg);
+            } else XSetForeground(dpy, gc, c->bold ? bold_pixel : fg);
             XDrawString(dpy, win, gc, x*cw, y*ch + ascent, s, 1);
             if (c->bold) XDrawString(dpy, win, gc, x*cw + 1, y*ch + ascent, s, 1);
         }
     }
-    XSetForeground(dpy, gc, fg);
-    XDrawRectangle(dpy, win, gc, cx*cw, cy*ch, (unsigned)(cw-1), (unsigned)(ch-1));
+    XSetForeground(dpy, gc, cursor_bg);
+    XFillRectangle(dpy, win, gc, cx*cw, cy*ch, (unsigned)cw, (unsigned)ch);
+    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,cx*cw,cy*ch+ascent,s,1); } }
     XFlush(dpy);
 }
 
@@ -277,10 +317,14 @@ static void send_key(XKeyEvent *e)
     if ((e->state & ControlMask) && (e->state & ShiftMask) && (ks==XK_V || ks==XK_v)) { request_paste(xa_clipboard); return; }
     if ((e->state & ShiftMask) && ks==XK_Insert) { request_paste(XA_PRIMARY); return; }
     switch (ks) {
-    case XK_Left: seq = "\033[D"; break;
-    case XK_Right: seq = "\033[C"; break;
-    case XK_Up: seq = "\033[A"; break;
-    case XK_Down: seq = "\033[B"; break;
+    case XK_Left: seq = app_cursor ? "\033OD" : "\033[D"; break;
+    case XK_Right: seq = app_cursor ? "\033OC" : "\033[C"; break;
+    case XK_Up: seq = app_cursor ? "\033OA" : "\033[A"; break;
+    case XK_Down: seq = app_cursor ? "\033OB" : "\033[B"; break;
+    case XK_F9: seq = "\033OP"; break;
+    case XK_F10: seq = "\033OQ"; break;
+    case XK_F11: seq = "\033OR"; break;
+    case XK_F12: seq = "\033OS"; break;
     case XK_Home: seq = "\033[H"; break;
     case XK_End: seq = "\033[F"; break;
     case XK_Delete: seq = "\033[3~"; break;
@@ -323,6 +367,17 @@ int main(int argc, char **argv)
 
     dpy = XOpenDisplay(0);
     if (!dpy) { fprintf(stderr, "xwsh: cannot open display\n"); return 1; }
+    { Colormap cm=DefaultColormap(dpy,DefaultScreen(dpy)); XColor a,b;
+      term_fg=WhitePixel(dpy,DefaultScreen(dpy)); term_bg=BlackPixel(dpy,DefaultScreen(dpy));
+      bold_pixel=term_fg; cursor_fg=term_bg; cursor_bg=term_fg; select_fg=term_bg; select_bg=term_fg;
+      if(XAllocNamedColor(dpy,cm,"#d6d6d6",&a,&b))term_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#00003f",&a,&b))term_bg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#ffff00",&a,&b))bold_pixel=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#00003f",&a,&b))cursor_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#00ff00",&a,&b))cursor_bg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#000000",&a,&b))select_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,"#adadad",&a,&b))select_bg=a.pixel;
+    }
     font = XLoadQueryFont(dpy, "fixed");
     if (!font) { fprintf(stderr, "xwsh: cannot load fixed font\n"); return 1; }
     cw = font->max_bounds.width;
@@ -334,8 +389,7 @@ int main(int argc, char **argv)
 
     win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 40, 40,
                               (unsigned)(cols*cw), (unsigned)(rows*ch), 1,
-                              BlackPixel(dpy, DefaultScreen(dpy)),
-                              WhitePixel(dpy, DefaultScreen(dpy)));
+                              term_fg, term_bg);
     XStoreName(dpy, win, "Winterm");
     { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=0; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
     wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
@@ -397,6 +451,7 @@ int main(int argc, char **argv)
                         for (y = 0; y < oldr && y < rows; ++y)
                             memcpy(cells + y*cols, old + y*oldc, (size_t)copyc*sizeof(*cells));
                         free(old);
+                        scroll_top=0; scroll_bottom=rows-1;
                         normalize_cursor();
                         resize_pty();
                         redraw();
