@@ -380,8 +380,8 @@ static void redraw(void)
     draw_scrollbar();
     if (view_offset) { XFlush(dpy); return; }
     XSetForeground(dpy, gc, cursor_bg);
-    XFillRectangle(dpy, win, gc, ctext_x0()+x*cw, cy*ch, (unsigned)cw, (unsigned)ch);
-    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,ctext_x0()+x*cw,cy*ch+ascent,s,1); } }
+    XFillRectangle(dpy, win, gc, text_x0()+x*cw, cy*ch, (unsigned)cw, (unsigned)ch);
+    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,text_x0()+x*cw,cy*ch+ascent,s,1); } }
     XFlush(dpy);
 }
 
