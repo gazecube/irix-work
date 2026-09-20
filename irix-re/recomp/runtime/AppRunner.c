@@ -108,6 +108,39 @@ static IrixGuestFunction resolve_native(const char *name)
     return irix_x11_bulk_lookup(name);
 }
 
+static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
+{
+    size_t i, rebound = 0;
+
+    /*
+     * A translated DSO can contain the real guest implementation of a symbol
+     * that the compatibility runtime deliberately implements natively.  rld
+     * is then free to bind an application veneer directly to that guest
+     * address.  Since dispatch is address-based, merely registering the
+     * name-based bridge import does not help: execution enters the translated
+     * provider instead.
+     *
+     * Once every translated provider has registered, replace each named
+     * function for which resolve_native() has an implementation.  This makes
+     * native ABI bridges authoritative regardless of whether a caller reaches
+     * them through a generated import forwarder or through rld's resolved
+     * guest address.
+     */
+    for (i = 0; i < rt->function_count; ++i) {
+        IrixGuestFunctionEntry *entry = &rt->functions[i];
+        IrixGuestFunction native;
+
+        if (!entry->name)
+            continue;
+        native = resolve_native(entry->name);
+        if (!native || entry->function == native)
+            continue;
+        entry->function = native;
+        ++rebound;
+    }
+    return rebound;
+}
+
 typedef void (*IrixDsoRegister)(IrixGuestRuntime *);
 
 static void register_native_dsos(IrixGuestRuntime *rt)
@@ -755,6 +788,13 @@ int main(int argc, char **argv)
     }
 
     irix_register_app_bundle(&rt);
+
+    {
+        size_t rebound = rebind_named_native_functions(&rt);
+        fprintf(stderr,
+                "IRIX native bridge authority: rebound=%zu named translated functions\\n",
+                rebound);
+    }
 
     if (setup_process_stack(&rt, &cpu, argc, argv,
                             have_app_elf ? &app_elf : 0,
