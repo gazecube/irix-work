@@ -723,6 +723,7 @@ int main(int argc, char **argv)
             {0x1001f50cu, "bcopy"},
             {0x1001f5acu, "calloc"},
             {0x1001fa48u, "malloc"},
+            {0x1001fb9cu, "XOpenDisplay"},
         };
         size_t vi;
 
