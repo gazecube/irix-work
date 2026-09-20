@@ -164,6 +164,16 @@ void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t val
 
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value)
 {
+    /*
+     * Temporary surgical watch for update_oex_state's outer saved-s0 slot.
+     * The failing FM run restores gp from this slot instead of the object
+     * pointer originally saved there; identify the exact guest instruction
+     * that overwrites it.
+     */
+    if (addr == 0x7fdff330u)
+        fprintf(stderr, "IRIX rld stack watch: pc=%08x addr=%08x value=%016llx\n",
+                (uint32_t)rt->current_pc, (uint32_t)addr,
+                (unsigned long long)value);
     irix_guest_write32be(rt, addr, (uint32_t)(value >> 32));
     irix_guest_write32be(rt, addr + 4, (uint32_t)value);
 }
