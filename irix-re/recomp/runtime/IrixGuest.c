@@ -801,7 +801,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, 0);
         return;
     }
-    case SYS_sigaction: { /* sigaction(sig, act, oact, sigtramp) */
+    case SYS_ksigaction: { /* sigaction(sig, act, oact, sigtramp) */
         int sig = (int)(int32_t)cpu->gpr[4];
         IrixGuestAddr act = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr oact = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
