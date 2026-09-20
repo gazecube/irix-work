@@ -12,6 +12,46 @@
 #include <fcntl.h>
 #include <limits.h>
 
+#define IRIX_NSIG 128u
+#define IRIX_SIGACTION_N32_SIZE 32u
+
+typedef struct IrixKernelSigAction {
+    uint32_t flags;
+    uint32_t handler;
+    uint32_t mask[4];
+    uint32_t sigtramp;
+} IrixKernelSigAction;
+
+static IrixKernelSigAction g_kernel_sigactions[IRIX_NSIG];
+
+static int read_irix_sigaction_n32(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                                   IrixKernelSigAction *out)
+{
+    unsigned i;
+    if (!addr || !out || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_N32_SIZE))
+        return -1;
+    out->flags = irix_guest_read32be(rt, addr + 0u);
+    out->handler = irix_guest_read32be(rt, addr + 4u);
+    for (i = 0; i < 4u; ++i)
+        out->mask[i] = irix_guest_read32be(rt, addr + 8u + i * 4u);
+    return rt->trapped ? -1 : 0;
+}
+
+static int write_irix_sigaction_n32(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                                    const IrixKernelSigAction *in)
+{
+    unsigned i;
+    if (!addr || !in || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_N32_SIZE))
+        return -1;
+    irix_guest_write32be(rt, addr + 0u, in->flags);
+    irix_guest_write32be(rt, addr + 4u, in->handler);
+    for (i = 0; i < 4u; ++i)
+        irix_guest_write32be(rt, addr + 8u + i * 4u, in->mask[i]);
+    irix_guest_write32be(rt, addr + 24u, 0u);
+    irix_guest_write32be(rt, addr + 28u, 0u);
+    return rt->trapped ? -1 : 0;
+}
+
 static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 {
     size_t i;
@@ -758,6 +798,42 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         rt->program_break = requested;
         fprintf(stderr, "IRIX break: 0x%08x -> 0x%08x\n",
                 old_break, requested);
+        syscall_result(cpu, 0);
+        return;
+    }
+    case SYS_sigaction: { /* sigaction(sig, act, oact, sigtramp) */
+        int sig = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr act = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr oact = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        uint32_t sigtramp = (uint32_t)cpu->gpr[7];
+        IrixKernelSigAction next;
+
+        /*
+         * SGI scalls.c: IRIX5/N32 sigaction copies irix5_sigaction_t in/out,
+         * validates 0 < sig < NSIG, and stores the fourth syscall argument
+         * separately as the signal trampoline. The user ABI structure is:
+         * flags, 32-bit handler, four-word sigset, two reserved words.
+         */
+        if (sig <= 0 || (unsigned)sig >= IRIX_NSIG) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (oact && write_irix_sigaction_n32(rt, oact,
+                                             &g_kernel_sigactions[sig]) != 0) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (act) {
+            if (read_irix_sigaction_n32(rt, act, &next) != 0) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            next.sigtramp = sigtramp;
+            g_kernel_sigactions[sig] = next;
+        }
         syscall_result(cpu, 0);
         return;
     }
