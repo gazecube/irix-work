@@ -319,6 +319,50 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     report_guest_words(rt, "a1", (IrixGuestAddr)(uint32_t)cpu->gpr[5]);
     report_guest_words(rt, "a3", (IrixGuestAddr)(uint32_t)cpu->gpr[7]);
 
+    /*
+     * rld run_init_code() dependency walk diagnostic.
+     *
+     * The debug rld identifies 0x0fb69b84..0x0fb69c5c as run_init_code().
+     * At the dependency loop, s0 is the current rld OBJECT.  Its observed
+     * fields are:
+     *   +0x58  dynamic string table
+     *   +0x6c  Elf32_Lib (.liblist) array
+     *   +0xa8  .liblist entry count
+     * and the loop keeps i and i*20 in the current stack frame.
+     *
+     * Keep this deliberately scoped to traps inside run_init_code rather than
+     * turning on broad rld tracing.
+     */
+    if (pc >= 0x0fb69b84u && pc <= 0x0fb69c5cu) {
+        IrixGuestAddr obj = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; /* s0 */
+        IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+        IrixGuestAddr dynstr = 0u, liblist = 0u;
+        uint32_t libcount = 0u, loop_i = 0u, loop_off = 0u;
+
+        if (obj && irix_guest_ptr(rt, obj + 0xa8u, 4u)) {
+            dynstr = irix_guest_read32be(rt, obj + 0x58u);
+            liblist = irix_guest_read32be(rt, obj + 0x6cu);
+            libcount = irix_guest_read32be(rt, obj + 0xa8u);
+        }
+        if (sp && irix_guest_ptr(rt, sp + 12u, 4u)) {
+            loop_i = irix_guest_read32be(rt, sp + 0u);
+            loop_off = irix_guest_read32be(rt, sp + 8u);
+        }
+
+        fprintf(stderr,
+                "  rld run_init_code: s0=0x%08x dynstr=0x%08x "
+                "liblist=0x%08x libcount=%u sp_i=%u sp_i20=0x%08x\\n",
+                obj, dynstr, liblist, libcount, loop_i, loop_off);
+
+        report_guest_words(rt, "rld-object", obj);
+        if (obj)
+            report_guest_bytes_ascii(rt, "rld-object", obj, 0u, 0xe0u);
+        if (dynstr)
+            report_guest_bytes_ascii(rt, "rld-dynstr", dynstr, 0u, 0x100u);
+        if (liblist)
+            report_guest_words(rt, "rld-liblist", liblist);
+    }
+
 }
 
 static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
