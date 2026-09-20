@@ -761,7 +761,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, 0);
         return;
     }
-    case 1108u: { /* IRIX gethostname(char *name, size_t len) */
+    case SYS_gethostname: { /* gethostname(char *name, size_t len) */
         IrixGuestAddr name_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         size_t len = (size_t)(uint32_t)cpu->gpr[5];
         char *name;
@@ -778,6 +778,106 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         syscall_result(cpu, (int64_t)gethostname(name, len));
+        return;
+    }
+    case SYS_chdir: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)chdir(path));
+        return;
+    }
+    case SYS_chmod: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)chmod(path, (mode_t)(uint32_t)cpu->gpr[5]));
+        return;
+    }
+    case SYS_chown: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)chown(path, (uid_t)(uint32_t)cpu->gpr[5],
+                                           (gid_t)(uint32_t)cpu->gpr[6]));
+        return;
+    }
+    case SYS_lseek:
+        syscall_result(cpu, (int64_t)lseek((int)(int32_t)cpu->gpr[4],
+                                           (off_t)(int32_t)cpu->gpr[5],
+                                           (int)(int32_t)cpu->gpr[6]));
+        return;
+    case SYS_setuid:
+        syscall_result(cpu, (int64_t)setuid((uid_t)(uint32_t)cpu->gpr[4]));
+        return;
+    case SYS_setgid:
+        syscall_result(cpu, (int64_t)setgid((gid_t)(uint32_t)cpu->gpr[4]));
+        return;
+    case SYS_umask:
+        syscall_result(cpu, (int64_t)umask((mode_t)(uint32_t)cpu->gpr[4]));
+        return;
+    case SYS_rmdir: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)rmdir(path));
+        return;
+    }
+    case SYS_mkdir: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)mkdir(path, (mode_t)(uint32_t)cpu->gpr[5]));
+        return;
+    }
+    case SYS_rename: {
+        const char *oldp = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *newp = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 1u);
+        if (!oldp || !newp) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)rename(oldp, newp));
+        return;
+    }
+    case SYS_symlink: {
+        const char *target = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *linkpath = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 1u);
+        if (!target || !linkpath) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)symlink(target, linkpath));
+        return;
+    }
+    case SYS_readlink: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        IrixGuestAddr buf_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t count = (size_t)(uint32_t)cpu->gpr[6];
+        void *buf = irix_guest_ptr(rt, buf_addr, count);
+        if (!path || (count && !buf)) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)readlink(path, (char *)buf, count));
+        return;
+    }
+    case SYS_truncate: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)truncate(path, (off_t)(int32_t)cpu->gpr[5]));
+        return;
+    }
+    case SYS_ftruncate:
+        syscall_result(cpu, (int64_t)ftruncate((int)(int32_t)cpu->gpr[4],
+                                               (off_t)(int32_t)cpu->gpr[5]));
+        return;
+    case SYS_fsync:
+        syscall_result(cpu, (int64_t)fsync((int)(int32_t)cpu->gpr[4]));
+        return;
+    case SYS_fchdir:
+        syscall_result(cpu, (int64_t)fchdir((int)(int32_t)cpu->gpr[4]));
+        return;
+    case SYS_fchown:
+        syscall_result(cpu, (int64_t)fchown((int)(int32_t)cpu->gpr[4],
+                                            (uid_t)(uint32_t)cpu->gpr[5],
+                                            (gid_t)(uint32_t)cpu->gpr[6]));
+        return;
+    case SYS_fchmod:
+        syscall_result(cpu, (int64_t)fchmod((int)(int32_t)cpu->gpr[4],
+                                            (mode_t)(uint32_t)cpu->gpr[5]));
+        return;
+    case SYS_lchown: {
+        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)lchown(path, (uid_t)(uint32_t)cpu->gpr[5],
+                                            (gid_t)(uint32_t)cpu->gpr[6]));
         return;
     }
     case SYS_getpid: /* getpid */
