@@ -538,6 +538,58 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         result = (int64_t)close((int)(int32_t)cpu->gpr[4]);
         syscall_result(cpu, result);
         return;
+    case 1017: { /* break */
+        IrixGuestAddr requested = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const uint32_t page_size = 16384u;
+        IrixGuestAddr old_break = rt->program_break;
+        IrixGuestAddr old_page;
+        IrixGuestAddr new_page;
+
+        /*
+         * IRIX syscall 17 is the kernel break(2) primitive used by libc's
+         * brk/sbrk implementation.  Unlike Linux's raw brk syscall, IRIX
+         * returns 0 on success and -1/ENOMEM on failure.
+         *
+         * Keep the logical break byte-exact, but back newly exposed heap with
+         * zero-filled guest pages.  Shrinking only moves the logical break for
+         * now: retaining the backing avoids fragmenting the simple guest
+         * segment table and is harmless until that address range is reused.
+         */
+        if (!old_break) {
+            old_break = requested;
+            rt->program_break = requested;
+            syscall_result(cpu, 0);
+            return;
+        }
+        if (requested < 0x10000u) {
+            errno = ENOMEM;
+            syscall_result(cpu, -1);
+            return;
+        }
+
+        old_page = (old_break + page_size - 1u) & ~(page_size - 1u);
+        new_page = (requested + page_size - 1u) & ~(page_size - 1u);
+        if (new_page > old_page) {
+            uint32_t grow = (uint32_t)(new_page - old_page);
+            if (irix_guest_map(rt, old_page, grow, 3u) != 0) {
+                /*
+                 * The requested range may already be backed by a loader
+                 * segment.  Accept it only when the complete growth range is
+                 * already guest-addressable.
+                 */
+                if (!irix_guest_ptr(rt, old_page, grow)) {
+                    errno = ENOMEM;
+                    syscall_result(cpu, -1);
+                    return;
+                }
+            }
+        }
+        rt->program_break = requested;
+        fprintf(stderr, "IRIX break: 0x%08x -> 0x%08x\n",
+                old_break, requested);
+        syscall_result(cpu, 0);
+        return;
+    }
     case 1020: /* getpid */
         syscall_result(cpu, (int64_t)getpid());
         return;
