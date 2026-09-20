@@ -260,6 +260,26 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         IrixGuestAddr slot = gp - 0x6a4cu;
         report_guest_bytes_ascii(rt, "fault", rt->fault_addr, 20u, 44u);
         report_guest_bytes_ascii(rt, "gp-slot", slot, 32u, 64u);
+        if (irix_guest_ptr(rt, slot, 4u)) {
+            IrixGuestAddr slot_value = irix_guest_read32be(rt, slot);
+            fprintf(stderr, "  gp-slot chain: [0x%08x]=0x%08x",
+                    slot, slot_value);
+            if (slot_value && irix_guest_ptr(rt, slot_value, 4u)) {
+                IrixGuestAddr pointee = irix_guest_read32be(rt, slot_value);
+                fprintf(stderr, " [0x%08x]=0x%08x", slot_value, pointee);
+                if (pointee && irix_guest_ptr(rt, pointee, 4u))
+                    fprintf(stderr, " [0x%08x]=0x%08x",
+                            pointee, irix_guest_read32be(rt, pointee));
+                else if (pointee)
+                    fputs(" (pointee unmapped)", stderr);
+                fputc('\n', stderr);
+                report_guest_bytes_ascii(rt, "gp-slot value",
+                                         slot_value, 32u, 64u);
+            } else {
+                fputs(slot_value ? " (slot value unmapped)\n" : "\n",
+                      stderr);
+            }
+        }
     }
 }
 
