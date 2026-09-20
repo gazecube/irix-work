@@ -94,8 +94,15 @@ uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr addr)
         return (uint32_t)(int32_t)errno;
     p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
     if (!p) { memory_fault(rt, addr); return 0; }
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    {
+        uint32_t value = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+                         ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+        if (addr == 0x0fb5291cu)
+            fprintf(stderr,
+                    "IRIX libc GOT read watch: pc=0x%08x slot=0x%08x value=%08x\n",
+                    rt->current_pc, addr, value);
+        return value;
+    }
 }
 
 uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
@@ -107,14 +114,25 @@ uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 
 void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 {
-    uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
+    uint8_t *p;
+    if (addr >= 0x0fb5291cu && addr < 0x0fb52920u)
+        fprintf(stderr,
+                "IRIX libc GOT byte watch: pc=0x%08x addr=0x%08x value=%02x\n",
+                rt->current_pc, addr, value);
+    p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
     if (!p) { memory_fault(rt, addr); return; }
     *p = value;
 }
 
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value)
 {
-    uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
+    uint8_t *p;
+    if ((uint64_t)addr < UINT64_C(0x0fb52920) &&
+        (uint64_t)addr + 2u > UINT64_C(0x0fb5291c))
+        fprintf(stderr,
+                "IRIX libc GOT half watch: pc=0x%08x addr=0x%08x value=%04x\n",
+                rt->current_pc, addr, value);
+    p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
     if (!p) { memory_fault(rt, addr); return; }
     p[0] = (uint8_t)(value >> 8); p[1] = (uint8_t)value;
 }
