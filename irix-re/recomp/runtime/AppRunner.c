@@ -420,11 +420,7 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         AT_PHNUM = 5,
         AT_PAGESZ = 6,
         AT_BASE = 7,
-        AT_ENTRY = 9,
-        AT_UID = 11,
-        AT_EUID = 12,
-        AT_GID = 13,
-        AT_EGID = 14
+        AT_ENTRY = 9
     };
     const IrixGuestAddr base = 0x7fd00000u;
     const uint32_t size = 0x00100000u;
@@ -432,17 +428,28 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     IrixGuestAddr sp, argv_addr, envp_addr;
     IrixGuestAddr *argv_guest = 0, *env_guest = 0;
     size_t envc = 0, i;
+    /*
+     * Match IRIX elf.c, not the Linux/SVR4 superset.  For a dynamic ELF
+     * with a usable PT_PHDR, IRIX appends exactly:
+     *
+     *   AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
+     *   AT_BASE, AT_PAGESZ, AT_NULL
+     *
+     * (AT_PFETCHFD is an R8K prefetch workaround and is not applicable here.)
+     * AT_BASE is the runtime-loader mapping base rounded down to
+     * ELF_MIPS_MAXPGSZ (64 KiB), while AT_PAGESZ is NBPP (16 KiB).
+     *
+     * elf.c uses AT_EXECFD instead of the first four entries when it cannot
+     * provide the executable program headers.  Our loader always has the
+     * program-header metadata, so this is the hasu path.
+     */
     const uint32_t auxv[][2] = {
         {AT_PHDR, app ? app->phdr : 0u},
         {AT_PHENT, app ? app->phent : 0u},
         {AT_PHNUM, app ? app->phnum : 0u},
-        {AT_PAGESZ, 16384u},
-        {AT_BASE, interp ? interp->load_base : 0u},
         {AT_ENTRY, app ? app->entry : 0u},
-        {AT_UID, (uint32_t)getuid()},
-        {AT_EUID, (uint32_t)geteuid()},
-        {AT_GID, (uint32_t)getgid()},
-        {AT_EGID, (uint32_t)getegid()},
+        {AT_BASE, interp ? (interp->load_base & ~0xffffu) : 0u},
+        {AT_PAGESZ, 16384u},
         {AT_NULL, 0u}
     };
 
@@ -488,8 +495,13 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (push_guest_string(rt, base, &top, argv[i - 1u], &argv_guest[i - 1u]) != 0)
             goto fail;
 
-    /* N32 process entry uses a 16-byte aligned stack. Build the canonical
-       argc/argv/envp/auxv vectors below the copied strings. */
+    /*
+     * fuexarg() lays the initial IRIX stack out as:
+     *   argc, argv[], NULL, envp[], NULL, reserved auxv, strings.
+     * elf.c fills that reserved auxv area after mapping PT_INTERP.
+     *
+     * Preserve the existing N32 alignment while reproducing that ordering.
+     */
     top &= ~15u;
     {
         size_t words = 1u + ((size_t)argc + 1u) + (envc + 1u) +
