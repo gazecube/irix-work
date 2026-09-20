@@ -142,6 +142,31 @@ static void ret_i32(IrixGuestCpu *cpu, int v)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)v;
 }
 
+static int guest_gid_allowed(gid_t gid)
+{
+    return gid == (gid_t)-1 || gid == getgid() || gid == getegid();
+}
+
+static void bridge_setregid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    gid_t rgid = (gid_t)(uint32_t)cpu->gpr[4];
+    gid_t egid = (gid_t)(uint32_t)cpu->gpr[5];
+    (void)rt;
+
+    /*
+     * Mirror the setreuid compatibility boundary: IRIX applications may
+     * normalize their real/effective group IDs during startup, but the guest
+     * must not mutate the Linux runner's credentials. Accept no-op/current
+     * identity transitions and reject unrelated host identities.
+     */
+    if (guest_gid_allowed(rgid) && guest_gid_allowed(egid)) {
+        ret_i32(cpu, 0);
+        return;
+    }
+    errno = EPERM;
+    ret_i32(cpu, -1);
+}
+
 static void bridge_setreuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uid_t ruid = (uid_t)(uint32_t)cpu->gpr[4];
@@ -452,7 +477,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
 {
     if (!name) return 0;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
-    MAP(gethostname); MAP(getcwd); MAP(chdir); MAP(access); MAP(setreuid);
+    MAP(gethostname); MAP(getcwd); MAP(chdir); MAP(access); MAP(setreuid); MAP(setregid);
     MAP(stat); MAP(lstat); MAP(fstat);
     MAP(open); MAP(close); MAP(read); MAP(write); MAP(lseek);
     MAP(unlink); MAP(rmdir); MAP(mkdir); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
