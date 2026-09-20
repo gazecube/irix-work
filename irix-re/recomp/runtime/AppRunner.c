@@ -508,6 +508,11 @@ int main(int argc, char **argv)
                     fprintf(stderr,
                             "IRIX PT_INTERP component: %s entry=0x%08x gp=0x%08x\n",
                             component->path, info.entry, info.gp_value);
+                    if (irix_guest_ptr(&rt, 0x0fb5291cu, 4u))
+                        fprintf(stderr,
+                                "IRIX libc GOT startup watch: after PT_INTERP load "
+                                "[0x0fb5291c]=%08x\n",
+                                irix_guest_read32be(&rt, 0x0fb5291cu));
                 } else if (component->role == 2) {
                     rld_elf = info;
                     have_rld_elf = 1;
