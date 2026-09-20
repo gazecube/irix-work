@@ -980,96 +980,9 @@ static int trace_dialog_call(const char *name)
            strstr(name, "waitForDialog__15VkDialogManager") != 0;
 }
 
-static int trace_passwd_call(const char *name)
-{
-    if (!name) return 0;
-    return strcmp(name, "getpwuid") == 0 ||
-           strcmp(name, "getpwnam") == 0 ||
-           strcmp(name, "getpwuid_r") == 0 ||
-           strcmp(name, "getpwnam_r") == 0;
-}
-
-static int trace_xwsh_passwd_decision(IrixGuestAddr pc)
-{
-    /* We found the decision function: authenticateUser__6wshAppGv at
-     * 0x10039c50.  Trace the calls it makes so we can identify the lookup
-     * which returns NULL, rather than tracing the fatal fprintf itself. */
-    return pc >= 0x10039c50u && pc < 0x10039d0cu;
-}
-
-static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
-                             IrixGuestAddr addr, uint32_t count)
-{
-    unsigned i;
-    uint32_t limit = count < 64u ? count : 64u;
-    fprintf(stderr, "%s addr=%08x len=%u", label, addr, count);
-    if (!addr || !limit || !irix_guest_ptr(rt, addr, limit)) {
-        fputc('\n', stderr);
-        return;
-    }
-    fputs(" bytes:", stderr);
-    for (i = 0; i < limit; ++i)
-        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, addr + i));
-    fputc('\n', stderr);
-}
-
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
-    /*
-     * Once authenticateUser is running, its callees live outside the xwsh
-     * address window.  Use the caller PC to report those outbound calls.
-     */
-    if ((uint32_t)cpu->pc >= 0x10039c50u &&
-        (uint32_t)cpu->pc < 0x10039d0cu &&
-        address != 0x10039c50u) {
-        fprintf(stderr,
-                "IRIX authenticateUser call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
-                address,
-                entry ? entry->address : 0u,
-                entry && entry->name ? entry->name : "?",
-                (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31],
-                (uint32_t)cpu->gpr[2],
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28],
-                (uint32_t)cpu->gpr[25]);
-        report_nearest_functions(rt, address);
-        fputc('\n', stderr);
-    }
-    if (((uint32_t)cpu->pc == 0x10039c7cu ||
-         (uint32_t)cpu->pc == 0x10039c88u ||
-         (uint32_t)cpu->pc == 0x10039cd0u ||
-         (uint32_t)cpu->pc == 0x10039d04u) &&
-        address != 0x10039c50u) {
-        IrixGuestAddr cs = (IrixGuestAddr)(uint32_t)cpu->pc;
-        fprintf(stderr, "  authenticateUser callsite %08x:", cs);
-        if (irix_guest_ptr(rt, cs - 16u, 40u)) {
-            unsigned j;
-            for (j = 0; j < 10u; ++j)
-                fprintf(stderr, " %08x", irix_guest_read32be(rt, cs - 16u + j * 4u));
-        }
-        fputc('\n', stderr);
-    }
-    if (trace_xwsh_passwd_decision(address)) {
-        fprintf(stderr,
-                "IRIX passwd window call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
-                address,
-                entry ? entry->address : 0u,
-                entry && entry->name ? entry->name : "?",
-                (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31],
-                (uint32_t)cpu->gpr[2],
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28],
-                (uint32_t)cpu->gpr[25]);
-        report_nearest_functions(rt, address);
-        fputc('\n', stderr);
-    }
     if (!entry) {
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
 
@@ -1121,7 +1034,6 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
-        int passwd_function_trace = trace_passwd_call(entry->name);
         unsigned saved_i;
 
         /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
@@ -1141,49 +1053,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
                     (uint32_t)cpu->gpr[11]);
         }
-        if (passwd_function_trace) {
-            fprintf(stderr,
-                    "IRIX passwd guest entry: callee=%08x:%s caller=%08x ra=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x\n",
-                    address, entry->name, caller_pc, (uint32_t)cpu->gpr[31],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                    (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
-            if ((strcmp(entry->name, "getpwnam") == 0 ||
-                 strcmp(entry->name, "getpwnam_r") == 0) &&
-                cpu->gpr[4])
-                dump_guest_bytes(rt, "  passwd name",
-                                 (IrixGuestAddr)(uint32_t)cpu->gpr[4], 64u);
-        }
-        if (entry->name && strcmp(entry->name, "strcpy") == 0) {
-            fprintf(stderr,
-                    "IRIX strcpy call: caller=%08x ra=%08x a0=%08x a1=%08x v0=%08x sp=%08x gp=%08x t9=%08x",
-                    (uint32_t)caller_pc, (uint32_t)cpu->gpr[31],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[29],
-                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25]);
-            {
-                IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
-                IrixGuestAddr callsite = ra >= 8u ? ra - 8u : ra;
-                if (callsite >= 16u && irix_guest_ptr(rt, callsite - 16u, 40u)) {
-                    fprintf(stderr,
-                            " callsite=%08x call_words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
-                            (uint32_t)callsite,
-                            irix_guest_read32be(rt, callsite - 16u),
-                            irix_guest_read32be(rt, callsite - 12u),
-                            irix_guest_read32be(rt, callsite - 8u),
-                            irix_guest_read32be(rt, callsite - 4u),
-                            irix_guest_read32be(rt, callsite),
-                            irix_guest_read32be(rt, callsite + 4u),
-                            irix_guest_read32be(rt, callsite + 8u),
-                            irix_guest_read32be(rt, callsite + 12u),
-                            irix_guest_read32be(rt, callsite + 16u),
-                            irix_guest_read32be(rt, callsite + 20u));
-                }
-            }
-            fputc('\n', stderr);
-        }
+
         cpu->pc = address;
         rt->current_pc = address;
         /*
@@ -1205,18 +1075,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                     (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
         }
-        if (passwd_function_trace) {
-            fprintf(stderr,
-                    "IRIX passwd guest return: callee=%08x:%s trapped=%d v0=%08x v1=%08x a0-a3=%08x,%08x,%08x,%08x sp=%08x\n",
-                    address, entry->name, rt->trapped,
-                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[29]);
-            if (!rt->trapped && cpu->gpr[2])
-                dump_guest_bytes(rt, "  passwd return object",
-                                 (IrixGuestAddr)(uint32_t)cpu->gpr[2], 36u);
-        }
+
         /* A completed N32 call must return with the caller's callee-saved
            register set and stack pointer intact. Do not rewrite state on a
            trap: the fault report needs the exact machine state at failure. */
