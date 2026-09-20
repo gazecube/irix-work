@@ -176,26 +176,42 @@ void irix_guest_fpr_set_d(IrixGuestCpu *cpu, unsigned reg, double value)
     cpu->fpr[reg & 31u] = v.u;
 }
 
-int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
-                                 IrixGuestFunction function, const char *name)
+int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                       uint32_t size, IrixGuestFunction function,
+                                       const char *name)
 {
     IrixGuestFunctionEntry *entry;
     if (!function || rt->function_count >= IRIX_GUEST_MAX_FUNCTIONS)
         return -1;
     entry = &rt->functions[rt->function_count++];
     entry->address = address;
+    entry->size = size;
     entry->function = function;
     entry->name = name;
     return 0;
 }
 
+int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                 IrixGuestFunction function, const char *name)
+{
+    return irix_guest_register_function_range(rt, address, 0u, function, name);
+}
+
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuestAddr address)
 {
+    IrixGuestFunctionEntry *containing = 0;
     size_t i;
-    for (i = 0; i < rt->function_count; ++i)
-        if (rt->functions[i].address == address)
-            return &rt->functions[i];
-    return 0;
+    for (i = 0; i < rt->function_count; ++i) {
+        IrixGuestFunctionEntry *entry = &rt->functions[i];
+        if (entry->address == address)
+            return entry;
+        if (entry->size && address > entry->address &&
+            (uint64_t)address < (uint64_t)entry->address + entry->size) {
+            if (!containing || entry->size < containing->size)
+                containing = entry;
+        }
+    }
+    return containing;
 }
 
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code)
