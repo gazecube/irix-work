@@ -11,7 +11,7 @@ SHF_WRITE=0x1; SHF_ALLOC=0x2; SHF_EXECINSTR=0x4
 def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
 BATCH_FUNCTIONS=128
-BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
 
 def function_body(text):
     marker='void irix_recomp_'
@@ -84,6 +84,16 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        if (old_pending == IRIX_PENDING_RETURN)')
     print('            return;')
     print('        if (old_pending == IRIX_PENDING_CALL) {')
+    print('            if (irix_guest_call(rt, cpu, old_target) != 0)')
+    print('                return;')
+    print('            pc = old_return;')
+    print('            continue;')
+    print('        }')
+    print('        if (old_pending == IRIX_PENDING_LINK) {')
+    print('            if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size))
+    print('                pc = old_target;')
+    print('                continue;')
+    print('            }')
     print('            if (irix_guest_call(rt, cpu, old_target) != 0)')
     print('                return;')
     print('            pc = old_return;')
