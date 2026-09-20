@@ -20,26 +20,15 @@ typedef struct {
 
 static IrixX11KeyboardState g_kbd;
 
-/* The broad Xlib bridge owns Display creation. We recover the host Display by
-   opening the same display name lazily for keyboard-only calls. This module is
-   intentionally self-contained; it never exposes host pointers to the guest. */
+/* Display creation and guest-handle ownership belong to the primary X11
+   bridge. Reuse that exact host Display instead of opening a second X
+   connection and guessing fields out of the synthetic guest shadow. */
+#include "IrixX11BridgeExtraAccess.h"
+
 static Display *display_from_guest(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    uint32_t off, i;
-    IrixGuestAddr name_addr;
-    const char *name;
-    if (addr < IRIX_X11_DISPLAY_BASE || addr >= IRIX_X11_DISPLAY_BASE + IRIX_X11_MAX_DISPLAYS * IRIX_X11_DISPLAY_STRIDE)
-        return 0;
-    off = addr - IRIX_X11_DISPLAY_BASE;
-    if (off % IRIX_X11_DISPLAY_STRIDE) return 0;
-    i = off / IRIX_X11_DISPLAY_STRIDE;
-    if (i >= IRIX_X11_MAX_DISPLAYS) return 0;
-    if (g_kbd.displays[i]) return g_kbd.displays[i];
-    name_addr = irix_guest_read32be(rt, addr + 128u);
-    name = name_addr ? (const char *)irix_guest_ptr(rt, name_addr, 1) : 0;
-    g_kbd.displays[i] = XOpenDisplay(name);
-    if (g_kbd.displays[i] && i >= g_kbd.display_count) g_kbd.display_count = i + 1u;
-    return g_kbd.displays[i];
+    (void)rt;
+    return irix_x11_primary_display_from_guest(addr);
 }
 
 static IrixGuestAddr tmp_alloc(uint32_t n)
@@ -64,6 +53,8 @@ static void bridge_XDisplayKeycodes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
     int minc = 0, maxc = 0;
     if (d) XDisplayKeycodes(d, &minc, &maxc);
+    fprintf(stderr, "IRIX XDisplayKeycodes: guest=%08x min=%d max=%d\\n",
+            (uint32_t)cpu->gpr[4], minc, maxc);
     wr32(rt, (uint32_t)cpu->gpr[5], (uint32_t)minc);
     wr32(rt, (uint32_t)cpu->gpr[6], (uint32_t)maxc);
     cpu->gpr[2] = 0;
@@ -74,7 +65,11 @@ static void bridge_XGetKeyboardMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
     int per = 0;
     int count = (int)(uint32_t)cpu->gpr[6];
-    KeySym *map = d ? XGetKeyboardMapping(d, (KeyCode)(uint32_t)cpu->gpr[5], count, &per) : 0;
+    KeyCode first = (KeyCode)(uint32_t)cpu->gpr[5];
+    KeySym *map;
+    fprintf(stderr, "IRIX XGetKeyboardMapping: guest=%08x first=%u count=%d\\n",
+            (uint32_t)cpu->gpr[4], (unsigned)first, count);
+    map = d ? XGetKeyboardMapping(d, first, count, &per) : 0;
     IrixGuestAddr out = 0;
     int i, n = (count > 0 && per > 0) ? count * per : 0;
     wr32(rt, (uint32_t)cpu->gpr[7], (uint32_t)per);
