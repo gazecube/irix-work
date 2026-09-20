@@ -743,50 +743,13 @@ int main(int argc, char **argv)
      *   0x1001f41c takes a guest name pointer and stores struct passwd *
      *   0x1001f430 takes uid 1000 and stores struct passwd *
      */
-    if (!strcmp(IRIX_APP_NAME, "xwsh")) {
-        struct XwshImportVeneer {
-            IrixGuestAddr addr;
-            const char *name;
-        };
-        static const struct XwshImportVeneer veneers[] = {
-            {0x1001f19cu, "__nw__GUi"},
-            {0x1001f1b0u, "strdup"},
-            {0x1001f28cu, "__nwa__GUi"},
-            {0x1001f41cu, "getpwnam"},
-            {0x1001f430u, "getpwuid"},
-            {0x1001f50cu, "bcopy"},
-            {0x1001f5acu, "calloc"},
-            {0x1001fa48u, "malloc"},
-            {0x1001fb9cu, "XOpenDisplay"},
-        };
-        size_t vi;
-
-        /*
-         * xwsh contains executable import veneers for several unresolved
-         * symbols. Metadata recovery also sees those veneers as translated
-         * functions, while the application's GOT can continue to point at
-         * them after rld has established the binding. Register the verified
-         * veneer addresses ahead of the app bundle so first-match dispatch
-         * preserves the imported symbol semantics.
-         *
-         * Keep this table limited to addresses verified from xwsh's dynamic
-         * symbol table. The resource database setup also copies the caller's
-         * 16-byte tuResourceItem records through the 0x1001f50c bcopy veneer;
-         * executing that recovered veneer as an ordinary translated function
-         * leaves the destination zeroed and later feeds NULL to strcmp.
-         *
-         * In particular tuBase::operator new calls calloc
-         * through its GOT with (1, size); allowing the anonymous 0x1001f5ac
-         * veneer to execute as ordinary translated code loses that return
-         * value and produces the NULL tuResourceDB seen during startup.
-         */
-        for (vi = 0; vi < sizeof(veneers) / sizeof(veneers[0]); ++vi) {
-            IrixGuestFunction fn = resolve_native(veneers[vi].name);
-            if (fn)
-                irix_guest_register_function(&rt, veneers[vi].addr,
-                                             fn, veneers[vi].name);
-        }
-    }
+    /*
+     * Executable import veneers are now recovered generically from undefined
+     * STT_FUNC dynsym entries with nonzero st_value by gen_prebound_bindings.
+     * Keep AppRunner application-agnostic: bridge registration happens before
+     * translated app functions, so exact-address first-match dispatch gives
+     * those named veneers native authority without per-program pin tables.
+     */
 
     irix_register_app_bundle(&rt);
 
