@@ -62,6 +62,8 @@ def main():
     ap.add_argument('-o', '--output', type=Path, required=True)
     ap.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     ap.add_argument('--ar', default=os.environ.get('AR', 'ar'))
+    ap.add_argument('--runtime-lib', type=Path,
+                    help='native libirixre shared runtime to link generated DSOs against')
     ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
     ap.add_argument('--generate-only', action='store_true')
     a = ap.parse_args()
@@ -146,6 +148,10 @@ def main():
             if i % 250 == 0 or i == len(futures):
                 print(f'processed {i}/{len(futures)} rebuilt={rebuilt} reused={reused}', flush=True)
 
+    runtime_lib = a.runtime_lib.resolve() if a.runtime_lib else None
+    if runtime_lib is not None and not runtime_lib.is_file():
+        raise SystemExit(f'missing shared recomp runtime: {runtime_lib}')
+
     # Keep the monolithic archive as a bootstrap/debug artifact for the current
     # runners. The canonical library-shaped outputs below are PIC ELF DSOs.
     lib = out / 'libirix_recompiled_stack.a'
@@ -200,8 +206,14 @@ def main():
 
         dso = out / f'lib{label}.so'
         dso_objects = [source_objects[src] for src in unique_sources] + [reg_obj]
-        run([a.cc, '-shared', f'-Wl,-soname,lib{label}.so',
-             '-o', dso, *dso_objects, '-lm'])
+        link_cmd = [a.cc, '-shared', f'-Wl,-soname,lib{label}.so',
+                    '-Wl,-z,defs', '-o', dso, *dso_objects]
+        if runtime_lib is not None:
+            # Use the exact build-tree runtime and record a stable DT_NEEDED
+            # identity (libirixre.so.1), not an accidental executable export.
+            link_cmd += [str(runtime_lib)]
+        link_cmd += ['-lm']
+        run(link_cmd)
         shared_outputs.append(dso)
 
     print(f'archive rebuilt from PIC objects: rebuilt={rebuilt} reused={reused}')
