@@ -60,7 +60,7 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
-    print('    IrixGuestAddr pc = 0x%08xu;'%start)
+    print('    IrixGuestAddr pc = cpu->pc;')
     print('    IrixGuestAddr pending_target = 0;')
     print('    IrixGuestAddr pending_return = 0;')
     print('    int pending_kind = IRIX_PENDING_NONE;')
