@@ -18,7 +18,7 @@
 #define IRIX_SGINAP_HZ 100L
 #define IRIX_SIGSET_WORDS 4u
 #define IRIX_SIGSET_BYTES (IRIX_SIGSET_WORDS * 4u)
-#define IRIX_SIGACTION_BYTES 24u
+#define IRIX_SIGACTION_BYTES 32u
 #define IRIX_NSIG 128
 
 #define IRIX_F_DUPFD 0
@@ -35,8 +35,8 @@
 #define IRIX_O_NONBLOCK 0x0080u
 
 typedef struct IrixSigActionState {
-    uint32_t handler;
     uint32_t flags;
+    uint32_t handler;
     uint32_t mask[IRIX_SIGSET_WORDS];
 } IrixSigActionState;
 
@@ -157,8 +157,8 @@ static int read_irix_sigaction(IrixGuestRuntime *rt, IrixGuestAddr addr,
     unsigned i;
     if (!addr || !out || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_BYTES))
         return -1;
-    out->handler = irix_guest_read32be(rt, addr + 0u);
-    out->flags = irix_guest_read32be(rt, addr + 4u);
+    out->flags = irix_guest_read32be(rt, addr + 0u);
+    out->handler = irix_guest_read32be(rt, addr + 4u);
     for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
         out->mask[i] = irix_guest_read32be(rt, addr + 8u + (IrixGuestAddr)i * 4u);
     return rt->trapped ? -1 : 0;
@@ -170,10 +170,12 @@ static int write_irix_sigaction(IrixGuestRuntime *rt, IrixGuestAddr addr,
     unsigned i;
     if (!addr || !in || !irix_guest_ptr(rt, addr, IRIX_SIGACTION_BYTES))
         return -1;
-    irix_guest_write32be(rt, addr + 0u, in->handler);
-    irix_guest_write32be(rt, addr + 4u, in->flags);
+    irix_guest_write32be(rt, addr + 0u, in->flags);
+    irix_guest_write32be(rt, addr + 4u, in->handler);
     for (i = 0; i < IRIX_SIGSET_WORDS; ++i)
         irix_guest_write32be(rt, addr + 8u + (IrixGuestAddr)i * 4u, in->mask[i]);
+    irix_guest_write32be(rt, addr + 24u, 0u);
+    irix_guest_write32be(rt, addr + 28u, 0u);
     return rt->trapped ? -1 : 0;
 }
 
