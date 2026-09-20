@@ -11,6 +11,7 @@ extern "C" {
 #define IRIX_GUEST_GPR_COUNT 32
 #define IRIX_GUEST_MAX_SEGMENTS 256
 #define IRIX_GUEST_MAX_FUNCTIONS 131072
+#define IRIX_GUEST_RLD_WATCH_MAX 32
 
 typedef uint32_t IrixGuestAddr;
 
@@ -55,6 +56,13 @@ typedef struct IrixGuestFunctionEntry {
     const char *name;
 } IrixGuestFunctionEntry;
 
+typedef struct IrixGuestRldWatchFrame {
+    IrixGuestAddr sp;
+    IrixGuestAddr slot;
+    uint64_t expected_s0;
+    int warned;
+} IrixGuestRldWatchFrame;
+
 typedef struct IrixGuestRuntime {
     IrixGuestMemory memory;
     IrixGuestAddr trap_pc;
@@ -65,6 +73,8 @@ typedef struct IrixGuestRuntime {
     IrixGuestAddr errno_proxy_addr;
     const char *rootfs;
     IrixGuestAddr program_break;
+    IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
+    unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     size_t function_count;
 } IrixGuestRuntime;
@@ -82,6 +92,9 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value);
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value);
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value);
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value);
+void irix_guest_rld_watch_enter(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
+void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
+void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
 void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr);
 void irix_guest_set_rootfs(IrixGuestRuntime *rt, const char *rootfs);
 float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg);
