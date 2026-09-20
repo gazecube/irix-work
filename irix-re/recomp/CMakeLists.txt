@@ -203,6 +203,7 @@ if(IRIX_DEV_TREE)
                 set(_app_build_target "irix_recompiled_${_app_name}")
                 set(_app_bundle_target "irix_${_app_name}_bundle")
                 set(_app_runner_target "irix_${_app_name}_runner")
+                get_filename_component(_app_elf_name "${_app_path}" NAME)
 
                 add_custom_command(
                     OUTPUT "${_app_lib}"
@@ -237,7 +238,16 @@ if(IRIX_DEV_TREE)
                 set_target_properties(${_app_bundle_target} PROPERTIES IMPORTED_LOCATION "${_app_lib}")
                 add_dependencies(${_app_bundle_target} ${_app_build_target})
 
+                # The CMake target keeps its unique internal name, but the
+                # produced artifact is the reconstructed IRIX program itself.
+                # AppRunner.c is now bootstrap/startup glue for that ELF, not
+                # the public identity of the executable.
                 add_executable(${_app_runner_target} runtime/AppRunner.c)
+                set_target_properties(${_app_runner_target} PROPERTIES
+                    OUTPUT_NAME "${_app_elf_name}"
+                    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
+                    BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR};${_app_dir}/lib"
+                )
                 add_dependencies(${_app_runner_target} irix_recompiled_core ${_app_build_target})
                 if(TARGET irix_fast_quarks)
                     add_dependencies(${_app_runner_target} irix_fast_quarks)
