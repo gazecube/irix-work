@@ -122,6 +122,18 @@ void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t val
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
 {
     uint8_t *p;
+    if (addr == 0x0fb5291cu) {
+        uint32_t old_value = 0;
+        uint8_t *oldp = (uint8_t *)irix_guest_ptr(rt, addr, 4u);
+        if (oldp)
+            old_value = ((uint32_t)oldp[0] << 24) |
+                        ((uint32_t)oldp[1] << 16) |
+                        ((uint32_t)oldp[2] << 8) |
+                        (uint32_t)oldp[3];
+        fprintf(stderr,
+                "IRIX libc GOT watch: pc=0x%08x slot=0x%08x %08x -> %08x\n",
+                rt->current_pc, addr, old_value, value);
+    }
     if (rt->errno_proxy_addr && addr == rt->errno_proxy_addr) {
         errno = (int)(int32_t)value;
         return;
