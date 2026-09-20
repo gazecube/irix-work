@@ -130,6 +130,7 @@ if(IRIX_DEV_TREE)
         set(IRIX_RECOMP_CORE_LINK "${IRIX_RECOMP_CORE_DIR}/generated/image/link.json")
         set(IRIX_ECOSYSTEM_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/ecosystem.json")
         set(IRIX_ECOSYSTEM_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-ecosystem")
+        set(IRIX_RECOMP_ROOT "${CMAKE_CURRENT_BINARY_DIR}/root")
         set(IRIX_APP_BUILDER "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_irix_app_bundle.py")
 
         execute_process(
@@ -218,6 +219,7 @@ if(IRIX_DEV_TREE)
                             -o "${_app_dir}"
                             --cc "${CMAKE_C_COMPILER}"
                             --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
+                            --rootfs "${IRIX_RECOMP_ROOT}"
                     DEPENDS
                         irix_recompiled_core
                         irix_recomp_runtime
@@ -246,7 +248,7 @@ if(IRIX_DEV_TREE)
                 set_target_properties(${_app_runner_target} PROPERTIES
                     OUTPUT_NAME "${_app_elf_name}"
                     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin"
-                    BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR};${_app_dir}/lib"
+                    BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}"
                 )
                 add_dependencies(${_app_runner_target} irix_recompiled_core ${_app_build_target})
                 if(TARGET irix_fast_quarks)
@@ -265,6 +267,7 @@ if(IRIX_DEV_TREE)
                     IRIX_APP_NAME="${_app_name}"
                     IRIX_APP_PATH="${_app_path}"
                     IRIX_APP_BUILD_DIR="${_app_dir}"
+                    IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
                     IRIX_APP_REGISTER=register_${_app_prefix}
                 )
                 target_link_libraries(${_app_runner_target} PRIVATE
