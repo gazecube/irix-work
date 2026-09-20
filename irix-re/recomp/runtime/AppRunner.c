@@ -171,6 +171,47 @@ static void report_guest_words(IrixGuestRuntime *rt, const char *label, IrixGues
     fputc('\n', stderr);
 }
 
+static void report_guest_bytes_ascii(IrixGuestRuntime *rt, const char *label,
+                                     IrixGuestAddr addr, unsigned before,
+                                     unsigned after)
+{
+    IrixGuestAddr start;
+    unsigned total, off;
+
+    if (!addr)
+        return;
+    start = addr >= before ? addr - before : 0u;
+    total = before + after;
+
+    fprintf(stderr, "  bytes %s around 0x%08x (-0x%x..+0x%x):\n",
+            label, addr, before, after);
+    for (off = 0; off < total; off += 16u) {
+        unsigned i, n = total - off;
+        if (n > 16u) n = 16u;
+        fprintf(stderr, "    %08x  ", start + off);
+        for (i = 0; i < 16u; ++i) {
+            IrixGuestAddr p = start + off + i;
+            if (i < n && irix_guest_ptr(rt, p, 1u)) {
+                unsigned char ch = *(const unsigned char *)irix_guest_ptr(rt, p, 1u);
+                fprintf(stderr, "%02x ", (unsigned)ch);
+            } else {
+                fputs("?? ", stderr);
+            }
+        }
+        fputs(" |", stderr);
+        for (i = 0; i < n; ++i) {
+            IrixGuestAddr p = start + off + i;
+            if (irix_guest_ptr(rt, p, 1u)) {
+                unsigned char ch = *(const unsigned char *)irix_guest_ptr(rt, p, 1u);
+                fputc(ch >= 0x20u && ch <= 0x7eu ? (int)ch : '.', stderr);
+            } else {
+                fputc('?', stderr);
+            }
+        }
+        fputs("|\n", stderr);
+    }
+}
+
 static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestFunctionEntry *below = 0, *above = 0, *ra_fn = 0;
@@ -214,6 +255,12 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     report_guest_words(rt, "a0", (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
     report_guest_words(rt, "a1", (IrixGuestAddr)(uint32_t)cpu->gpr[5]);
     report_guest_words(rt, "a3", (IrixGuestAddr)(uint32_t)cpu->gpr[7]);
+    if (rt->trap_code == 0xeeee0004u) {
+        IrixGuestAddr gp = (IrixGuestAddr)(uint32_t)cpu->gpr[28];
+        IrixGuestAddr slot = gp - 0x6a4cu;
+        report_guest_bytes_ascii(rt, "fault", rt->fault_addr, 20u, 44u);
+        report_guest_bytes_ascii(rt, "gp-slot", slot, 32u, 64u);
+    }
 }
 
 static int push_guest_string(IrixGuestRuntime *rt, IrixGuestAddr base,
