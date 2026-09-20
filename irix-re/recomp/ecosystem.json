@@ -46,7 +46,8 @@
       "name": "xwsh",
       "prefix": "xwsh",
       "kind": "runtime",
-      "path": "usr/sbin/xwsh"
+      "path": "usr/sbin/xwsh",
+      "shared_components": []
     }
   ],
   "shared_components": [
