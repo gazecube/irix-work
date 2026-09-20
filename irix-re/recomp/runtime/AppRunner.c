@@ -642,6 +642,29 @@ int main(int argc, char **argv)
 
     irix_register_recompiled_stack(&rt);
     register_native_dsos(&rt);
+
+    /*
+     * xwsh's stripped import veneers for getpwnam/getpwuid were recovered as
+     * anonymous executable functions.  The guest rld leaves the application
+     * GOT pointing at those veneers, so name-based bridge registration never
+     * sees the calls.  Pin the two verified veneers before the app bundle is
+     * registered; first-match lookup then sends them through the ABI bridge.
+     *
+     * authenticateUser__6wshAppGv proves the mapping:
+     *   0x1001f41c takes a guest name pointer and stores struct passwd *
+     *   0x1001f430 takes uid 1000 and stores struct passwd *
+     */
+    if (!strcmp(IRIX_APP_NAME, "xwsh")) {
+        IrixGuestFunction getpwnam_fn = resolve_native("getpwnam");
+        IrixGuestFunction getpwuid_fn = resolve_native("getpwuid");
+        if (getpwnam_fn)
+            irix_guest_register_function(&rt, 0x1001f41cu,
+                                         getpwnam_fn, "getpwnam");
+        if (getpwuid_fn)
+            irix_guest_register_function(&rt, 0x1001f430u,
+                                         getpwuid_fn, "getpwuid");
+    }
+
     irix_register_app_bundle(&rt);
 
     if (setup_process_stack(&rt, &cpu, argc, argv,
