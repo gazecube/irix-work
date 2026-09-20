@@ -42,6 +42,11 @@ static unsigned long term_fg, term_bg, bold_pixel, cursor_fg, cursor_bg, select_
 static Atom wm_delete, xa_clipboard, xa_utf8;
 static int selecting, sel_x0, sel_y0, sel_x1, sel_y1;
 static char *selection_text;
+static const char *opt_title="Winterm", *opt_font="fixed";
+static const char *opt_fg="#d6d6d6", *opt_bg="#00003f", *opt_bold="#ffff00";
+static const char *opt_selfg="#000000", *opt_selbg="#adadad";
+static const char *filter_cmd1="nr -newwin '%s'";
+static int hold_on_exit;
 static Cell *cells;
 static Cell *history;
 static int history_count, view_offset;
@@ -311,6 +316,28 @@ static void make_selection(void)
     XSetSelectionOwner(dpy, xa_clipboard, win, CurrentTime);
 }
 
+static int urlchar(int c)
+{
+    return c>0x20 && c!='"' && c!='\'' && c!='<' && c!='>' && c!='(' && c!=')';
+}
+
+static void filter_url_at(int x,int y)
+{
+    Cell *row; int a=x,b=x; char url[2048],cmd[4096]; size_t n; pid_t p;
+    if(y<0||y>=rows||x<0||x>=cols)return;
+    row=display_cell(0,y);
+    while(a>0 && urlchar(row[a-1].ch))--a;
+    while(b<cols && urlchar(row[b].ch))++b;
+    n=(size_t)(b-a); if(!n||n>=sizeof(url))return;
+    memcpy(url,&row[a].ch,n); url[n]=0;
+    if(strncmp(url,"http://",7)&&strncmp(url,"https://",8)&&strncmp(url,"ftp://",6)&&strncmp(url,"www.",4))return;
+    free(selection_text); selection_text=strdup(url);
+    if(!selection_text)return;
+    XSetSelectionOwner(dpy,XA_PRIMARY,win,CurrentTime);
+    if(snprintf(cmd,sizeof(cmd),filter_cmd1,url)>=(int)sizeof(cmd))return;
+    p=fork(); if(p==0){execl("/bin/sh","sh","-c",cmd,(char*)0);_exit(127);}
+}
+
 static void request_paste(Atom which)
 {
     XConvertSelection(dpy, which, xa_utf8, xa_utf8, win, CurrentTime);
@@ -415,38 +442,52 @@ int main(int argc, char **argv)
     fd_set rfds;
     int xfd, maxfd;
     char **cmd = 0;
-    int i;
+    int i, gx=40, gy=40, gw=0, gh=0;
+    const char *geom=0;
 
-    for (i = 1; i < argc; ++i)
+    for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-e") && i + 1 < argc) { cmd = &argv[i+1]; break; }
+        else if ((!strcmp(argv[i],"-title") || !strcmp(argv[i],"-t")) && i+1<argc) opt_title=argv[++i];
+        else if ((!strcmp(argv[i],"-fn") || !strcmp(argv[i],"-f")) && i+1<argc) opt_font=argv[++i];
+        else if (!strcmp(argv[i],"-fg") && i+1<argc) opt_fg=argv[++i];
+        else if (!strcmp(argv[i],"-bg") && i+1<argc) opt_bg=argv[++i];
+        else if (!strcmp(argv[i],"-bold") && i+1<argc) opt_bold=argv[++i];
+        else if (!strcmp(argv[i],"-selfg") && i+1<argc) opt_selfg=argv[++i];
+        else if (!strcmp(argv[i],"-selbg") && i+1<argc) opt_selbg=argv[++i];
+        else if ((!strcmp(argv[i],"-geometry") || !strcmp(argv[i],"-geom")) && i+1<argc) geom=argv[++i];
+        else if ((!strcmp(argv[i],"-sl") || !strcmp(argv[i],"-retain")) && i+1<argc) { ++i; /* fixed backing store remains 1000 for now */ }
+        else if (!strcmp(argv[i],"-hold") || !strcmp(argv[i],"-holdonerror")) hold_on_exit=1;
+    }
 
     dpy = XOpenDisplay(0);
     if (!dpy) { fprintf(stderr, "xwsh: cannot open display\n"); return 1; }
     { Colormap cm=DefaultColormap(dpy,DefaultScreen(dpy)); XColor a,b;
       term_fg=WhitePixel(dpy,DefaultScreen(dpy)); term_bg=BlackPixel(dpy,DefaultScreen(dpy));
       bold_pixel=term_fg; cursor_fg=term_bg; cursor_bg=term_fg; select_fg=term_bg; select_bg=term_fg;
-      if(XAllocNamedColor(dpy,cm,"#d6d6d6",&a,&b))term_fg=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#00003f",&a,&b))term_bg=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#ffff00",&a,&b))bold_pixel=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_fg,&a,&b))term_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_bg,&a,&b))term_bg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_bold,&a,&b))bold_pixel=a.pixel;
       if(XAllocNamedColor(dpy,cm,"#00003f",&a,&b))cursor_fg=a.pixel;
       if(XAllocNamedColor(dpy,cm,"#00ff00",&a,&b))cursor_bg=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#000000",&a,&b))select_fg=a.pixel;
-      if(XAllocNamedColor(dpy,cm,"#adadad",&a,&b))select_bg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_selfg,&a,&b))select_fg=a.pixel;
+      if(XAllocNamedColor(dpy,cm,opt_selbg,&a,&b))select_bg=a.pixel;
     }
-    font = XLoadQueryFont(dpy, "fixed");
+    font = XLoadQueryFont(dpy, opt_font);
     if (!font) { fprintf(stderr, "xwsh: cannot load fixed font\n"); return 1; }
     cw = font->max_bounds.width;
     ch = font->ascent + font->descent;
     ascent = font->ascent;
+    if (geom) { int mask=XParseGeometry(geom,&gx,&gy,(unsigned*)&gw,(unsigned*)&gh); if(mask&WidthValue)cols=gw; if(mask&HeightValue)rows=gh; }
     cells = calloc((size_t)cols * rows, sizeof(*cells));
     history = calloc((size_t)RETAIN_LIMIT * cols, sizeof(*history));
     if (!cells || !history) return 1;
     clear_all();
 
-    win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 40, 40,
+    win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), gx, gy,
                               (unsigned)(cols*cw), (unsigned)(rows*ch), 1,
                               term_fg, term_bg);
-    XStoreName(dpy, win, "Winterm");
+    XStoreName(dpy, win, opt_title);
+    XSetIconName(dpy, win, opt_title);
     { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=0; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
     wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
     xa_clipboard=XInternAtom(dpy,"CLIPBOARD",False); xa_utf8=XInternAtom(dpy,"UTF8_STRING",False);
@@ -483,7 +524,9 @@ int main(int argc, char **argv)
                 XNextEvent(dpy, &ev);
                 if (ev.type == Expose) redraw();
                 else if (ev.type == KeyPress) send_key(&ev.xkey);
-                else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
+                else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
+                    filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
+                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
                     selecting=1; free(selection_text); selection_text=0; sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                 } else if (ev.type == MotionNotify && selecting) {
                     sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
@@ -517,7 +560,7 @@ int main(int argc, char **argv)
                 }
             }
         }
-        if (waitpid(child, 0, WNOHANG) == child) break;
+        if (waitpid(child, 0, WNOHANG) == child) { if(hold_on_exit){child=-1;} else break; }
     }
 done:
     if (child > 0) kill(child, SIGHUP);
