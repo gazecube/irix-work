@@ -935,8 +935,15 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         }
         cpu->pc = address;
         rt->current_pc = address;
-        /* N32 PIC entry convention: t9 contains the callee address. */
-        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        /*
+         * Only real named guest functions get N32 call-entry treatment.
+         * Anonymous recovered ranges are translation coverage: entering one
+         * at an interior PC is a control-flow continuation, not a new ABI
+         * function call.  In particular, do not clobber t9 when dispatching
+         * into an FDE/PDR/link/pointer-derived range.
+         */
+        if (entry->name)
+            cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
         /* $gp is callee-saved in the N32 ABI. Preserve the caller's value
            across all translated/native guest calls, including bridge entries
