@@ -1004,8 +1004,19 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         return -1;
     }
     {
+        uint64_t caller_saved[9];
         uint64_t caller_gp = cpu->gpr[28];
+        uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
+        unsigned saved_i;
+
+        /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
+           completed guest call just as $gp already does below. Keeping this
+           contract at the dispatcher boundary is especially important when
+           a translated callee crosses recovered ranges before returning. */
+        for (saved_i = 0; saved_i < 8u; ++saved_i)
+            caller_saved[saved_i] = cpu->gpr[16u + saved_i];
+        caller_saved[8] = cpu->gpr[30];
         if (trace_dialog_call(entry->name)) {
             fprintf(stderr,
                     "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
@@ -1036,10 +1047,16 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
-        /* $gp is callee-saved in the N32 ABI. Preserve the caller's value
-           across all translated/native guest calls, including bridge entries
-           that do not execute a guest epilogue themselves. */
-        cpu->gpr[28] = caller_gp;
+        /* A completed N32 call must return with the caller's callee-saved
+           register set and stack pointer intact. Do not rewrite state on a
+           trap: the fault report needs the exact machine state at failure. */
+        if (!rt->trapped) {
+            for (saved_i = 0; saved_i < 8u; ++saved_i)
+                cpu->gpr[16u + saved_i] = caller_saved[saved_i];
+            cpu->gpr[28] = caller_gp;
+            cpu->gpr[29] = caller_sp;
+            cpu->gpr[30] = caller_saved[8];
+        }
     }
     cpu->gpr[0] = 0;
     return rt->trapped ? -1 : 0;
