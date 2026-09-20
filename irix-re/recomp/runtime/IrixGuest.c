@@ -1027,6 +1027,29 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
                     (uint32_t)cpu->gpr[11]);
         }
+        if (entry->name && strcmp(entry->name, "strcpy") == 0) {
+            fprintf(stderr,
+                    "IRIX strcpy call: caller=%08x ra=%08x a0=%08x a1=%08x v0=%08x sp=%08x gp=%08x t9=%08x",
+                    (uint32_t)caller_pc, (uint32_t)cpu->gpr[31],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[29],
+                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25]);
+            if (caller_pc >= 16u && irix_guest_ptr(rt, caller_pc - 16u, 40u)) {
+                fprintf(stderr,
+                        " caller_words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+                        irix_guest_read32be(rt, caller_pc - 16u),
+                        irix_guest_read32be(rt, caller_pc - 12u),
+                        irix_guest_read32be(rt, caller_pc - 8u),
+                        irix_guest_read32be(rt, caller_pc - 4u),
+                        irix_guest_read32be(rt, caller_pc),
+                        irix_guest_read32be(rt, caller_pc + 4u),
+                        irix_guest_read32be(rt, caller_pc + 8u),
+                        irix_guest_read32be(rt, caller_pc + 12u),
+                        irix_guest_read32be(rt, caller_pc + 16u),
+                        irix_guest_read32be(rt, caller_pc + 20u));
+            }
+            fputc('\n', stderr);
+        }
         if (address >= 0x0fa36900u && address < 0x0fa37700u) {
             fprintf(stderr,
                     "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a3=0x%08x\n",
