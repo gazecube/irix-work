@@ -112,9 +112,85 @@ uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
     return ((uint64_t)hi << 32) | lo;
 }
 
+static void rld_watch_write(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
+{
+    unsigned i;
+    uint64_t end = (uint64_t)addr + size;
+    for (i = 0; i < rt->rld_watch_depth; ++i) {
+        IrixGuestRldWatchFrame *f = &rt->rld_watch[i];
+        uint64_t slot_end = (uint64_t)f->slot + 8u;
+        if (!f->warned && rt->current_pc != 0x0fb69b8cu &&
+            (uint64_t)addr < slot_end && end > (uint64_t)f->slot) {
+            uint64_t before = irix_guest_read64be(rt, f->slot);
+            fprintf(stderr,
+                    "IRIX rld saved-s0 overwrite: pc=%08x frame_sp=%08x slot=%08x expected=%016llx before=%016llx write_addr=%08x size=%zu\n",
+                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                    (uint32_t)f->slot, (unsigned long long)f->expected_s0,
+                    (unsigned long long)before, (uint32_t)addr, size);
+            f->warned = 1;
+        }
+    }
+}
+
+void irix_guest_rld_watch_enter(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
+{
+    IrixGuestRldWatchFrame *f;
+    if (rt->rld_watch_depth >= IRIX_GUEST_RLD_WATCH_MAX) {
+        fprintf(stderr, "IRIX rld watch overflow: pc=%08x sp=%08x\n",
+                (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[29]);
+        return;
+    }
+    f = &rt->rld_watch[rt->rld_watch_depth++];
+    f->sp = (IrixGuestAddr)((uint32_t)cpu->gpr[29] - 0x30u);
+    f->slot = f->sp + 0x10u;
+    f->expected_s0 = cpu->gpr[16];
+    f->warned = 0;
+}
+
+void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
+{
+    IrixGuestRldWatchFrame *f;
+    uint64_t actual;
+    if (!rt->rld_watch_depth)
+        return;
+    f = &rt->rld_watch[rt->rld_watch_depth - 1u];
+    if (f->sp != (IrixGuestAddr)cpu->gpr[29])
+        return;
+    actual = irix_guest_read64be(rt, f->slot);
+    if (actual != f->expected_s0)
+        fprintf(stderr,
+                "IRIX rld saved-s0 CORRUPT: pc=%08x frame_sp=%08x slot=%08x expected=%016llx actual=%016llx\n",
+                (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                (uint32_t)f->slot, (unsigned long long)f->expected_s0,
+                (unsigned long long)actual);
+}
+
+void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
+{
+    IrixGuestRldWatchFrame *f;
+    if (!rt->rld_watch_depth)
+        return;
+    f = &rt->rld_watch[rt->rld_watch_depth - 1u];
+    if (f->sp != (IrixGuestAddr)cpu->gpr[29]) {
+        fprintf(stderr,
+                "IRIX rld watch frame mismatch: pc=%08x expected_sp=%08x actual_sp=%08x\n",
+                (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                (uint32_t)cpu->gpr[29]);
+        return;
+    }
+    if (cpu->gpr[16] != f->expected_s0)
+        fprintf(stderr,
+                "IRIX rld s0 restore mismatch: pc=%08x frame_sp=%08x expected=%016llx restored=%016llx\n",
+                (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                (unsigned long long)f->expected_s0,
+                (unsigned long long)cpu->gpr[16]);
+    --rt->rld_watch_depth;
+}
+
 void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 {
     uint8_t *p;
+    rld_watch_write(rt, addr, 1u);
     if (addr >= 0x0fb5291cu && addr < 0x0fb52920u)
         fprintf(stderr,
                 "IRIX libc GOT byte watch: pc=0x%08x addr=0x%08x value=%02x\n",
@@ -127,6 +203,7 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value)
 {
     uint8_t *p;
+    rld_watch_write(rt, addr, 2u);
     if ((uint64_t)addr < UINT64_C(0x0fb52920) &&
         (uint64_t)addr + 2u > UINT64_C(0x0fb5291c))
         fprintf(stderr,
@@ -140,6 +217,7 @@ void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t val
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
 {
     uint8_t *p;
+    rld_watch_write(rt, addr, 4u);
     if (addr == 0x0fb5291cu) {
         uint32_t old_value = 0;
         uint8_t *oldp = (uint8_t *)irix_guest_ptr(rt, addr, 4u);
