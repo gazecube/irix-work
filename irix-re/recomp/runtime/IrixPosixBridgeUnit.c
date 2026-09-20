@@ -414,6 +414,89 @@ static void bridge_getpwnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out;
 }
 
+static int write_guest_passwd_r(IrixGuestRuntime *rt, IrixGuestAddr out,
+                                IrixGuestAddr buf, uint32_t buflen,
+                                const struct passwd *pw)
+{
+    const char *src[7];
+    IrixGuestAddr ptr[7];
+    uint32_t used = 0;
+    unsigned i;
+    if (!out || !buf || !pw || !irix_guest_ptr(rt, out, 36u) ||
+        !irix_guest_ptr(rt, buf, buflen))
+        return EFAULT;
+    src[0] = pw->pw_name ? pw->pw_name : "";
+    src[1] = pw->pw_passwd ? pw->pw_passwd : "";
+    src[2] = ""; /* IRIX pw_age */
+    src[3] = ""; /* IRIX pw_comment */
+    src[4] = pw->pw_gecos ? pw->pw_gecos : "";
+    src[5] = pw->pw_dir ? pw->pw_dir : "";
+    src[6] = pw->pw_shell ? pw->pw_shell : "";
+    for (i = 0; i < 7u; ++i) {
+        size_t n = strlen(src[i]) + 1u;
+        void *dst;
+        if (n > UINT32_MAX || used > buflen || n > (size_t)(buflen - used))
+            return ERANGE;
+        ptr[i] = buf + used;
+        dst = irix_guest_ptr(rt, ptr[i], n);
+        if (!dst) return EFAULT;
+        memcpy(dst, src[i], n);
+        used += (uint32_t)n;
+    }
+    irix_guest_write32be(rt, out + 0u, ptr[0]);
+    irix_guest_write32be(rt, out + 4u, ptr[1]);
+    irix_guest_write32be(rt, out + 8u, (uint32_t)pw->pw_uid);
+    irix_guest_write32be(rt, out + 12u, (uint32_t)pw->pw_gid);
+    irix_guest_write32be(rt, out + 16u, ptr[2]);
+    irix_guest_write32be(rt, out + 20u, ptr[3]);
+    irix_guest_write32be(rt, out + 24u, ptr[4]);
+    irix_guest_write32be(rt, out + 28u, ptr[5]);
+    irix_guest_write32be(rt, out + 32u, ptr[6]);
+    return rt->trapped ? EFAULT : 0;
+}
+
+static void bridge_getpwuid_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uid_t uid = (uid_t)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr pwd = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr buf = (uint32_t)cpu->gpr[6];
+    uint32_t buflen = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr resultp = (uint32_t)cpu->gpr[8];
+    struct passwd *pw = getpwuid(uid);
+    int rc = 0;
+    if (!resultp || !irix_guest_ptr(rt, resultp, 4u)) rc = EFAULT;
+    else if (!pw) irix_guest_write32be(rt, resultp, 0u);
+    else {
+        rc = write_guest_passwd_r(rt, pwd, buf, buflen, pw);
+        irix_guest_write32be(rt, resultp, rc ? 0u : pwd);
+    }
+    fprintf(stderr, "IRIX getpwuid_r: uid=%lu pwd=%08x buf=%08x len=%u resultp=%08x host=%s rc=%d\n",
+            (unsigned long)uid, (unsigned)pwd, (unsigned)buf, buflen,
+            (unsigned)resultp, pw && pw->pw_name ? pw->pw_name : "(null)", rc);
+    ret_i32(cpu, rc);
+}
+
+static void bridge_getpwnam_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr pwd = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr buf = (uint32_t)cpu->gpr[6];
+    uint32_t buflen = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr resultp = (uint32_t)cpu->gpr[8];
+    struct passwd *pw = name ? getpwnam(name) : 0;
+    int rc = 0;
+    if (!resultp || !irix_guest_ptr(rt, resultp, 4u)) rc = EFAULT;
+    else if (!pw) irix_guest_write32be(rt, resultp, 0u);
+    else {
+        rc = write_guest_passwd_r(rt, pwd, buf, buflen, pw);
+        irix_guest_write32be(rt, resultp, rc ? 0u : pwd);
+    }
+    fprintf(stderr, "IRIX getpwnam_r: name=%s pwd=%08x buf=%08x len=%u resultp=%08x host=%s rc=%d\n",
+            name ? name : "(null)", (unsigned)pwd, (unsigned)buf, buflen,
+            (unsigned)resultp, pw && pw->pw_name ? pw->pw_name : "(null)", rc);
+    ret_i32(cpu, rc);
+}
+
 static void bridge_getuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -883,6 +966,8 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
     if (!strcmp(name, "getpwuid")) return bridge_getpwuid;
     if (!strcmp(name, "getpwnam")) return bridge_getpwnam;
+    if (!strcmp(name, "getpwuid_r")) return bridge_getpwuid_r;
+    if (!strcmp(name, "getpwnam_r")) return bridge_getpwnam_r;
     if (!strcmp(name, "getuid")) return bridge_getuid;
     if (!strcmp(name, "geteuid")) return bridge_geteuid;
     if (!strcmp(name, "getgid")) return bridge_getgid;
