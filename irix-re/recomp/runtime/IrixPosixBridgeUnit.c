@@ -364,15 +364,22 @@ static IrixGuestAddr copy_guest_tmp_string(IrixGuestRuntime *rt, const char *src
    cache because the non-reentrant getpw* interfaces return static storage. */
 static IrixGuestAddr copy_guest_passwd_n32(IrixGuestRuntime *rt, const struct passwd *pw)
 {
-    IrixGuestAddr out, fields[5];
+    IrixGuestAddr out, fields[7];
     if (!pw) return 0;
-    out = tmp_alloc(28u);
+
+    /* IRIX passwd(4) has two SVR4 fields that Linux lacks:
+         name, passwd, uid, gid, age, comment, gecos, dir, shell
+       N32 therefore occupies 36 bytes, not the Linux-shaped 28 bytes. */
+    out = tmp_alloc(36u);
     fields[0] = copy_guest_tmp_string(rt, pw->pw_name ? pw->pw_name : "");
     fields[1] = copy_guest_tmp_string(rt, pw->pw_passwd ? pw->pw_passwd : "");
-    fields[2] = copy_guest_tmp_string(rt, pw->pw_gecos ? pw->pw_gecos : "");
-    fields[3] = copy_guest_tmp_string(rt, pw->pw_dir ? pw->pw_dir : "");
-    fields[4] = copy_guest_tmp_string(rt, pw->pw_shell ? pw->pw_shell : "");
-    if (!out || !fields[0] || !fields[1] || !fields[2] || !fields[3] || !fields[4]) return 0;
+    fields[2] = copy_guest_tmp_string(rt, ""); /* pw_age */
+    fields[3] = copy_guest_tmp_string(rt, ""); /* pw_comment */
+    fields[4] = copy_guest_tmp_string(rt, pw->pw_gecos ? pw->pw_gecos : "");
+    fields[5] = copy_guest_tmp_string(rt, pw->pw_dir ? pw->pw_dir : "");
+    fields[6] = copy_guest_tmp_string(rt, pw->pw_shell ? pw->pw_shell : "");
+    if (!out || !fields[0] || !fields[1] || !fields[2] || !fields[3] ||
+        !fields[4] || !fields[5] || !fields[6]) return 0;
     irix_guest_write32be(rt, out + 0u, fields[0]);
     irix_guest_write32be(rt, out + 4u, fields[1]);
     irix_guest_write32be(rt, out + 8u, (uint32_t)pw->pw_uid);
@@ -380,6 +387,8 @@ static IrixGuestAddr copy_guest_passwd_n32(IrixGuestRuntime *rt, const struct pa
     irix_guest_write32be(rt, out + 16u, fields[2]);
     irix_guest_write32be(rt, out + 20u, fields[3]);
     irix_guest_write32be(rt, out + 24u, fields[4]);
+    irix_guest_write32be(rt, out + 28u, fields[5]);
+    irix_guest_write32be(rt, out + 32u, fields[6]);
     return rt->trapped ? 0 : out;
 }
 
