@@ -26,6 +26,32 @@ static void compat_result(IrixGuestCpu *cpu, int64_t value)
     }
 }
 
+static int compat_range_contains_addr(IrixGuestAddr base, uint32_t len,
+                                      IrixGuestAddr addr, uint32_t width)
+{
+    uint64_t lo = base;
+    uint64_t hi = lo + len;
+    uint64_t alo = addr;
+    uint64_t ahi = alo + width;
+    return alo >= lo && ahi <= hi;
+}
+
+static void compat_watch_libc_got(IrixGuestRuntime *rt, const char *where,
+                                  IrixGuestAddr base, uint32_t len)
+{
+    const IrixGuestAddr slot = 0x0fb5291cu;
+    if (!compat_range_contains_addr(base, len, slot, 4u))
+        return;
+    if (!irix_guest_ptr(rt, slot, 4u)) {
+        fprintf(stderr, "IRIX libc GOT bulk watch: %s slot=0x%08x unmapped\n",
+                where, slot);
+        return;
+    }
+    fprintf(stderr,
+            "IRIX libc GOT bulk watch: %s range=0x%08x+0x%x slot=0x%08x value=%08x\n",
+            where, base, len, slot, irix_guest_read32be(rt, slot));
+}
+
 static int compat_elfmap(IrixGuestRuntime *rt, int fd,
                          IrixGuestAddr phdr_addr, uint32_t count,
                          IrixGuestAddr *first_out)
@@ -66,6 +92,7 @@ static int compat_elfmap(IrixGuestRuntime *rt, int fd,
             }
         }
 
+        compat_watch_libc_got(rt, "ELFMAP before pread", vaddr, filesz);
         if (filesz) {
             got = pread(fd, dst, filesz, (off_t)offset);
             if (got < 0)
@@ -75,8 +102,14 @@ static int compat_elfmap(IrixGuestRuntime *rt, int fd,
                 return -1;
             }
         }
-        if (memsz > filesz)
+        compat_watch_libc_got(rt, "ELFMAP after pread", vaddr, filesz);
+        if (memsz > filesz) {
+            compat_watch_libc_got(rt, "ELFMAP before bss clear",
+                                  vaddr + filesz, memsz - filesz);
             memset((unsigned char *)dst + filesz, 0, memsz - filesz);
+            compat_watch_libc_got(rt, "ELFMAP after bss clear",
+                                  vaddr + filesz, memsz - filesz);
+        }
 
         if (!first)
             first = vaddr;
