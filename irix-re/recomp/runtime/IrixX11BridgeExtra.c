@@ -4,6 +4,7 @@
 #include <X11/Xlibint.h>
 #include <X11/Xresource.h>
 #include <X11/Xutil.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -394,8 +395,25 @@ static void bridge__XSGIAddToPreloadAtomList(IrixGuestRuntime *rt, IrixGuestCpu 
 
 static void bridge_XOpenDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = display_to_guest(XOpenDisplay(name));
+    IrixGuestAddr name_addr = (uint32_t)cpu->gpr[4];
+    const char *name = guest_cstr(rt, name_addr);
+    const char *host_display = getenv("DISPLAY");
+    Display *dpy;
+    IrixGuestAddr guest_display;
+
+    fprintf(stderr,
+            "IRIX XOpenDisplay: guest_name=0x%08x name=%s%s%s host_DISPLAY=%s%s%s\\n",
+            name_addr,
+            name ? "\\\"" : "<", name ? name : "NULL", name ? "\\\"" : ">",
+            host_display ? "\\\"" : "<", host_display ? host_display : "NULL",
+            host_display ? "\\\"" : ">");
+
+    dpy = XOpenDisplay(name);
+    guest_display = display_to_guest(dpy);
+    fprintf(stderr,
+            "IRIX XOpenDisplay: host_result=%p guest_result=0x%08x\\n",
+            (void *)dpy, guest_display);
+    cpu->gpr[2] = guest_display;
 }
 
 static void bridge_XCloseDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
