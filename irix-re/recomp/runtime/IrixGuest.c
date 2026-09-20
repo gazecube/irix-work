@@ -766,6 +766,18 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 1024: /* getuid */
         syscall_result(cpu, (int64_t)getuid());
         return;
+    case 1033: { /* access */
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        int mode = (int)(int32_t)cpu->gpr[5];
+        const char *path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        if (!path) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)access(path, mode));
+        return;
+    }
     case 1040: /* syssgi */
         irix_compat_syssgi(rt, cpu);
         return;
