@@ -149,42 +149,55 @@ void irix_guest_rld_watch_enter(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
 
 void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
 {
-    IrixGuestRldWatchFrame *f;
-    uint64_t actual;
-    if (!rt->rld_watch_depth)
+    IrixGuestAddr sp = (IrixGuestAddr)cpu->gpr[29];
+    unsigned i;
+    for (i = rt->rld_watch_depth; i > 0; --i) {
+        IrixGuestRldWatchFrame *f = &rt->rld_watch[i - 1u];
+        uint64_t actual;
+        if (f->sp != sp)
+            continue;
+        actual = irix_guest_read64be(rt, f->slot);
+        if (actual != f->expected_s0)
+            fprintf(stderr,
+                    "IRIX rld saved-s0 CORRUPT: pc=%08x frame_sp=%08x slot=%08x expected=%016llx actual=%016llx\n",
+                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                    (uint32_t)f->slot, (unsigned long long)f->expected_s0,
+                    (unsigned long long)actual);
         return;
-    f = &rt->rld_watch[rt->rld_watch_depth - 1u];
-    if (f->sp != (IrixGuestAddr)cpu->gpr[29])
-        return;
-    actual = irix_guest_read64be(rt, f->slot);
-    if (actual != f->expected_s0)
-        fprintf(stderr,
-                "IRIX rld saved-s0 CORRUPT: pc=%08x frame_sp=%08x slot=%08x expected=%016llx actual=%016llx\n",
-                (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                (uint32_t)f->slot, (unsigned long long)f->expected_s0,
-                (unsigned long long)actual);
+    }
 }
 
 void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
 {
-    IrixGuestRldWatchFrame *f;
-    if (!rt->rld_watch_depth)
-        return;
-    f = &rt->rld_watch[rt->rld_watch_depth - 1u];
-    if (f->sp != (IrixGuestAddr)cpu->gpr[29]) {
-        fprintf(stderr,
-                "IRIX rld watch frame mismatch: pc=%08x expected_sp=%08x actual_sp=%08x\n",
-                (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                (uint32_t)cpu->gpr[29]);
+    IrixGuestAddr sp = (IrixGuestAddr)cpu->gpr[29];
+    unsigned i;
+    for (i = rt->rld_watch_depth; i > 0; --i) {
+        unsigned index = i - 1u;
+        IrixGuestRldWatchFrame *f = &rt->rld_watch[index];
+        if (f->sp != sp)
+            continue;
+        if (cpu->gpr[16] != f->expected_s0)
+            fprintf(stderr,
+                    "IRIX rld s0 restore mismatch: pc=%08x frame_sp=%08x expected=%016llx restored=%016llx\n",
+                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
+                    (unsigned long long)f->expected_s0,
+                    (unsigned long long)cpu->gpr[16]);
+        if (index + 1u < rt->rld_watch_depth)
+            memmove(&rt->rld_watch[index], &rt->rld_watch[index + 1u],
+                    (rt->rld_watch_depth - index - 1u) * sizeof(rt->rld_watch[0]));
+        --rt->rld_watch_depth;
         return;
     }
-    if (cpu->gpr[16] != f->expected_s0)
-        fprintf(stderr,
-                "IRIX rld s0 restore mismatch: pc=%08x frame_sp=%08x expected=%016llx restored=%016llx\n",
-                (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                (unsigned long long)f->expected_s0,
-                (unsigned long long)cpu->gpr[16]);
-    --rt->rld_watch_depth;
+
+    fprintf(stderr, "IRIX rld unmatched epilogue: pc=%08x actual_sp=%08x active=",
+            (uint32_t)rt->current_pc, (uint32_t)sp);
+    if (!rt->rld_watch_depth) {
+        fprintf(stderr, "none");
+    } else {
+        for (i = 0; i < rt->rld_watch_depth; ++i)
+            fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)rt->rld_watch[i].sp);
+    }
+    fputc('\n', stderr);
 }
 
 void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
