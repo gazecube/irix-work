@@ -986,6 +986,29 @@ static void dump_guest_bytes(IrixGuestRuntime *rt, const char *label,
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    /*
+     * Once authenticateUser is running, its callees live outside the xwsh
+     * address window.  Use the caller PC to report those outbound calls.
+     */
+    if ((uint32_t)cpu->pc >= 0x10039c50u &&
+        (uint32_t)cpu->pc < 0x10039d0cu &&
+        address != 0x10039c50u) {
+        fprintf(stderr,
+                "IRIX authenticateUser call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
+                address,
+                entry ? entry->address : 0u,
+                entry && entry->name ? entry->name : "?",
+                (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31],
+                (uint32_t)cpu->gpr[2],
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28],
+                (uint32_t)cpu->gpr[25]);
+        report_nearest_functions(rt, address);
+        fputc('\n', stderr);
+    }
     if (trace_xwsh_passwd_decision(address)) {
         fprintf(stderr,
                 "IRIX passwd window call: target=%08x owner=%08x:%s caller=%08x ra=%08x v0=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x sp=%08x gp=%08x t9=%08x\n",
