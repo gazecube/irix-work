@@ -64,6 +64,7 @@ typedef struct IrixGuestRuntime {
     int trapped;
     IrixGuestAddr errno_proxy_addr;
     const char *rootfs;
+    IrixGuestAddr program_break;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     size_t function_count;
 } IrixGuestRuntime;
