@@ -554,8 +554,23 @@ def main():
             registry = bundle.parent / 'registry.c'
             component_sources.append(registry)
             component_objects = [object_by_source[src] for src in component_sources]
+            # A translated dependency can live in an IRIX ISA subdirectory
+            # (for example /usr/lib32/mips3/libm.so).  Give the native loader
+            # explicit $ORIGIN-relative search paths to every translated
+            # provider instead of allowing an IRIX absolute RUNPATH such as
+            # /usr/lib to escape into the Linux host filesystem.
+            runpaths = ['$ORIGIN']
+            for needed in elf_needed(binary):
+                dep = dso_by_soname.get(needed)
+                if dep is None or dep == dso:
+                    continue
+                rel = os.path.relpath(dep.parent, dso.parent)
+                rp = '$ORIGIN' if rel == '.' else '$ORIGIN/' + rel
+                if rp not in runpaths:
+                    runpaths.append(rp)
             link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
-                        '-Wl,--no-as-needed', "-Wl,-rpath,$ORIGIN",
+                        '-Wl,--no-as-needed',
+                        '-Wl,-rpath,' + ':'.join(runpaths),
                         '-o', dso, *component_objects]
             if runtime_lib is not None:
                 link_cmd.append(str(runtime_lib))
