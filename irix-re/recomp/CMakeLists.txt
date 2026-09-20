@@ -1,4 +1,4 @@
-add_library(irix_recomp_runtime STATIC
+add_library(irix_recomp_runtime SHARED
     runtime/IrixGuest.c
     runtime/IrixCompat.c
     runtime/IrixElf.c
@@ -10,6 +10,9 @@ target_include_directories(irix_recomp_runtime PUBLIC
 
 set_target_properties(irix_recomp_runtime PROPERTIES
     POSITION_INDEPENDENT_CODE ON
+    OUTPUT_NAME irixre
+    VERSION 1.0.0
+    SOVERSION 1
 )
 
 add_library(irix_recomp_libc_bridge STATIC
