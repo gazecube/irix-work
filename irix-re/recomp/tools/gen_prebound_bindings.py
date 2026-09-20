@@ -80,11 +80,18 @@ def main():
             # forwarding candidate here.
             if row and row['value']:
                 addrs.append(row['value'])
-            elif imp['address'] and imp['address'] in defined_addrs:
-                # Keep genuine executable import stubs recovered from the
-                # image itself.  Do not manufacture one from arbitrary
-                # undefined-symbol st_value metadata.
-                addrs.append(imp['address'])
+            if imp['address'] and imp['address'] in defined_addrs:
+                # An undefined STT_FUNC with a nonzero st_value can be a real
+                # executable import veneer even when the prebound GOT already
+                # contains a different provider address. Preserve both pieces
+                # of evidence: the GOT target is where prebound callers may
+                # jump, while st_value is the owner-local veneer that callers
+                # can also reach directly. xwsh uses exactly this form for
+                # strdup, malloc/calloc, getpwnam/getpwuid and XOpenDisplay.
+                # defined_addrs keeps arbitrary prebound provider addresses
+                # from being mistaken for local veneers.
+                if imp['address'] not in addrs:
+                    addrs.append(imp['address'])
             target=defs.get(name,0)
             for stub in addrs:
                 # An undefined symbol may carry the address of an executable
