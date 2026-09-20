@@ -216,8 +216,10 @@ if(IRIX_DEV_TREE)
                             --core-link "${IRIX_RECOMP_CORE_LINK}"
                             -o "${_app_dir}"
                             --cc "${CMAKE_C_COMPILER}"
+                            --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
                     DEPENDS
                         irix_recompiled_core
+                        irix_recomp_runtime
                         "${IRIX_ECOSYSTEM_MANIFEST}"
                         tools/build_irix_app_bundle.py
                         tools/audit_n32_bundle.py
