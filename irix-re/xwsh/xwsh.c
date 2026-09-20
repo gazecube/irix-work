@@ -47,7 +47,7 @@ static const char *opt_title="Winterm", *opt_font="fixed";
 static const char *opt_fg="#d6d6d6", *opt_bg="#00003f", *opt_bold="#ffff00";
 static const char *opt_selfg="#000000", *opt_selbg="#adadad";
 static const char *filter_cmd1="nr -newwin '%s'";
-static int hold_on_exit, login_shell, iconic, no_keyboard, transient;
+static int hold_on_exit, login_shell, iconic, no_keyboard, transient, use_scrollbar=1;
 static const char *opt_display;
 static Window transient_for;
 static Cell *cells;
@@ -63,6 +63,8 @@ static char csi[MAX_CSI];
 static int csi_len;
 
 static int clampi(int v, int lo, int hi);
+static int text_x0(void) { return use_scrollbar ? SCROLLBAR_W : 0; }
+static int window_extra_width(void) { return use_scrollbar ? SCROLLBAR_W : 0; }
 static void set_view(int off);
 
 static Cell *cell_at(int x, int y) { return &cells[y * cols + x]; }
@@ -288,27 +290,64 @@ static int point_selected(int x,int y)
     return y>=y0 && y<=y1 && (y!=y0 || x>=x0) && (y!=y1 || x<=x1);
 }
 
+static void scrollbar_metrics(int *thumb_y, int *thumb_h)
+{
+    int h=rows*ch, button=SCROLLBAR_W, track_y=button, track_h=h-2*button;
+    int total=history_count+rows, span;
+    if(track_h<1){*thumb_y=track_y;*thumb_h=1;return;}
+    *thumb_h=total ? (rows*track_h)/total : track_h;
+    if(*thumb_h<12)*thumb_h=12; if(*thumb_h>track_h)*thumb_h=track_h;
+    span=track_h-*thumb_h;
+    *thumb_y=track_y+(history_count ? ((history_count-view_offset)*span)/history_count : 0);
+}
+
 static void draw_scrollbar(void)
 {
-    int x0=cols*cw, h=rows*ch, total=history_count+rows;
-    int thumb_h, thumb_y, track=h-4;
-    unsigned long trough=select_bg, thumb=term_fg;
-    if(track<1)return;
-    thumb_h = total ? (rows*track)/total : track;
-    if(thumb_h<12)thumb_h=12; if(thumb_h>track)thumb_h=track;
-    thumb_y = 2 + (history_count ? ((history_count-view_offset)*(track-thumb_h))/history_count : 0);
-    XSetForeground(dpy,gc,trough); XFillRectangle(dpy,win,gc,x0,0,SCROLLBAR_W,(unsigned)h);
-    XSetForeground(dpy,gc,term_bg); XDrawRectangle(dpy,win,gc,x0+1,1,SCROLLBAR_W-3,(unsigned)(h-3));
-    XSetForeground(dpy,gc,thumb); XFillRectangle(dpy,win,gc,x0+3,thumb_y,SCROLLBAR_W-6,(unsigned)thumb_h);
+    int h=rows*ch, b=SCROLLBAR_W, ty,th, mid=b/2;
+    if(!use_scrollbar)return;
+    scrollbar_metrics(&ty,&th);
+    /* Original xwsh constructs a wshScrollBar/tuScrollBar with separate
+       decrement/increment buttons, slider thumb and divot. */
+    XSetForeground(dpy,gc,select_bg);
+    XFillRectangle(dpy,win,gc,0,0,b,(unsigned)h);
+    XSetForeground(dpy,gc,term_bg);
+    XDrawRectangle(dpy,win,gc,0,0,b-1,b-1);
+    XDrawRectangle(dpy,win,gc,0,h-b,b-1,b-1);
+    /* up/down button glyphs */
+    XDrawLine(dpy,win,gc,mid,b/3,3,2*b/3);
+    XDrawLine(dpy,win,gc,mid,b/3,b-4,2*b/3);
+    XDrawLine(dpy,win,gc,3,2*b/3,b-4,2*b/3);
+    XDrawLine(dpy,win,gc,3,h-b/3,b-4,h-2*b/3);
+    XDrawLine(dpy,win,gc,b-4,h-2*b/3,mid,h-b/3);
+    XDrawLine(dpy,win,gc,mid,h-b/3,3,h-2*b/3);
+    XSetForeground(dpy,gc,term_fg);
+    XFillRectangle(dpy,win,gc,2,ty,b-4,(unsigned)th);
+    /* tuSlider's divot: give the thumb a visible center grip. */
+    XSetForeground(dpy,gc,term_bg);
+    XDrawLine(dpy,win,gc,4,ty+th/2,b-5,ty+th/2);
+}
+
+static void scrollbar_action(int y)
+{
+    int h=rows*ch, ty,th;
+    if(!use_scrollbar)return;
+    scrollbar_metrics(&ty,&th);
+    if(y<SCROLLBAR_W){set_view(view_offset+1);return;}
+    if(y>=h-SCROLLBAR_W){set_view(view_offset-1);return;}
+    if(y<ty){set_view(view_offset+rows);return;}
+    if(y>=ty+th){set_view(view_offset-rows);return;}
+    scrollbar_drag=1; scrollbar_drag_y=y; scrollbar_drag_view=view_offset;
 }
 
 static void scrollbar_to_y(int y)
 {
-    int h=rows*ch, track=h-4, total=history_count+rows, thumb_h, span, pos;
-    if(!history_count){set_view(0);return;}
-    thumb_h=(rows*track)/total; if(thumb_h<12)thumb_h=12; if(thumb_h>track)thumb_h=track;
-    span=track-thumb_h; if(span<=0){set_view(0);return;}
-    pos=clampi(y-2-thumb_h/2,0,span);
+    int h=rows*ch, track_y=SCROLLBAR_W, track_h=h-2*SCROLLBAR_W;
+    int total=history_count+rows, thumb_h, span, pos;
+    if(!use_scrollbar||!history_count){set_view(0);return;}
+    thumb_h=total ? (rows*track_h)/total : track_h;
+    if(thumb_h<12)thumb_h=12; if(thumb_h>track_h)thumb_h=track_h;
+    span=track_h-thumb_h; if(span<=0){set_view(0);return;}
+    pos=clampi(y-track_y-thumb_h/2,0,span);
     set_view(history_count-(pos*history_count)/span);
 }
 
@@ -318,31 +357,31 @@ static void redraw(void)
     unsigned long fg = term_fg;
     unsigned long bg = term_bg;
     XSetForeground(dpy, gc, bg);
-    XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw + SCROLLBAR_W), (unsigned)(rows * ch));
+    XFillRectangle(dpy, win, gc, 0, 0, (unsigned)(cols * cw + window_extra_width()), (unsigned)(rows * ch));
     for (y = 0; y < rows; ++y) {
         for (x = 0; x < cols; ++x) {
             Cell *c = display_cell(x, y);
             char s[1];
             s[0] = (char)c->ch;
             if (point_selected(x,y)) {
-                XSetForeground(dpy,gc,select_bg); XFillRectangle(dpy,win,gc,x*cw,y*ch,(unsigned)cw,(unsigned)ch);
-                if(c->ch!=' '){XSetForeground(dpy,gc,select_fg);XDrawString(dpy,win,gc,x*cw,y*ch+ascent,s,1);} continue;
+                XSetForeground(dpy,gc,select_bg); XFillRectangle(dpy,win,gc,text_x0()+x*cw,y*ch,(unsigned)cw,(unsigned)ch);
+                if(c->ch!=' '){XSetForeground(dpy,gc,select_fg);XDrawString(dpy,win,gc,text_x0()+x*cw,y*ch+ascent,s,1);} continue;
             }
             if (c->ch == ' ') continue;
             if (c->inverse) {
                 XSetForeground(dpy, gc, fg);
-                XFillRectangle(dpy, win, gc, x*cw, y*ch, (unsigned)cw, (unsigned)ch);
+                XFillRectangle(dpy, win, gc, text_x0()+x*cw, y*ch, (unsigned)cw, (unsigned)ch);
                 XSetForeground(dpy, gc, bg);
             } else XSetForeground(dpy, gc, c->bold ? bold_pixel : fg);
-            XDrawString(dpy, win, gc, x*cw, y*ch + ascent, s, 1);
-            if (c->bold) XDrawString(dpy, win, gc, x*cw + 1, y*ch + ascent, s, 1);
+            XDrawString(dpy, win, gc, text_x0()+x*cw, y*ch + ascent, s, 1);
+            if (c->bold) XDrawString(dpy, win, gc, text_x0()+x*cw + 1, y*ch + ascent, s, 1);
         }
     }
     draw_scrollbar();
     if (view_offset) { XFlush(dpy); return; }
     XSetForeground(dpy, gc, cursor_bg);
-    XFillRectangle(dpy, win, gc, cx*cw, cy*ch, (unsigned)cw, (unsigned)ch);
-    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,cx*cw,cy*ch+ascent,s,1); } }
+    XFillRectangle(dpy, win, gc, ctext_x0()+x*cw, cy*ch, (unsigned)cw, (unsigned)ch);
+    { Cell *cc=cell_at(cx,cy); char s[1]={(char)cc->ch}; if(cc->ch!=' '){ XSetForeground(dpy,gc,cursor_fg); XDrawString(dpy,win,gc,ctext_x0()+x*cw,cy*ch+ascent,s,1); } }
     XFlush(dpy);
 }
 
@@ -529,6 +568,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i],"-ls") || !strcmp(argv[i],"-login")) login_shell=1;
         else if (!strcmp(argv[i],"-iconic")) iconic=1;
         else if (!strcmp(argv[i],"-nokeyboard")) no_keyboard=1;
+        else if (!strcmp(argv[i],"-noscrollbar")) use_scrollbar=0;
         else if (!strcmp(argv[i],"-transient")) transient=1;
         else if (!strcmp(argv[i],"-display") && i+1<argc) opt_display=argv[++i];
     }
@@ -558,11 +598,11 @@ int main(int argc, char **argv)
     clear_all();
 
     win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), gx, gy,
-                              (unsigned)(cols*cw+SCROLLBAR_W), (unsigned)(rows*ch), 1,
+                              (unsigned)(cols*cw+window_extra_width()), (unsigned)(rows*ch), 1,
                               term_fg, term_bg);
     XStoreName(dpy, win, opt_title);
     XSetIconName(dpy, win, opt_title);
-    { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=SCROLLBAR_W; h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
+    { XSizeHints h; memset(&h,0,sizeof(h)); h.flags=PResizeInc|PBaseSize; h.width_inc=cw; h.height_inc=ch; h.base_width=window_extra_width(); h.base_height=0; XSetWMNormalHints(dpy,win,&h); }
     wm_delete=XInternAtom(dpy,"WM_DELETE_WINDOW",False); XSetWMProtocols(dpy,win,&wm_delete,1);
     xa_clipboard=XInternAtom(dpy,"CLIPBOARD",False); xa_utf8=XInternAtom(dpy,"UTF8_STRING",False);
     XSelectInput(dpy, win, ExposureMask|KeyPressMask|StructureNotifyMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask);
@@ -607,36 +647,35 @@ int main(int argc, char **argv)
                 if (ev.type == Expose) redraw();
                 else if (ev.type == KeyPress && !no_keyboard) send_key(&ev.xkey);
                 else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && (ev.xbutton.state & ControlMask)) {
-                    filter_url_at(clampi(ev.xbutton.x/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
-                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && ev.xbutton.x >= cols*cw) {
-                    scrollbar_drag=1; scrollbar_drag_y=ev.xbutton.y; scrollbar_drag_view=view_offset;
-                    scrollbar_to_y(ev.xbutton.y);
+                    filter_url_at(clampi((ev.xbutton.x-text_x0())/cw,0,cols-1),clampi(ev.xbutton.y/ch,0,rows-1));
+                } else if (ev.type == ButtonPress && ev.xbutton.button == Button1 && use_scrollbar && ev.xbutton.x < SCROLLBAR_W) {
+                    scrollbar_action(ev.xbutton.y);
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button1) {
                     if (selection_visible) {
                         selection_visible=0; selecting=0; suppress_select_release=1; redraw();
                     } else {
                         selecting=1; selection_visible=0; suppress_select_release=0;
                         free(selection_text); selection_text=0;
-                        sel_x0=sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
+                        sel_x0=sel_x1=clampi((ev.xbutton.x-text_x0())/cw,0,cols-1); sel_y0=sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); redraw();
                     }
                 } else if (ev.type == MotionNotify && scrollbar_drag) {
                     scrollbar_to_y(ev.xmotion.y);
                 } else if (ev.type == MotionNotify && selecting) {
-                    sel_x1=clampi(ev.xmotion.x/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
+                    sel_x1=clampi((ev.xmotion.x-text_x0())/cw,0,cols-1); sel_y1=clampi(ev.xmotion.y/ch,0,rows-1); redraw();
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1 && scrollbar_drag) {
                     scrollbar_drag=0;
                 } else if (ev.type == ButtonRelease && ev.xbutton.button == Button1) {
                     if (suppress_select_release) {
                         suppress_select_release=0;
                     } else if (selecting) {
-                        sel_x1=clampi(ev.xbutton.x/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); make_selection(); selecting=0; redraw();
+                        sel_x1=clampi((ev.xbutton.x-text_x0())/cw,0,cols-1); sel_y1=clampi(ev.xbutton.y/ch,0,rows-1); make_selection(); selecting=0; redraw();
                     }
                 } else if (ev.type == ButtonPress && ev.xbutton.button == Button2) request_paste(XA_PRIMARY);
                 else if (ev.type == SelectionRequest) selection_request(&ev.xselectionrequest);
                 else if (ev.type == SelectionNotify) selection_notify(&ev.xselection);
                 else if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == wm_delete) goto done;
                 else if (ev.type == ConfigureNotify) {
-                    int nc = (ev.xconfigure.width - SCROLLBAR_W) / cw;
+                    int nc = (ev.xconfigure.width - window_extra_width()) / cw;
                     int nr = ev.xconfigure.height / ch;
                     if (nc < 2) nc = 2; if (nr < 2) nr = 2;
                     if (nc != cols || nr != rows) {
