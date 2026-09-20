@@ -523,40 +523,57 @@ def main():
         dso_by_soname[soname] = dso
 
     shared_outputs = []
-    for row, bundle, binary, soname, dso in dso_rows:
-        meta = json.loads(bundle.read_text())
-        component_sources = []
-        seen = set()
-        for fn in meta.get('functions', []):
-            src = Path(fn['source'])
-            if src not in seen:
-                component_sources.append(src)
-                seen.add(src)
-        registry = bundle.parent / 'registry.c'
-        component_sources.append(registry)
-        component_objects = [object_by_source[src] for src in component_sources]
-        link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
-                    '-Wl,--no-as-needed', "-Wl,-rpath,$ORIGIN",
-                    '-o', dso, *component_objects]
-        if runtime_lib is not None:
-            link_cmd.append(str(runtime_lib))
+    linked_sonames = set()
+    pending_dso_rows = list(dso_rows)
+    while pending_dso_rows:
+        progressed = False
+        for item in list(pending_dso_rows):
+            row, bundle, binary, soname, dso = item
+            local_deps = [needed for needed in elf_needed(binary)
+                          if needed in dso_by_soname and dso_by_soname[needed] != dso]
+            if any(needed not in linked_sonames for needed in local_deps):
+                continue
 
-        # Preserve every original IRIX DT_NEEDED edge whose provider is part
-        # of this translated closure. --no-as-needed matters here: translated
-        # guest calls dispatch by guest address, so the host linker cannot see
-        # a normal ELF symbol reference even though the dependency is real.
-        for needed in elf_needed(binary):
-            dep = dso_by_soname.get(needed)
-            if dep is not None and dep != dso:
-                link_cmd.append(str(dep))
-            elif needed not in dso_by_soname:
-                print(f'warning: native DSO {soname}: translated provider for '
-                      f'DT_NEEDED {needed} is not in this closure',
-                      file=sys.stderr)
+            meta = json.loads(bundle.read_text())
+            component_sources = []
+            seen = set()
+            for fn in meta.get('functions', []):
+                src = Path(fn['source'])
+                if src not in seen:
+                    component_sources.append(src)
+                    seen.add(src)
+            registry = bundle.parent / 'registry.c'
+            component_sources.append(registry)
+            component_objects = [object_by_source[src] for src in component_sources]
+            link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
+                        '-Wl,--no-as-needed', "-Wl,-rpath,$ORIGIN",
+                        '-o', dso, *component_objects]
+            if runtime_lib is not None:
+                link_cmd.append(str(runtime_lib))
 
-        link_cmd.append('-lm')
-        run(link_cmd)
-        shared_outputs.append(dso)
+            # Preserve every original IRIX DT_NEEDED edge whose provider is
+            # part of this translated closure. Providers are linked first so
+            # passing their output paths to ld never races a not-yet-created
+            # DSO merely because closure discovery found a consumer first.
+            for needed in elf_needed(binary):
+                dep = dso_by_soname.get(needed)
+                if dep is not None and dep != dso:
+                    link_cmd.append(str(dep))
+                elif needed not in dso_by_soname:
+                    print(f'warning: native DSO {soname}: translated provider for '
+                          f'DT_NEEDED {needed} is not in this closure',
+                          file=sys.stderr)
+
+            link_cmd.append('-lm')
+            run(link_cmd)
+            shared_outputs.append(dso)
+            linked_sonames.add(soname)
+            pending_dso_rows.remove(item)
+            progressed = True
+
+        if not progressed:
+            cycle = ', '.join(soname for _, _, _, soname, _ in pending_dso_rows)
+            raise SystemExit(f'cannot order translated DSO dependency cycle: {cycle}')
 
     # The bootstrap archive now contains only process-image translation
     # (application, PT_INTERP, rld) plus bindings/descriptor glue. Shared
