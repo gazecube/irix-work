@@ -97,10 +97,6 @@ uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr addr)
     {
         uint32_t value = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                          ((uint32_t)p[2] << 8) | (uint32_t)p[3];
-        if (addr == 0x0fb5291cu)
-            fprintf(stderr,
-                    "IRIX libc GOT read watch: pc=0x%08x slot=0x%08x value=%08x\n",
-                    rt->current_pc, addr, value);
         return value;
     }
 }
@@ -1061,10 +1057,6 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
-        IrixGuestAddr memcpy_dst = 0;
-        IrixGuestAddr memcpy_src = 0;
-        uint32_t memcpy_len = 0;
-        int passwd_memcpy_trace = 0;
         int passwd_function_trace = trace_passwd_call(entry->name);
         unsigned saved_i;
 
@@ -1128,44 +1120,6 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             }
             fputc('\n', stderr);
         }
-        if (address >= 0x0fa36900u && address < 0x0fa37700u) {
-            IrixGuestAddr dst = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-            IrixGuestAddr src = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-            uint32_t len = (uint32_t)cpu->gpr[6];
-            int passwd_trace =
-                (caller_pc >= 0x0fa88c00u && caller_pc < 0x0fa89300u) ||
-                (caller_pc >= 0x0fa45c00u && caller_pc < 0x0fa45e00u);
-            if (passwd_trace) {
-                memcpy_dst = dst;
-                memcpy_src = src;
-                memcpy_len = len;
-                passwd_memcpy_trace = 1;
-            }
-            fprintf(stderr,
-                    "IRIX memcpy dispatch: target=0x%08x owner=0x%08x+0x%x:%s caller=0x%08x ra=0x%08x gp=0x%08x t9=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
-                    address, entry->address, entry->size,
-                    entry->name ? entry->name : "?", caller_pc,
-                    (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[28],
-                    (uint32_t)cpu->gpr[25], dst, src, len,
-                    (uint32_t)cpu->gpr[7]);
-            if (passwd_trace) {
-                unsigned i, limit = len < 64u ? len : 64u;
-                fprintf(stderr, "  passwd memcpy before: dst=%08x src=%08x len=%u\n",
-                        dst, src, len);
-                if (src && irix_guest_ptr(rt, src, limit ? limit : 1u)) {
-                    fputs("    src:", stderr);
-                    for (i = 0; i < limit; ++i)
-                        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, src + i));
-                    fputc('\n', stderr);
-                }
-                if (dst && irix_guest_ptr(rt, dst, limit ? limit : 1u)) {
-                    fputs("    dst:", stderr);
-                    for (i = 0; i < limit; ++i)
-                        fprintf(stderr, " %02x", (unsigned)irix_guest_read8(rt, dst + i));
-                    fputc('\n', stderr);
-                }
-            }
-        }
         cpu->pc = address;
         rt->current_pc = address;
         /*
@@ -1186,12 +1140,6 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
                     (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                     (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28]);
-        }
-        if (!rt->trapped && passwd_memcpy_trace) {
-            fprintf(stderr,
-                    "  passwd memcpy after: v0=%08x dst=%08x src=%08x len=%u\n",
-                    (uint32_t)cpu->gpr[2], memcpy_dst, memcpy_src, memcpy_len);
-            dump_guest_bytes(rt, "    dst", memcpy_dst, memcpy_len);
         }
         if (passwd_function_trace) {
             fprintf(stderr,
