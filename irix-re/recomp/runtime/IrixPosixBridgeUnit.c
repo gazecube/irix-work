@@ -4,7 +4,9 @@
 #undef irix_posix_bridge_lookup
 
 #include <fcntl.h>
+#include <grp.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <sched.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -355,6 +357,51 @@ static IrixGuestAddr copy_guest_tmp_string(IrixGuestRuntime *rt, const char *src
     if (!dst) return 0;
     memcpy(dst, src, n);
     return out;
+}
+
+/* IRIX N32 struct passwd is six 32-bit words:
+   name, passwd, uid, gid, gecos, dir, shell. Keep a small persistent guest
+   cache because the non-reentrant getpw* interfaces return static storage. */
+static IrixGuestAddr copy_guest_passwd_n32(IrixGuestRuntime *rt, const struct passwd *pw)
+{
+    IrixGuestAddr out, fields[5];
+    if (!pw) return 0;
+    out = tmp_alloc(28u);
+    fields[0] = copy_guest_tmp_string(rt, pw->pw_name ? pw->pw_name : "");
+    fields[1] = copy_guest_tmp_string(rt, pw->pw_passwd ? pw->pw_passwd : "");
+    fields[2] = copy_guest_tmp_string(rt, pw->pw_gecos ? pw->pw_gecos : "");
+    fields[3] = copy_guest_tmp_string(rt, pw->pw_dir ? pw->pw_dir : "");
+    fields[4] = copy_guest_tmp_string(rt, pw->pw_shell ? pw->pw_shell : "");
+    if (!out || !fields[0] || !fields[1] || !fields[2] || !fields[3] || !fields[4]) return 0;
+    irix_guest_write32be(rt, out + 0u, fields[0]);
+    irix_guest_write32be(rt, out + 4u, fields[1]);
+    irix_guest_write32be(rt, out + 8u, (uint32_t)pw->pw_uid);
+    irix_guest_write32be(rt, out + 12u, (uint32_t)pw->pw_gid);
+    irix_guest_write32be(rt, out + 16u, fields[2]);
+    irix_guest_write32be(rt, out + 20u, fields[3]);
+    irix_guest_write32be(rt, out + 24u, fields[4]);
+    return rt->trapped ? 0 : out;
+}
+
+static void bridge_getpwuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct passwd *pw = getpwuid((uid_t)(uint32_t)cpu->gpr[4]);
+    cpu->gpr[2] = copy_guest_passwd_n32(rt, pw);
+}
+
+static void bridge_getpwnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    struct passwd *pw = name ? getpwnam(name) : 0;
+    cpu->gpr[2] = copy_guest_passwd_n32(rt, pw);
+}
+
+static void bridge_initgroups(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    gid_t gid = (gid_t)(uint32_t)cpu->gpr[5];
+    (void)rt;
+    ret_i32(cpu, name ? initgroups(name, gid) : (errno = EFAULT, -1));
 }
 
 static void bridge_gethostbyname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -792,6 +839,9 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
+    if (!strcmp(name, "getpwuid")) return bridge_getpwuid;
+    if (!strcmp(name, "getpwnam")) return bridge_getpwnam;
+    if (!strcmp(name, "initgroups")) return bridge_initgroups;
     if (!strcmp(name, "realpath")) return bridge_realpath;
     if (!strcmp(name, "execl")) return bridge_execl;
     if (!strcmp(name, "exit")) return bridge_exit;
