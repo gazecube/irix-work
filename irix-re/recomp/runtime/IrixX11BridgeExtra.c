@@ -565,6 +565,20 @@ static void bridge_XDefaultColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = d ? (uint32_t)DefaultColormap(d, (int)cpu->gpr[5]) : 0;
 }
 
+/*
+ * SGI OpenDis.c has an internal XKB display-initialization helper which
+ * allocates/fills Display->xkb_info and then fetches the initial XkbDescRec.
+ * Our guest Display is intentionally only a public/marshalable shadow; the
+ * real host Display returned by XOpenDisplay already owns valid host XKB
+ * private state.  Never run that SGI helper against the shadow.
+ */
+static void bridge__IrixXkbDisplayInit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    (void)rt;
+    cpu->gpr[2] = d ? 1u : 0u;
+}
+
 static void bridge_XkbGetUpdatedMap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
@@ -1038,7 +1052,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XrmParseCommand); MAP(_XSGIAddToPreloadAtomList);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
-    MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
+    if(!strcmp(name, "_IrixXkbDisplayInit")) return bridge__IrixXkbDisplayInit;\n    MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
