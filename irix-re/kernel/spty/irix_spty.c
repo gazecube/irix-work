@@ -238,15 +238,28 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 		mutex_unlock(&pt->lock);
 		return -EIO;
 	}
-	rc = kfifo_from_user(&pt->to_slave, buf, count, &copied);
-	mutex_unlock(&pt->lock);
-	if (copied)
-		wake_up_all(&pt->slave_wait);
-	if (rc)
-		return rc;
-	if (!copied && (file->f_flags & O_NONBLOCK))
-		return -EAGAIN;
-	return copied;
+	for (;;) {
+		rc = kfifo_from_user(&pt->to_slave, buf, count, &copied);
+		mutex_unlock(&pt->lock);
+		if (copied) {
+			wake_up_all(&pt->slave_wait);
+			return rc ? rc : copied;
+		}
+		if (rc)
+			return rc;
+		if (file->f_flags & O_NONBLOCK)
+			return -EAGAIN;
+		rc = wait_event_interruptible(pt->master_wait,
+			(pt->pts_state & IRIX_PT_DEAD) ||
+			kfifo_avail(&pt->to_slave) != 0);
+		if (rc)
+			return rc;
+		mutex_lock(&pt->lock);
+		if (pt->pts_state & IRIX_PT_DEAD) {
+			mutex_unlock(&pt->lock);
+			return -EIO;
+		}
+	}
 }
 
 static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
@@ -526,15 +539,28 @@ static ssize_t irix_pts_write(struct file *file, const char __user *buf,
 		mutex_unlock(&pt->lock);
 		return -EIO;
 	}
-	rc = kfifo_from_user(&pt->to_master, buf, count, &copied);
-	mutex_unlock(&pt->lock);
-	if (copied)
-		wake_up_all(&pt->master_wait);
-	if (rc)
-		return rc;
-	if (!copied && (file->f_flags & O_NONBLOCK))
-		return -EAGAIN;
-	return copied;
+	for (;;) {
+		rc = kfifo_from_user(&pt->to_master, buf, count, &copied);
+		mutex_unlock(&pt->lock);
+		if (copied) {
+			wake_up_all(&pt->master_wait);
+			return rc ? rc : copied;
+		}
+		if (rc)
+			return rc;
+		if (file->f_flags & O_NONBLOCK)
+			return -EAGAIN;
+		rc = wait_event_interruptible(pt->slave_wait,
+			(pt->ptc_state & IRIX_PT_DEAD) ||
+			kfifo_avail(&pt->to_master) != 0);
+		if (rc)
+			return rc;
+		mutex_lock(&pt->lock);
+		if (pt->ptc_state & IRIX_PT_DEAD) {
+			mutex_unlock(&pt->lock);
+			return -EIO;
+		}
+	}
 }
 
 static long irix_pts_ioctl(struct file *file, unsigned int cmd,
