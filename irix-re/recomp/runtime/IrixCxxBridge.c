@@ -128,12 +128,16 @@ static void bridge_ostream_insert_cstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     /*
-     * Only ostrstream instances are emulated here.  This symbol is also the
-     * ordinary ostream::operator<<(const char *) entry point, so callers such
-     * as cerr/cout must be allowed to use the real translated libCio body.
-     * Returning without claiming the call lets the guest implementation run.
+     * Only ostrstream instances are buffered here.  This symbol is also the
+     * ordinary ostream::operator<<(const char *) entry point.  The bridge
+     * lookup has already claimed that call, so preserve the C++ insertion
+     * contract for ordinary ostream objects: return the stream object rather
+     * than leaking the incoming string address through v0.  This is required
+     * for chained manipulators such as << endl.
      */
     if (!st) {
+        fputs(s, stderr);
+        cpu->gpr[2] = object;
         return;
     }
 
