@@ -203,7 +203,7 @@ static const struct file_operations irix_ptc_fops = {
 	.unlocked_ioctl = irix_ptc_ioctl,
 	.compat_ioctl   = irix_ptc_ioctl,
 	.poll           = irix_ptc_poll,
-	.llseek         = no_llseek,
+	.llseek         = noop_llseek,
 };
 
 static struct miscdevice irix_ptc_device = {
