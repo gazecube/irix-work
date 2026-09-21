@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <utmpx.h>
 
 #define IRIX_FD_SETSIZE 1024
 #define IRIX_FDSET_BYTES 128u
@@ -912,6 +913,117 @@ static void bridge_select(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+#define IRIX_UTMPX_SIZE 372u
+static IrixGuestAddr g_irix_utmpx_result;
+
+static int read_irix_utmpx(IrixGuestRuntime *rt, IrixGuestAddr addr, struct utmpx *u)
+{
+    if (!addr || !u || !irix_guest_ptr(rt, addr, IRIX_UTMPX_SIZE))
+        return -1;
+    memset(u, 0, sizeof(*u));
+    memcpy(u->ut_user, irix_guest_ptr(rt, addr + 0u, 32u), 32u);
+    memcpy(u->ut_id, irix_guest_ptr(rt, addr + 32u, 4u), 4u);
+    memcpy(u->ut_line, irix_guest_ptr(rt, addr + 36u, 32u), 32u);
+    u->ut_pid = (pid_t)(int32_t)irix_guest_read32be(rt, addr + 68u);
+    u->ut_type = (short)(int16_t)irix_guest_read16be(rt, addr + 72u);
+    u->ut_exit.e_termination = (short)(int16_t)irix_guest_read16be(rt, addr + 74u);
+    u->ut_exit.e_exit = (short)(int16_t)irix_guest_read16be(rt, addr + 76u);
+    u->ut_tv.tv_sec = (int32_t)irix_guest_read32be(rt, addr + 80u);
+    u->ut_tv.tv_usec = (int32_t)irix_guest_read32be(rt, addr + 84u);
+#ifdef __linux__
+    u->ut_session = (int32_t)irix_guest_read32be(rt, addr + 88u);
+#endif
+    memcpy(u->ut_host, irix_guest_ptr(rt, addr + 114u, 257u),
+           sizeof(u->ut_host) < 257u ? sizeof(u->ut_host) : 257u);
+    return rt->trapped ? -1 : 0;
+}
+
+static int write_irix_utmpx(IrixGuestRuntime *rt, IrixGuestAddr addr, const struct utmpx *u)
+{
+    size_t hostlen;
+    if (!addr || !u || !irix_guest_ptr(rt, addr, IRIX_UTMPX_SIZE))
+        return -1;
+    memset(irix_guest_ptr(rt, addr, IRIX_UTMPX_SIZE), 0, IRIX_UTMPX_SIZE);
+    memcpy(irix_guest_ptr(rt, addr + 0u, 32u), u->ut_user, 32u);
+    memcpy(irix_guest_ptr(rt, addr + 32u, 4u), u->ut_id, 4u);
+    memcpy(irix_guest_ptr(rt, addr + 36u, 32u), u->ut_line, 32u);
+    irix_guest_write32be(rt, addr + 68u, (uint32_t)(int32_t)u->ut_pid);
+    irix_guest_write16be(rt, addr + 72u, (uint16_t)u->ut_type);
+    irix_guest_write16be(rt, addr + 74u, (uint16_t)u->ut_exit.e_termination);
+    irix_guest_write16be(rt, addr + 76u, (uint16_t)u->ut_exit.e_exit);
+    irix_guest_write32be(rt, addr + 80u, (uint32_t)(int32_t)u->ut_tv.tv_sec);
+    irix_guest_write32be(rt, addr + 84u, (uint32_t)(int32_t)u->ut_tv.tv_usec);
+#ifdef __linux__
+    irix_guest_write32be(rt, addr + 88u, (uint32_t)(int32_t)u->ut_session);
+#endif
+    hostlen = sizeof(u->ut_host);
+    if (hostlen > 257u) hostlen = 257u;
+    memcpy(irix_guest_ptr(rt, addr + 114u, hostlen), u->ut_host, hostlen);
+    irix_guest_write16be(rt, addr + 112u,
+        (uint16_t)(strnlen(u->ut_host, hostlen) + (hostlen ? 1u : 0u)));
+    return rt->trapped ? -1 : 0;
+}
+
+static IrixGuestAddr cache_irix_utmpx(IrixGuestRuntime *rt, const struct utmpx *u)
+{
+    if (!u) return 0;
+    if (!g_irix_utmpx_result)
+        g_irix_utmpx_result = alloc_guest(IRIX_UTMPX_SIZE, 4u);
+    if (!g_irix_utmpx_result ||
+        write_irix_utmpx(rt, g_irix_utmpx_result, u) != 0)
+        return 0;
+    return g_irix_utmpx_result;
+}
+
+static void bridge_setutxent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt; setutxent(); ret_i32(cpu, 0);
+}
+
+static void bridge_endutxent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt; endutxent(); ret_i32(cpu, 0);
+}
+
+static void bridge_getutxent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    cpu->gpr[2] = cache_irix_utmpx(rt, getutxent());
+}
+
+static void bridge_getutxid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct utmpx key;
+    if (read_irix_utmpx(rt, (uint32_t)cpu->gpr[4], &key) != 0) {
+        errno = EFAULT; cpu->gpr[2] = 0; return;
+    }
+    cpu->gpr[2] = cache_irix_utmpx(rt, getutxid(&key));
+}
+
+static void bridge_getutxline(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct utmpx key;
+    if (read_irix_utmpx(rt, (uint32_t)cpu->gpr[4], &key) != 0) {
+        errno = EFAULT; cpu->gpr[2] = 0; return;
+    }
+    cpu->gpr[2] = cache_irix_utmpx(rt, getutxline(&key));
+}
+
+static void bridge_pututxline(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct utmpx ent;
+    if (read_irix_utmpx(rt, (uint32_t)cpu->gpr[4], &ent) != 0) {
+        errno = EFAULT; cpu->gpr[2] = 0; return;
+    }
+    cpu->gpr[2] = cache_irix_utmpx(rt, pututxline(&ent));
+}
+
+static void bridge_utmpxname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    if (!name) { errno = EFAULT; ret_i32(cpu, 0); return; }
+    ret_i32(cpu, utmpxname(name));
+}
+
 static void bridge_putenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char *s = (char *)irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], 1u);
@@ -1047,6 +1159,13 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "sginap")) return bridge_sginap;
+    if (!strcmp(name, "setutxent")) return bridge_setutxent;
+    if (!strcmp(name, "endutxent")) return bridge_endutxent;
+    if (!strcmp(name, "getutxent")) return bridge_getutxent;
+    if (!strcmp(name, "getutxid")) return bridge_getutxid;
+    if (!strcmp(name, "getutxline")) return bridge_getutxline;
+    if (!strcmp(name, "pututxline")) return bridge_pututxline;
+    if (!strcmp(name, "utmpxname")) return bridge_utmpxname;
     if (!strcmp(name, "putenv")) return bridge_putenv;
     if (!strcmp(name, "alarm")) return bridge_alarm;
     if (!strcmp(name, "kill")) return bridge_kill;
