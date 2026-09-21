@@ -348,10 +348,8 @@ static IrixGuestAddr display_to_guest(Display *dpy)
     size_t i;
     if (!dpy) return 0;
     for (i = 0; i < g_x11.display_count; ++i) {
-        if (g_x11.displays[i] == dpy) {
-            write_display_shadow(i, dpy);
+        if (g_x11.displays[i] == dpy)
             return display_guest_addr(i);
-        }
     }
     if (g_x11.display_count >= IRIX_X11_MAX_DISPLAYS) return 0;
     i = g_x11.display_count++;
