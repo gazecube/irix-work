@@ -743,7 +743,22 @@ def main():
             boundary_defs.append((n,addr,size,sh,'boundary_entry'))
 
     seen_addr=set(); functions=[]; frame_count=0; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
-    all_defs=sorted(defs+zero_defs+frame_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,key=lambda x:(x[1],x[0]))
+    # When several discovery mechanisms identify the same entry address, keep
+    # the real ELF symbol.  Sorting only by (address, name) let synthetic
+    # __debug_frame/__pdr/etc. names win lexically; seen_addr then discarded
+    # the actual symbol.  That erased its runtime name, so native bridge
+    # rebinding could not recognize functions such as malloc at that address.
+    source_priority = {
+        'symbol': 0,
+        'zero_size': 1,
+        'debug_frame': 2,
+        'pdr': 3,
+        'data_ptr': 4,
+        'code_link': 5,
+        'boundary_entry': 6,
+    }
+    all_defs=sorted(defs+zero_defs+frame_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,
+                    key=lambda x:(x[1],source_priority.get(x[4],99),x[0]))
     batches=[]; batch_bodies=[]; batch_rows=[]
     def flush_batch():
         nonlocal batch_bodies,batch_rows
