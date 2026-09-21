@@ -77,6 +77,9 @@ def emit_explicit(path, name, start, size, c_prefix):
     print('        switch (pc) {')
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
+        if addr in (0x0983931c, 0x098402b4):
+            tag = 'DT_INIT' if addr == 0x0983931c else '__cplinit'
+            print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag, addr))
         for line in lines: print('            '+line)
         print('            break;')
     print('        default:'); print('            return;'); print('        }'); print('')
