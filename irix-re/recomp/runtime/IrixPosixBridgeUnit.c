@@ -1024,6 +1024,27 @@ static void bridge_utmpxname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, utmpxname(name));
 }
 
+static void bridge_updwtmpx(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    struct utmpx ent;
+
+    if (!path || read_irix_utmpx(rt, (uint32_t)cpu->gpr[5], &ent) != 0) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    /*
+     * updwtmpx() is a void interface on glibc/SVR4.  The guest pathname is
+     * intentionally honored here; xwsh uses /var/adm/wtmpx just as IRIX
+     * does, so any filesystem namespace redirection belongs at the path
+     * personality layer rather than in the utmpx ABI translator.
+     */
+    updwtmpx(path, &ent);
+    ret_i32(cpu, 0);
+}
+
 static void bridge_putenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char *s = (char *)irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], 1u);
@@ -1166,6 +1187,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "getutxline")) return bridge_getutxline;
     if (!strcmp(name, "pututxline")) return bridge_pututxline;
     if (!strcmp(name, "utmpxname")) return bridge_utmpxname;
+    if (!strcmp(name, "updwtmpx")) return bridge_updwtmpx;
     if (!strcmp(name, "putenv")) return bridge_putenv;
     if (!strcmp(name, "alarm")) return bridge_alarm;
     if (!strcmp(name, "kill")) return bridge_kill;
