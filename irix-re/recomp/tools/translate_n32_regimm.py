@@ -200,6 +200,7 @@ def decode(addr, insn):
 _base.decode = decode
 Elf32BE = _base.Elf32BE
 emit = _base.emit
+emit_range = _base.emit_range
 c_name = _base.c_name
 reg = _base.reg
 mem_addr = _base.mem_addr
