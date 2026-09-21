@@ -744,6 +744,75 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out_addr;
 }
 
+static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *file = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr argv_addr = (uint32_t)cpu->gpr[5];
+    char **argv = NULL;
+    size_t argc = 0, i;
+    int saved_errno;
+
+    if (!file || !argv_addr) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    /*
+     * IRIX N32 argv is an array of big-endian 32-bit guest pointers.
+     * This call is reached in xwsh's post-fork child after the PTY has been
+     * installed on stdio, so a successful host exec preserves exactly that
+     * fd/session state.  This is the process-boundary implementation until
+     * exec replacement can load another translated IRIX image in-process.
+     */
+    for (;;) {
+        IrixGuestAddr slot = argv_addr + (IrixGuestAddr)(argc * 4u);
+        uint32_t argp;
+        if (!irix_guest_ptr(rt, slot, 4u)) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        argp = irix_guest_read32be(rt, slot);
+        if (rt->trapped) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        if (!argp) break;
+        if (!guest_cstr(rt, argp)) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        if (++argc >= 4096u) {
+            errno = E2BIG;
+            ret_i32(cpu, -1);
+            return;
+        }
+    }
+
+    argv = (char **)calloc(argc + 1u, sizeof(*argv));
+    if (!argv) {
+        ret_i32(cpu, -1);
+        return;
+    }
+    for (i = 0; i < argc; ++i) {
+        uint32_t argp = irix_guest_read32be(
+            rt, argv_addr + (IrixGuestAddr)(i * 4u));
+        argv[i] = (char *)guest_cstr(rt, argp);
+    }
+
+    fprintf(stderr, "IRIX execvp: file=%s argc=%zu arg0=%s\n",
+            file, argc, argc ? argv[0] : "(null)");
+    execvp(file, argv);
+
+    saved_errno = errno;
+    free(argv);
+    errno = saved_errno;
+    ret_i32(cpu, -1);
+}
+
 static void bridge_execl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -1204,6 +1273,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "getegid")) return bridge_getegid;
     if (!strcmp(name, "initgroups")) return bridge_initgroups;
     if (!strcmp(name, "realpath")) return bridge_realpath;
+    if (!strcmp(name, "execvp")) return bridge_execvp;
     if (!strcmp(name, "execl")) return bridge_execl;
     if (!strcmp(name, "exit")) return bridge_exit;
     if (!strcmp(name, "socket")) return bridge_socket;
