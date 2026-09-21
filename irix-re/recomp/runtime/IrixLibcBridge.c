@@ -671,11 +671,11 @@ IrixGuestAddr irix_libc_bridge_data_lookup(const char *name)
 IrixGuestFunction irix_libc_bridge_lookup(const char *name)
 {
     if (!name) return 0;
-    if (!strcmp(name, "malloc") || !strcmp(name, "__nw__GUi") || !strcmp(name, "__nwa__GUi")) return bridge_malloc;
-    if (!strcmp(name, "calloc")) return bridge_calloc;
-    if (!strcmp(name, "realloc")) return bridge_realloc;
+    if (!strcmp(name, "malloc") || !strcmp(name, "_malloc") || !strcmp(name, "__nw__GUi") || !strcmp(name, "__nwa__GUi")) return bridge_malloc;
+    if (!strcmp(name, "calloc") || !strcmp(name, "_calloc")) return bridge_calloc;
+    if (!strcmp(name, "realloc") || !strcmp(name, "_realloc")) return bridge_realloc;
     if (!strcmp(name, "memalign")) return bridge_memalign;
-    if (!strcmp(name, "free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
+    if (!strcmp(name, "free") || !strcmp(name, "_free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
     if (!strcmp(name, "strdup")) return bridge_strdup;
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
