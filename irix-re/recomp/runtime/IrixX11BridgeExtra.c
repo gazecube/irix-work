@@ -870,6 +870,68 @@ static int read_xkeyevent(IrixGuestRuntime *rt, IrixGuestAddr a, XKeyEvent *e)
     return !rt->trapped && e->display;
 }
 
+static int read_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, XEvent *e)
+{
+    int type;
+    if (!a || !e || !irix_guest_ptr(rt, a, IRIX_XEVENT_SIZE)) return 0;
+    memset(e, 0, sizeof(*e));
+    type = (int32_t)irix_guest_read32be(rt, a + 0u);
+    e->xany.type = type;
+    e->xany.serial = (unsigned long)irix_guest_read32be(rt, a + 4u);
+    e->xany.send_event = (Bool)(int32_t)irix_guest_read32be(rt, a + 8u);
+    e->xany.display = display_from_guest(irix_guest_read32be(rt, a + 12u));
+    e->xany.window = (Window)irix_guest_read32be(rt, a + 16u);
+    if (!e->xany.display) return 0;
+    switch (type) {
+    case KeyPress:
+    case KeyRelease:
+        return read_xkeyevent(rt, a, &e->xkey);
+    case FocusIn:
+    case FocusOut:
+        e->xfocus.mode = (int32_t)irix_guest_read32be(rt, a + 20u);
+        e->xfocus.detail = (int32_t)irix_guest_read32be(rt, a + 24u);
+        break;
+    default:
+        break;
+    }
+    return !rt->trapped;
+}
+
+static void bridge_XWindowEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    long mask = (long)(int32_t)cpu->gpr[6];
+    IrixGuestAddr out = (uint32_t)cpu->gpr[7];
+    XEvent e;
+    if (!d || !out) { cpu->gpr[2] = 0; return; }
+    XWindowEvent(d, w, mask, &e);
+    cpu->gpr[2] = write_xevent(rt, out, &e) ? 0u : 0u;
+}
+
+static void bridge_XCheckWindowEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    long mask = (long)(int32_t)cpu->gpr[6];
+    IrixGuestAddr out = (uint32_t)cpu->gpr[7];
+    XEvent e;
+    Bool ok = False;
+    if (d && out) ok = XCheckWindowEvent(d, w, mask, &e);
+    if (ok && !write_xevent(rt, out, &e)) ok = False;
+    cpu->gpr[2] = (uint32_t)ok;
+}
+
+static void bridge_XFilterEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    XEvent e;
+    if (!read_xevent(rt, (uint32_t)cpu->gpr[4], &e)) {
+        cpu->gpr[2] = False;
+        return;
+    }
+    cpu->gpr[2] = (uint32_t)XFilterEvent(&e, (Window)(uint32_t)cpu->gpr[5]);
+}
+
 static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
@@ -1262,7 +1324,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
     if(!strcmp(name, "_IrixXkbDisplayInit")) return bridge__IrixXkbDisplayInit;
-    MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
+    MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XFilterEvent); MAP(XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
