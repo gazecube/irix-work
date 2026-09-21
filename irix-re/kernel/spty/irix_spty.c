@@ -82,7 +82,10 @@ static struct irix_spty *irix_spty_alloc(void)
 	pt->pts_state = IRIX_PT_UNBORN | IRIX_PTS_LOCKED;
 	pt->ptc_state = IRIX_PT_UNBORN;
 	pt->pts_auto_ld = 1;
-	pt->termios.c_cflag = CS8 | CREAD | CLOCAL;
+	/* spty.c seeds this from stty_ld's default termio.  Keep a conservative
+	 * IRIX-side default until the line discipline port supplies that object. */
+	pt->termio.c_iflag = cpu_to_be32(IRIX_IXON);
+	pt->termio.c_lflag = cpu_to_be32(IRIX_ICANON | IRIX_ECHO | IRIX_ECHOE | IRIX_ECHOK);
 
 	rc = kfifo_alloc(&pt->to_master, IRIX_SPTY_FIFO_SIZE, GFP_KERNEL);
 	if (rc)
@@ -246,12 +249,68 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 	return copied;
 }
 
+static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
+			       unsigned long arg)
+{
+	struct irix_termio tio;
+	int value;
+
+	switch (cmd) {
+	case IRIX_TCGETA:
+		return copy_to_user((void __user *)arg, &pt->termio,
+				    sizeof(pt->termio)) ? -EFAULT : 0;
+	case IRIX_TCSETAF:
+		kfifo_reset(&pt->to_slave);
+		fallthrough;
+	case IRIX_TCSETA:
+	case IRIX_TCSETAW:
+		if (copy_from_user(&tio, (void __user *)arg, sizeof(tio)))
+			return -EFAULT;
+		pt->termio = tio;
+		if (pt->ptc_state & IRIX_PTC_PKT)
+			pt->pt_pkt |= TIOCPKT_IOCTL;
+		wake_up_all(&pt->master_wait);
+		wake_up_all(&pt->slave_wait);
+		return 0;
+	case IRIX_TCXONC:
+		if (get_user(value, (int __user *)arg))
+			return -EFAULT;
+		if (value == 0) {
+			pt->output_stopped = 1;
+		} else if (value == 1) {
+			pt->output_stopped = 0;
+			wake_up_all(&pt->master_wait);
+		} else {
+			return -EINVAL;
+		}
+		return 0;
+	case IRIX_TIOCREMOTE:
+		if (get_user(value, (int __user *)arg))
+			return -EFAULT;
+		pt->remote_mode = !!value;
+		return 0;
+	case IRIX_TCSBRK:
+		/* spty.c ACKs the request; signal generation belongs to stty_ld. */
+		return 0;
+	default:
+		return -ENOTTY;
+	}
+}
+
 static long irix_ptc_nested_ioctl(struct irix_spty *pt, unsigned int cmd,
 				  unsigned long arg)
 {
 	int value;
 
 	switch (cmd) {
+	case IRIX_TCGETA:
+	case IRIX_TCSETA:
+	case IRIX_TCSETAW:
+	case IRIX_TCSETAF:
+	case IRIX_TCXONC:
+	case IRIX_TIOCREMOTE:
+	case IRIX_TCSBRK:
+		return irix_termio_ioctl(pt, cmd, arg);
 	case IRIX_ISPTM:
 		return 0;
 	case IRIX_UNLKPT:
@@ -316,6 +375,16 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 	case IRIX_SVR4SOPEN:
 	case IRIX_TIOCPKT:
 		rc = irix_ptc_nested_ioctl(pt, cmd, arg);
+		mutex_unlock(&pt->lock);
+		return rc;
+	case IRIX_TCGETA:
+	case IRIX_TCSETA:
+	case IRIX_TCSETAW:
+	case IRIX_TCSETAF:
+	case IRIX_TCXONC:
+	case IRIX_TIOCREMOTE:
+	case IRIX_TCSBRK:
+		rc = irix_termio_ioctl(pt, cmd, arg);
 		mutex_unlock(&pt->lock);
 		return rc;
 	case IRIX_TIOCGWINSZ:
