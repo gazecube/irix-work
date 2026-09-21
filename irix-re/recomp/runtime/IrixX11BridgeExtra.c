@@ -1033,6 +1033,31 @@ WINDOW_CALL1(bridge_XClearWindow, XClearWindow(d, (Window)(uint32_t)cpu->gpr[5])
 WINDOW_CALL1(bridge_XMoveWindow, XMoveWindow(d, (Window)(uint32_t)cpu->gpr[5], (int)cpu->gpr[6], (int)cpu->gpr[7]))
 WINDOW_CALL1(bridge_XResizeWindow, XResizeWindow(d, (Window)(uint32_t)cpu->gpr[5], (unsigned)cpu->gpr[6], (unsigned)cpu->gpr[7]))
 WINDOW_CALL1(bridge_XMoveResizeWindow, XMoveResizeWindow(d, (Window)(uint32_t)cpu->gpr[5], (int)cpu->gpr[6], (int)cpu->gpr[7], (unsigned)cpu->gpr[8], (unsigned)cpu->gpr[9]))
+
+static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    unsigned int mask = (unsigned int)cpu->gpr[6];
+    IrixGuestAddr a = (uint32_t)cpu->gpr[7];
+    XWindowChanges v;
+
+    if (!d || !a || !irix_guest_ptr(rt, a, 28u)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    memset(&v, 0, sizeof(v));
+    v.x = (int32_t)irix_guest_read32be(rt, a + 0u);
+    v.y = (int32_t)irix_guest_read32be(rt, a + 4u);
+    v.width = (int32_t)irix_guest_read32be(rt, a + 8u);
+    v.height = (int32_t)irix_guest_read32be(rt, a + 12u);
+    v.border_width = (int32_t)irix_guest_read32be(rt, a + 16u);
+    v.sibling = (Window)irix_guest_read32be(rt, a + 20u);
+    v.stack_mode = (int32_t)irix_guest_read32be(rt, a + 24u);
+    cpu->gpr[2] = (uint32_t)XConfigureWindow(d, w, mask, &v);
+}
+
 WINDOW_CALL1(bridge_XSelectInput, XSelectInput(d, (Window)(uint32_t)cpu->gpr[5], (long)(int32_t)cpu->gpr[6]))
 WINDOW_CALL1(bridge_XSetWindowBackground, XSetWindowBackground(d, (Window)(uint32_t)cpu->gpr[5], (unsigned long)cpu->gpr[6]))
 WINDOW_CALL1(bridge_XSetWindowBorder, XSetWindowBorder(d, (Window)(uint32_t)cpu->gpr[5], (unsigned long)cpu->gpr[6]))
@@ -1326,7 +1351,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     if(!strcmp(name, "_IrixXkbDisplayInit")) return bridge__IrixXkbDisplayInit;
     MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XFilterEvent); MAP(XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
-    MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
+    MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XConfigureWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
     MAP(XSetForeground); MAP(XSetBackground); MAP(XSetFunction); MAP(XSetPlaneMask); MAP(XSetFillStyle); MAP(XSetFillRule); MAP(XSetArcMode); MAP(XSetClipMask); MAP(XSetClipOrigin); MAP(XSetFont); MAP(XSetSubwindowMode); MAP(XSetGraphicsExposures); MAP(XSetLineAttributes);
     MAP(XDrawLine); MAP(XDrawRectangle); MAP(XFillRectangle); MAP(XCopyArea); MAP(XGetGeometry); MAP(XTranslateCoordinates);
