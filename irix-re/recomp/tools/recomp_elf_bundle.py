@@ -55,6 +55,21 @@ def emit_explicit(path, name, start, size, c_prefix):
         addr=start+i*4
         lines,control=t.decode(addr,word)
         decoded.append((addr,word,lines,control))
+
+    # A recovered range that ends on a control-transfer instruction is not a
+    # complete MIPS procedure: the following instruction is its delay slot and
+    # executes before the transfer takes effect.  Some SGI metadata-derived
+    # ranges stop at the control instruction itself, so include that slot here
+    # rather than silently dispatching the pending call/jump without it.
+    if decoded and decoded[-1][3] == 'control':
+        slot_addr = start + size
+        try:
+            slot_word = elf.words(slot_addr, 4)[0]
+            slot_lines, slot_control = t.decode(slot_addr, slot_word)
+            decoded.append((slot_addr, slot_word, slot_lines, slot_control))
+            size += 4
+        except Exception:
+            pass
     fn='irix_recomp_%s%s'%(t.c_name(c_prefix),t.c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (explicit range). */'%(path,name,start,size))
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
