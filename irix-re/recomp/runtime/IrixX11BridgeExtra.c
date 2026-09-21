@@ -1030,9 +1030,40 @@ WINDOW_CALL1(bridge_XUnmapWindow, XUnmapWindow(d, (Window)(uint32_t)cpu->gpr[5])
 WINDOW_CALL1(bridge_XRaiseWindow, XRaiseWindow(d, (Window)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XLowerWindow, XLowerWindow(d, (Window)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XClearWindow, XClearWindow(d, (Window)(uint32_t)cpu->gpr[5]))
-WINDOW_CALL1(bridge_XMoveWindow, XMoveWindow(d, (Window)(uint32_t)cpu->gpr[5], (int)cpu->gpr[6], (int)cpu->gpr[7]))
-WINDOW_CALL1(bridge_XResizeWindow, XResizeWindow(d, (Window)(uint32_t)cpu->gpr[5], (unsigned)cpu->gpr[6], (unsigned)cpu->gpr[7]))
-WINDOW_CALL1(bridge_XMoveResizeWindow, XMoveResizeWindow(d, (Window)(uint32_t)cpu->gpr[5], (int)cpu->gpr[6], (int)cpu->gpr[7], (unsigned)cpu->gpr[8], (unsigned)cpu->gpr[9]))
+static void bridge_XMoveWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    int x = (int32_t)cpu->gpr[6], y = (int32_t)cpu->gpr[7];
+    (void)rt;
+    fprintf(stderr, "IRIX XMoveWindow: serial=%lu window=0x%lx x=%d y=%d\\n",
+            d ? NextRequest(d) : 0ul, (unsigned long)w, x, y);
+    cpu->gpr[2] = d ? (uint32_t)XMoveWindow(d, w, x, y) : 0;
+}
+
+static void bridge_XResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    unsigned width = (unsigned)cpu->gpr[6], height = (unsigned)cpu->gpr[7];
+    (void)rt;
+    fprintf(stderr, "IRIX XResizeWindow: serial=%lu window=0x%lx width=%u height=%u\\n",
+            d ? NextRequest(d) : 0ul, (unsigned long)w, width, height);
+    cpu->gpr[2] = d ? (uint32_t)XResizeWindow(d, w, width, height) : 0;
+}
+
+static void bridge_XMoveResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    int x = (int32_t)cpu->gpr[6], y = (int32_t)cpu->gpr[7];
+    unsigned width = (unsigned)cpu->gpr[8], height = (unsigned)cpu->gpr[9];
+    (void)rt;
+    fprintf(stderr,
+            "IRIX XMoveResizeWindow: serial=%lu window=0x%lx x=%d y=%d width=%u height=%u\\n",
+            d ? NextRequest(d) : 0ul, (unsigned long)w, x, y, width, height);
+    cpu->gpr[2] = d ? (uint32_t)XMoveResizeWindow(d, w, x, y, width, height) : 0;
+}
 
 static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
@@ -1048,8 +1079,8 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     memset(&v, 0, sizeof(v));
-    fprintf(stderr, "IRIX XConfigureWindow bridge: window=0x%lx mask=0x%x changes=0x%08x\\n",
-            (unsigned long)w, mask, (unsigned)a);
+    fprintf(stderr, "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x\\n",
+            NextRequest(d), (unsigned long)w, mask, (unsigned)a);
     v.x = (int32_t)irix_guest_read32be(rt, a + 0u);
     v.y = (int32_t)irix_guest_read32be(rt, a + 4u);
     v.width = (int32_t)irix_guest_read32be(rt, a + 8u);
