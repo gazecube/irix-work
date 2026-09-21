@@ -122,8 +122,18 @@ static void bridge_ostream_insert_cstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *s = (const char *)irix_guest_ptr(rt, string_addr, 1);
     size_t n;
 
-    if (!st || !s) {
+    if (!s) {
         irix_guest_trap(rt, cpu, 0xeeee2206u);
+        return;
+    }
+
+    /*
+     * Only ostrstream instances are emulated here.  This symbol is also the
+     * ordinary ostream::operator<<(const char *) entry point, so callers such
+     * as cerr/cout must be allowed to use the real translated libCio body.
+     * Returning without claiming the call lets the guest implementation run.
+     */
+    if (!st) {
         return;
     }
 
