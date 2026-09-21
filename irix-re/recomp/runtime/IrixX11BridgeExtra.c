@@ -565,6 +565,22 @@ static void bridge_XDefaultColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = d ? (uint32_t)DefaultColormap(d, (int)cpu->gpr[5]) : 0;
 }
 
+static void bridge_XkbSelectEventDetails(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Bool ok = False;
+    (void)rt;
+
+    if (d)
+        ok = XkbSelectEventDetails(d,
+            (unsigned int)cpu->gpr[5],
+            (unsigned int)cpu->gpr[6],
+            (unsigned long)(uint32_t)cpu->gpr[7],
+            (unsigned long)(uint32_t)cpu->gpr[8]);
+
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
 static void bridge_XkbQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
@@ -1001,7 +1017,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XrmParseCommand); MAP(_XSGIAddToPreloadAtomList);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
-    MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
+    MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XEventsQueued); MAP(XBell);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
