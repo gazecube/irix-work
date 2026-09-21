@@ -155,6 +155,25 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
             continue;
         }
 
+        /*
+         * Exact SGI libX11 OpenDis.c internal XKB initializer.  Static
+         * matching against the 6.5.5 debug libX11 identifies the faulting
+         * sequence as the helper which writes Display->xkb_info.  The runtime
+         * copy is recovered anonymously at 0x0f706bdc; replace the whole
+         * helper because the guest Display shadow deliberately has no private
+         * Xlib connection/XKB pointers.
+         */
+        if ((!entry->name || !strcmp(entry->name, "?")) &&
+            entry->address == 0x0f706bdcu) {
+            native = resolve_native("_IrixXkbDisplayInit");
+            if (native && entry->function != native) {
+                entry->function = native;
+                entry->name = "libX11:_IrixXkbDisplayInit";
+                ++rebound;
+            }
+            continue;
+        }
+
         if (!entry->name)
             continue;
         name = strrchr(entry->name, ':');
