@@ -1434,6 +1434,34 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         for (saved_i = 0; saved_i < 8u; ++saved_i)
             caller_saved[saved_i] = cpu->gpr[16u + saved_i];
         caller_saved[8] = cpu->gpr[30];
+        /*
+         * Targeted call-boundary tracer for stalls that occur immediately
+         * after a known guest call site.  Set IRIX_TRACE_FROM_CALLER to a
+         * guest PC (hex accepted).  Once that caller is observed, dump the
+         * next 64 dispatcher crossings.  This stays dormant in normal runs.
+         */
+        {
+            static int trace_init;
+            static IrixGuestAddr trace_from;
+            static unsigned trace_left;
+            if (!trace_init) {
+                const char *s = getenv("IRIX_TRACE_FROM_CALLER");
+                if (s && *s)
+                    trace_from = (IrixGuestAddr)strtoul(s, NULL, 0);
+                trace_init = 1;
+            }
+            if (trace_from && caller_pc == trace_from)
+                trace_left = 64u;
+            if (trace_left) {
+                fprintf(stderr,
+                        "IRIX call trace: caller_pc=0x%08x callee=0x%08x:%s ra=0x%08x sp=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
+                        caller_pc, address, entry->name ? entry->name : "?",
+                        (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[29],
+                        (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                        (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7]);
+                --trace_left;
+            }
+        }
         if (trace_dialog_call(entry->name)) {
             fprintf(stderr,
                     "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
