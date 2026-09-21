@@ -193,6 +193,22 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
             continue;
         }
 
+        /*
+         * libXt's own XConfigureWindow import veneer is a separate recovered
+         * guest function.  Xt geometry management calls this provider
+         * directly, so pin it to the same host-Xlib bridge as the executable
+         * veneer.  Address is from the exact IRIX libXt symbol table.
+         */
+        if (entry->address == 0x0f60e38cu) {
+            native = resolve_native("XConfigureWindow");
+            if (native && entry->function != native) {
+                entry->function = native;
+                entry->name = "libXt:XConfigureWindow";
+                ++rebound;
+            }
+            continue;
+        }
+
         if (!entry->name)
             continue;
         name = strrchr(entry->name, ':');
