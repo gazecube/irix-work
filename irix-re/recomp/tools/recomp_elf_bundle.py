@@ -42,107 +42,6 @@ def raw_function_symbols(path):
             if name: rows.append(dict(name=name,address=v,size=z,shndx=sh,bind=info>>4))
     return rows
 
-def emit_explicit(path, name, start, size, c_prefix):
-    """Emit one desktop/runtime function from an explicit address range.
-
-    This intentionally lives here instead of changing translate_n32.py so
-    metadata recovery cannot invalidate the static core translator.
-    """
-    elf=t.Elf32BE(str(path))
-    words=elf.words(start,size)
-    decoded=[]
-    for i,word in enumerate(words):
-        addr=start+i*4
-        lines,control=t.decode(addr,word)
-        decoded.append((addr,word,lines,control))
-
-    # A recovered range that ends on a control-transfer instruction is not a
-    # complete MIPS procedure: the following instruction is its delay slot and
-    # executes before the transfer takes effect.  Some SGI metadata-derived
-    # ranges stop at the control instruction itself, so include that slot here
-    # rather than silently dispatching the pending call/jump without it.
-    if decoded and decoded[-1][3] == 'control':
-        slot_addr = start + size
-        try:
-            slot_word = elf.words(slot_addr, 4)[0]
-            slot_lines, slot_control = t.decode(slot_addr, slot_word)
-            decoded.append((slot_addr, slot_word, slot_lines, slot_control))
-            size += 4
-        except Exception:
-            pass
-    fn='irix_recomp_%s%s'%(t.c_name(c_prefix),t.c_name(name))
-    print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (explicit range). */'%(path,name,start,size))
-    print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
-    print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
-    print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
-    print('    IrixGuestAddr pc = cpu->pc;')
-    print('    IrixGuestAddr pending_target = 0;')
-    print('    IrixGuestAddr pending_return = 0;')
-    print('    int pending_kind = IRIX_PENDING_NONE;')
-    print('    int old_pending;')
-    print('    IrixGuestAddr old_target;')
-    print('    IrixGuestAddr old_return;'); print('')
-    print('    for (;;) {')
-    print('        old_pending = pending_kind;')
-    print('        old_target = pending_target;')
-    print('        old_return = pending_return;')
-    print('        pending_kind = IRIX_PENDING_NONE;')
-    print('        cpu->pc = pc;')
-    print('        rt->current_pc = pc;'); print('')
-    print('        switch (pc) {')
-    for addr,word,lines,_ in decoded:
-        print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
-        if addr in (0x0983931c, 0x098402b4):
-            tag = 'DT_INIT' if addr == 0x0983931c else '__cplinit'
-            print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag, addr))
-        if addr in (0x098402d8, 0x098402fc, 0x09840310):
-            print('            fprintf(stderr, "IRIX libimdUtil cplinit step: pc=0x%08x a0=%%08x a1=%%08x t9=%%08x kNull.master=%%08x kEmpty.master=%%08x\\n", (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % addr)
-        if addr in (0x098402ec, 0x098402f4, 0x098402f8):
-            print('            fprintf(stderr, "IRIX libimdUtil kEmpty call probe: pc=0x%08x a0=%%08x a1=%%08x t9=%%08x gp=%%08x pending target context\\n", (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[28]);' % addr)
-        if 0x0f633960 <= addr <= 0x0f6339a4:
-            print('            fprintf(stderr, "IRIX XtCreateApplicationContext probe: pc=0x%08x v0=%%08x a0=%%08x a1=%%08x t9=%%08x sp=%%08x gp=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);' % addr)
-        for line in lines: print('            '+line)
-        print('            break;')
-    print('        default:')
-    print('            if (pc >= 0x098402b4u && pc <= 0x0984031cu)')
-    print('                fprintf(stderr, "IRIX libimdUtil cplinit RANGE MISS: pc=0x%%08x start=0x%08x size=0x%x\\n", (uint32_t)pc);' % (start, size))
-    print('            return;'); print('        }'); print('')
-    print('        if (rt->trapped)'); print('            return;'); print('        cpu->gpr[0] = 0;')
-    print('        if (old_pending == IRIX_PENDING_RETURN)')
-    print('            return;')
-    print('        if (old_pending == IRIX_PENDING_CALL) {')
-    print('            if (irix_guest_call(rt, cpu, old_target) != 0)')
-    print('                return;')
-    print('            pc = old_return;')
-    print('            continue;')
-    print('        }')
-    print('        if (old_pending == IRIX_PENDING_LINK) {')
-    print('            /* A REGIMM link branch may target an interior label in this')
-    print('             * procedure (the classic PIC get-gp BAL idiom).  Keep that')
-    print('             * control flow inside this generated function; only dispatch')
-    print('             * through the runtime when the link target is outside it. */')
-    print('            if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size))
-    print('                pc = old_target;')
-    print('                continue;')
-    print('            }')
-    print('            if (irix_guest_call(rt, cpu, old_target) != 0)')
-    print('                return;')
-    print('            pc = old_return;')
-    print('            continue;')
-    print('        }')
-    print('        if (old_pending == IRIX_PENDING_JUMP) {')
-    print('            if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size))
-    print('                if (irix_guest_call(rt, cpu, old_target) != 0)')
-    print('                    return;')
-    print('                return;')
-    print('            }')
-    print('            pc = old_target;')
-    print('            continue;')
-    print('        }')
-    print('        pc += 4;')
-    print('    }')
-    print('}')
-
 def zero_size_function_ranges(elf, symbol_rows):
     """Recover named zero-sized STT_FUNC symbols conservatively."""
     out=[]
@@ -786,7 +685,7 @@ def main():
         generated=io.StringIO()
         with contextlib.redirect_stdout(generated):
             if source_kind in ('debug_frame','pdr','zero_size','data_ptr','code_link','boundary_entry'):
-                emit_explicit(str(path),n,addr,size,prefix+'_')
+                t.emit_range(str(path),n,addr,size,prefix+'_', recover_trailing_delay_slot=True)
             else:
                 t.emit(str(path),n,c_prefix=prefix+'_')
         text=generated.getvalue()
