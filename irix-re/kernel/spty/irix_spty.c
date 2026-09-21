@@ -3,8 +3,9 @@
  * IRIX System V pseudo-terminal controller/slave compatibility driver.
  *
  * Source-driven port of SGI IRIX kern/io/spty.c (Revision 3.62).
- * Linux supplies device, memory, locking and wait-queue primitives; the
- * externally visible state machine follows the IRIX PTC/PTS driver.
+ * Linux supplies device, memory, locking and wait-queue primitives.  This
+ * module is the kernel substrate for reproducing the IRIX PTC/PTS behavior;
+ * STREAMS and line-discipline semantics are still being ported source-first.
  */
 
 #include <linux/module.h>
@@ -180,6 +181,8 @@ static ssize_t irix_ptc_read(struct file *file, char __user *buf,
 			return 1;
 		}
 		if (!kfifo_is_empty(&pt->to_master)) {
+			unsigned int prefix = 0;
+
 			if (pt->ptc_state & IRIX_PTC_PKT) {
 				unsigned char zero = 0;
 				if (put_user(zero, buf)) {
@@ -188,10 +191,10 @@ static ssize_t irix_ptc_read(struct file *file, char __user *buf,
 				}
 				buf++;
 				count--;
-				copied = 1;
+				prefix = 1;
 				if (!count) {
 					mutex_unlock(&pt->lock);
-					return copied;
+					return prefix;
 				}
 			}
 			rc = kfifo_to_user(&pt->to_master, buf, count, &copied);
@@ -199,7 +202,7 @@ static ssize_t irix_ptc_read(struct file *file, char __user *buf,
 			wake_up_all(&pt->slave_wait);
 			if (rc)
 				return rc;
-			return copied + ((pt->ptc_state & IRIX_PTC_PKT) ? 1 : 0);
+			return prefix + copied;
 		}
 		if (pt->pts_state & IRIX_PT_DEAD) {
 			mutex_unlock(&pt->lock);
@@ -306,7 +309,7 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 		rc = irix_ptc_nested_ioctl(pt, cmd, arg);
 		mutex_unlock(&pt->lock);
 		return rc;
-	case TIOCGWINSZ:
+	case IRIX_TIOCGWINSZ:
 		if (copy_to_user((void __user *)arg, &pt->winsize,
 				 sizeof(pt->winsize))) {
 			mutex_unlock(&pt->lock);
@@ -314,7 +317,7 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 		}
 		mutex_unlock(&pt->lock);
 		return 0;
-	case TIOCSWINSZ:
+	case IRIX_TIOCSWINSZ:
 		if (copy_from_user(&pt->winsize, (void __user *)arg,
 				   sizeof(pt->winsize))) {
 			mutex_unlock(&pt->lock);
@@ -463,14 +466,14 @@ static long irix_pts_ioctl(struct file *file, unsigned int cmd,
 
 	mutex_lock(&pt->lock);
 	switch (cmd) {
-	case TIOCGWINSZ:
+	case IRIX_TIOCGWINSZ:
 		if (copy_to_user((void __user *)arg, &pt->winsize,
 				 sizeof(pt->winsize))) {
 			mutex_unlock(&pt->lock);
 			return -EFAULT;
 		}
 		break;
-	case TIOCSWINSZ:
+	case IRIX_TIOCSWINSZ:
 		if (copy_from_user(&pt->winsize, (void __user *)arg,
 				   sizeof(pt->winsize))) {
 			mutex_unlock(&pt->lock);
