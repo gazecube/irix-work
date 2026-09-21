@@ -1046,9 +1046,13 @@ static void bridge_XResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
     Window w = (Window)(uint32_t)cpu->gpr[5];
     unsigned width = (unsigned)cpu->gpr[6], height = (unsigned)cpu->gpr[7];
-    (void)rt;
-    fprintf(stderr, "IRIX XResizeWindow: serial=%lu window=0x%lx width=%u height=%u\\n",
-            d ? NextRequest(d) : 0ul, (unsigned long)w, width, height);
+    IrixGuestAddr caller = (uint32_t)cpu->gpr[31];
+    const IrixGuestFunctionEntry *ce = irix_guest_find_function(rt, caller);
+    fprintf(stderr,
+            "IRIX XResizeWindow: serial=%lu caller=0x%08x %s window=0x%lx width=%u height=%u\\n",
+            d ? NextRequest(d) : 0ul, caller,
+            (ce && ce->name) ? ce->name : "?",
+            (unsigned long)w, width, height);
     cpu->gpr[2] = d ? (uint32_t)XResizeWindow(d, w, width, height) : 0;
 }
 
