@@ -201,6 +201,10 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
          */
         if (entry->address == 0x0f60e38cu) {
             native = resolve_native("XConfigureWindow");
+            fprintf(stderr,
+                    "IRIX exact XConfigureWindow rebind: addr=0x%08x name=%s native=%p old=%p\\n",
+                    entry->address, entry->name ? entry->name : "<null>",
+                    (void *)native, (void *)entry->function);
             if (native && entry->function != native) {
                 entry->function = native;
                 entry->name = "libXt:XConfigureWindow";
