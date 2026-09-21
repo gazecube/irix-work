@@ -163,8 +163,12 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
          * helper because the guest Display shadow deliberately has no private
          * Xlib connection/XKB pointers.
          */
-        if ((!entry->name || !strcmp(entry->name, "?")) &&
-            entry->address == 0x0f706bdcu) {
+        /*
+         * This recovered helper does have a synthetic recovery name in some
+         * generated bundles, so do not gate an exact-address identity on the
+         * name being NULL/"?".  The address match is the authority here.
+         */
+        if (entry->address == 0x0f706bdcu) {
             native = resolve_native("_IrixXkbDisplayInit");
             if (native && entry->function != native) {
                 entry->function = native;
