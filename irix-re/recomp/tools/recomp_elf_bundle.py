@@ -56,32 +56,20 @@ def emit_explicit(path, name, start, size, c_prefix):
         lines,control=t.decode(addr,word)
         decoded.append((addr,word,lines,control))
 
-    # A recovered range can end in a MIPS delay slot.  In that case the
-    # transfer itself is the penultimate instruction: execute the slot, then
-    # resume at pc+8.  Metadata-derived ranges occasionally omit that resume
-    # instruction, which makes the generated dispatcher hit default and return
-    # before it can process old_pending.  Include the resume instruction too.
-    if len(decoded) >= 2 and decoded[-2][3] == 'control':
-        resume_addr = start + size
+    # A recovered range that ends on a control-transfer instruction is not a
+    # complete MIPS procedure: the following instruction is its delay slot and
+    # executes before the transfer takes effect.  Some SGI metadata-derived
+    # ranges stop at the control instruction itself, so include that slot here
+    # rather than silently dispatching the pending call/jump without it.
+    if decoded and decoded[-1][3] == 'control':
+        slot_addr = start + size
         try:
-            resume_word = elf.words(resume_addr, 4)[0]
-            resume_lines, resume_control = t.decode(resume_addr, resume_word)
-            decoded.append((resume_addr, resume_word, resume_lines, resume_control))
+            slot_word = elf.words(slot_addr, 4)[0]
+            slot_lines, slot_control = t.decode(slot_addr, slot_word)
+            decoded.append((slot_addr, slot_word, slot_lines, slot_control))
             size += 4
         except Exception:
             pass
-    elif decoded and decoded[-1][3] == 'control':
-        # If metadata stopped on the transfer itself, include both its delay
-        # slot and the resume instruction for the same reason.
-        for extra in range(2):
-            extra_addr = start + size
-            try:
-                extra_word = elf.words(extra_addr, 4)[0]
-                extra_lines, extra_control = t.decode(extra_addr, extra_word)
-                decoded.append((extra_addr, extra_word, extra_lines, extra_control))
-                size += 4
-            except Exception:
-                break
     fn='irix_recomp_%s%s'%(t.c_name(c_prefix),t.c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes (explicit range). */'%(path,name,start,size))
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('')
