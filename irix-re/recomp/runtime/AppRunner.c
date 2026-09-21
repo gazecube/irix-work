@@ -803,6 +803,21 @@ int main(int argc, char **argv)
 
     irix_register_app_bundle(&rt);
 
+    /*
+     * Exact-address bridge overrides must be registered before execution, not
+     * merely used to mutate one recovered function-table entry.  Multiple
+     * overlapping recovered ranges can cover the same stripped SGI helper,
+     * and irix_guest_find_function() may otherwise select a different exact
+     * entry/range.  Registration order gives an exact address authoritative
+     * first-match dispatch.
+     */
+    {
+        IrixGuestFunction native = resolve_native("_IrixXkbDisplayInit");
+        if (native)
+            (void)irix_guest_register_function(&rt, 0x0f706bdcu, native,
+                                               "libX11:_IrixXkbDisplayInit");
+    }
+
     {
         size_t rebound = rebind_named_native_functions(&rt);
         fprintf(stderr,
