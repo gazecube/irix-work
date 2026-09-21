@@ -968,7 +968,7 @@ static IrixGuestAddr cache_irix_utmpx(IrixGuestRuntime *rt, const struct utmpx *
 {
     if (!u) return 0;
     if (!g_irix_utmpx_result)
-        g_irix_utmpx_result = alloc_guest(IRIX_UTMPX_SIZE, 4u);
+        g_irix_utmpx_result = tmp_alloc(IRIX_UTMPX_SIZE);
     if (!g_irix_utmpx_result ||
         write_irix_utmpx(rt, g_irix_utmpx_result, u) != 0)
         return 0;
