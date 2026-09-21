@@ -804,18 +804,23 @@ int main(int argc, char **argv)
     irix_register_app_bundle(&rt);
 
     /*
-     * Exact-address bridge overrides must be registered before execution, not
-     * merely used to mutate one recovered function-table entry.  Multiple
-     * overlapping recovered ranges can cover the same stripped SGI helper,
-     * and irix_guest_find_function() may otherwise select a different exact
-     * entry/range.  Registration order gives an exact address authoritative
-     * first-match dispatch.
+     * The SGI libX11 XKB display initializer is reached through an interior
+     * recovered entry at 0x0f706c48, not the nominal 0x0f706bdc boundary.
+     * The crash consistently reports that recovered entry as the nearest
+     * function below PC 0x0f706cb4.  Rebind the actual dispatched entry.
      */
     {
         IrixGuestFunction native = resolve_native("_IrixXkbDisplayInit");
-        if (native)
-            (void)irix_guest_register_function(&rt, 0x0f706bdcu, native,
-                                               "libX11:_IrixXkbDisplayInit");
+        size_t i;
+        if (native) {
+            for (i = 0; i < rt.function_count; ++i) {
+                IrixGuestFunctionEntry *e = &rt.functions[i];
+                if (e->address == 0x0f706c48u) {
+                    e->function = native;
+                    e->name = "libX11:_IrixXkbDisplayInit";
+                }
+            }
+        }
     }
 
     {
