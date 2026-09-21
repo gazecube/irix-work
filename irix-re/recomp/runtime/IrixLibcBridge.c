@@ -762,7 +762,8 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "realloc") || !strcmp(name, "_realloc")) return bridge_realloc;
     if (!strcmp(name, "memalign")) return bridge_memalign;
     if (!strcmp(name, "free") || !strcmp(name, "_free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
-    if (!strcmp(name, "strdup")) return bridge_strdup;\n    if (!strcmp(name, "sprintf")) return bridge_sprintf;
+    if (!strcmp(name, "strdup")) return bridge_strdup;
+    if (!strcmp(name, "sprintf")) return bridge_sprintf;
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
     if (!strcmp(name, "strncmp")) return bridge_strncmp;
