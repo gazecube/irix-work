@@ -289,6 +289,15 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 	if (!pt)
 		return -ENODEV;
 
+	if (cmd == IRIX_SPTY_HOST_GET_ID) {
+		struct irix_spty_host_id id = {
+			.index = pt->index,
+			.side = IRIX_SPTY_SIDE_MASTER,
+		};
+		return copy_to_user((void __user *)arg, &id, sizeof(id)) ?
+			-EFAULT : 0;
+	}
+
 	mutex_lock(&pt->lock);
 	if (cmd == IRIX_I_STR) {
 		if (copy_from_user(&si, (void __user *)arg, sizeof(si))) {
@@ -463,6 +472,15 @@ static long irix_pts_ioctl(struct file *file, unsigned int cmd,
 			   unsigned long arg)
 {
 	struct irix_spty *pt = file->private_data;
+
+	if (cmd == IRIX_SPTY_HOST_GET_ID) {
+		struct irix_spty_host_id id = {
+			.index = pt->index,
+			.side = IRIX_SPTY_SIDE_SLAVE,
+		};
+		return copy_to_user((void __user *)arg, &id, sizeof(id)) ?
+			-EFAULT : 0;
+	}
 
 	mutex_lock(&pt->lock);
 	switch (cmd) {
