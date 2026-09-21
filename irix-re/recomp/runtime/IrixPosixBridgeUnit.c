@@ -314,6 +314,36 @@ static uint32_t irix_status_flags_from_host(int flags)
     return out;
 }
 
+static void bridge_ioctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int fd = (int)(int32_t)cpu->gpr[4];
+    uint32_t cmd = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr arg = (uint32_t)cpu->gpr[6];
+    void *p;
+
+    /*
+     * Direct libc ioctl imports bypass the raw syscall dispatcher.  Marshal
+     * the pointer-bearing IRIX tty controls that xwsh uses here; scalar
+     * controls can be forwarded unchanged to the IRIX spty module.
+     */
+    switch (cmd) {
+    case 0x80087467u: /* IRIX TIOCSWINSZ */
+    case 0x40087468u: /* IRIX TIOCGWINSZ */
+        p = arg ? irix_guest_ptr(rt, arg, 8u) : NULL;
+        if (!p) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        ret_i32(cpu, ioctl(fd, (unsigned long)cmd, p));
+        return;
+    default:
+        ret_i32(cpu, ioctl(fd, (unsigned long)cmd,
+                           (unsigned long)(uint32_t)arg));
+        return;
+    }
+}
+
 static void bridge_fcntl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int fd = (int)(int32_t)cpu->gpr[4];
@@ -1160,6 +1190,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigaction")) return bridge_sigaction;
     if (!strcmp(name, "sighold")) return bridge_sighold;
     if (!strcmp(name, "sigrelse")) return bridge_sigrelse;
+    if (!strcmp(name, "ioctl")) return bridge_ioctl;
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
