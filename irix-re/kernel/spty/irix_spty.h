@@ -38,6 +38,17 @@
 #define IRIX_TIOC            ('T' << 8)
 #define IRIX_TIOCPKT         (IRIX_TIOC | 112)
 
+/*
+ * IRIX sys/ioccom.h encoding.  struct winsize is four 16-bit fields,
+ * therefore sizeof(struct winsize) is 8 in both the IRIX and Linux ABI.
+ */
+#define IRIX_IOC_OUT         0x40000000U
+#define IRIX_IOC_IN          0x80000000U
+#define IRIX_IOC_CMD(f,n,x,y) ((unsigned int)((f) | (((n) & 0xffU) << 16) | \
+					       ((unsigned int)(x) << 8) | (y)))
+#define IRIX_TIOCGWINSZ      IRIX_IOC_CMD(IRIX_IOC_OUT, 8, 't', 104)
+#define IRIX_TIOCSWINSZ      IRIX_IOC_CMD(IRIX_IOC_IN, 8, 't', 103)
+
 struct irix_n32_strioctl {
 	__u32 ic_cmd;
 	__s32 ic_timout;
