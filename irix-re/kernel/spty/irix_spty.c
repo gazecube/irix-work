@@ -26,6 +26,18 @@ static dev_t irix_pts_devt;
 static struct cdev irix_pts_cdev;
 static struct class *irix_pts_class;
 
+static char *irix_pts_devnode(const struct device *dev, umode_t *mode)
+{
+	/*
+	 * devtmpfs otherwise creates class devices root-only on this host.
+	 * IRIX getpty opens the pre-existing slave node as the calling user and
+	 * then applies ownership/mode policy, so the namespace must be reachable.
+	 */
+	if (mode)
+		*mode = 0666;
+	return NULL;
+}
+
 module_param(maxpty, uint, 0444);
 MODULE_PARM_DESC(maxpty, "maximum IRIX pseudo terminals (1..1000)");
 
@@ -544,6 +556,7 @@ static int __init irix_spty_init(void)
 		rc = PTR_ERR(irix_pts_class);
 		goto err_cdev;
 	}
+	irix_pts_class->devnode = irix_pts_devnode;
 
 	for (i = 0; i < maxpty; ++i) {
 		char name[16];
