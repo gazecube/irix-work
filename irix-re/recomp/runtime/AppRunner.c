@@ -135,6 +135,26 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
 
         const char *name;
 
+        /*
+         * Some SGI DSOs have stripped/private function records even when the
+         * routine is a public Xlib entry point.  The IRIX libX11 used by xwsh
+         * has XkbSelectEventDetails at 0x0f715fb4 without a surviving name,
+         * so ordinary name-based rebinding cannot make the host-Xlib bridge
+         * authoritative.  This address was identified statically from the
+         * exact SGI libX11 instruction sequence around the faulting request
+         * builder.  Keep this as an exact-address alias, not a range heuristic.
+         */
+        if ((!entry->name || !strcmp(entry->name, "?")) &&
+            entry->address == 0x0f715fb4u) {
+            native = resolve_native("XkbSelectEventDetails");
+            if (native && entry->function != native) {
+                entry->function = native;
+                entry->name = "libX11:XkbSelectEventDetails";
+                ++rebound;
+            }
+            continue;
+        }
+
         if (!entry->name)
             continue;
         name = strrchr(entry->name, ':');
