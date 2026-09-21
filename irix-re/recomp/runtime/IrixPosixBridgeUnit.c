@@ -179,6 +179,67 @@ static int write_irix_sigaction(IrixGuestRuntime *rt, IrixGuestAddr addr,
     return rt->trapped ? -1 : 0;
 }
 
+static sigset_t g_irix_held_signals;
+static int g_irix_held_signals_initialized;
+
+static void ensure_irix_held_signals(void)
+{
+    if (!g_irix_held_signals_initialized) {
+        sigemptyset(&g_irix_held_signals);
+        g_irix_held_signals_initialized = 1;
+    }
+}
+
+/*
+ * SVR4 sighold()/sigrelse() manipulate the calling process signal mask.
+ * Keep a host mask in sync so code using the legacy interfaces gets the
+ * expected blocking semantics without exposing host sigset_t to the guest.
+ */
+static void bridge_sighold(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int signo = (int)(int32_t)cpu->gpr[4];
+    unsigned word;
+    uint32_t mask;
+
+    (void)rt;
+    if (irix_sig_bit(signo, &word, &mask) != 0) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    ensure_irix_held_signals();
+    if (sigaddset(&g_irix_held_signals, signo) != 0 ||
+        sigprocmask(SIG_BLOCK, &g_irix_held_signals, NULL) != 0) {
+        ret_i32(cpu, -1);
+        return;
+    }
+    ret_i32(cpu, 0);
+}
+
+static void bridge_sigrelse(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int signo = (int)(int32_t)cpu->gpr[4];
+    unsigned word;
+    uint32_t mask;
+    sigset_t one;
+
+    (void)rt;
+    if (irix_sig_bit(signo, &word, &mask) != 0) {
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+    ensure_irix_held_signals();
+    sigemptyset(&one);
+    if (sigaddset(&one, signo) != 0 ||
+        sigprocmask(SIG_UNBLOCK, &one, NULL) != 0) {
+        ret_i32(cpu, -1);
+        return;
+    }
+    sigdelset(&g_irix_held_signals, signo);
+    ret_i32(cpu, 0);
+}
+
 static void bridge_sigaction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int signo = (int)(int32_t)cpu->gpr[4];
@@ -963,6 +1024,8 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "sigdelset")) return bridge_sigdelset;
     if (!strcmp(name, "sigismember")) return bridge_sigismember;
     if (!strcmp(name, "sigaction")) return bridge_sigaction;
+    if (!strcmp(name, "sighold")) return bridge_sighold;
+    if (!strcmp(name, "sigrelse")) return bridge_sigrelse;
     if (!strcmp(name, "fcntl")) return bridge_fcntl;
     if (!strcmp(name, "sgikopt")) return bridge_sgikopt;
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
