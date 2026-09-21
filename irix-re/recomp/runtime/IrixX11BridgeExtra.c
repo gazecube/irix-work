@@ -752,14 +752,6 @@ SIMPLE_DISPLAY0(bridge_XSync, XSync(d, (Bool)cpu->gpr[5]))
 SIMPLE_DISPLAY0(bridge_XPending, XPending(d))
 #define IRIX_XEVENT_SIZE 96u
 
-static IrixGuestAddr display_to_guest(Display *d)
-{
-    size_t i;
-    for (i = 0; i < g_x11.display_count; ++i)
-        if (g_x11.displays[i] == d)
-            return display_guest_addr(i);
-    return 0;
-}
 
 /*
  * IRIX N32 XEvent uses 32-bit long/pointer fields.  Marshal the common
