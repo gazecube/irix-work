@@ -9,6 +9,7 @@
 
 #include <linux/cdev.h>
 #include <linux/kfifo.h>
+#include <linux/ioctl.h>
 #include <linux/mutex.h>
 #include <linux/termios.h>
 #include <linux/wait.h>
@@ -48,6 +49,19 @@
 					       ((unsigned int)(x) << 8) | (y)))
 #define IRIX_TIOCGWINSZ      IRIX_IOC_CMD(IRIX_IOC_OUT, 8, 't', 104)
 #define IRIX_TIOCSWINSZ      IRIX_IOC_CMD(IRIX_IOC_IN, 8, 't', 103)
+
+/*
+ * Host-private query used by the compatibility runtime when translating
+ * fstat(2).  This is not an IRIX ioctl and is never exposed to guest code.
+ */
+#define IRIX_SPTY_HOST_GET_ID _IOR('I', 0xf0, struct irix_spty_host_id)
+#define IRIX_SPTY_SIDE_MASTER 0u
+#define IRIX_SPTY_SIDE_SLAVE  1u
+
+struct irix_spty_host_id {
+	__u32 index;
+	__u32 side;
+};
 
 struct irix_n32_strioctl {
 	__u32 ic_cmd;
