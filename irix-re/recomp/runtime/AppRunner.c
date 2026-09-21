@@ -178,6 +178,21 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
             continue;
         }
 
+        /*
+         * xwsh's stripped executable retains XConfigureWindow as an import
+         * veneer at 0x10020290.  Bind that exact veneer to the host-Xlib
+         * bridge so it cannot fall back into SGI Xlib request construction.
+         */
+        if (entry->address == 0x10020290u) {
+            native = resolve_native("XConfigureWindow");
+            if (native && entry->function != native) {
+                entry->function = native;
+                entry->name = "xwsh:XConfigureWindow";
+                ++rebound;
+            }
+            continue;
+        }
+
         if (!entry->name)
             continue;
         name = strrchr(entry->name, ':');
