@@ -115,7 +115,7 @@ struct irix_spty {
 	unsigned char remote_mode;
 	unsigned char output_stopped;
 	struct winsize winsize;
-	struct ktermios termios;
+	struct irix_termio termio;
 	unsigned int master_open;
 	unsigned int slave_open;
 	struct kfifo to_master;
