@@ -38,6 +38,26 @@
 #define IRIX_SVR4SOPEN       (('P' << 8) | 100)
 #define IRIX_TIOC            ('T' << 8)
 #define IRIX_TIOCPKT         (IRIX_TIOC | 112)
+#define IRIX_TCSBRK          (IRIX_TIOC | 5)
+#define IRIX_TCXONC          (IRIX_TIOC | 6)
+#define IRIX_TIOCREMOTE      ((('t') << 8) | 30)
+
+/* MIPS ABI uses the old termio ioctl numbers. */
+#define IRIX_TCGETA          (IRIX_TIOC | 1)
+#define IRIX_TCSETA          (IRIX_TIOC | 2)
+#define IRIX_TCSETAW         (IRIX_TIOC | 3)
+#define IRIX_TCSETAF         (IRIX_TIOC | 4)
+
+#define IRIX_IGNBRK          0000001u
+#define IRIX_BRKINT          0000002u
+#define IRIX_IXON            0002000u
+#define IRIX_IXOFF           0010000u
+#define IRIX_ICANON          0000002u
+#define IRIX_ECHO            0000010u
+#define IRIX_ECHOE           0000020u
+#define IRIX_ECHOK           0000040u
+#define IRIX_ECHONL          0000100u
+#define IRIX_NCCS            23
 
 /*
  * IRIX sys/ioccom.h encoding.  struct winsize is four 16-bit fields,
@@ -63,6 +83,19 @@ struct irix_spty_host_id {
 	__u32 side;
 };
 
+/*
+ * MIPS ABI old struct termio: four 32-bit tcflag_t values, c_line, then
+ * NCCS bytes.  Values are guest big-endian on the ioctl wire.
+ */
+struct irix_termio {
+	__be32 c_iflag;
+	__be32 c_oflag;
+	__be32 c_cflag;
+	__be32 c_lflag;
+	__u8 c_line;
+	__u8 c_cc[IRIX_NCCS];
+};
+
 struct irix_n32_strioctl {
 	__u32 ic_cmd;
 	__s32 ic_timout;
@@ -79,6 +112,8 @@ struct irix_spty {
 	unsigned char pts_state;
 	unsigned char ptc_state;
 	unsigned char pts_auto_ld;
+	unsigned char remote_mode;
+	unsigned char output_stopped;
 	struct winsize winsize;
 	struct ktermios termios;
 	unsigned int master_open;
