@@ -1048,6 +1048,8 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     memset(&v, 0, sizeof(v));
+    fprintf(stderr, "IRIX XConfigureWindow bridge: window=0x%lx mask=0x%x changes=0x%08x\\n",
+            (unsigned long)w, mask, (unsigned)a);
     v.x = (int32_t)irix_guest_read32be(rt, a + 0u);
     v.y = (int32_t)irix_guest_read32be(rt, a + 4u);
     v.width = (int32_t)irix_guest_read32be(rt, a + 8u);
