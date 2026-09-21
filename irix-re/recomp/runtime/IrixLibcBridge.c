@@ -1,6 +1,8 @@
 #include "IrixLibcBridge.h"
 
 #include <locale.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -179,6 +181,68 @@ static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[31], src,
             s ? s : "<NULL>", out);
     cpu->gpr[2] = out;
+}
+
+typedef struct IrixSptyHostId {
+    uint32_t index;
+    uint32_t side;
+} IrixSptyHostId;
+
+#define IRIX_SPTY_HOST_GET_ID _IOR('I', 0xf0, IrixSptyHostId)
+#define IRIX_SPTY_SIDE_MASTER 0u
+#define IRIX_UNLKPT            (('P' << 8) | 2)
+
+static void bridge__getpty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr fildes_addr = (uint32_t)cpu->gpr[4];
+    mode_t mode = (mode_t)((uint32_t)cpu->gpr[6] & 0666u);
+    IrixSptyHostId id;
+    char name[32];
+    IrixGuestAddr result;
+    int fd;
+    unsigned family;
+    unsigned minor_no;
+
+    /*
+     * IRIX _getpty() is a libc wrapper around the PTC clone device.  Keep the
+     * naming rule from getpty.c, but let the Linux spty module provide the
+     * controller identity instead of depending on translated libc's writable
+     * DSO data aliases (__slave0/__slave1).
+     */
+    fd = open("/dev/ptc", O_RDWR | O_NOCTTY);
+    if (fd < 0)
+        goto fail;
+    if (ioctl(fd, IRIX_SPTY_HOST_GET_ID, &id) < 0 ||
+        id.side != IRIX_SPTY_SIDE_MASTER || id.index >= 1000u)
+        goto fail_close;
+
+    family = id.index / 100u;
+    minor_no = id.index % 100u;
+    if (family >= 10u)
+        goto fail_close;
+    snprintf(name, sizeof(name), "/dev/tty%c%u",
+             "qrstuvwxyz"[family], minor_no);
+
+    /* The module exposes the historical IRIX slave node directly. */
+    (void)chmod(name, mode);
+    if (ioctl(fd, IRIX_UNLKPT) < 0)
+        goto fail_close;
+
+    result = copy_host_string_to_guest(rt, name);
+    if (!result)
+        goto fail_close;
+    if (fildes_addr)
+        irix_guest_write32be(rt, fildes_addr, (uint32_t)fd);
+    else
+        close(fd);
+
+    cpu->gpr[2] = result;
+    return;
+
+fail_close:
+    close(fd);
+fail:
+    cpu->gpr[2] = 0;
 }
 
 static void bridge_sprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -764,6 +828,7 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "free") || !strcmp(name, "_free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
     if (!strcmp(name, "strdup")) return bridge_strdup;
     if (!strcmp(name, "sprintf")) return bridge_sprintf;
+    if (!strcmp(name, "_getpty")) return bridge__getpty;
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
     if (!strcmp(name, "strncmp")) return bridge_strncmp;
