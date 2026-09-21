@@ -103,7 +103,7 @@ def emit_explicit(path, name, start, size, c_prefix):
         print('            break;')
     print('        default:')
     print('            if (pc >= 0x098402b4u && pc <= 0x0984031cu)')
-    print('                fprintf(stderr, "IRIX libimdUtil cplinit RANGE MISS: pc=0x%08x start=0x%08x size=0x%x\\n", (uint32_t)pc, 0x%08xu, 0x%xu);' % (start, size, start, size))
+    print('                fprintf(stderr, "IRIX libimdUtil cplinit RANGE MISS: pc=0x%%08x start=0x%08x size=0x%x\\n", (uint32_t)pc);' % (start, size))
     print('            return;'); print('        }'); print('')
     print('        if (rt->trapped)'); print('            return;'); print('        cpu->gpr[0] = 0;')
     print('        if (old_pending == IRIX_PENDING_RETURN)')
