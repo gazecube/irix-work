@@ -811,37 +811,30 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          * instead of handing the guest address to the Linux kernel.
          */
         if (cmd == 0x5308u) {
-            struct {
-                uint32_t ic_cmd;
-                int32_t ic_timout;
-                int32_t ic_len;
-                uint32_t ic_dp;
-            } si;
+            unsigned char host_si[16];
             unsigned char *payload = NULL;
-            struct {
-                uint32_t ic_cmd;
-                int32_t ic_timout;
-                int32_t ic_len;
-                uintptr_t ic_dp;
-            } host_si;
+            uint32_t ic_cmd;
+            int32_t ic_timout;
+            int32_t ic_len;
+            uint32_t ic_dp;
 
             if (!arg_addr || !irix_guest_ptr(rt, arg_addr, 16u)) {
                 errno = EFAULT;
                 syscall_result(cpu, -1);
                 return;
             }
-            si.ic_cmd = irix_guest_read32be(rt, arg_addr + 0u);
-            si.ic_timout = (int32_t)irix_guest_read32be(rt, arg_addr + 4u);
-            si.ic_len = (int32_t)irix_guest_read32be(rt, arg_addr + 8u);
-            si.ic_dp = irix_guest_read32be(rt, arg_addr + 12u);
-            if (si.ic_len < 0 || si.ic_len > 65536) {
+            ic_cmd = irix_guest_read32be(rt, arg_addr + 0u);
+            ic_timout = (int32_t)irix_guest_read32be(rt, arg_addr + 4u);
+            ic_len = (int32_t)irix_guest_read32be(rt, arg_addr + 8u);
+            ic_dp = irix_guest_read32be(rt, arg_addr + 12u);
+            if (ic_len < 0 || ic_len > 65536) {
                 errno = EINVAL;
                 syscall_result(cpu, -1);
                 return;
             }
-            if (si.ic_len && si.ic_dp) {
+            if (ic_len && ic_dp) {
                 payload = (unsigned char *)irix_guest_ptr(
-                    rt, (IrixGuestAddr)si.ic_dp, (size_t)si.ic_len);
+                    rt, (IrixGuestAddr)ic_dp, (size_t)ic_len);
                 if (!payload) {
                     errno = EFAULT;
                     syscall_result(cpu, -1);
@@ -849,11 +842,26 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 }
             }
 
-            host_si.ic_cmd = si.ic_cmd;
-            host_si.ic_timout = si.ic_timout;
-            host_si.ic_len = si.ic_len;
-            host_si.ic_dp = (uintptr_t)payload;
-            result = (int64_t)ioctl(fd, cmd, &host_si);
+            /*
+             * The module deliberately keeps the 16-byte N32 strioctl wire
+             * shape.  ic_dp is host-private at this boundary, so require it
+             * to fit in 32 bits rather than silently truncating a pointer.
+             * The current getpty controls (UNLKPT/SVR4SOPEN) carry no data
+             * and therefore use a zero pointer.
+             */
+            if ((uintptr_t)payload > UINT32_MAX) {
+                errno = EOVERFLOW;
+                syscall_result(cpu, -1);
+                return;
+            }
+            memcpy(host_si + 0, &ic_cmd, 4u);
+            memcpy(host_si + 4, &ic_timout, 4u);
+            memcpy(host_si + 8, &ic_len, 4u);
+            {
+                uint32_t hp = (uint32_t)(uintptr_t)payload;
+                memcpy(host_si + 12, &hp, 4u);
+            }
+            result = (int64_t)ioctl(fd, cmd, host_si);
             syscall_result(cpu, result);
             return;
         }
