@@ -80,6 +80,8 @@ def emit_explicit(path, name, start, size, c_prefix):
         if addr in (0x0983931c, 0x098402b4):
             tag = 'DT_INIT' if addr == 0x0983931c else '__cplinit'
             print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag, addr))
+        if addr in (0x098402d8, 0x098402fc, 0x09840310):
+            print('            fprintf(stderr, "IRIX libimdUtil cplinit step: pc=0x%08x a0=%%08x a1=%%08x t9=%%08x kNull.master=%%08x kEmpty.master=%%08x\\n", (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % addr)
         for line in lines: print('            '+line)
         print('            break;')
     print('        default:'); print('            return;'); print('        }'); print('')
