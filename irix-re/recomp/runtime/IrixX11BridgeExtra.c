@@ -806,6 +806,44 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         irix_guest_write8(rt, a + 52u, (uint8_t)e->xmotion.is_hint);
         wr32(rt, a + 56u, (uint32_t)e->xmotion.same_screen);
         break;
+    case EnterNotify:
+    case LeaveNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xcrossing.root);
+        wr32(rt, a + 24u, (uint32_t)e->xcrossing.subwindow);
+        wr32(rt, a + 28u, (uint32_t)e->xcrossing.time);
+        wr32(rt, a + 32u, (uint32_t)e->xcrossing.x);
+        wr32(rt, a + 36u, (uint32_t)e->xcrossing.y);
+        wr32(rt, a + 40u, (uint32_t)e->xcrossing.x_root);
+        wr32(rt, a + 44u, (uint32_t)e->xcrossing.y_root);
+        wr32(rt, a + 48u, (uint32_t)e->xcrossing.mode);
+        wr32(rt, a + 52u, (uint32_t)e->xcrossing.detail);
+        wr32(rt, a + 56u, (uint32_t)e->xcrossing.same_screen);
+        wr32(rt, a + 60u, (uint32_t)e->xcrossing.focus);
+        wr32(rt, a + 64u, (uint32_t)e->xcrossing.state);
+        break;
+    case FocusIn:
+    case FocusOut:
+        wr32(rt, a + 20u, (uint32_t)e->xfocus.mode);
+        wr32(rt, a + 24u, (uint32_t)e->xfocus.detail);
+        break;
+    case Expose:
+        wr32(rt, a + 20u, (uint32_t)e->xexpose.x);
+        wr32(rt, a + 24u, (uint32_t)e->xexpose.y);
+        wr32(rt, a + 28u, (uint32_t)e->xexpose.width);
+        wr32(rt, a + 32u, (uint32_t)e->xexpose.height);
+        wr32(rt, a + 36u, (uint32_t)e->xexpose.count);
+        break;
+    case ConfigureNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xconfigure.event);
+        wr32(rt, a + 24u, (uint32_t)e->xconfigure.window);
+        wr32(rt, a + 28u, (uint32_t)e->xconfigure.x);
+        wr32(rt, a + 32u, (uint32_t)e->xconfigure.y);
+        wr32(rt, a + 36u, (uint32_t)e->xconfigure.width);
+        wr32(rt, a + 40u, (uint32_t)e->xconfigure.height);
+        wr32(rt, a + 44u, (uint32_t)e->xconfigure.border_width);
+        wr32(rt, a + 48u, (uint32_t)e->xconfigure.above);
+        wr32(rt, a + 52u, (uint32_t)e->xconfigure.override_redirect);
+        break;
     default:
         break;
     }
