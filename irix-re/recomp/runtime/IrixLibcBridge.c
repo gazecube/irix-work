@@ -181,6 +181,92 @@ static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out;
 }
 
+static void bridge_sprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst_addr = (uint32_t)cpu->gpr[4];
+    const char *fmt = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    char *dst = (char *)irix_guest_ptr(rt, dst_addr, 1u);
+    const char *p;
+    char *out;
+    unsigned arg = 6u;
+
+    if (!dst || !fmt) {
+        cpu->gpr[2] = (uint64_t)(int64_t)-1;
+        return;
+    }
+
+    /*
+     * N32 passes the integer/pointer varargs following dst/fmt in a2-a7.
+     * Keep this bridge deliberately to the conversion set used by the IRIX
+     * libc paths we currently execute; unlike host sprintf, guest pointers
+     * must be translated before %s can be consumed.
+     */
+    out = dst;
+    for (p = fmt; *p; ++p) {
+        char tmp[64];
+        int n = 0;
+        uint32_t v;
+
+        if (*p != '%') {
+            *out++ = *p;
+            continue;
+        }
+        ++p;
+        if (*p == '%') {
+            *out++ = '%';
+            continue;
+        }
+        if (!*p || arg > 11u) {
+            cpu->gpr[2] = (uint64_t)(int64_t)-1;
+            return;
+        }
+
+        v = (uint32_t)cpu->gpr[arg++];
+        switch (*p) {
+        case 'c':
+            *out++ = (char)v;
+            break;
+        case 'd':
+        case 'i':
+            n = snprintf(tmp, sizeof(tmp), "%d", (int32_t)v);
+            break;
+        case 'u':
+            n = snprintf(tmp, sizeof(tmp), "%u", v);
+            break;
+        case 'x':
+            n = snprintf(tmp, sizeof(tmp), "%x", v);
+            break;
+        case 'X':
+            n = snprintf(tmp, sizeof(tmp), "%X", v);
+            break;
+        case 'o':
+            n = snprintf(tmp, sizeof(tmp), "%o", v);
+            break;
+        case 'p':
+            n = snprintf(tmp, sizeof(tmp), "0x%x", v);
+            break;
+        case 's': {
+            const char *s = guest_cstr(rt, v);
+            if (!s) s = "(null)";
+            n = (int)strlen(s);
+            memcpy(out, s, (size_t)n);
+            out += n;
+            n = 0;
+            break;
+        }
+        default:
+            cpu->gpr[2] = (uint64_t)(int64_t)-1;
+            return;
+        }
+        if (n > 0) {
+            memcpy(out, tmp, (size_t)n);
+            out += n;
+        }
+    }
+    *out = '\0';
+    cpu->gpr[2] = (uint64_t)(uint32_t)(out - dst);
+}
+
 static void bridge_strlen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -676,7 +762,7 @@ IrixGuestFunction irix_libc_bridge_lookup(const char *name)
     if (!strcmp(name, "realloc") || !strcmp(name, "_realloc")) return bridge_realloc;
     if (!strcmp(name, "memalign")) return bridge_memalign;
     if (!strcmp(name, "free") || !strcmp(name, "_free") || !strcmp(name, "__dl__GPv") || !strcmp(name, "__dla__GPv")) return bridge_free;
-    if (!strcmp(name, "strdup")) return bridge_strdup;
+    if (!strcmp(name, "strdup")) return bridge_strdup;\n    if (!strcmp(name, "sprintf")) return bridge_sprintf;
     if (!strcmp(name, "strlen")) return bridge_strlen;
     if (!strcmp(name, "strcmp")) return bridge_strcmp;
     if (!strcmp(name, "strncmp")) return bridge_strncmp;
