@@ -1434,6 +1434,15 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         for (saved_i = 0; saved_i < 8u; ++saved_i)
             caller_saved[saved_i] = cpu->gpr[16u + saved_i];
         caller_saved[8] = cpu->gpr[30];
+        if (address == 0x10024fdcu) {
+            IrixGuestFunctionEntry *caller_entry = irix_guest_find_function(rt, caller_pc);
+            fprintf(stderr,
+                    "IRIX tuGadget::resize entry: caller_pc=0x%08x %s this=0x%08x width=%d height=%d ra=0x%08x\\n",
+                    caller_pc,
+                    (caller_entry && caller_entry->name) ? caller_entry->name : "?",
+                    (uint32_t)cpu->gpr[4], (int32_t)cpu->gpr[5],
+                    (int32_t)cpu->gpr[6], (uint32_t)cpu->gpr[31]);
+        }
         /*
          * Targeted call-boundary tracer for stalls that occur immediately
          * after a known guest call site.  Set IRIX_TRACE_FROM_CALLER to a
