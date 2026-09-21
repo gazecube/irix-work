@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -384,8 +385,42 @@ static uint32_t irix_syscall_dev(dev_t d)
     return ((uint32_t)major(d) << 18) | ((uint32_t)minor(d) & 0x3ffffu);
 }
 
+/*
+ * The Linux spty module uses dynamic host device numbers.  IRIX libc getpty
+ * identifies PTC/PTS endpoints from st_rdev, so fstat must expose the
+ * historical IRIX device families instead of the Linux substrate numbers.
+ */
+typedef struct IrixSptyHostId {
+    uint32_t index;
+    uint32_t side;
+} IrixSptyHostId;
+
+#define IRIX_SPTY_HOST_GET_ID _IOR('I', 0xf0, IrixSptyHostId)
+#define IRIX_SPTY_SIDE_MASTER 0u
+#define IRIX_SPTY_SIDE_SLAVE  1u
+
+static uint32_t irix_syscall_rdev(const struct stat *st, int fd)
+{
+    static const uint32_t ptc_major[5] = { 14u, 104u, 106u, 108u, 110u };
+    static const uint32_t pts_major[5] = { 15u, 105u, 107u, 109u, 111u };
+    IrixSptyHostId id;
+
+    if (fd >= 0 && ioctl(fd, IRIX_SPTY_HOST_GET_ID, &id) == 0 &&
+        id.index < 1000u &&
+        (id.side == IRIX_SPTY_SIDE_MASTER ||
+         id.side == IRIX_SPTY_SIDE_SLAVE)) {
+        uint32_t family = id.index / 200u;
+        uint32_t minor_no = id.index % 200u;
+        uint32_t major_no = id.side == IRIX_SPTY_SIDE_MASTER ?
+                            ptc_major[family] : pts_major[family];
+        return (major_no << 18) | minor_no;
+    }
+
+    return irix_syscall_dev(st->st_rdev);
+}
+
 static int write_irix_xstat32(IrixGuestRuntime *rt, IrixGuestAddr out,
-                              const struct stat *st)
+                              const struct stat *st, int fd)
 {
     unsigned char *p;
     if (!out || !st) {
@@ -404,7 +439,7 @@ static int write_irix_xstat32(IrixGuestRuntime *rt, IrixGuestAddr out,
     irix_guest_write32be(rt, out + 24u, (uint32_t)st->st_nlink);
     irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_uid);
     irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_gid);
-    irix_guest_write32be(rt, out + 36u, irix_syscall_dev(st->st_rdev));
+    irix_guest_write32be(rt, out + 36u, irix_syscall_rdev(st, fd));
     irix_guest_write32be(rt, out + 48u, (uint32_t)st->st_size);
 #if defined(__APPLE__)
     irix_guest_write32be(rt, out + 56u, (uint32_t)st->st_atimespec.tv_sec);
@@ -428,7 +463,7 @@ static int write_irix_xstat32(IrixGuestRuntime *rt, IrixGuestAddr out,
 }
 
 static int write_irix_xstat64(IrixGuestRuntime *rt, IrixGuestAddr out,
-                              const struct stat *st)
+                              const struct stat *st, int fd)
 {
     unsigned char *p;
     if (!out || !st) {
@@ -447,7 +482,7 @@ static int write_irix_xstat64(IrixGuestRuntime *rt, IrixGuestAddr out,
     irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_nlink);
     irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_uid);
     irix_guest_write32be(rt, out + 36u, (uint32_t)st->st_gid);
-    irix_guest_write32be(rt, out + 40u, irix_syscall_dev(st->st_rdev));
+    irix_guest_write32be(rt, out + 40u, irix_syscall_rdev(st, fd));
     irix_guest_write64be(rt, out + 56u, (uint64_t)(int64_t)st->st_size);
 #if defined(__APPLE__)
     irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_atimespec.tv_sec);
@@ -470,12 +505,12 @@ static int write_irix_xstat64(IrixGuestRuntime *rt, IrixGuestAddr out,
 }
 
 static int write_irix_xstat(IrixGuestRuntime *rt, uint32_t version,
-                            IrixGuestAddr out, const struct stat *st)
+                            IrixGuestAddr out, const struct stat *st, int fd)
 {
     if (version == 2u)
-        return write_irix_xstat32(rt, out, st);
+        return write_irix_xstat32(rt, out, st, fd);
     if (version == 3u)
-        return write_irix_xstat64(rt, out, st);
+        return write_irix_xstat64(rt, out, st, fd);
     errno = EINVAL;
     return -1;
 }
@@ -1025,7 +1060,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         result = (int64_t)stat(path, &st);
-        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+        if (result == 0 && write_irix_xstat(rt, version, out, &st, -1) != 0)
             result = -1;
         syscall_result(cpu, result);
         return;
@@ -1042,7 +1077,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         result = (int64_t)lstat(path, &st);
-        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+        if (result == 0 && write_irix_xstat(rt, version, out, &st, -1) != 0)
             result = -1;
         syscall_result(cpu, result);
         return;
@@ -1053,7 +1088,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
         struct stat st;
         result = (int64_t)fstat(fd, &st);
-        if (result == 0 && write_irix_xstat(rt, version, out, &st) != 0)
+        if (result == 0 && write_irix_xstat(rt, version, out, &st, fd) != 0)
             result = -1;
         syscall_result(cpu, result);
         return;
