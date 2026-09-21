@@ -308,19 +308,43 @@ def decode(addr, insn):
 
 def c_name(name): return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
-def emit(path,name,section_base=None,c_prefix=''):
-    elf=Elf32BE(path); sym_name,sym_value,size,shndx=elf.find_function(name)
-    if not size: raise ValueError('symbol has zero size: %s'%name)
+def emit_range(path, name, start, size, c_prefix='', shndx=None,
+               section_base=0, recover_trailing_delay_slot=False):
+    """Emit one function from an already-resolved executable address range.
+
+    All front ends use this routine so symbol-backed and metadata-recovered
+    functions share exactly the same instruction/control-flow emitter.
+    """
+    elf=Elf32BE(path)
     if elf.etype==1:
-        if section_base is None: section_base=0x50000000
-        start=(section_base+sym_value)&0xffffffff; words=elf.words(start,size,shndx=shndx,section_base=section_base)
+        if shndx is None:
+            raise ValueError('ET_REL emit_range requires symbol section')
+        words=elf.words(start,size,shndx=shndx,section_base=section_base)
     else:
-        start=sym_value; words=elf.words(start,size)
+        words=elf.words(start,size)
     decoded=[]
     for i,word in enumerate(words):
-        addr=start+i*4; lines,control=decode(addr,word); decoded.append((addr,word,lines,control))
+        addr=start+i*4
+        lines,control=decode(addr,word)
+        decoded.append((addr,word,lines,control))
+
+    # Metadata-derived ranges can end on a control transfer while omitting its
+    # architectural delay slot.  Recovery callers may request that one word.
+    if recover_trailing_delay_slot and decoded and decoded[-1][3] == 'control':
+        slot_addr=start+size
+        try:
+            if elf.etype==1:
+                slot_word=elf.words(slot_addr,4,shndx=shndx,section_base=section_base)[0]
+            else:
+                slot_word=elf.words(slot_addr,4)[0]
+            slot_lines,slot_control=decode(slot_addr,slot_word)
+            decoded.append((slot_addr,slot_word,slot_lines,slot_control))
+            size+=4
+        except Exception:
+            pass
+
     fn='irix_recomp_%s%s'%(c_name(c_prefix),c_name(name))
-    print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */'%(path,sym_name,start,size))
+    print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */'%(path,name,start,size))
     print('#include "IrixGuest.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
@@ -328,15 +352,28 @@ def emit(path,name,section_base=None,c_prefix=''):
     for addr,word,lines,_ in decoded:
         print('        case 0x%08xu: /* 0x%08x */'%(addr,word))
         if addr in (0x0983931c, 0x098402b4):
-            tag = 'DT_INIT' if addr == 0x0983931c else '__cplinit'
-            print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag, addr))
+            tag='DT_INIT' if addr==0x0983931c else '__cplinit'
+            print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag,addr))
         if 0x0f633960 <= addr <= 0x0f6339a4:
             print('            fprintf(stderr, "IRIX XtCreateApplicationContext probe: pc=0x%08x v0=%%08x a0=%%08x a1=%%08x t9=%%08x sp=%%08x gp=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);' % addr)
         if 0x0f61448c <= addr <= 0x0f614520:
             print('            fprintf(stderr, "IRIX Xt allocator probe: pc=0x%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t9=%%08x sp=%%08x gp=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);' % addr)
         for line in lines: print('            '+line)
         print('            break;')
-    print('        default:'); print('            return;'); print('        }'); print(''); print('        if (rt->trapped)'); print('            return;'); print('        cpu->gpr[0] = 0;'); print('        if (old_pending == IRIX_PENDING_RETURN)'); print('            return;'); print('        if (old_pending == IRIX_PENDING_CALL) {'); print('            if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                return;'); print('            pc = old_return;'); print('            continue;'); print('        }'); print('        if (old_pending == IRIX_PENDING_LINK) {'); print('            /* Link branches are calls, including recursive/local ones. */'); print('            if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                return;'); print('            pc = old_return;'); print('            continue;'); print('        }'); print('        if (old_pending == IRIX_PENDING_JUMP) {'); print('            if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size)); print('                if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                    return;'); print('                return;'); print('            }'); print('            pc = old_target;'); print('            continue;'); print('        }'); print('        pc += 4;'); print('    }'); print('}')
+    print('        default:'); print('            return;'); print('        }'); print(''); print('        if (rt->trapped)'); print('            return;'); print('        cpu->gpr[0] = 0;'); print('        if (old_pending == IRIX_PENDING_RETURN)'); print('            return;'); print('        if (old_pending == IRIX_PENDING_CALL) {'); print('            if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                return;'); print('            pc = old_return;'); print('            continue;'); print('        }'); print('        if (old_pending == IRIX_PENDING_LINK) {'); print('            if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size)); print('                pc = old_target;'); print('                continue;'); print('            }'); print('            if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                return;'); print('            pc = old_return;'); print('            continue;'); print('        }'); print('        if (old_pending == IRIX_PENDING_JUMP) {'); print('            if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size)); print('                if (irix_guest_call(rt, cpu, old_target) != 0)'); print('                    return;'); print('                return;'); print('            }'); print('            pc = old_target;'); print('            continue;'); print('        }'); print('        pc += 4;'); print('    }'); print('}')
+
+
+def emit(path,name,section_base=None,c_prefix=''):
+    elf=Elf32BE(path)
+    sym_name,sym_value,size,shndx=elf.find_function(name)
+    if not size:
+        raise ValueError('symbol has zero size: %s'%name)
+    if elf.etype==1:
+        if section_base is None:
+            section_base=0x50000000
+        start=(section_base+sym_value)&0xffffffff
+        return emit_range(path,sym_name,start,size,c_prefix,shndx,section_base)
+    return emit_range(path,sym_name,sym_value,size,c_prefix)
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('elf'); ap.add_argument('function'); ap.add_argument('--section-base',type=lambda x:int(x,0)); ap.add_argument('--c-prefix',default=''); ns=ap.parse_args()
