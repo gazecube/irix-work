@@ -7,6 +7,7 @@
 #include <grp.h>
 #include <netdb.h>
 #include <pwd.h>
+#include <signal.h>
 #include <sched.h>
 #include <sys/select.h>
 #include <sys/socket.h>
