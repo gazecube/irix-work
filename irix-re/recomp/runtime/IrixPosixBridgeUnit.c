@@ -12,6 +12,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <sys/un.h>
 #include <utmpx.h>
 
@@ -1210,6 +1211,44 @@ static void bridge_sysmp_compat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     irix_compat_sysmp(rt, cpu);
 }
 
+static void bridge_times(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr out = (uint32_t)cpu->gpr[4];
+    struct tms t;
+    clock_t rc;
+
+    errno = 0;
+    rc = times(&t);
+    if (rc == (clock_t)-1) {
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    /*
+     * IRIX N32 struct tms is four 32-bit clock_t values.  xwsh passes a
+     * guest stack object here, so marshal the host result explicitly rather
+     * than exposing the host struct layout/endian order.
+     */
+    if (out) {
+        if (!irix_guest_ptr(rt, out, 16u)) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+        irix_guest_write32be(rt, out + 0u, (uint32_t)(int32_t)t.tms_utime);
+        irix_guest_write32be(rt, out + 4u, (uint32_t)(int32_t)t.tms_stime);
+        irix_guest_write32be(rt, out + 8u, (uint32_t)(int32_t)t.tms_cutime);
+        irix_guest_write32be(rt, out + 12u, (uint32_t)(int32_t)t.tms_cstime);
+        if (rt->trapped) {
+            errno = EFAULT;
+            ret_i32(cpu, -1);
+            return;
+        }
+    }
+
+    ret_i32(cpu, (int32_t)rc);
+}
+
 static void bridge_sginap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int32_t ticks = (int32_t)cpu->gpr[4];
@@ -1280,6 +1319,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "connect")) return bridge_connect;
     if (!strcmp(name, "fork")) return bridge_fork;
     if (!strcmp(name, "select")) return bridge_select;
+    if (!strcmp(name, "times")) return bridge_times;
     if (!strcmp(name, "sginap")) return bridge_sginap;
     if (!strcmp(name, "setutxent")) return bridge_setutxent;
     if (!strcmp(name, "endutxent")) return bridge_endutxent;
