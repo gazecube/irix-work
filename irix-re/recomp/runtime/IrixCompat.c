@@ -232,21 +232,26 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    case SGI_RXEV_GET:
+    case SGI_RXEV_GET: { /* SGI_RXEV_GET */
         /*
-         * SGI_RXEV_GET is a Trusted IRIX receive-event interface.  The old
-         * compatibility shim treated request 92 as an rld no-op without an
-         * authoritative command identity.  Do not silently preserve that
-         * guess now that the SGI command table identifies it.
+         * SGI syssgi.c: tell libc/rld whether loader-control environment
+         * variables (_RLD_ROOT, _RLD_PATH, LD_LIBRARY_PATH, ...) are unsafe.
+         * They are unsafe after an effective/real uid or gid transition, or
+         * when capabilities are present.  Our guest personality does not
+         * currently expose IRIX capabilities, so only the credential test
+         * applies.  arg1==0 permits IRIX's real-uid-root exception.
          */
-        fprintf(stderr,
-                "UNIMPLEMENTED IRIX SGI_RXEV_GET pc=0x%08x a1-a3=%08x,%08x,%08x\n",
-                (uint32_t)cpu->pc,
-                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
-                (uint32_t)cpu->gpr[7]);
-        rt->fault_addr = request;
-        irix_guest_trap(rt, cpu, 0xeeee2304u);
+        uid_t ruid = getuid();
+        uid_t euid = geteuid();
+        gid_t rgid = getgid();
+        gid_t egid = getegid();
+        int disallow = (euid != ruid || egid != rgid);
+
+        if (ruid == 0 && (uint32_t)cpu->gpr[5] == 0u)
+            disallow = 0;
+        compat_result(cpu, disallow ? 1 : 0);
         return;
+    }
 
     case SGI_TOSSTSAVE: /* SGI_TOSSTSAVE */
         compat_result(cpu, 0);
