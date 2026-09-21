@@ -926,8 +926,8 @@ static int read_irix_utmpx(IrixGuestRuntime *rt, IrixGuestAddr addr, struct utmp
     memcpy(u->ut_line, irix_guest_ptr(rt, addr + 36u, 32u), 32u);
     u->ut_pid = (pid_t)(int32_t)irix_guest_read32be(rt, addr + 68u);
     u->ut_type = (short)(int16_t)irix_guest_read16be(rt, addr + 72u);
-    u->ut_exit.e_termination = (short)(int16_t)irix_guest_read16be(rt, addr + 74u);
-    u->ut_exit.e_exit = (short)(int16_t)irix_guest_read16be(rt, addr + 76u);
+    u->ut_exit.__e_termination = (short)(int16_t)irix_guest_read16be(rt, addr + 74u);
+    u->ut_exit.__e_exit = (short)(int16_t)irix_guest_read16be(rt, addr + 76u);
     u->ut_tv.tv_sec = (int32_t)irix_guest_read32be(rt, addr + 80u);
     u->ut_tv.tv_usec = (int32_t)irix_guest_read32be(rt, addr + 84u);
 #ifdef __linux__
@@ -949,8 +949,8 @@ static int write_irix_utmpx(IrixGuestRuntime *rt, IrixGuestAddr addr, const stru
     memcpy(irix_guest_ptr(rt, addr + 36u, 32u), u->ut_line, 32u);
     irix_guest_write32be(rt, addr + 68u, (uint32_t)(int32_t)u->ut_pid);
     irix_guest_write16be(rt, addr + 72u, (uint16_t)u->ut_type);
-    irix_guest_write16be(rt, addr + 74u, (uint16_t)u->ut_exit.e_termination);
-    irix_guest_write16be(rt, addr + 76u, (uint16_t)u->ut_exit.e_exit);
+    irix_guest_write16be(rt, addr + 74u, (uint16_t)u->ut_exit.__e_termination);
+    irix_guest_write16be(rt, addr + 76u, (uint16_t)u->ut_exit.__e_exit);
     irix_guest_write32be(rt, addr + 80u, (uint32_t)(int32_t)u->ut_tv.tv_sec);
     irix_guest_write32be(rt, addr + 84u, (uint32_t)(int32_t)u->ut_tv.tv_usec);
 #ifdef __linux__
