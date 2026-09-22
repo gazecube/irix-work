@@ -128,6 +128,20 @@ struct irix_termio {
 	__u8 c_cc[IRIX_NCCS];
 };
 
+/*
+ * The public IRIX ABI hides c_ospeed/c_ispeed from struct termio
+ * (_NO_ABIAPI is false in userland).  spty/stty_ld keep the expanded
+ * kernel form above internally, so TCGETA/TCSETA need explicit marshaling.
+ */
+struct irix_termio_wire {
+	__be32 c_iflag;
+	__be32 c_oflag;
+	__be32 c_cflag;
+	__be32 c_lflag;
+	__u8 c_line;
+	__u8 c_cc[IRIX_NCCS];
+};
+
 struct irix_n32_strioctl {
 	__u32 ic_cmd;
 	__s32 ic_timout;

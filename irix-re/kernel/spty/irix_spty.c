@@ -388,13 +388,19 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 			       unsigned long arg)
 {
-	struct irix_termio tio;
+	struct irix_termio_wire tio;
 	int value;
 
 	switch (cmd) {
 	case IRIX_TCGETA:
-		return copy_to_user((void __user *)arg, &pt->termio,
-				    sizeof(pt->termio)) ? -EFAULT : 0;
+		tio.c_iflag = pt->termio.c_iflag;
+		tio.c_oflag = pt->termio.c_oflag;
+		tio.c_cflag = pt->termio.c_cflag;
+		tio.c_lflag = pt->termio.c_lflag;
+		tio.c_line = pt->termio.c_line;
+		memcpy(tio.c_cc, pt->termio.c_cc, IRIX_NCCS);
+		return copy_to_user((void __user *)arg, &tio, sizeof(tio)) ?
+			-EFAULT : 0;
 	case IRIX_TCSETAF:
 		kfifo_reset(&pt->to_slave);
 		kfifo_reset(&pt->canon_input);
@@ -405,7 +411,12 @@ static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 	case IRIX_TCSETAW:
 		if (copy_from_user(&tio, (void __user *)arg, sizeof(tio)))
 			return -EFAULT;
-		pt->termio = tio;
+		pt->termio.c_iflag = tio.c_iflag;
+		pt->termio.c_oflag = tio.c_oflag;
+		pt->termio.c_cflag = tio.c_cflag;
+		pt->termio.c_lflag = tio.c_lflag;
+		pt->termio.c_line = tio.c_line;
+		memcpy(pt->termio.c_cc, tio.c_cc, IRIX_NCCS);
 		if (pt->ptc_state & IRIX_PTC_PKT)
 			pt->pt_pkt |= TIOCPKT_IOCTL;
 		wake_up_all(&pt->master_wait);
@@ -657,36 +668,60 @@ static ssize_t irix_pts_write(struct file *file, const char __user *buf,
 			      size_t count, loff_t *ppos)
 {
 	struct irix_spty *pt = file->private_data;
-	unsigned int copied = 0;
-	int rc;
+	unsigned char in[256], out[512];
+	size_t done = 0;
 
-	mutex_lock(&pt->lock);
-	if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
-		mutex_unlock(&pt->lock);
-		return -EIO;
-	}
-	for (;;) {
-		rc = kfifo_from_user(&pt->to_master, buf, count, &copied);
-		mutex_unlock(&pt->lock);
-		if (copied) {
-			wake_up_all(&pt->master_wait);
-			return rc ? rc : copied;
-		}
-		if (rc)
-			return rc;
-		if (file->f_flags & O_NONBLOCK)
-			return -EAGAIN;
-		rc = wait_event_interruptible(pt->slave_wait,
-			(pt->ptc_state & IRIX_PT_DEAD) ||
-			kfifo_avail(&pt->to_master) != 0);
-		if (rc)
-			return rc;
+	/* stty_ld output side: preserve the source's fast raw path and perform
+	 * the overwhelmingly important OPOST/ONLCR transform for cooked ttys. */
+	while (done < count) {
+		size_t n = min_t(size_t, sizeof(in), count - done), i, o = 0;
+		u32 oflag;
+
+		if (copy_from_user(in, buf + done, n))
+			return done ? (ssize_t)done : -EFAULT;
 		mutex_lock(&pt->lock);
-		if (pt->ptc_state & IRIX_PT_DEAD) {
+		if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
 			mutex_unlock(&pt->lock);
-			return -EIO;
+			return done ? (ssize_t)done : -EIO;
 		}
+		if (pt->pts_state & IRIX_PTS_TXSTOP) {
+			mutex_unlock(&pt->lock);
+			if (file->f_flags & O_NONBLOCK)
+				return done ? (ssize_t)done : -EAGAIN;
+			if (wait_event_interruptible(pt->slave_wait,
+			    !(pt->pts_state & IRIX_PTS_TXSTOP) ||
+			    (pt->ptc_state & IRIX_PT_DEAD)))
+				return done ? (ssize_t)done : -ERESTARTSYS;
+			continue;
+		}
+		oflag = be32_to_cpu(pt->termio.c_oflag);
+		for (i = 0; i < n && o < sizeof(out); ++i) {
+			if ((oflag & (IRIX_OPOST | IRIX_ONLCR)) ==
+			    (IRIX_OPOST | IRIX_ONLCR) && in[i] == '\n') {
+				if (o + 2 > sizeof(out))
+					break;
+				out[o++] = '\r';
+				out[o++] = '\n';
+			} else {
+				out[o++] = in[i];
+			}
+		}
+		if (kfifo_avail(&pt->to_master) < o) {
+			mutex_unlock(&pt->lock);
+			if (file->f_flags & O_NONBLOCK)
+				return done ? (ssize_t)done : -EAGAIN;
+			if (wait_event_interruptible(pt->slave_wait,
+			    kfifo_avail(&pt->to_master) >= o ||
+			    (pt->ptc_state & IRIX_PT_DEAD)))
+				return done ? (ssize_t)done : -ERESTARTSYS;
+			continue;
+		}
+		kfifo_in(&pt->to_master, out, o);
+		mutex_unlock(&pt->lock);
+		done += i;
+		wake_up_all(&pt->master_wait);
 	}
+	return done;
 }
 
 static long irix_pts_ioctl(struct file *file, unsigned int cmd,
@@ -849,6 +884,7 @@ static void __exit irix_spty_exit(void)
 		ida_free(&irix_spty_ids, i);
 		kfifo_free(&pt->to_master);
 		kfifo_free(&pt->to_slave);
+		kfifo_free(&pt->canon_input);
 		kfree(pt);
 	}
 	mutex_unlock(&irix_spty_table_lock);
