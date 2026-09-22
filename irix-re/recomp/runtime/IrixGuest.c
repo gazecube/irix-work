@@ -1503,18 +1503,13 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         cpu->pc = address;
         rt->current_pc = address;
         /*
-         * N32 PIC call entry requires $t9 to name the callee entry address,
-         * regardless of whether the original symbol name survived stripping.
-         *
-         * Recovered anonymous ranges serve two roles:
-         *   - exact entry address: a real callable function boundary
-         *   - interior address: control-flow continuation into translated code
-         *
-         * Distinguish those by address, not by entry->name.  Using the name as
-         * the gate leaves stripped callbacks with stale $t9, which in turn can
-         * derive the wrong $gp and silently corrupt PIC data accesses.
+         * Only real named guest functions get N32 call-entry treatment.
+         * Anonymous recovered ranges are translation coverage: entering one
+         * at an interior PC is a control-flow continuation, not a new ABI
+         * function call.  In particular, do not clobber t9 when dispatching
+         * into an FDE/PDR/link/pointer-derived range.
          */
-        if (address == entry->address)
+        if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
 
