@@ -80,6 +80,25 @@ static void irix_spty_input_char_locked(struct irix_spty *pt, unsigned char ch)
 	u32 lflag = be32_to_cpu(pt->termio.c_lflag);
 	unsigned char tmp;
 
+	if (pt->literal_next) {
+		pt->literal_next = 0;
+		goto ordinary;
+	}
+	if ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VLNEXT]) {
+		pt->literal_next = 1;
+		if (lflag & IRIX_ECHO) {
+			unsigned char vis[2] = {'^', '\b'};
+			kfifo_in(&pt->to_master, vis,
+				 min_t(unsigned int, 2, kfifo_avail(&pt->to_master)));
+		}
+		return;
+	}
+	if ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VDISCARD]) {
+		pt->output_discard = !pt->output_discard;
+		return;
+	}
+
+ordinary:
 	if (iflag & IRIX_ISTRIP)
 		ch &= 0x7f;
 	if (ch == '\n' && (iflag & IRIX_INLCR))
@@ -143,6 +162,37 @@ static void irix_spty_input_char_locked(struct irix_spty *pt, unsigned char ch)
 		kfifo_reset(&pt->canon_input);
 		if (lflag & IRIX_ECHOK)
 			irix_spty_echo_locked(pt, '\n');
+		return;
+	}
+
+	if ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VWERASE]) {
+		unsigned int n = kfifo_len(&pt->canon_input);
+		unsigned char *p;
+		if (!n)
+			return;
+		p = kmalloc(n, GFP_KERNEL);
+		if (!p)
+			return;
+		kfifo_out(&pt->canon_input, p, n);
+		while (n && (p[n - 1] == ' ' || p[n - 1] == '\t'))
+			n--;
+		while (n && p[n - 1] != ' ' && p[n - 1] != '\t')
+			n--;
+		kfifo_in(&pt->canon_input, p, n);
+		kfree(p);
+		return;
+	}
+
+	if ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VREPRINT]) {
+		unsigned int n = kfifo_len(&pt->canon_input);
+		unsigned char *p = kmalloc(n ? n : 1, GFP_KERNEL);
+		irix_spty_echo_locked(pt, '\n');
+		if (p) {
+			kfifo_out_peek(&pt->canon_input, p, n);
+			kfifo_in(&pt->to_master, p,
+				 min_t(unsigned int, n, kfifo_avail(&pt->to_master)));
+			kfree(p);
+		}
 		return;
 	}
 
@@ -411,6 +461,19 @@ static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 	case IRIX_TCSETAW:
 		if (copy_from_user(&tio, (void __user *)arg, sizeof(tio)))
 			return -EFAULT;
+		{
+			u32 old_iflag = be32_to_cpu(pt->termio.c_iflag);
+			u32 new_iflag = be32_to_cpu(tio.c_iflag);
+			if ((old_iflag ^ new_iflag) & IRIX_IXON) {
+				if (pt->ptc_state & IRIX_PTC_PKT) {
+					pt->pt_pkt &= ~(TIOCPKT_DOSTOP | TIOCPKT_NOSTOP);
+					pt->pt_pkt |= (new_iflag & IRIX_IXON) ?
+						TIOCPKT_DOSTOP : TIOCPKT_NOSTOP;
+				}
+				if (!(new_iflag & IRIX_IXON))
+					pt->pts_state &= ~IRIX_PTS_TXSTOP;
+			}
+		}
 		pt->termio.c_iflag = tio.c_iflag;
 		pt->termio.c_oflag = tio.c_oflag;
 		pt->termio.c_cflag = tio.c_cflag;
@@ -427,9 +490,16 @@ static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 			return -EFAULT;
 		if (value == 0) {
 			pt->output_stopped = 1;
+			pt->pts_state |= IRIX_PTS_TXSTOP;
+			if (pt->ptc_state & IRIX_PTC_PKT)
+				pt->pt_pkt |= TIOCPKT_STOP;
 		} else if (value == 1) {
 			pt->output_stopped = 0;
+			pt->pts_state &= ~IRIX_PTS_TXSTOP;
+			if (pt->ptc_state & IRIX_PTC_PKT)
+				pt->pt_pkt |= TIOCPKT_START;
 			wake_up_all(&pt->master_wait);
+			wake_up_all(&pt->slave_wait);
 		} else {
 			return -EINVAL;
 		}
@@ -440,7 +510,22 @@ static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 		pt->remote_mode = !!value;
 		return 0;
 	case IRIX_TCSBRK:
-		/* spty.c ACKs the request; signal generation belongs to stty_ld. */
+		/*
+		 * spty.c turns a zero TCSBRK into an input flush + SIGINT when
+		 * BRKINT is selected.  Process-group delivery is supplied by
+		 * the process/session personality; preserve the queue semantics
+		 * here instead of silently treating break as a no-op.
+		 */
+		if (value == 0 &&
+		    (be32_to_cpu(pt->termio.c_iflag) & (IRIX_IGNBRK | IRIX_BRKINT))
+		      == IRIX_BRKINT) {
+			kfifo_reset(&pt->to_slave);
+			kfifo_reset(&pt->canon_input);
+			if (pt->ptc_state & IRIX_PTC_PKT)
+				pt->pt_pkt |= TIOCPKT_FLUSHREAD;
+			wake_up_all(&pt->master_wait);
+			wake_up_all(&pt->slave_wait);
+		}
 		return 0;
 	default:
 		return -ENOTTY;
@@ -695,6 +780,11 @@ static ssize_t irix_pts_write(struct file *file, const char __user *buf,
 			continue;
 		}
 		oflag = be32_to_cpu(pt->termio.c_oflag);
+		if (pt->output_discard) {
+			mutex_unlock(&pt->lock);
+			done += n;
+			continue;
+		}
 		for (i = 0; i < n && o < sizeof(out); ++i) {
 			if ((oflag & (IRIX_OPOST | IRIX_ONLCR)) ==
 			    (IRIX_OPOST | IRIX_ONLCR) && in[i] == '\n') {

@@ -72,6 +72,7 @@
 #define IRIX_IEXTEN          0000400u
 #define IRIX_ECHOCTL         0001000u
 #define IRIX_ECHOKE          0004000u
+#define IRIX_FLUSHO          0020000u
 #define IRIX_NCCS            23
 
 #define IRIX_VINTR           0
@@ -160,6 +161,8 @@ struct irix_spty {
 	unsigned char pts_auto_ld;
 	unsigned char remote_mode;
 	unsigned char output_stopped;
+	unsigned char literal_next;
+	unsigned char output_discard;
 	struct winsize winsize;
 	struct irix_termio termio;
 	unsigned int master_open;
