@@ -501,6 +501,8 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 		}
 		mutex_unlock(&pt->lock);
 
+		pr_info_ratelimited("irix_spty: ptc input pty=%u n=%zu slave_open=%u tty=%px\n",
+			pt->index, n, pt->slave_open, pt->tty);
 		pushed = tty_insert_flip_string(&pt->port, chunk, n);
 		if (!pushed)
 			break;
@@ -786,6 +788,8 @@ static struct irix_spty *irix_tty_pair(struct tty_struct *tty)
 static int irix_tty_install(struct tty_driver *driver, struct tty_struct *tty)
 {
 	struct irix_spty *pt = irix_tty_pair(tty);
+	pr_info("irix_spty: tty install %s%d pt=%px\n",
+		driver->name, tty->index, pt);
 	if (!pt)
 		return -ENODEV;
 	tty->driver_data = pt;
@@ -799,6 +803,8 @@ static int irix_tty_open(struct tty_struct *tty, struct file *file)
 
 	if (!pt)
 		return -ENODEV;
+	pr_info_ratelimited("irix_spty: tty write pty=%u count=%zu\n",
+		pt->index, count);
 	mutex_lock(&pt->lock);
 	if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
 		mutex_unlock(&pt->lock);
@@ -810,7 +816,10 @@ static int irix_tty_open(struct tty_struct *tty, struct file *file)
 	}
 	mutex_unlock(&pt->lock);
 
+	pr_info("irix_spty: tty open begin pty=%u locked=%u master=%u\n",
+		pt->index, !!(pt->pts_state & IRIX_PTS_LOCKED), pt->master_open);
 	rc = tty_port_open(&pt->port, tty, file);
+	pr_info("irix_spty: tty open port rc=%d pty=%u\n", rc, pt->index);
 	if (rc)
 		return rc;
 	mutex_lock(&pt->lock);
@@ -818,6 +827,8 @@ static int irix_tty_open(struct tty_struct *tty, struct file *file)
 	pt->tty = tty;
 	pt->pts_state &= ~(IRIX_PT_UNBORN | IRIX_PT_DEAD);
 	mutex_unlock(&pt->lock);
+	pr_info("irix_spty: tty open complete pty=%u opens=%u\n",
+		pt->index, pt->slave_open);
 	wake_up_all(&pt->master_wait);
 	return 0;
 }
