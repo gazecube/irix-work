@@ -803,8 +803,6 @@ static int irix_tty_open(struct tty_struct *tty, struct file *file)
 
 	if (!pt)
 		return -ENODEV;
-	pr_info_ratelimited("irix_spty: tty write pty=%u count=%zu\n",
-		pt->index, count);
 	mutex_lock(&pt->lock);
 	if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
 		mutex_unlock(&pt->lock);
