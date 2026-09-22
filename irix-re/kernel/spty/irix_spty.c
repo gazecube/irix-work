@@ -30,6 +30,15 @@ static unsigned int maxpty = IRIX_SPTY_MAXPTY;
 static struct tty_driver *irix_pts_driver[10];
 static char irix_pts_name[10][5];
 
+/*
+ * tty_port_open() dereferences port->ops unconditionally on current kernels.
+ * This pseudo terminal has no carrier/modem hardware, so the empty operations
+ * table is intentional: default tty_port behavior treats carrier as raised
+ * and requires no activate/shutdown hooks.
+ */
+static const struct tty_port_operations irix_tty_port_ops = {
+};
+
 module_param(maxpty, uint, 0444);
 MODULE_PARM_DESC(maxpty, "maximum IRIX pseudo terminals (1..1000)");
 
@@ -269,6 +278,7 @@ static struct irix_spty *irix_spty_alloc(void)
 	init_waitqueue_head(&pt->slave_wait);
 	init_waitqueue_head(&pt->drain_wait);
 	tty_port_init(&pt->port);
+	pt->port.ops = &irix_tty_port_ops;
 	pt->index = id;
 	pt->pts_state = IRIX_PT_UNBORN | IRIX_PTS_LOCKED;
 	pt->ptc_state = IRIX_PT_UNBORN;
