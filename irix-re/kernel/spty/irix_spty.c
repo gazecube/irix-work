@@ -903,6 +903,18 @@ static const struct tty_operations irix_tty_ops = {
 	.flush_buffer = irix_tty_flush_buffer,
 };
 
+static const struct file_operations irix_ptc_fops = {
+	.owner          = THIS_MODULE,
+	.open           = irix_ptc_open,
+	.release        = irix_ptc_release,
+	.read           = irix_ptc_read,
+	.write          = irix_ptc_write,
+	.unlocked_ioctl = irix_ptc_ioctl,
+	.compat_ioctl   = irix_ptc_ioctl,
+	.poll           = irix_ptc_poll,
+	.llseek         = noop_llseek,
+};
+
 static struct miscdevice irix_ptc_device = {
 	.minor = MISC_DYNAMIC_MINOR,
 	.name = "ptc",
@@ -950,7 +962,7 @@ static int __init irix_spty_init(void)
 		tty_set_operations(drv, &irix_tty_ops);
 		rc = tty_register_driver(drv);
 		if (rc) {
-			put_tty_driver(drv);
+			tty_driver_kref_put(drv);
 			irix_pts_driver[i] = NULL;
 			goto err_drivers;
 		}
@@ -968,7 +980,7 @@ err_drivers:
 		if (!irix_pts_driver[i])
 			continue;
 		tty_unregister_driver(irix_pts_driver[i]);
-		put_tty_driver(irix_pts_driver[i]);
+		tty_driver_kref_put(irix_pts_driver[i]);
 		irix_pts_driver[i] = NULL;
 	}
 	return rc;
@@ -1001,7 +1013,7 @@ static void __exit irix_spty_exit(void)
 		if (!irix_pts_driver[i])
 			continue;
 		tty_unregister_driver(irix_pts_driver[i]);
-		put_tty_driver(irix_pts_driver[i]);
+		tty_driver_kref_put(irix_pts_driver[i]);
 		irix_pts_driver[i] = NULL;
 	}
 	pr_info("irix_spty: unloaded\n");
