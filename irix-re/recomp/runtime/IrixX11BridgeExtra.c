@@ -832,15 +832,21 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 36u, (uint32_t)e->xexpose.count);
         break;
     case ConfigureNotify:
-        wr32(rt, a + 20u, (uint32_t)e->xconfigure.event);
-        wr32(rt, a + 24u, (uint32_t)e->xconfigure.window);
-        wr32(rt, a + 28u, (uint32_t)e->xconfigure.x);
-        wr32(rt, a + 32u, (uint32_t)e->xconfigure.y);
-        wr32(rt, a + 36u, (uint32_t)e->xconfigure.width);
-        wr32(rt, a + 40u, (uint32_t)e->xconfigure.height);
-        wr32(rt, a + 44u, (uint32_t)e->xconfigure.border_width);
-        wr32(rt, a + 48u, (uint32_t)e->xconfigure.above);
-        wr32(rt, a + 52u, (uint32_t)e->xconfigure.override_redirect);
+        /*
+         * XConfigureEvent differs from XAnyEvent at +16: this slot is
+         * 'event', followed by 'window'.  The common-header write above
+         * already stores xany.window at +16, which aliases xconfigure.event.
+         * Continue with window at +20; do not write event a second time or
+         * every remaining field is shifted by four bytes.
+         */
+        wr32(rt, a + 20u, (uint32_t)e->xconfigure.window);
+        wr32(rt, a + 24u, (uint32_t)e->xconfigure.x);
+        wr32(rt, a + 28u, (uint32_t)e->xconfigure.y);
+        wr32(rt, a + 32u, (uint32_t)e->xconfigure.width);
+        wr32(rt, a + 36u, (uint32_t)e->xconfigure.height);
+        wr32(rt, a + 40u, (uint32_t)e->xconfigure.border_width);
+        wr32(rt, a + 44u, (uint32_t)e->xconfigure.above);
+        wr32(rt, a + 48u, (uint32_t)e->xconfigure.override_redirect);
         break;
     default:
         break;
