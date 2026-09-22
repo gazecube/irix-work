@@ -1434,16 +1434,6 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         for (saved_i = 0; saved_i < 8u; ++saved_i)
             caller_saved[saved_i] = cpu->gpr[16u + saved_i];
         caller_saved[8] = cpu->gpr[30];
-        if (address == 0x1002961cu) {
-            IrixGuestAddr ev = (uint32_t)cpu->gpr[5];
-            fprintf(stderr,
-                    "IRIX TTY doKeyboard: event=0x%08x type=%u window=0x%08x keycode=%u state=0x%x\\n",
-                    ev,
-                    ev ? irix_guest_read32be(rt, ev + 0u) : 0u,
-                    ev ? irix_guest_read32be(rt, ev + 16u) : 0u,
-                    ev ? irix_guest_read32be(rt, ev + 52u) : 0u,
-                    ev ? irix_guest_read32be(rt, ev + 48u) : 0u);
-        }
         if (address == 0x10044150u) {
             IrixGuestFunctionEntry *caller_entry = irix_guest_find_function(rt, caller_pc);
             fprintf(stderr,
