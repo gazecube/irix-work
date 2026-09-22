@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xlibint.h>
