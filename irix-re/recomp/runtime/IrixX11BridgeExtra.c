@@ -1124,7 +1124,26 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)XConfigureWindow(d, w, mask, &v);
 }
 
-WINDOW_CALL1(bridge_XSelectInput, XSelectInput(d, (Window)(uint32_t)cpu->gpr[5], (long)(int32_t)cpu->gpr[6]))
+static void bridge_XSelectInput(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = irix_x11_primary_display_from_guest((IrixGuestAddr)(uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    long mask = (long)(int32_t)cpu->gpr[6];
+    int rc;
+
+    if (!d) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    if (mask & SubstructureRedirectMask)
+        fprintf(stderr, "IRIX XSelectInput WM claim: window=0x%lx mask=0x%lx root=0x%lx\n",
+                (unsigned long)w, (unsigned long)mask,
+                (unsigned long)DefaultRootWindow(d));
+
+    rc = XSelectInput(d, w, mask);
+    cpu->gpr[2] = (uint32_t)rc;
+}
 WINDOW_CALL1(bridge_XSetWindowBackground, XSetWindowBackground(d, (Window)(uint32_t)cpu->gpr[5], (unsigned long)cpu->gpr[6]))
 WINDOW_CALL1(bridge_XSetWindowBorder, XSetWindowBorder(d, (Window)(uint32_t)cpu->gpr[5], (unsigned long)cpu->gpr[6]))
 
