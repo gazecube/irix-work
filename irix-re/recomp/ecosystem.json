@@ -48,6 +48,30 @@
       "kind": "runtime",
       "path": "usr/sbin/xwsh",
       "shared_components": []
+    },
+    {
+      "name": "xsm",
+      "prefix": "xsm",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xsm"
+    },
+    {
+      "name": "xdm",
+      "prefix": "xdm",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xdm"
+    },
+    {
+      "name": "xinit",
+      "prefix": "xinit",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xinit"
+    },
+    {
+      "name": "iconcatalog",
+      "prefix": "iconcatalog",
+      "kind": "runtime",
+      "path": "usr/sbin/iconcatalog"
     }
   ],
   "shared_components": [
