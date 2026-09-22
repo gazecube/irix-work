@@ -977,6 +977,16 @@ static void bridge_XLookupString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     rc = XLookupString(&e, buf, bytes, keysym_addr ? &ks : NULL, NULL);
     if (keysym_addr) wr32(rt, keysym_addr, (uint32_t)ks);
+    fprintf(stderr,
+            "IRIX XLookupString: keycode=%u state=0x%x bytes=%d rc=%d keysym=0x%lx",
+            e.keycode, e.state, bytes, rc, (unsigned long)ks);
+    if (rc > 0 && buf) {
+        int i;
+        fputs(" data=", stderr);
+        for (i = 0; i < rc; ++i)
+            fprintf(stderr, "%02x", (unsigned char)buf[i]);
+    }
+    fputc('\\n', stderr);
     cpu->gpr[2] = (uint32_t)rc;
 }
 
