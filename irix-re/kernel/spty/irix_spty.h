@@ -160,6 +160,7 @@ struct irix_spty {
 	struct mutex lock;
 	wait_queue_head_t master_wait;
 	wait_queue_head_t slave_wait;
+	wait_queue_head_t drain_wait;
 	unsigned int index;
 	unsigned char pt_pkt;
 	unsigned char pts_state;
@@ -173,6 +174,7 @@ struct irix_spty {
 	struct irix_termio termio;
 	unsigned int master_open;
 	unsigned int slave_open;
+	pid_t fg_pgrp;
 	struct kfifo to_master;
 	struct kfifo to_slave;
 	struct kfifo canon_input;

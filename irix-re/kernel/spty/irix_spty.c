@@ -141,6 +141,29 @@ ordinary:
 			return;
 	}
 
+	if ((lflag & IRIX_ISIG) &&
+	    (ch == pt->termio.c_cc[IRIX_VINTR] ||
+	     ch == pt->termio.c_cc[IRIX_VQUIT] ||
+	     ch == pt->termio.c_cc[IRIX_VSUSP] ||
+	     ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VDSUSP]))) {
+		pt->literal_next = 0;
+		pt->output_discard = 0;
+		if (!(lflag & IRIX_NOFLSH) &&
+		    !((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VDSUSP])) {
+			kfifo_reset(&pt->to_slave);
+			kfifo_reset(&pt->canon_input);
+			kfifo_reset(&pt->to_master);
+			if (pt->ptc_state & IRIX_PTC_PKT)
+				pt->pt_pkt |= TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE;
+		}
+		/*
+		 * IRIX emits M_PCSIG (or M_SIG for VDSUSP) here. The Linux
+		 * substrate must not signal current: the foreground tty pgrp
+		 * belongs to the process/session personality and is wired there.
+		 */
+		return;
+	}
+
 	if (!(lflag & IRIX_ICANON) || pt->remote_mode) {
 		if ((lflag & IRIX_ECHO) || ((lflag & IRIX_ECHONL) && ch == '\n'))
 			irix_spty_echo_locked(pt, ch);
@@ -254,6 +277,7 @@ static struct irix_spty *irix_spty_alloc(void)
 	mutex_init(&pt->lock);
 	init_waitqueue_head(&pt->master_wait);
 	init_waitqueue_head(&pt->slave_wait);
+	init_waitqueue_head(&pt->drain_wait);
 	pt->index = id;
 	pt->pts_state = IRIX_PT_UNBORN | IRIX_PTS_LOCKED;
 	pt->ptc_state = IRIX_PT_UNBORN;
@@ -355,6 +379,7 @@ static int irix_ptc_release(struct inode *inode, struct file *file)
 	mutex_unlock(&pt->lock);
 	wake_up_all(&pt->slave_wait);
 	wake_up_all(&pt->master_wait);
+	wake_up_all(&pt->drain_wait);
 
 	if (free_pair)
 		irix_spty_release_pair(pt);
@@ -401,6 +426,8 @@ static ssize_t irix_ptc_read(struct file *file, char __user *buf,
 			rc = kfifo_to_user(&pt->to_master, buf, count, &copied);
 			mutex_unlock(&pt->lock);
 			wake_up_all(&pt->slave_wait);
+			if (kfifo_is_empty(&pt->to_master))
+				wake_up_all(&pt->drain_wait);
 			if (rc)
 				return rc;
 			return prefix + copied;
@@ -624,6 +651,15 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 			mutex_unlock(&pt->lock);
 			return -EFAULT;
 		}
+		if (si.ic_cmd == IRIX_TCSETAW || si.ic_cmd == IRIX_TCSETAF) {
+			mutex_unlock(&pt->lock);
+			rc = wait_event_interruptible(pt->drain_wait,
+				kfifo_is_empty(&pt->to_master) ||
+				(pt->ptc_state & IRIX_PT_DEAD));
+			if (rc)
+				return rc;
+			mutex_lock(&pt->lock);
+		}
 		rc = irix_ptc_nested_ioctl(pt, si.ic_cmd,
 			(unsigned long)(uintptr_t)si.ic_dp);
 		mutex_unlock(&pt->lock);
@@ -640,11 +676,21 @@ static long irix_ptc_ioctl(struct file *file, unsigned int cmd,
 		return rc;
 	case IRIX_TCGETA:
 	case IRIX_TCSETA:
-	case IRIX_TCSETAW:
-	case IRIX_TCSETAF:
 	case IRIX_TCXONC:
 	case IRIX_TIOCREMOTE:
 	case IRIX_TCSBRK:
+		rc = irix_termio_ioctl(pt, cmd, arg);
+		mutex_unlock(&pt->lock);
+		return rc;
+	case IRIX_TCSETAW:
+	case IRIX_TCSETAF:
+		mutex_unlock(&pt->lock);
+		rc = wait_event_interruptible(pt->drain_wait,
+			kfifo_is_empty(&pt->to_master) ||
+			(pt->ptc_state & IRIX_PT_DEAD));
+		if (rc)
+			return rc;
+		mutex_lock(&pt->lock);
 		rc = irix_termio_ioctl(pt, cmd, arg);
 		mutex_unlock(&pt->lock);
 		return rc;
@@ -741,6 +787,7 @@ static int irix_pts_release(struct inode *inode, struct file *file)
 	}
 	mutex_unlock(&pt->lock);
 	wake_up_all(&pt->master_wait);
+	wake_up_all(&pt->drain_wait);
 	if (free_pair)
 		irix_spty_release_pair(pt);
 	return 0;
