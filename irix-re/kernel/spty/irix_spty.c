@@ -947,16 +947,24 @@ static int __init irix_spty_init(void)
 		irix_pts_driver[i] = drv;
 		snprintf(irix_pts_name[i], sizeof(irix_pts_name[i]), "tty%c",
 			"qrstuvwxyz"[i]);
+		drv->owner = THIS_MODULE;
 		drv->driver_name = "irix_spty";
 		drv->name = irix_pts_name[i];
 		drv->major = 0;
 		drv->minor_start = 0;
-		drv->type = TTY_DRIVER_TYPE_PTY;
-		drv->subtype = PTY_TYPE_SLAVE;
+		/*
+		 * This is a real tty slave endpoint, but not a Linux paired-PTY:
+		 * the master remains the IRIX /dev/ptc character device.  Marking
+		 * this PTY_TYPE_SLAVE makes the tty core assume driver->other and
+		 * tty->link semantics that we deliberately do not have.
+		 */
+		drv->type = TTY_DRIVER_TYPE_SYSTEM;
+		drv->subtype = SYSTEM_TYPE_TTY;
 		drv->driver_state = (void *)(unsigned long)i;
 		drv->init_termios = tty_std_termios;
 		drv->init_termios.c_iflag = BRKINT | ICRNL | IXON | IXANY;
 		drv->init_termios.c_oflag = OPOST | ONLCR;
+		drv->init_termios.c_cflag = B38400 | CS8 | CREAD | HUPCL | CLOCAL;
 		drv->init_termios.c_lflag =
 			ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
 		tty_set_operations(drv, &irix_tty_ops);
