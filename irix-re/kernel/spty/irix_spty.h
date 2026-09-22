@@ -12,6 +12,8 @@
 #include <linux/ioctl.h>
 #include <linux/mutex.h>
 #include <linux/termios.h>
+#include <linux/tty.h>
+#include <linux/tty_port.h>
 #include <linux/wait.h>
 
 #define IRIX_SPTY_MAXPTY 1000
@@ -175,6 +177,8 @@ struct irix_spty {
 	unsigned int master_open;
 	unsigned int slave_open;
 	pid_t fg_pgrp;
+	struct tty_port port;
+	struct tty_struct *tty;
 	struct kfifo to_master;
 	struct kfifo to_slave;
 	struct kfifo canon_input;

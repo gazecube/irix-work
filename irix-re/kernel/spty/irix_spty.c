@@ -17,6 +17,9 @@
 #include <linux/poll.h>
 #include <linux/device.h>
 #include <linux/signal.h>
+#include <linux/tty.h>
+#include <linux/tty_driver.h>
+#include <linux/tty_flip.h>
 
 #include "irix_spty.h"
 
@@ -24,21 +27,8 @@ static DEFINE_IDA(irix_spty_ids);
 static DEFINE_MUTEX(irix_spty_table_lock);
 static struct irix_spty *irix_spty_table[IRIX_SPTY_MAXPTY];
 static unsigned int maxpty = IRIX_SPTY_MAXPTY;
-static dev_t irix_pts_devt;
-static struct cdev irix_pts_cdev;
-static struct class *irix_pts_class;
-
-static char *irix_pts_devnode(const struct device *dev, umode_t *mode)
-{
-	/*
-	 * devtmpfs otherwise creates class devices root-only on this host.
-	 * IRIX getpty opens the pre-existing slave node as the calling user and
-	 * then applies ownership/mode policy, so the namespace must be reachable.
-	 */
-	if (mode)
-		*mode = 0666;
-	return NULL;
-}
+static struct tty_driver *irix_pts_driver[10];
+static char irix_pts_name[10][5];
 
 module_param(maxpty, uint, 0444);
 MODULE_PARM_DESC(maxpty, "maximum IRIX pseudo terminals (1..1000)");
@@ -278,6 +268,7 @@ static struct irix_spty *irix_spty_alloc(void)
 	init_waitqueue_head(&pt->master_wait);
 	init_waitqueue_head(&pt->slave_wait);
 	init_waitqueue_head(&pt->drain_wait);
+	tty_port_init(&pt->port);
 	pt->index = id;
 	pt->pts_state = IRIX_PT_UNBORN | IRIX_PTS_LOCKED;
 	pt->ptc_state = IRIX_PT_UNBORN;
@@ -320,6 +311,20 @@ static struct irix_spty *irix_spty_alloc(void)
 	mutex_lock(&irix_spty_table_lock);
 	irix_spty_table[id] = pt;
 	mutex_unlock(&irix_spty_table_lock);
+
+	if (IS_ERR(tty_port_register_device(&pt->port,
+		irix_pts_driver[id / IRIX_SPTY_PER_MAJOR],
+		id % IRIX_SPTY_PER_MAJOR, NULL))) {
+		rc = -ENODEV;
+		mutex_lock(&irix_spty_table_lock);
+		irix_spty_table[id] = NULL;
+		mutex_unlock(&irix_spty_table_lock);
+		kfifo_free(&pt->canon_input);
+		kfifo_free(&pt->to_slave);
+		kfifo_free(&pt->to_master);
+		tty_port_destroy(&pt->port);
+		goto fail;
+	}
 	return pt;
 
 fail:
@@ -336,6 +341,9 @@ static void irix_spty_release_pair(struct irix_spty *pt)
 	if (irix_spty_table[id] == pt)
 		irix_spty_table[id] = NULL;
 	mutex_unlock(&irix_spty_table_lock);
+	tty_unregister_device(irix_pts_driver[id / IRIX_SPTY_PER_MAJOR],
+		id % IRIX_SPTY_PER_MAJOR);
+	tty_port_destroy(&pt->port);
 	ida_free(&irix_spty_ids, id);
 	kfifo_free(&pt->to_master);
 	kfifo_free(&pt->to_slave);
@@ -366,6 +374,7 @@ static int irix_ptc_release(struct inode *inode, struct file *file)
 {
 	struct irix_spty *pt = file->private_data;
 	bool free_pair;
+	struct tty_struct *tty = NULL;
 
 	if (!pt)
 		return 0;
@@ -376,10 +385,16 @@ static int irix_ptc_release(struct inode *inode, struct file *file)
 	pt->ptc_state &= ~IRIX_PTC_QUEUED;
 	memset(&pt->winsize, 0, sizeof(pt->winsize));
 	free_pair = !pt->slave_open;
+	if (pt->tty)
+		tty = tty_kref_get(pt->tty);
 	mutex_unlock(&pt->lock);
 	wake_up_all(&pt->slave_wait);
 	wake_up_all(&pt->master_wait);
 	wake_up_all(&pt->drain_wait);
+	if (tty) {
+		tty_hangup(tty);
+		tty_kref_put(tty);
+	}
 
 	if (free_pair)
 		irix_spty_release_pair(pt);
@@ -453,13 +468,20 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 	unsigned char chunk[256];
 	size_t done = 0;
 
-	/* PTC M_DATA is fed through stty_ld before becoming slave input. */
+	/*
+	 * The Linux tty core is now the slave stream head.  Feeding the flip
+	 * buffer gives native children a real N_TTY line discipline, controlling
+	 * tty, job control and signal semantics instead of duplicating them in
+	 * this driver.
+	 */
 	while (done < count) {
-		size_t n = min_t(size_t, sizeof(chunk), count - done), i;
+		size_t n = min_t(size_t, sizeof(chunk), count - done);
+		int pushed;
+
 		if (copy_from_user(chunk, buf + done, n))
 			return done ? (ssize_t)done : -EFAULT;
 		mutex_lock(&pt->lock);
-		if (!pt->slave_open) {
+		if (!pt->slave_open || !pt->tty) {
 			mutex_unlock(&pt->lock);
 			return count;
 		}
@@ -467,12 +489,13 @@ static ssize_t irix_ptc_write(struct file *file, const char __user *buf,
 			mutex_unlock(&pt->lock);
 			return done ? (ssize_t)done : -EIO;
 		}
-		for (i = 0; i < n; ++i)
-			irix_spty_input_char_locked(pt, chunk[i]);
 		mutex_unlock(&pt->lock);
-		done += n;
-		wake_up_all(&pt->slave_wait);
-		wake_up_all(&pt->master_wait);
+
+		pushed = tty_insert_flip_string(&pt->port, chunk, n);
+		if (!pushed)
+			break;
+		tty_flip_buffer_push(&pt->port);
+		done += pushed;
 	}
 	return done;
 }
@@ -736,53 +759,73 @@ static __poll_t irix_ptc_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-static int irix_pts_open(struct inode *inode, struct file *file)
+static struct irix_spty *irix_tty_pair(struct tty_struct *tty)
 {
-	unsigned int index = iminor(inode);
-	struct irix_spty *pt;
+	unsigned int group = (unsigned long)tty->driver->driver_state;
+	unsigned int id = group * IRIX_SPTY_PER_MAJOR + tty->index;
+	struct irix_spty *pt = NULL;
 
-	if (index >= maxpty)
-		return -ENODEV;
-
+	if (id >= maxpty)
+		return NULL;
 	mutex_lock(&irix_spty_table_lock);
-	pt = irix_spty_table[index];
-	if (!pt) {
-		mutex_unlock(&irix_spty_table_lock);
+	pt = irix_spty_table[id];
+	mutex_unlock(&irix_spty_table_lock);
+	return pt;
+}
+
+static int irix_tty_install(struct tty_driver *driver, struct tty_struct *tty)
+{
+	struct irix_spty *pt = irix_tty_pair(tty);
+	if (!pt)
 		return -ENODEV;
-	}
+	tty->driver_data = pt;
+	return tty_port_install(&pt->port, driver, tty);
+}
+
+static int irix_tty_open(struct tty_struct *tty, struct file *file)
+{
+	struct irix_spty *pt = tty->driver_data;
+	int rc;
+
+	if (!pt)
+		return -ENODEV;
 	mutex_lock(&pt->lock);
 	if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
 		mutex_unlock(&pt->lock);
-		mutex_unlock(&irix_spty_table_lock);
 		return -EIO;
 	}
 	if (pt->pts_state & IRIX_PTS_LOCKED) {
 		mutex_unlock(&pt->lock);
-		mutex_unlock(&irix_spty_table_lock);
 		return -EACCES;
 	}
-	pt->slave_open++;
-	pt->pts_state &= ~(IRIX_PT_UNBORN | IRIX_PT_DEAD);
-	file->private_data = pt;
 	mutex_unlock(&pt->lock);
-	mutex_unlock(&irix_spty_table_lock);
+
+	rc = tty_port_open(&pt->port, tty, file);
+	if (rc)
+		return rc;
+	mutex_lock(&pt->lock);
+	pt->slave_open++;
+	pt->tty = tty;
+	pt->pts_state &= ~(IRIX_PT_UNBORN | IRIX_PT_DEAD);
+	mutex_unlock(&pt->lock);
 	wake_up_all(&pt->master_wait);
 	return 0;
 }
 
-static int irix_pts_release(struct inode *inode, struct file *file)
+static void irix_tty_close(struct tty_struct *tty, struct file *file)
 {
-	struct irix_spty *pt = file->private_data;
+	struct irix_spty *pt = tty->driver_data;
 	bool free_pair = false;
 
 	if (!pt)
-		return 0;
+		return;
+	tty_port_close(&pt->port, tty, file);
 	mutex_lock(&pt->lock);
 	if (pt->slave_open)
 		pt->slave_open--;
 	if (!pt->slave_open) {
+		pt->tty = NULL;
 		pt->pts_state |= IRIX_PT_DEAD;
-		kfifo_reset(&pt->to_slave);
 		free_pair = !pt->master_open;
 	}
 	mutex_unlock(&pt->lock);
@@ -790,188 +833,74 @@ static int irix_pts_release(struct inode *inode, struct file *file)
 	wake_up_all(&pt->drain_wait);
 	if (free_pair)
 		irix_spty_release_pair(pt);
-	return 0;
 }
 
-static ssize_t irix_pts_read(struct file *file, char __user *buf,
-			     size_t count, loff_t *ppos)
+static ssize_t irix_tty_write(struct tty_struct *tty, const u8 *buf, size_t count)
 {
-	struct irix_spty *pt = file->private_data;
-	unsigned int copied;
-	int rc;
+	struct irix_spty *pt = tty->driver_data;
+	unsigned int n;
 
-	for (;;) {
-		mutex_lock(&pt->lock);
-		if (!kfifo_is_empty(&pt->to_slave)) {
-			rc = kfifo_to_user(&pt->to_slave, buf, count, &copied);
-			mutex_unlock(&pt->lock);
-			wake_up_all(&pt->master_wait);
-			return rc ? rc : copied;
-		}
-		if (pt->ptc_state & IRIX_PT_DEAD) {
-			mutex_unlock(&pt->lock);
-			return 0;
-		}
-		mutex_unlock(&pt->lock);
-		if (file->f_flags & O_NONBLOCK)
-			return -EAGAIN;
-		rc = wait_event_interruptible(pt->slave_wait,
-			irix_spty_slave_readable(pt));
-		if (rc)
-			return rc;
-	}
-}
-
-static ssize_t irix_pts_write(struct file *file, const char __user *buf,
-			      size_t count, loff_t *ppos)
-{
-	struct irix_spty *pt = file->private_data;
-	unsigned char in[256], out[512];
-	size_t done = 0;
-
-	/* stty_ld output side: preserve the source's fast raw path and perform
-	 * the overwhelmingly important OPOST/ONLCR transform for cooked ttys. */
-	while (done < count) {
-		size_t n = min_t(size_t, sizeof(in), count - done), i, o = 0;
-		u32 oflag;
-
-		if (copy_from_user(in, buf + done, n))
-			return done ? (ssize_t)done : -EFAULT;
-		mutex_lock(&pt->lock);
-		if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
-			mutex_unlock(&pt->lock);
-			return done ? (ssize_t)done : -EIO;
-		}
-		if (pt->pts_state & IRIX_PTS_TXSTOP) {
-			mutex_unlock(&pt->lock);
-			if (file->f_flags & O_NONBLOCK)
-				return done ? (ssize_t)done : -EAGAIN;
-			if (wait_event_interruptible(pt->slave_wait,
-			    !(pt->pts_state & IRIX_PTS_TXSTOP) ||
-			    (pt->ptc_state & IRIX_PT_DEAD)))
-				return done ? (ssize_t)done : -ERESTARTSYS;
-			continue;
-		}
-		oflag = be32_to_cpu(pt->termio.c_oflag);
-		if (pt->output_discard) {
-			mutex_unlock(&pt->lock);
-			done += n;
-			continue;
-		}
-		for (i = 0; i < n && o < sizeof(out); ++i) {
-			unsigned char ch = in[i];
-
-			if (oflag & IRIX_OPOST) {
-				if ((oflag & IRIX_OLCUC) && ch >= 'a' && ch <= 'z')
-					ch -= 'a' - 'A';
-				if (ch == '\r' && (oflag & IRIX_OCRNL))
-					ch = '\n';
-				if (ch == '\n' && (oflag & IRIX_ONLCR)) {
-					if (o + 2 > sizeof(out))
-						break;
-					out[o++] = '\r';
-					out[o++] = '\n';
-					continue;
-				}
-			}
-			out[o++] = ch;
-		}
-		if (kfifo_avail(&pt->to_master) < o) {
-			mutex_unlock(&pt->lock);
-			if (file->f_flags & O_NONBLOCK)
-				return done ? (ssize_t)done : -EAGAIN;
-			if (wait_event_interruptible(pt->slave_wait,
-			    kfifo_avail(&pt->to_master) >= o ||
-			    (pt->ptc_state & IRIX_PT_DEAD)))
-				return done ? (ssize_t)done : -ERESTARTSYS;
-			continue;
-		}
-		kfifo_in(&pt->to_master, out, o);
-		mutex_unlock(&pt->lock);
-		done += i;
-		wake_up_all(&pt->master_wait);
-	}
-	return done;
-}
-
-static long irix_pts_ioctl(struct file *file, unsigned int cmd,
-			   unsigned long arg)
-{
-	struct irix_spty *pt = file->private_data;
-
-	if (cmd == IRIX_SPTY_HOST_GET_ID) {
-		struct irix_spty_host_id id = {
-			.index = pt->index,
-			.side = IRIX_SPTY_SIDE_SLAVE,
-		};
-		return copy_to_user((void __user *)arg, &id, sizeof(id)) ?
-			-EFAULT : 0;
-	}
-
+	if (!pt)
+		return -ENODEV;
 	mutex_lock(&pt->lock);
-	switch (cmd) {
-	case IRIX_TIOCGWINSZ:
-		if (copy_to_user((void __user *)arg, &pt->winsize,
-				 sizeof(pt->winsize))) {
-			mutex_unlock(&pt->lock);
-			return -EFAULT;
-		}
-		break;
-	case IRIX_TIOCSWINSZ:
-		if (copy_from_user(&pt->winsize, (void __user *)arg,
-				   sizeof(pt->winsize))) {
-			mutex_unlock(&pt->lock);
-			return -EFAULT;
-		}
-		if (pt->ptc_state & IRIX_PTC_PKT)
-			pt->pt_pkt |= TIOCPKT_IOCTL;
-		wake_up_all(&pt->master_wait);
-		break;
-	default:
+	if (!pt->master_open || (pt->ptc_state & IRIX_PT_DEAD)) {
 		mutex_unlock(&pt->lock);
-		return -ENOTTY;
+		return -EIO;
 	}
+	n = min_t(unsigned int, count, kfifo_avail(&pt->to_master));
+	kfifo_in(&pt->to_master, buf, n);
 	mutex_unlock(&pt->lock);
-	return 0;
+	if (n)
+		wake_up_all(&pt->master_wait);
+	return n;
 }
 
-static __poll_t irix_pts_poll(struct file *file, poll_table *wait)
+static unsigned int irix_tty_write_room(struct tty_struct *tty)
 {
-	struct irix_spty *pt = file->private_data;
-	__poll_t mask = EPOLLOUT | EPOLLWRNORM;
-
-	poll_wait(file, &pt->slave_wait, wait);
+	struct irix_spty *pt = tty->driver_data;
+	unsigned int n = 0;
+	if (!pt)
+		return 0;
 	mutex_lock(&pt->lock);
-	if (pt->ptc_state & IRIX_PT_DEAD)
-		mask |= EPOLLHUP;
-	if (!kfifo_is_empty(&pt->to_slave))
-		mask |= EPOLLIN | EPOLLRDNORM;
+	n = kfifo_avail(&pt->to_master);
 	mutex_unlock(&pt->lock);
-	return mask;
+	return n;
 }
 
-static const struct file_operations irix_ptc_fops = {
-	.owner          = THIS_MODULE,
-	.open           = irix_ptc_open,
-	.release        = irix_ptc_release,
-	.read           = irix_ptc_read,
-	.write          = irix_ptc_write,
-	.unlocked_ioctl = irix_ptc_ioctl,
-	.compat_ioctl   = irix_ptc_ioctl,
-	.poll           = irix_ptc_poll,
-	.llseek         = noop_llseek,
-};
+static unsigned int irix_tty_chars_in_buffer(struct tty_struct *tty)
+{
+	struct irix_spty *pt = tty->driver_data;
+	unsigned int n = 0;
+	if (!pt)
+		return 0;
+	mutex_lock(&pt->lock);
+	n = kfifo_len(&pt->to_master);
+	mutex_unlock(&pt->lock);
+	return n;
+}
 
-static const struct file_operations irix_pts_fops = {
-	.owner          = THIS_MODULE,
-	.open           = irix_pts_open,
-	.release        = irix_pts_release,
-	.read           = irix_pts_read,
-	.write          = irix_pts_write,
-	.unlocked_ioctl = irix_pts_ioctl,
-	.compat_ioctl   = irix_pts_ioctl,
-	.poll           = irix_pts_poll,
-	.llseek         = noop_llseek,
+static void irix_tty_flush_buffer(struct tty_struct *tty)
+{
+	struct irix_spty *pt = tty->driver_data;
+	if (!pt)
+		return;
+	mutex_lock(&pt->lock);
+	kfifo_reset(&pt->to_master);
+	if (pt->ptc_state & IRIX_PTC_PKT)
+		pt->pt_pkt |= TIOCPKT_FLUSHWRITE;
+	mutex_unlock(&pt->lock);
+	wake_up_all(&pt->master_wait);
+	wake_up_all(&pt->drain_wait);
+}
+
+static const struct tty_operations irix_tty_ops = {
+	.install = irix_tty_install,
+	.open = irix_tty_open,
+	.close = irix_tty_close,
+	.write = irix_tty_write,
+	.write_room = irix_tty_write_room,
+	.chars_in_buffer = irix_tty_chars_in_buffer,
+	.flush_buffer = irix_tty_flush_buffer,
 };
 
 static struct miscdevice irix_ptc_device = {
@@ -989,48 +918,59 @@ static int __init irix_spty_init(void)
 	if (!maxpty || maxpty > IRIX_SPTY_MAXPTY)
 		return -EINVAL;
 
-	rc = alloc_chrdev_region(&irix_pts_devt, 0, maxpty, "irix_pts");
-	if (rc)
-		return rc;
-	cdev_init(&irix_pts_cdev, &irix_pts_fops);
-	irix_pts_cdev.owner = THIS_MODULE;
-	rc = cdev_add(&irix_pts_cdev, irix_pts_devt, maxpty);
-	if (rc)
-		goto err_region;
+	for (i = 0; i < 10; ++i) {
+		struct tty_driver *drv;
+		unsigned int first = i * IRIX_SPTY_PER_MAJOR;
+		unsigned int lines;
 
-	irix_pts_class = class_create("irix_pts");
-	if (IS_ERR(irix_pts_class)) {
-		rc = PTR_ERR(irix_pts_class);
-		goto err_cdev;
-	}
-	irix_pts_class->devnode = irix_pts_devnode;
-
-	for (i = 0; i < maxpty; ++i) {
-		char name[16];
-		irix_slave_name(i, name, sizeof(name));
-		if (IS_ERR(device_create(irix_pts_class, NULL,
-				MKDEV(MAJOR(irix_pts_devt), i), NULL, "%s", name))) {
-			rc = -ENODEV;
-			goto err_devices;
+		if (first >= maxpty)
+			break;
+		lines = min_t(unsigned int, IRIX_SPTY_PER_MAJOR, maxpty - first);
+		drv = tty_alloc_driver(lines,
+			TTY_DRIVER_DYNAMIC_DEV | TTY_DRIVER_RESET_TERMIOS);
+		if (IS_ERR(drv)) {
+			rc = PTR_ERR(drv);
+			goto err_drivers;
+		}
+		irix_pts_driver[i] = drv;
+		snprintf(irix_pts_name[i], sizeof(irix_pts_name[i]), "tty%c",
+			"qrstuvwxyz"[i]);
+		drv->driver_name = "irix_spty";
+		drv->name = irix_pts_name[i];
+		drv->major = 0;
+		drv->minor_start = 0;
+		drv->type = TTY_DRIVER_TYPE_PTY;
+		drv->subtype = PTY_TYPE_SLAVE;
+		drv->driver_state = (void *)(unsigned long)i;
+		drv->init_termios = tty_std_termios;
+		drv->init_termios.c_iflag = BRKINT | ICRNL | IXON | IXANY;
+		drv->init_termios.c_oflag = OPOST | ONLCR;
+		drv->init_termios.c_lflag =
+			ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN;
+		tty_set_operations(drv, &irix_tty_ops);
+		rc = tty_register_driver(drv);
+		if (rc) {
+			put_tty_driver(drv);
+			irix_pts_driver[i] = NULL;
+			goto err_drivers;
 		}
 	}
 
 	rc = misc_register(&irix_ptc_device);
 	if (rc)
-		goto err_devices;
-
-	pr_info("irix_spty: IRIX PTC/PTS loaded, maxpty=%u, /dev/ptc + /dev/tty[q-z]N ready\n",
+		goto err_drivers;
+	pr_info("irix_spty: IRIX PTC + Linux tty-backed PTS loaded, maxpty=%u\n",
 		maxpty);
 	return 0;
 
-err_devices:
-	while (i--)
-		device_destroy(irix_pts_class, MKDEV(MAJOR(irix_pts_devt), i));
-	class_destroy(irix_pts_class);
-err_cdev:
-	cdev_del(&irix_pts_cdev);
-err_region:
-	unregister_chrdev_region(irix_pts_devt, maxpty);
+err_drivers:
+	while (i--) {
+		if (!irix_pts_driver[i])
+			continue;
+		tty_unregister_driver(irix_pts_driver[i]);
+		put_tty_driver(irix_pts_driver[i]);
+		irix_pts_driver[i] = NULL;
+	}
 	return rc;
 }
 
@@ -1039,18 +979,15 @@ static void __exit irix_spty_exit(void)
 	unsigned int i;
 
 	misc_deregister(&irix_ptc_device);
-	for (i = 0; i < maxpty; ++i)
-		device_destroy(irix_pts_class, MKDEV(MAJOR(irix_pts_devt), i));
-	class_destroy(irix_pts_class);
-	cdev_del(&irix_pts_cdev);
-	unregister_chrdev_region(irix_pts_devt, maxpty);
-
 	mutex_lock(&irix_spty_table_lock);
 	for (i = 0; i < IRIX_SPTY_MAXPTY; ++i) {
 		struct irix_spty *pt = irix_spty_table[i];
 		if (!pt)
 			continue;
 		irix_spty_table[i] = NULL;
+		tty_unregister_device(irix_pts_driver[i / IRIX_SPTY_PER_MAJOR],
+			i % IRIX_SPTY_PER_MAJOR);
+		tty_port_destroy(&pt->port);
 		ida_free(&irix_spty_ids, i);
 		kfifo_free(&pt->to_master);
 		kfifo_free(&pt->to_slave);
@@ -1059,6 +996,14 @@ static void __exit irix_spty_exit(void)
 	}
 	mutex_unlock(&irix_spty_table_lock);
 	ida_destroy(&irix_spty_ids);
+
+	for (i = 0; i < 10; ++i) {
+		if (!irix_pts_driver[i])
+			continue;
+		tty_unregister_driver(irix_pts_driver[i]);
+		put_tty_driver(irix_pts_driver[i]);
+		irix_pts_driver[i] = NULL;
+	}
 	pr_info("irix_spty: unloaded\n");
 }
 
