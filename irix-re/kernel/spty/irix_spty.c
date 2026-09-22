@@ -893,6 +893,66 @@ static void irix_tty_flush_buffer(struct tty_struct *tty)
 	wake_up_all(&pt->drain_wait);
 }
 
+static int irix_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
+			  unsigned long arg)
+{
+	struct irix_spty *pt = tty->driver_data;
+	long rc;
+
+	if (!pt)
+		return -ENODEV;
+
+	/*
+	 * The translated IRIX side opens the slave before exec'ing the native
+	 * shell and still issues IRIX termio ioctls on that fd.  Once the slave
+	 * moved onto tty-core those commands stopped reaching the old cdev ioctl
+	 * handler, causing xwsh's child-side tty setup to fail before exec.
+	 * Keep the IRIX ABI on this endpoint while Linux tty-core handles native
+	 * TCGETS/TCSETS, pgrp, controlling-tty and other standard tty commands.
+	 */
+	mutex_lock(&pt->lock);
+	switch (cmd) {
+	case IRIX_TCGETA:
+	case IRIX_TCSETA:
+	case IRIX_TCXONC:
+	case IRIX_TIOCREMOTE:
+	case IRIX_TCSBRK:
+		rc = irix_termio_ioctl(pt, cmd, arg);
+		break;
+	case IRIX_TCSETAW:
+	case IRIX_TCSETAF:
+		mutex_unlock(&pt->lock);
+		rc = wait_event_interruptible(pt->drain_wait,
+			kfifo_is_empty(&pt->to_master) ||
+			(pt->ptc_state & IRIX_PT_DEAD));
+		if (rc)
+			return rc;
+		mutex_lock(&pt->lock);
+		rc = irix_termio_ioctl(pt, cmd, arg);
+		break;
+	case IRIX_TIOCGWINSZ:
+		rc = copy_to_user((void __user *)arg, &pt->winsize,
+				  sizeof(pt->winsize)) ? -EFAULT : 0;
+		break;
+	case IRIX_TIOCSWINSZ:
+		if (copy_from_user(&pt->winsize, (void __user *)arg,
+				   sizeof(pt->winsize))) {
+			rc = -EFAULT;
+			break;
+		}
+		if (pt->ptc_state & IRIX_PTC_PKT)
+			pt->pt_pkt |= TIOCPKT_IOCTL;
+		wake_up_all(&pt->master_wait);
+		rc = 0;
+		break;
+	default:
+		rc = -ENOIOCTLCMD;
+		break;
+	}
+	mutex_unlock(&pt->lock);
+	return (int)rc;
+}
+
 static const struct tty_operations irix_tty_ops = {
 	.install = irix_tty_install,
 	.open = irix_tty_open,
@@ -901,6 +961,7 @@ static const struct tty_operations irix_tty_ops = {
 	.write_room = irix_tty_write_room,
 	.chars_in_buffer = irix_tty_chars_in_buffer,
 	.flush_buffer = irix_tty_flush_buffer,
+	.ioctl = irix_tty_ioctl,
 };
 
 static const struct file_operations irix_ptc_fops = {
