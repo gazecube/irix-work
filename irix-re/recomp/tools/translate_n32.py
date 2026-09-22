@@ -148,8 +148,12 @@ def decode(addr, insn):
                 return ['pending_kind = IRIX_PENDING_RETURN;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs)], 'control'
             return ['pending_kind = IRIX_PENDING_JUMP;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs)], 'control'
         if fn == 0x09:
-            link = rd if rd else 31
-            return ['%s = %s;' % (reg(link), sx32_expr('0x%08xu' % (addr + 8))), 'pending_kind = IRIX_PENDING_CALL;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs), 'pending_return = 0x%08xu;' % (addr + 8)], 'control'
+            # JALR writes the architecturally encoded rd.  rd==0 is a
+            # deliberate no-link tail jump (commonly "jalr $zero,$t9"), not
+            # an implicit request to use $ra.
+            if rd == 0:
+                return ['pending_kind = IRIX_PENDING_JUMP;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs)], 'control'
+            return ['%s = %s;' % (reg(rd), sx32_expr('0x%08xu' % (addr + 8))), 'pending_kind = IRIX_PENDING_CALL;', 'pending_target = (IrixGuestAddr)%s;' % reg(rs), 'pending_return = 0x%08xu;' % (addr + 8)], 'control'
         if fn in (0x21,0x2d):
             expr=sx32_expr('(uint32_t)%s + (uint32_t)%s'%(reg(rs),reg(rt))) if fn==0x21 else '%s + %s'%(reg(rs),reg(rt))
             return ['%s = %s;'%(reg(rd),expr)],None
