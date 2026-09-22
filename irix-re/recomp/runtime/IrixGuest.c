@@ -115,6 +115,147 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
     return seg->host_base + (uint32_t)(addr - seg->guest_base);
 }
 
+#define IRIX_XT_COMPAT_BASE 0x74400000u
+#define IRIX_XT_COMPAT_SIZE 0x00100000u
+#define IRIX_XT_RESOURCE_SIZE 28u
+
+static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
+{
+    IrixGuestAddr out;
+    uint32_t n = (size + 7u) & ~7u;
+
+    if (!n)
+        return 0;
+    if (!rt->compat_alloc_cur) {
+        if (irix_guest_map(rt, IRIX_XT_COMPAT_BASE, IRIX_XT_COMPAT_SIZE, 3u) != 0 &&
+            !irix_guest_ptr(rt, IRIX_XT_COMPAT_BASE, 1u))
+            return 0;
+        rt->compat_alloc_cur = IRIX_XT_COMPAT_BASE;
+    }
+    if (rt->compat_alloc_cur + n < rt->compat_alloc_cur ||
+        rt->compat_alloc_cur + n > IRIX_XT_COMPAT_BASE + IRIX_XT_COMPAT_SIZE)
+        return 0;
+    out = rt->compat_alloc_cur;
+    rt->compat_alloc_cur += n;
+    return out;
+}
+
+static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
+                                                 IrixGuestAddr resources,
+                                                 uint32_t num_resources)
+{
+    IrixGuestAddr first;
+    uint32_t size;
+
+    if (!resources || !num_resources)
+        return 0;
+    if (!irix_guest_ptr(rt, resources, 4u))
+        return 0;
+    first = irix_guest_read32be(rt, resources);
+    if (!first || !irix_guest_ptr(rt, first, IRIX_XT_RESOURCE_SIZE))
+        return 0;
+    size = irix_guest_read32be(rt, first + 12u);
+    return size > 0u && size <= 0x10000u;
+}
+
+static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
+                                                        IrixGuestAddr wc,
+                                                        unsigned depth)
+{
+    IrixGuestAddr sc;
+    IrixGuestAddr resources;
+    IrixGuestAddr super_resources = 0;
+    IrixGuestAddr table;
+    uint32_t class_num;
+    uint32_t super_num = 0;
+    uint32_t super_widget_size = 0;
+    uint32_t new_num;
+    uint32_t next;
+    uint32_t i, j;
+
+    if (!wc || depth > 64u || !irix_guest_ptr(rt, wc, 52u))
+        return;
+
+    sc = irix_guest_read32be(rt, wc + 0u);
+    resources = irix_guest_read32be(rt, wc + 44u);
+    class_num = irix_guest_read32be(rt, wc + 48u);
+
+    if (irix_guest_xt_resources_are_indirect(rt, resources, class_num))
+        return;
+
+    if (sc) {
+        irix_guest_xt_repair_class_resources_inner(rt, sc, depth + 1u);
+        if (irix_guest_ptr(rt, sc, 52u)) {
+            super_widget_size = irix_guest_read32be(rt, sc + 8u);
+            super_resources = irix_guest_read32be(rt, sc + 44u);
+            super_num = irix_guest_read32be(rt, sc + 48u);
+        }
+    }
+
+    if (!class_num) {
+        irix_guest_write32be(rt, wc + 44u, super_resources);
+        irix_guest_write32be(rt, wc + 48u, super_num);
+        return;
+    }
+
+    if (!resources || class_num > 4096u ||
+        !irix_guest_ptr(rt, resources, (size_t)class_num * IRIX_XT_RESOURCE_SIZE))
+        return;
+
+    /*
+     * _XtCompileResourceList also complements xrm_offset.  Do just that part
+     * here.  Fast-quark/string compilation is intentionally left to the
+     * original SGI path; this compatibility repair only fixes the structural
+     * indirection table needed by GetResources().
+     */
+    for (i = 0; i < class_num; ++i) {
+        IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+        uint32_t off = irix_guest_read32be(rt, res + 16u);
+        if ((int32_t)off >= 0)
+            irix_guest_write32be(rt, res + 16u, ~off);
+    }
+
+    table = irix_guest_xt_compat_alloc(rt, (super_num + class_num) * 4u);
+    if (!table)
+        return;
+
+    for (i = 0; i < super_num; ++i)
+        irix_guest_write32be(rt, table + i * 4u,
+                             irix_guest_read32be(rt, super_resources + i * 4u));
+
+    new_num = super_num + class_num;
+    next = super_num;
+    for (i = 0; i < class_num; ++i) {
+        IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+        uint32_t off = irix_guest_read32be(rt, res + 16u);
+        uint32_t real_off = ~off;
+        int replaced = 0;
+
+        if (real_off < super_widget_size) {
+            for (j = 0; j < super_num; ++j) {
+                IrixGuestAddr super_res = irix_guest_read32be(rt, table + j * 4u);
+                if (super_res &&
+                    irix_guest_read32be(rt, super_res + 16u) == off) {
+                    irix_guest_write32be(rt, table + j * 4u, res);
+                    --new_num;
+                    replaced = 1;
+                    break;
+                }
+            }
+        }
+        if (!replaced)
+            irix_guest_write32be(rt, table + next++ * 4u, res);
+    }
+
+    irix_guest_write32be(rt, wc + 44u, table);
+    irix_guest_write32be(rt, wc + 48u, new_num);
+}
+
+void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc)
+{
+    irix_guest_xt_repair_class_resources_inner(rt, wc, 0u);
+}
+
 uint8_t irix_guest_read8(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
