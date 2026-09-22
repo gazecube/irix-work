@@ -333,7 +333,11 @@ def _reachable_code_extent(elf, start, sec_lo, sec_hi, barriers):
         if op==0x00 and fn in (0x08,0x09):
             include_delay()
             if fn==0x09:
-                todo.append(addr+8)
+                rd=(word>>11)&0x1f
+                # jalr $zero,rs is a no-link tail jump and has no local
+                # continuation at pc+8.  Only linked JALR forms resume.
+                if rd!=0:
+                    todo.append(addr+8)
             continue
         if op==0x02:
             include_delay()
@@ -350,7 +354,7 @@ def _reachable_code_extent(elf, start, sec_lo, sec_hi, barriers):
             else:
                 todo.append(dst); todo.append(addr+8)
             continue
-        if op in (0x04,0x05,0x06,0x07,0x14,0x15):
+        if op in (0x04,0x05,0x06,0x07,0x14,0x15,0x16,0x17):
             include_delay()
             dst=(addr+4+(imm<<2))&0xffffffff
             unconditional=(op==0x04 and rs==0 and rt==0)
