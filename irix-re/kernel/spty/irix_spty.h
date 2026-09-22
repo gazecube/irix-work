@@ -51,6 +51,7 @@
 #define IRIX_IGNBRK          0000001u
 #define IRIX_BRKINT          0000002u
 #define IRIX_IGNPAR          0000004u
+#define IRIX_IUCLC           0001000u
 #define IRIX_ISTRIP          0000040u
 #define IRIX_INLCR           0000100u
 #define IRIX_IGNCR           0000200u
@@ -60,7 +61,11 @@
 #define IRIX_IXOFF           0010000u
 #define IRIX_IMAXBEL         0020000u
 #define IRIX_OPOST           0000001u
+#define IRIX_OLCUC           0000002u
 #define IRIX_ONLCR           0000004u
+#define IRIX_OCRNL           0000010u
+#define IRIX_ONOCR           0000020u
+#define IRIX_ONLRET          0000040u
 #define IRIX_TAB3            0014000u
 #define IRIX_ISIG            0000001u
 #define IRIX_ICANON          0000002u
@@ -85,6 +90,7 @@
 #define IRIX_VSTART          8
 #define IRIX_VSTOP           9
 #define IRIX_VSUSP           10
+#define IRIX_VDSUSP          11
 #define IRIX_VREPRINT        12
 #define IRIX_VDISCARD        13
 #define IRIX_VWERASE         14

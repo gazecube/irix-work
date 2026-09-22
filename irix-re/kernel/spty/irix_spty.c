@@ -94,13 +94,28 @@ static void irix_spty_input_char_locked(struct irix_spty *pt, unsigned char ch)
 		return;
 	}
 	if ((lflag & IRIX_IEXTEN) && ch == pt->termio.c_cc[IRIX_VDISCARD]) {
-		pt->output_discard = !pt->output_discard;
+		/*
+		 * stty_ld's VFLUSHO transition flushes pending output before
+		 * entering FLUSHO; the next VDISCARD leaves discard mode.
+		 */
+		if (!pt->output_discard) {
+			kfifo_reset(&pt->to_master);
+			if (pt->ptc_state & IRIX_PTC_PKT)
+				pt->pt_pkt |= TIOCPKT_FLUSHWRITE;
+			pt->output_discard = 1;
+		} else {
+			pt->output_discard = 0;
+		}
+		wake_up_all(&pt->master_wait);
+		wake_up_all(&pt->slave_wait);
 		return;
 	}
 
 ordinary:
 	if (iflag & IRIX_ISTRIP)
 		ch &= 0x7f;
+	if ((iflag & IRIX_IUCLC) && ch >= 'A' && ch <= 'Z')
+		ch += 'a' - 'A';
 	if (ch == '\n' && (iflag & IRIX_INLCR))
 		ch = '\r';
 	else if (ch == '\r') {
@@ -507,22 +522,33 @@ static long irix_termio_ioctl(struct irix_spty *pt, unsigned int cmd,
 	case IRIX_TIOCREMOTE:
 		if (get_user(value, (int __user *)arg))
 			return -EFAULT;
+		/*
+		 * IRIX sends MC_NO_CANON/MC_DO_CANON to stty_ld.  Model that
+		 * state explicitly: remote mode bypasses canonical editing, and
+		 * discard any half-built canonical record at the transition.
+		 */
+		if (pt->remote_mode != !!value)
+			kfifo_reset(&pt->canon_input);
 		pt->remote_mode = !!value;
+		wake_up_all(&pt->slave_wait);
 		return 0;
 	case IRIX_TCSBRK:
 		/*
-		 * spty.c turns a zero TCSBRK into an input flush + SIGINT when
-		 * BRKINT is selected.  Process-group delivery is supplied by
-		 * the process/session personality; preserve the queue semantics
-		 * here instead of silently treating break as a no-op.
+		 * spty.c interprets the integer argument, not the pointer value.
+		 * A zero break with BRKINT flushes both directions and raises
+		 * SIGINT upstream.  Signal delivery is completed by the process
+		 * personality; reproduce the queue and packet effects here.
 		 */
+		if (get_user(value, (int __user *)arg))
+			return -EFAULT;
 		if (value == 0 &&
 		    (be32_to_cpu(pt->termio.c_iflag) & (IRIX_IGNBRK | IRIX_BRKINT))
 		      == IRIX_BRKINT) {
 			kfifo_reset(&pt->to_slave);
 			kfifo_reset(&pt->canon_input);
+			kfifo_reset(&pt->to_master);
 			if (pt->ptc_state & IRIX_PTC_PKT)
-				pt->pt_pkt |= TIOCPKT_FLUSHREAD;
+				pt->pt_pkt |= TIOCPKT_FLUSHREAD | TIOCPKT_FLUSHWRITE;
 			wake_up_all(&pt->master_wait);
 			wake_up_all(&pt->slave_wait);
 		}
@@ -786,15 +812,22 @@ static ssize_t irix_pts_write(struct file *file, const char __user *buf,
 			continue;
 		}
 		for (i = 0; i < n && o < sizeof(out); ++i) {
-			if ((oflag & (IRIX_OPOST | IRIX_ONLCR)) ==
-			    (IRIX_OPOST | IRIX_ONLCR) && in[i] == '\n') {
-				if (o + 2 > sizeof(out))
-					break;
-				out[o++] = '\r';
-				out[o++] = '\n';
-			} else {
-				out[o++] = in[i];
+			unsigned char ch = in[i];
+
+			if (oflag & IRIX_OPOST) {
+				if ((oflag & IRIX_OLCUC) && ch >= 'a' && ch <= 'z')
+					ch -= 'a' - 'A';
+				if (ch == '\r' && (oflag & IRIX_OCRNL))
+					ch = '\n';
+				if (ch == '\n' && (oflag & IRIX_ONLCR)) {
+					if (o + 2 > sizeof(out))
+						break;
+					out[o++] = '\r';
+					out[o++] = '\n';
+					continue;
+				}
 			}
+			out[o++] = ch;
 		}
 		if (kfifo_avail(&pt->to_master) < o) {
 			mutex_unlock(&pt->lock);
