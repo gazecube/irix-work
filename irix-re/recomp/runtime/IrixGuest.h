@@ -73,6 +73,7 @@ typedef struct IrixGuestRuntime {
     IrixGuestAddr errno_proxy_addr;
     const char *rootfs;
     IrixGuestAddr program_break;
+    IrixGuestAddr compat_alloc_cur;
     IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
     unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
@@ -112,6 +113,7 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc);
 int irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
                                   IrixGuestElfInfo *info_out);
 int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
