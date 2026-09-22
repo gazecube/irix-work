@@ -50,14 +50,44 @@
 
 #define IRIX_IGNBRK          0000001u
 #define IRIX_BRKINT          0000002u
+#define IRIX_IGNPAR          0000004u
+#define IRIX_ISTRIP          0000040u
+#define IRIX_INLCR           0000100u
+#define IRIX_IGNCR           0000200u
+#define IRIX_ICRNL           0000400u
 #define IRIX_IXON            0002000u
+#define IRIX_IXANY           0004000u
 #define IRIX_IXOFF           0010000u
+#define IRIX_IMAXBEL         0020000u
+#define IRIX_OPOST           0000001u
+#define IRIX_ONLCR           0000004u
+#define IRIX_TAB3            0014000u
+#define IRIX_ISIG            0000001u
 #define IRIX_ICANON          0000002u
 #define IRIX_ECHO            0000010u
 #define IRIX_ECHOE           0000020u
 #define IRIX_ECHOK           0000040u
 #define IRIX_ECHONL          0000100u
+#define IRIX_NOFLSH          0000200u
+#define IRIX_IEXTEN          0000400u
+#define IRIX_ECHOCTL         0001000u
+#define IRIX_ECHOKE          0004000u
 #define IRIX_NCCS            23
+
+#define IRIX_VINTR           0
+#define IRIX_VQUIT           1
+#define IRIX_VERASE          2
+#define IRIX_VKILL           3
+#define IRIX_VEOF            4
+#define IRIX_VEOL            5
+#define IRIX_VEOL2           6
+#define IRIX_VSTART          8
+#define IRIX_VSTOP           9
+#define IRIX_VSUSP           10
+#define IRIX_VREPRINT        12
+#define IRIX_VDISCARD        13
+#define IRIX_VWERASE         14
+#define IRIX_VLNEXT          15
 
 /*
  * IRIX sys/ioccom.h encoding.  struct winsize is four 16-bit fields,
@@ -84,14 +114,16 @@ struct irix_spty_host_id {
 };
 
 /*
- * MIPS ABI old struct termio: four 32-bit tcflag_t values, c_line, then
- * NCCS bytes.  Values are guest big-endian on the ioctl wire.
+ * IRIX kernel struct termio used by spty.c/stty_ld.c.  Unlike the legacy
+ * __old_termio layout it contains explicit output/input speed_t fields.
  */
 struct irix_termio {
 	__be32 c_iflag;
 	__be32 c_oflag;
 	__be32 c_cflag;
 	__be32 c_lflag;
+	__be32 c_ospeed;
+	__be32 c_ispeed;
 	__u8 c_line;
 	__u8 c_cc[IRIX_NCCS];
 };
@@ -120,6 +152,7 @@ struct irix_spty {
 	unsigned int slave_open;
 	struct kfifo to_master;
 	struct kfifo to_slave;
+	struct kfifo canon_input;
 };
 
 #endif
