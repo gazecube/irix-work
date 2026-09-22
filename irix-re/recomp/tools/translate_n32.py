@@ -358,17 +358,6 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         if addr in (0x0983931c, 0x098402b4):
             tag='DT_INIT' if addr==0x0983931c else '__cplinit'
             print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag,addr))
-        if 0x0f633960 <= addr <= 0x0f6339a4:
-            print('            fprintf(stderr, "IRIX XtCreateApplicationContext probe: pc=0x%08x v0=%%08x a0=%%08x a1=%%08x t9=%%08x sp=%%08x gp=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);' % addr)
-        if 0x0f61448c <= addr <= 0x0f614520:
-            print('            fprintf(stderr, "IRIX Xt allocator probe: pc=0x%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t9=%%08x sp=%%08x gp=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);' % addr)
-        if addr == 0x0f62f0a4 or 0x0f62f340 <= addr <= 0x0f62f380:
-            class_reg = 4 if addr == 0x0f62f0a4 else 16
-            print('            fprintf(stderr, "IRIX Xt class-init probe: pc=0x%08x class=%%08x s0=%%08x a0=%%08x a1=%%08x ra=%%08x class_inited=%%02x raw_res0=%%08x\\n", (uint32_t)cpu->gpr[%d], (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[31], (unsigned)(irix_guest_read32be(rt, (uint32_t)cpu->gpr[%d] + 20u) >> 24), irix_guest_read32be(rt, 0x0f6959d8u));' % (addr, class_reg, class_reg))
-        if addr == 0x0f6154e8:
-            print('            fprintf(stderr, "IRIX Xt GetResources entry: appShell.class_inited=%02x appShell.resources=%08x appShell.num_resources=%u raw_res0=%08x a0=%08x a1=%08x a2=%08x a3=%08x ra=%08x\\n", (unsigned)(irix_guest_read32be(rt, 0x0f695a3cu) >> 24), irix_guest_read32be(rt, 0x0f695a54u), irix_guest_read32be(rt, 0x0f695a58u), irix_guest_read32be(rt, 0x0f6959d8u), (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[31]);')
-        if 0x0f62e38c <= addr <= 0x0f62e3b8:
-            print('            fprintf(stderr, "IRIX Xt ObjectClassPartInit probe: pc=0x%08x s0=%%08x s1=%%08x a0=%%08x a1=%%08x gp=%%08x t9=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[31]);' % addr)
         if 0x0f62f0e8 <= addr <= 0x0f62f0f8:
             print('            fprintf(stderr, "IRIX Xt class-part callsite: pc=0x%08x insn=0x%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x s0=%%08x s1=%%08x gp=%%08x t9=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[31]);' % (addr, word))
         for line in lines: print('            '+line)
