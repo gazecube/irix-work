@@ -480,6 +480,24 @@ static void bridge__XSGIAddToPreloadAtomList(IrixGuestRuntime *rt, IrixGuestCpu 
     cpu->gpr[2] = 0;
 }
 
+static int irix_host_xerror_continue(Display *dpy, XErrorEvent *ev)
+{
+    char msg[128];
+    msg[0] = 0;
+    if (dpy)
+        XGetErrorText(dpy, ev->error_code, msg, (int)sizeof(msg));
+    fprintf(stderr,
+            "IRIX host X error ignored: code=%u request=%u minor=%u resource=%08lx serial=%lu%s%s\n",
+            (unsigned)ev->error_code,
+            (unsigned)ev->request_code,
+            (unsigned)ev->minor_code,
+            ev->resourceid,
+            ev->serial,
+            msg[0] ? " text=" : "",
+            msg[0] ? msg : "");
+    return 0;
+}
+
 static void bridge_XOpenDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr name_addr = (uint32_t)cpu->gpr[4];
@@ -496,6 +514,8 @@ static void bridge_XOpenDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             host_display ? "\\\"" : ">");
 
     dpy = XOpenDisplay(name);
+    if (dpy)
+        XSetErrorHandler(irix_host_xerror_continue);
     guest_display = display_to_guest(dpy);
     fprintf(stderr,
             "IRIX XOpenDisplay: host_result=%p guest_result=0x%08x\\n",
