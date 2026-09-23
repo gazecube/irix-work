@@ -319,8 +319,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     # creation/realization code.  Extend this one known range so execution
     # reaches the real epilogue instead of returning with stale v0 from the
     # preceding void XtGetApplicationNameAndClass() call.
-    if start == 0x0b294240 and size < 0x160:
-        size = 0x160
+    if start == 0x0b294240 and size < 0x110:
+        size = 0x110
     """Emit one function from an already-resolved executable address range.
 
     All front ends use this routine so symbol-backed and metadata-recovered
