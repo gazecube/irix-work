@@ -37,6 +37,7 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 find_package(X11)
 find_path(XPM_INCLUDE_DIR X11/xpm.h)
 find_library(XPM_LIBRARY NAMES Xpm)
+find_library(XT_LIBRARY NAMES Xt)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
         runtime/IrixX11BridgeUnit.c
@@ -46,6 +47,7 @@ if(X11_FOUND)
         runtime/IrixX11ContextBridge.c
         runtime/IrixX11BridgeBulkUnit.c
         runtime/IrixRuntimeX11Bridge.c
+        runtime/IrixRuntimeXtBridge.c
         runtime/IrixX11WindowBridgeUnit.c
         runtime/IrixX11ImageBridgeUnit.c
         runtime/IrixX11WmBridge.c
@@ -59,6 +61,12 @@ if(X11_FOUND)
         irix_recomp_runtime
         X11::X11
     )
+    if(XT_LIBRARY)
+        message(STATUS "Using host Xt: ${XT_LIBRARY}")
+        target_link_libraries(irix_recomp_x11_bridge PUBLIC ${XT_LIBRARY})
+    else()
+        message(WARNING "Host Xt development/runtime library not found; Xt hybrid bridge will fail to link")
+    endif()
     if(XPM_INCLUDE_DIR AND XPM_LIBRARY)
         message(STATUS "Using host Xpm: ${XPM_LIBRARY}")
         target_include_directories(irix_recomp_x11_bridge PRIVATE ${XPM_INCLUDE_DIR})
