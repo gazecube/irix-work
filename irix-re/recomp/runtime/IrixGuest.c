@@ -158,6 +158,46 @@ static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
     return size > 0u && size <= 0x10000u;
 }
 
+static int irix_guest_xt_normalize_resource(IrixGuestRuntime *rt,
+                                            IrixGuestAddr res)
+{
+    uint32_t size;
+    uint32_t off;
+    uint32_t q;
+    static const uint32_t fields[] = {0u, 4u, 8u, 20u};
+    unsigned k;
+
+    if (!res || !irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE))
+        return 0;
+
+    size = irix_guest_read32be(rt, res + 12u);
+    if (!size || size > 0x10000u)
+        return 0;
+
+    /*
+     * _XtCompileResourceList interns resource_name, resource_class,
+     * resource_type and default_type into the Xrm quark namespace.  This is
+     * deliberately idempotent: positive values that are already Xrm quarks
+     * do not map to guest strings, so quarkify_encoded returns zero and we
+     * leave them untouched.  SGI FAST_QUARK values and real guest String
+     * pointers are converted.
+     */
+    if (rt->xrm_quarkify_encoded) {
+        for (k = 0; k < sizeof(fields) / sizeof(fields[0]); ++k) {
+            uint32_t value = irix_guest_read32be(rt, res + fields[k]);
+            q = rt->xrm_quarkify_encoded(rt, value);
+            if (q)
+                irix_guest_write32be(rt, res + fields[k], q);
+        }
+    }
+
+    off = irix_guest_read32be(rt, res + 16u);
+    if ((int32_t)off >= 0)
+        irix_guest_write32be(rt, res + 16u, ~off);
+
+    return 1;
+}
+
 IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
                                                   IrixGuestAddr table,
                                                   uint32_t num_resources)
@@ -169,22 +209,16 @@ IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
         return table;
 
     /*
-     * Fast path: this is already an XrmResourceList[].
-     * Validate every entry, not just the first one, so a partially malformed
-     * table cannot sneak through and explode later in GetResources().
+     * If this is already an XrmResourceList[], still normalize the pointed-to
+     * records.  Earlier compatibility passes may have built the pointer table
+     * while leaving the String/FAST_QUARK fields uncompiled.
      */
     if (irix_guest_ptr(rt, table, (size_t)num_resources * 4u)) {
         int all_indirect = 1;
         for (i = 0; i < num_resources; ++i) {
             IrixGuestAddr res =
                 irix_guest_read32be(rt, table + i * 4u);
-            uint32_t size;
-            if (!res || !irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE)) {
-                all_indirect = 0;
-                break;
-            }
-            size = irix_guest_read32be(rt, res + 12u);
-            if (!size || size > 0x10000u) {
+            if (!irix_guest_xt_normalize_resource(rt, res)) {
                 all_indirect = 0;
                 break;
             }
@@ -194,9 +228,9 @@ IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
     }
 
     /*
-     * Otherwise accept the table as a raw contiguous XtResource[] only when
-     * each 28-byte record has a sane xrm_size.  SGI FAST_QUARK values in
-     * xrm_name/xrm_class/xrm_type are intentionally left untouched.
+     * Otherwise accept the input as a raw contiguous XtResource[] and perform
+     * the same compilation before creating the XrmResourceList[] indirection
+     * table expected by GetResources().
      */
     if (!irix_guest_ptr(rt, table,
                         (size_t)num_resources * IRIX_XT_RESOURCE_SIZE))
@@ -204,32 +238,8 @@ IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
 
     for (i = 0; i < num_resources; ++i) {
         IrixGuestAddr res = table + i * IRIX_XT_RESOURCE_SIZE;
-        uint32_t size = irix_guest_read32be(rt, res + 12u);
-        uint32_t off = irix_guest_read32be(rt, res + 16u);
-        uint32_t q;
-
-        if (!size || size > 0x10000u)
+        if (!irix_guest_xt_normalize_resource(rt, res))
             return table;
-
-        /*
-         * Full _XtCompileResourceList semantics: the first three fields and
-         * default_type start life as String / SGI FAST_QUARK encodings and
-         * must be interned into the Xrm quark namespace before GetResources
-         * compares them against QString/QImmediate/QCallProc/etc.
-         */
-        if (rt->xrm_quarkify_encoded) {
-            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 0u));
-            if (q) irix_guest_write32be(rt, res + 0u, q);
-            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 4u));
-            if (q) irix_guest_write32be(rt, res + 4u, q);
-            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 8u));
-            if (q) irix_guest_write32be(rt, res + 8u, q);
-            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 20u));
-            if (q) irix_guest_write32be(rt, res + 20u, q);
-        }
-
-        if ((int32_t)off >= 0)
-            irix_guest_write32be(rt, res + 16u, ~off);
     }
 
     out = irix_guest_xt_compat_alloc(rt, num_resources * 4u);
