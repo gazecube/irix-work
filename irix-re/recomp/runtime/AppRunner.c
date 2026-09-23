@@ -543,8 +543,13 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         AT_BASE = 7,
         AT_ENTRY = 9
     };
-    const IrixGuestAddr base = 0x7fd00000u;
-    const uint32_t size = 0x00100000u;
+    /*
+     * Keep the historical initial stack top at 0x7fe00000, but give the
+     * original IRIX desktop stack substantially more room to grow downward.
+     * Xt/Motif shell construction can consume more than the old 1 MiB mapping.
+     */
+    const IrixGuestAddr base = 0x7f600000u;
+    const uint32_t size = 0x00800000u;
     IrixGuestAddr top = base + size - 0x100u;
     IrixGuestAddr sp, argv_addr, envp_addr;
     IrixGuestAddr *argv_guest = 0, *env_guest = 0;
