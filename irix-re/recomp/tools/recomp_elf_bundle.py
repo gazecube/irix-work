@@ -638,6 +638,16 @@ def main():
             # function pointer.  A real nonzero-size ELF symbol is stronger
             # ownership evidence, however, so never manufacture an entry in
             # the middle of one.
+            #
+            # libXm's static GetDisplay() is materialized in the XmDisplay
+            # class record at 0x0b294240.  SGI .debug_frame splits its single
+            # machine function at 0x0b2942b0, so the ordinary "next recovered
+            # boundary" rule truncates the pointer-derived entry to 0x70 bytes
+            # and returns before XtAppCreateShell.  The original N32 body
+            # continues through 0x0b29434f and the next function begins at
+            # 0x0b294350.  Keep the complete callable body.
+            if addr == 0x0b294240 and size < 0x110:
+                size = 0x110
             ptr_defs.append((n,addr,size,sh,'data_ptr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in ptr_defs}
