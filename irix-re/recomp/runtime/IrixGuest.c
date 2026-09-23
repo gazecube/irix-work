@@ -1885,7 +1885,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
          * BEFORE restoring the caller's stack/callee-saved state so the live
          * GetDisplay frame is preserved.
          */
-        if (!rt->trapped && address == 0x0b294240u &&
+        if (!rt->trapped &&
+            (caller_pc == 0x0b297ca0u || address == 0x0b294240u) &&
             (uint32_t)cpu->gpr[2] >= 0x74300000u &&
             (uint32_t)cpu->gpr[2] <  0x74400000u) {
             IrixGuestFunctionEntry *cont =
