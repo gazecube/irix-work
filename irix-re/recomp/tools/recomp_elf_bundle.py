@@ -689,6 +689,16 @@ def main():
 
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
+
+        # SGI libXm static GetDisplay().  Its callable entry is 0x0b294240,
+        # while .debug_frame inserts an internal boundary at 0x0b2942b0.
+        # Whatever discovery mechanism supplied this entry, emit the complete
+        # machine function through the real next-function boundary at
+        # 0x0b294350.  Applying this here, after all discovery mechanisms have
+        # converged, avoids source-kind-specific truncation.
+        if addr == 0x0b294240:
+            size = 0x110
+
         if source_kind in ('debug_frame','pdr','zero_size','data_ptr','code_link','boundary_entry'):
             checked_size=validated_recovered_size(elf,addr,size)
             if not checked_size:
