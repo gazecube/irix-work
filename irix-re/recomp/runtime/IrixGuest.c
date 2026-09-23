@@ -270,6 +270,7 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
      */
     enum { IRIX_XT_CALLBACK_PRIVATE = 0x60u };
     const uint32_t irix_xt_r_callback = 0xffffffe3u;
+    uint32_t irix_xt_q_callback = 0u;
     IrixGuestAddr sc;
     IrixGuestAddr resources;
     IrixGuestAddr super_resources = 0;
@@ -295,6 +296,9 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
     class_num = irix_guest_read32be(rt, wc + 48u);
     resources_indirect =
         irix_guest_xt_resources_are_indirect(rt, resources, class_num);
+    if (rt->xrm_quarkify_encoded)
+        irix_xt_q_callback =
+            rt->xrm_quarkify_encoded(rt, irix_xt_r_callback);
 
     if (sc) {
         irix_guest_xt_repair_class_resources_inner(rt, sc, depth + 1u);
@@ -396,7 +400,9 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
             IrixGuestAddr res =
                 irix_guest_read32be(rt, resources + i * 4u);
             if (res && irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE) &&
-                irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback ||
+                 (irix_xt_q_callback &&
+                  irix_guest_read32be(rt, res + 8u) == irix_xt_q_callback)))
                 ++own_callback_num;
         }
 
@@ -410,7 +416,9 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
             IrixGuestAddr res =
                 irix_guest_read32be(rt, resources + i * 4u);
             if (res && irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE) &&
-                irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback ||
+                 (irix_xt_q_callback &&
+                  irix_guest_read32be(rt, res + 8u) == irix_xt_q_callback)))
                 irix_guest_write32be(rt,
                     callback_table + callback_next++ * 4u, res);
         }
@@ -425,7 +433,9 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
                        (size_t)class_num * IRIX_XT_RESOURCE_SIZE)) {
         for (i = 0; i < class_num; ++i) {
             IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
-            if (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+            if ((irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback ||
+                 (irix_xt_q_callback &&
+                  irix_guest_read32be(rt, res + 8u) == irix_xt_q_callback)))
                 ++own_callback_num;
         }
     }
@@ -442,7 +452,9 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
     if (resources && own_callback_num) {
         for (i = 0; i < class_num; ++i) {
             IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
-            if (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+            if ((irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback ||
+                 (irix_xt_q_callback &&
+                  irix_guest_read32be(rt, res + 8u) == irix_xt_q_callback)))
                 irix_guest_write32be(rt,
                     callback_table + callback_next++ * 4u, res);
         }
