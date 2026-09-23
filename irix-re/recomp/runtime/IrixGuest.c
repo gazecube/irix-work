@@ -162,93 +162,172 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
                                                         IrixGuestAddr wc,
                                                         unsigned depth)
 {
+    /*
+     * SGI/N32 CoreClassPart offsets used here:
+     *   +0x00 superclass
+     *   +0x08 widget_size
+     *   +0x2c resources
+     *   +0x30 num_resources
+     *   +0x60 callback_private
+     *
+     * ConstructCallbackOffsets() always installs callback_private, even when
+     * the class has zero callback resources.  The SGI FAST_QUARK encoding for
+     * XtRCallback in this libXt build is 0xffffffe3 (verified from the sole
+     * Object resource, destroyCallback).
+     */
+    enum { IRIX_XT_CALLBACK_PRIVATE = 0x60u };
+    const uint32_t irix_xt_r_callback = 0xffffffe3u;
     IrixGuestAddr sc;
     IrixGuestAddr resources;
     IrixGuestAddr super_resources = 0;
-    IrixGuestAddr table;
+    IrixGuestAddr super_callbacks = 0;
+    IrixGuestAddr table = 0;
+    IrixGuestAddr callback_table;
     uint32_t class_num;
     uint32_t super_num = 0;
+    uint32_t super_callback_num = 0;
     uint32_t super_widget_size = 0;
-    uint32_t new_num;
-    uint32_t next;
+    uint32_t new_num = 0;
+    uint32_t next = 0;
+    uint32_t own_callback_num = 0;
+    uint32_t callback_next = 1;
     uint32_t i, j;
+    int resources_indirect;
 
-    if (!wc || depth > 64u || !irix_guest_ptr(rt, wc, 52u))
+    if (!wc || depth > 64u || !irix_guest_ptr(rt, wc, 100u))
         return;
 
     sc = irix_guest_read32be(rt, wc + 0u);
     resources = irix_guest_read32be(rt, wc + 44u);
     class_num = irix_guest_read32be(rt, wc + 48u);
-
-    if (irix_guest_xt_resources_are_indirect(rt, resources, class_num))
-        return;
+    resources_indirect =
+        irix_guest_xt_resources_are_indirect(rt, resources, class_num);
 
     if (sc) {
         irix_guest_xt_repair_class_resources_inner(rt, sc, depth + 1u);
-        if (irix_guest_ptr(rt, sc, 52u)) {
+        if (irix_guest_ptr(rt, sc, 100u)) {
             super_widget_size = irix_guest_read32be(rt, sc + 8u);
             super_resources = irix_guest_read32be(rt, sc + 44u);
             super_num = irix_guest_read32be(rt, sc + 48u);
+            super_callbacks =
+                irix_guest_read32be(rt, sc + IRIX_XT_CALLBACK_PRIVATE);
+            if (super_callbacks && irix_guest_ptr(rt, super_callbacks, 4u))
+                super_callback_num =
+                    irix_guest_read32be(rt, super_callbacks);
         }
     }
-
-    if (!class_num) {
-        irix_guest_write32be(rt, wc + 44u, super_resources);
-        irix_guest_write32be(rt, wc + 48u, super_num);
-        return;
-    }
-
-    if (!resources || class_num > 4096u ||
-        !irix_guest_ptr(rt, resources, (size_t)class_num * IRIX_XT_RESOURCE_SIZE))
-        return;
 
     /*
-     * _XtCompileResourceList also complements xrm_offset.  Do just that part
-     * here.  Fast-quark/string compilation is intentionally left to the
-     * original SGI path; this compatibility repair only fixes the structural
-     * indirection table needed by GetResources().
+     * Repair the resource indirection table only when this class still owns
+     * its raw XtResource array.  Keep 'resources' pointing at that raw array
+     * below so callback_private can be constructed from the same class-local
+     * resource list, just like Xt's ConstructCallbackOffsets().
      */
-    for (i = 0; i < class_num; ++i) {
-        IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
-        uint32_t off = irix_guest_read32be(rt, res + 16u);
-        if ((int32_t)off >= 0)
-            irix_guest_write32be(rt, res + 16u, ~off);
-    }
+    if (!resources_indirect && class_num) {
+        if (!resources || class_num > 4096u ||
+            !irix_guest_ptr(rt, resources,
+                            (size_t)class_num * IRIX_XT_RESOURCE_SIZE))
+            return;
 
-    table = irix_guest_xt_compat_alloc(rt, (super_num + class_num) * 4u);
-    if (!table)
-        return;
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+            uint32_t off = irix_guest_read32be(rt, res + 16u);
+            if ((int32_t)off >= 0)
+                irix_guest_write32be(rt, res + 16u, ~off);
+        }
 
-    for (i = 0; i < super_num; ++i)
-        irix_guest_write32be(rt, table + i * 4u,
-                             irix_guest_read32be(rt, super_resources + i * 4u));
+        table = irix_guest_xt_compat_alloc(rt,
+                                           (super_num + class_num) * 4u);
+        if (!table)
+            return;
 
-    new_num = super_num + class_num;
-    next = super_num;
-    for (i = 0; i < class_num; ++i) {
-        IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
-        uint32_t off = irix_guest_read32be(rt, res + 16u);
-        uint32_t real_off = ~off;
-        int replaced = 0;
+        for (i = 0; i < super_num; ++i)
+            irix_guest_write32be(rt, table + i * 4u,
+                                 irix_guest_read32be(rt,
+                                                    super_resources + i * 4u));
 
-        if (real_off < super_widget_size) {
-            for (j = 0; j < super_num; ++j) {
-                IrixGuestAddr super_res = irix_guest_read32be(rt, table + j * 4u);
-                if (super_res &&
-                    irix_guest_read32be(rt, super_res + 16u) == off) {
-                    irix_guest_write32be(rt, table + j * 4u, res);
-                    --new_num;
-                    replaced = 1;
-                    break;
+        new_num = super_num + class_num;
+        next = super_num;
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+            uint32_t off = irix_guest_read32be(rt, res + 16u);
+            uint32_t real_off = ~off;
+            int replaced = 0;
+
+            if (real_off < super_widget_size) {
+                for (j = 0; j < super_num; ++j) {
+                    IrixGuestAddr super_res =
+                        irix_guest_read32be(rt, table + j * 4u);
+                    if (super_res &&
+                        irix_guest_read32be(rt, super_res + 16u) == off) {
+                        irix_guest_write32be(rt, table + j * 4u, res);
+                        --new_num;
+                        replaced = 1;
+                        break;
+                    }
                 }
             }
+            if (!replaced)
+                irix_guest_write32be(rt, table + next++ * 4u, res);
         }
-        if (!replaced)
-            irix_guest_write32be(rt, table + next++ * 4u, res);
+
+        irix_guest_write32be(rt, wc + 44u, table);
+        irix_guest_write32be(rt, wc + 48u, new_num);
+    } else if (!class_num && !resources_indirect) {
+        irix_guest_write32be(rt, wc + 44u, super_resources);
+        irix_guest_write32be(rt, wc + 48u, super_num);
     }
 
-    irix_guest_write32be(rt, wc + 44u, table);
-    irix_guest_write32be(rt, wc + 48u, new_num);
+    /*
+     * Xt's ConstructCallbackOffsets() is a separate class-init step from
+     * _XtResourceDependencies().  Our original repair supplied the latter's
+     * resource table but forgot callback_private entirely, leaving +0x60 NULL
+     * and causing the SGI callback walker to dereference address zero.
+     *
+     * Build the same table shape: [count, subclass callbacks..., inherited
+     * callbacks...].  If the resource list was already repaired by an earlier
+     * invocation, leave an existing callback table alone.
+     */
+    if (irix_guest_read32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE))
+        return;
+
+    if (!resources_indirect && resources && class_num &&
+        irix_guest_ptr(rt, resources,
+                       (size_t)class_num * IRIX_XT_RESOURCE_SIZE)) {
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+            if (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                ++own_callback_num;
+        }
+    }
+
+    callback_table =
+        irix_guest_xt_compat_alloc(rt,
+            (1u + own_callback_num + super_callback_num) * 4u);
+    if (!callback_table)
+        return;
+
+    irix_guest_write32be(rt, callback_table,
+                         own_callback_num + super_callback_num);
+
+    if (!resources_indirect && resources && own_callback_num) {
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
+            if (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                irix_guest_write32be(rt,
+                    callback_table + callback_next++ * 4u, res);
+        }
+    }
+
+    if (super_callbacks) {
+        for (i = 0; i < super_callback_num; ++i)
+            irix_guest_write32be(rt,
+                callback_table + callback_next++ * 4u,
+                irix_guest_read32be(rt,
+                    super_callbacks + (i + 1u) * 4u));
+    }
+
+    irix_guest_write32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE, callback_table);
 }
 
 void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc)
