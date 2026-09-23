@@ -1874,6 +1874,34 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         entry->function(rt, cpu);
 
+        /*
+         * Emergency SGI libXm compatibility path.
+         *
+         * The static XmDisplay GetDisplay() entry at 0x0b294240 is split by
+         * SGI .debug_frame metadata at the interior address 0x0b2942b0.
+         * Some generated bundles therefore return from the first recovered
+         * range at 0x2b0 even though the machine function continues through
+         * 0x0b29434f.  Continue directly into the adjacent recovered range
+         * BEFORE restoring the caller's stack/callee-saved state so the live
+         * GetDisplay frame is preserved.
+         */
+        if (!rt->trapped && address == 0x0b294240u &&
+            (uint32_t)cpu->gpr[2] >= 0x74300000u &&
+            (uint32_t)cpu->gpr[2] <  0x74400000u) {
+            IrixGuestFunctionEntry *cont =
+                irix_guest_find_function(rt, 0x0b2942b0u);
+            if (cont && cont->function) {
+                fprintf(stderr,
+                        "IRIX Xm GetDisplay continuation: 0x0b294240 -> 0x0b2942b0\n");
+                cpu->pc = 0x0b2942b0u;
+                rt->current_pc = 0x0b2942b0u;
+                cont->function(rt, cpu);
+            } else {
+                fprintf(stderr,
+                        "IRIX Xm GetDisplay continuation missing at 0x0b2942b0\n");
+            }
+        }
+
 
         /* A completed N32 call must return with the caller's callee-saved
            register set and stack pointer intact. Do not rewrite state on a
