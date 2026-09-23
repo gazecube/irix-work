@@ -206,8 +206,28 @@ IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
         IrixGuestAddr res = table + i * IRIX_XT_RESOURCE_SIZE;
         uint32_t size = irix_guest_read32be(rt, res + 12u);
         uint32_t off = irix_guest_read32be(rt, res + 16u);
+        uint32_t q;
+
         if (!size || size > 0x10000u)
             return table;
+
+        /*
+         * Full _XtCompileResourceList semantics: the first three fields and
+         * default_type start life as String / SGI FAST_QUARK encodings and
+         * must be interned into the Xrm quark namespace before GetResources
+         * compares them against QString/QImmediate/QCallProc/etc.
+         */
+        if (rt->xrm_quarkify_encoded) {
+            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 0u));
+            if (q) irix_guest_write32be(rt, res + 0u, q);
+            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 4u));
+            if (q) irix_guest_write32be(rt, res + 4u, q);
+            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 8u));
+            if (q) irix_guest_write32be(rt, res + 8u, q);
+            q = rt->xrm_quarkify_encoded(rt, irix_guest_read32be(rt, res + 20u));
+            if (q) irix_guest_write32be(rt, res + 20u, q);
+        }
+
         if ((int32_t)off >= 0)
             irix_guest_write32be(rt, res + 16u, ~off);
     }
