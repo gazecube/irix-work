@@ -48,6 +48,8 @@ typedef struct IrixGuestMemory {
 
 struct IrixGuestRuntime;
 typedef void (*IrixGuestFunction)(struct IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+typedef uint32_t (*IrixGuestQuarkifyEncoded)(struct IrixGuestRuntime *rt,
+                                             uint32_t encoded);
 
 typedef struct IrixGuestFunctionEntry {
     IrixGuestAddr address;
@@ -74,6 +76,7 @@ typedef struct IrixGuestRuntime {
     const char *rootfs;
     IrixGuestAddr program_break;
     IrixGuestAddr compat_alloc_cur;
+    IrixGuestQuarkifyEncoded xrm_quarkify_encoded;
     IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
     unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
