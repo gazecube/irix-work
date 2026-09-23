@@ -1851,6 +1851,26 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                         irix_guest_read32be(rt,args+24u),
                         irix_guest_read32be(rt,args+28u));
             }
+            {
+                IrixGuestAddr cvt = (IrixGuestAddr)(uint32_t)cpu->gpr[22];
+                if (cvt && irix_guest_ptr(rt, cvt, 48u)) {
+                    fprintf(stderr,
+                            "IRIX XtCvtStringToCursor converter: s6=%08x words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                            cvt,
+                            irix_guest_read32be(rt,cvt+0u),
+                            irix_guest_read32be(rt,cvt+4u),
+                            irix_guest_read32be(rt,cvt+8u),
+                            irix_guest_read32be(rt,cvt+12u),
+                            irix_guest_read32be(rt,cvt+16u),
+                            irix_guest_read32be(rt,cvt+20u),
+                            irix_guest_read32be(rt,cvt+24u),
+                            irix_guest_read32be(rt,cvt+28u),
+                            irix_guest_read32be(rt,cvt+32u),
+                            irix_guest_read32be(rt,cvt+36u),
+                            irix_guest_read32be(rt,cvt+40u),
+                            irix_guest_read32be(rt,cvt+44u));
+                }
+            }
             fputc('\n', stderr);
         }
 
