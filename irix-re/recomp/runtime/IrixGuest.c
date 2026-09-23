@@ -1737,6 +1737,32 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     static unsigned xm_display_shell_depth;
     static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    /*
+     * Resolve the SGI Motif XmDialogShell core-class extension inheritance
+     * that Xt class initialization failed to fold.
+     *
+     * XmDialogShell (0x0b3e6d18) has core_class.extension at +0x70.  Its
+     * first extension hook at +0x10 is _XtInherit, while its superclass
+     * TransientShell has no corresponding core extension.  The inherited
+     * value is therefore NULL.  Leaving _XtInherit in place causes the
+     * internal Xt initializer at 0x0f62b47c to call the fatal sentinel.
+     *
+     * Patch the slot before that initializer tests it so Xt follows its
+     * normal no-extension fallback path.
+     */
+    if (address == 0x0f62b47cu &&
+        (uint32_t)cpu->gpr[4] == 0x0b3e6d18u) {
+        IrixGuestAddr cls = 0x0b3e6d18u;
+        IrixGuestAddr ext = irix_guest_read32be(rt, cls + 0x70u);
+        if (!rt->trapped && ext &&
+            irix_guest_ptr(rt, ext + 0x10u, 4u) &&
+            irix_guest_read32be(rt, ext + 0x10u) == 0x0f6588b8u) {
+            fprintf(stderr,
+                    "IRIX Xt inheritance repair: XmDialogShell core extension hook _XtInherit -> NULL\n");
+            irix_guest_write32be(rt, ext + 0x10u, 0u);
+        }
+    }
+
     if (address == 0x0f6588b8u) {
         fprintf(stderr,
                 "IRIX _XtInherit called: caller_pc=%08x ra=%08x sp=%08x gp=%08x t9=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
