@@ -158,6 +158,69 @@ static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
     return size > 0u && size <= 0x10000u;
 }
 
+IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt,
+                                                  IrixGuestAddr table,
+                                                  uint32_t num_resources)
+{
+    IrixGuestAddr out;
+    uint32_t i;
+
+    if (!table || !num_resources || num_resources > 4096u)
+        return table;
+
+    /*
+     * Fast path: this is already an XrmResourceList[].
+     * Validate every entry, not just the first one, so a partially malformed
+     * table cannot sneak through and explode later in GetResources().
+     */
+    if (irix_guest_ptr(rt, table, (size_t)num_resources * 4u)) {
+        int all_indirect = 1;
+        for (i = 0; i < num_resources; ++i) {
+            IrixGuestAddr res =
+                irix_guest_read32be(rt, table + i * 4u);
+            uint32_t size;
+            if (!res || !irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE)) {
+                all_indirect = 0;
+                break;
+            }
+            size = irix_guest_read32be(rt, res + 12u);
+            if (!size || size > 0x10000u) {
+                all_indirect = 0;
+                break;
+            }
+        }
+        if (all_indirect)
+            return table;
+    }
+
+    /*
+     * Otherwise accept the table as a raw contiguous XtResource[] only when
+     * each 28-byte record has a sane xrm_size.  SGI FAST_QUARK values in
+     * xrm_name/xrm_class/xrm_type are intentionally left untouched.
+     */
+    if (!irix_guest_ptr(rt, table,
+                        (size_t)num_resources * IRIX_XT_RESOURCE_SIZE))
+        return table;
+
+    for (i = 0; i < num_resources; ++i) {
+        IrixGuestAddr res = table + i * IRIX_XT_RESOURCE_SIZE;
+        uint32_t size = irix_guest_read32be(rt, res + 12u);
+        uint32_t off = irix_guest_read32be(rt, res + 16u);
+        if (!size || size > 0x10000u)
+            return table;
+        if ((int32_t)off >= 0)
+            irix_guest_write32be(rt, res + 16u, ~off);
+    }
+
+    out = irix_guest_xt_compat_alloc(rt, num_resources * 4u);
+    if (!out)
+        return table;
+    for (i = 0; i < num_resources; ++i)
+        irix_guest_write32be(rt, out + i * 4u,
+                             table + i * IRIX_XT_RESOURCE_SIZE);
+    return out;
+}
+
 static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
                                                         IrixGuestAddr wc,
                                                         unsigned depth)
