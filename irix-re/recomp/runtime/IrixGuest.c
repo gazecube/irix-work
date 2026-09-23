@@ -1825,6 +1825,28 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         unsigned saved_i;
 
         /*
+         * Emergency XtGetValues/_XtCopyToArg guard.
+         *
+         * Some translated XtGetValues paths currently produce a bogus
+         * args[index].value destination (observed 0xb00e1da4).  The original
+         * _XtCopyToArg immediately dereferences that pointer.  If the
+         * destination is not guest-mapped, skip that one output copy rather
+         * than killing the process; callers will retain their existing value.
+         */
+        if (address == 0x0f61caecu) {
+            IrixGuestAddr dst = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+            uint32_t n = (uint32_t)cpu->gpr[6];
+            if (!dst || !irix_guest_ptr(rt, dst, n ? n : 1u)) {
+                fprintf(stderr,
+                        "IRIX _XtCopyToArg guard: skip invalid dst=%08x size=%u src=%08x\n",
+                        dst, n, (uint32_t)cpu->gpr[4]);
+                cpu->gpr[2] = 0;
+                cpu->gpr[0] = 0;
+                return 0;
+            }
+        }
+
+        /*
          * Emergency Motif font-list repair.
          *
          * A failed String -> XmFontList conversion can leave the literal
