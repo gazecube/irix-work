@@ -37,7 +37,17 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 find_package(X11)
 find_path(XPM_INCLUDE_DIR X11/xpm.h)
 find_library(XPM_LIBRARY NAMES Xpm)
-find_library(XT_LIBRARY NAMES Xt)
+# The hybrid Xt bridge must use the host distro libXt, never MaXX's copy.
+# MaXX may inject /opt/MaXX into CMake's search path and can also leave a
+# stale cached path behind, so keep this lookup deliberately rooted in /usr.
+unset(IRIX_HOST_XT_LIBRARY CACHE)
+find_library(IRIX_HOST_XT_LIBRARY NAMES Xt
+    PATHS
+        /usr/lib
+        /usr/lib64
+        /usr/lib/x86_64-linux-gnu
+    NO_DEFAULT_PATH
+)
 if(X11_FOUND)
     add_library(irix_recomp_x11_bridge STATIC
         runtime/IrixX11BridgeUnit.c
@@ -61,9 +71,9 @@ if(X11_FOUND)
         irix_recomp_runtime
         X11::X11
     )
-    if(XT_LIBRARY)
-        message(STATUS "Using host Xt: ${XT_LIBRARY}")
-        target_link_libraries(irix_recomp_x11_bridge PUBLIC ${XT_LIBRARY})
+    if(IRIX_HOST_XT_LIBRARY)
+        message(STATUS "Using host Xt: ${IRIX_HOST_XT_LIBRARY}")
+        target_link_libraries(irix_recomp_x11_bridge PUBLIC ${IRIX_HOST_XT_LIBRARY})
     else()
         message(WARNING "Host Xt development/runtime library not found; Xt hybrid bridge will fail to link")
     endif()
