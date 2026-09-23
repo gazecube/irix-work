@@ -354,7 +354,43 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
     if (irix_guest_read32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE))
         return;
 
-    if (!resources_indirect && resources && class_num &&
+    /*
+     * If resources is already an XrmResourceList[], it is the merged class
+     * resource table produced by Xt.  Scan that table directly: it already
+     * contains inherited resources in the correct override order, so adding
+     * superclass callbacks again would duplicate them.
+     */
+    if (resources_indirect && resources && class_num &&
+        irix_guest_ptr(rt, resources, (size_t)class_num * 4u)) {
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res =
+                irix_guest_read32be(rt, resources + i * 4u);
+            if (res && irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE) &&
+                irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                ++own_callback_num;
+        }
+
+        callback_table =
+            irix_guest_xt_compat_alloc(rt, (1u + own_callback_num) * 4u);
+        if (!callback_table)
+            return;
+
+        irix_guest_write32be(rt, callback_table, own_callback_num);
+        for (i = 0; i < class_num; ++i) {
+            IrixGuestAddr res =
+                irix_guest_read32be(rt, resources + i * 4u);
+            if (res && irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE) &&
+                irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
+                irix_guest_write32be(rt,
+                    callback_table + callback_next++ * 4u, res);
+        }
+
+        irix_guest_write32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE,
+                             callback_table);
+        return;
+    }
+
+    if (resources && class_num &&
         irix_guest_ptr(rt, resources,
                        (size_t)class_num * IRIX_XT_RESOURCE_SIZE)) {
         for (i = 0; i < class_num; ++i) {
@@ -373,7 +409,7 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
     irix_guest_write32be(rt, callback_table,
                          own_callback_num + super_callback_num);
 
-    if (!resources_indirect && resources && own_callback_num) {
+    if (resources && own_callback_num) {
         for (i = 0; i < class_num; ++i) {
             IrixGuestAddr res = resources + i * IRIX_XT_RESOURCE_SIZE;
             if (irix_guest_read32be(rt, res + 8u) == irix_xt_r_callback)
