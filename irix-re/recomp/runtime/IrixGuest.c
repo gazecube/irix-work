@@ -1824,6 +1824,22 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
              (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
         unsigned saved_i;
 
+        if (address == 0x0f636998u) {
+            IrixGuestAddr args = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+            uint32_t arg_size = 0, arg_addr = 0, arg_value = 0;
+            if (args && irix_guest_ptr(rt, args, 8u)) {
+                arg_size = irix_guest_read32be(rt, args + 0u);
+                arg_addr = irix_guest_read32be(rt, args + 4u);
+                if (arg_addr && irix_guest_ptr(rt, arg_addr, 4u))
+                    arg_value = irix_guest_read32be(rt, arg_addr);
+            }
+            fprintf(stderr,
+                    "IRIX XtCvtStringToCursor entry: dpy=%08x args=%08x num_args=%08x from=%08x to=%08x closure=%08x arg0.size=%08x arg0.addr=%08x arg0.value=%08x\n",
+                    (uint32_t)cpu->gpr[4], args, (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
+                    (uint32_t)cpu->gpr[9], arg_size, arg_addr, arg_value);
+        }
+
         /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
            completed guest call just as $gp already does below. Keeping this
            contract at the dispatcher boundary is especially important when
