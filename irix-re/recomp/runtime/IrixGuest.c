@@ -1750,7 +1750,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
      * temporary pointer table.
      */
     if (address == 0x0b2ab1a0u &&
-        (uint32_t)cpu->pc == 0x0b2c1de4u) {
+        (uint32_t)cpu->gpr[31] == 0x0b2c1de4u) {
         IrixGuestAddr gp = (IrixGuestAddr)(uint32_t)cpu->gpr[28];
         IrixGuestAddr got_slot = gp - 27424u;
         IrixGuestAddr wc = 0;
