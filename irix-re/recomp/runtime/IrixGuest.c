@@ -1737,6 +1737,21 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     static unsigned xm_display_shell_depth;
     static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    if (address == 0x0f6572b4u) {
+        IrixGuestAddr msg_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const char *msg = msg_addr
+            ? (const char *)irix_guest_ptr(rt, msg_addr, 1u)
+            : NULL;
+        if (msg && !strcmp(msg, "Unresolved inheritance operation")) {
+            fprintf(stderr,
+                    "IRIX XtError bypass: %s\n",
+                    msg);
+            cpu->gpr[2] = 0;
+            cpu->gpr[0] = 0;
+            return 0;
+        }
+    }
+
     if (!entry) {
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
 
