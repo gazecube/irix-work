@@ -358,6 +358,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         if addr in (0x0983931c, 0x098402b4):
             tag='DT_INIT' if addr==0x0983931c else '__cplinit'
             print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag,addr))
+        if addr == 0x0f6154e8:
+            print('            cpu->gpr[8] = irix_guest_xt_ensure_resource_table(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9]);')
         if addr == 0x0f6156a4:
             print('            { IrixGuestAddr wc = 0u; IrixGuestAddr frame = (IrixGuestAddr)(uint32_t)cpu->gpr[7]; if ((uint32_t)cpu->gpr[2] == 0x0f6959d8u) { if (frame && irix_guest_ptr(rt, frame + 12u, 4u)) wc = irix_guest_read32be(rt, frame + 12u); if (!wc) wc = 0x0f695a28u; irix_guest_xt_repair_class_resources(rt, wc); cpu->gpr[2] = irix_guest_read32be(rt, wc + 44u); cpu->gpr[16] = cpu->gpr[2]; } }')
         for line in lines: print('            '+line)
