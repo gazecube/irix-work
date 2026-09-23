@@ -129,10 +129,15 @@ static void bridge_XQstrcmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)strcmp(sa, sb);
 }
 
+static uint32_t quarkify_encoded(IrixGuestRuntime *rt, uint32_t encoded)
+{
+    const char *s = decode_qstring(rt, encoded);
+    return s ? (uint32_t)XrmStringToQuark(s) : 0u;
+}
+
 static void bridge_XrmStringToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *s = decode_qstring(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = s ? (uint32_t)XrmStringToQuark(s) : 0;
+    cpu->gpr[2] = quarkify_encoded(rt, (uint32_t)cpu->gpr[4]);
 }
 
 static void bridge_XrmPermStringToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -242,6 +247,7 @@ void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt)
 {
     memset(&g_quark, 0, sizeof(g_quark));
     g_quark.rt = rt;
+    rt->xrm_quarkify_encoded = quarkify_encoded;
     if (irix_guest_map(rt, IRIX_XRM_QUARK_VALUE_BASE, IRIX_XRM_QUARK_VALUE_SIZE, 3u) == 0 ||
         irix_guest_ptr(rt, IRIX_XRM_QUARK_VALUE_BASE, 1))
         g_quark.value_cur = IRIX_XRM_QUARK_VALUE_BASE;
