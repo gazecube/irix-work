@@ -97,7 +97,6 @@ IrixGuestFunction irix_runtime_xt_bridge_lookup(const char *name)
         return 0;
 
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
-    MAP(XtToolkitInitialize);
     MAP(XtWarning);
     MAP(XtError);
     MAP(XtAppWarning);
