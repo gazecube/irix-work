@@ -1436,6 +1436,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XrmParseCommand); MAP(_XSGIAddToPreloadAtomList);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     if(!strcmp(name,"XAllocNamedColor")) return irix_x11_bulk_lookup(name);
+    if(!strcmp(name,"XQueryColors")) return irix_x11_bulk_lookup(name);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
     if(!strcmp(name, "_IrixXkbDisplayInit")) return bridge__IrixXkbDisplayInit;
     MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XFilterEvent); MAP(XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
