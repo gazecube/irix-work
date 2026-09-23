@@ -1,5 +1,6 @@
 #define irix_x11_bulk_lookup irix_x11_bulk_lookup_base
 #include "IrixX11BridgeBulk.c"
+#include <stdio.h>
 #undef irix_x11_bulk_lookup
 
 #include "IrixX11BridgeExtraAccess.h"
@@ -264,7 +265,7 @@ static void bridge_common_XmbTextPropertyToTextList(IrixGuestRuntime *rt,IrixGue
 static void bridge_common_XMatchVisualInfo(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XVisualInfo v;Status ok=0;IrixGuestAddr out=(uint32_t)cpu->gpr[8];memset(&v,0,sizeof(v));if(d)ok=XMatchVisualInfo(d,(int)cpu->gpr[5],(int)cpu->gpr[6],(int)cpu->gpr[7],&v);if(ok&&out){IrixGuestAddr gv=bulk_alloc(32u);if(gv)write_visual_shadow(rt,gv,v.visual);irix_guest_write32be(rt,out+0u,gv);irix_guest_write32be(rt,out+4u,(uint32_t)v.visualid);irix_guest_write32be(rt,out+8u,(uint32_t)v.screen);irix_guest_write32be(rt,out+12u,(uint32_t)v.depth);irix_guest_write32be(rt,out+16u,(uint32_t)v.class);irix_guest_write32be(rt,out+20u,(uint32_t)v.red_mask);irix_guest_write32be(rt,out+24u,(uint32_t)v.green_mask);irix_guest_write32be(rt,out+28u,(uint32_t)v.blue_mask);irix_guest_write32be(rt,out+32u,(uint32_t)v.colormap_size);irix_guest_write32be(rt,out+36u,(uint32_t)v.bits_per_rgb);}cpu->gpr[2]=(uint32_t)ok;}
 
 static void bridge_common_XListDepths(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);int n=0,i;int*list=d?XListDepths(d,(int)cpu->gpr[5],&n):0;IrixGuestAddr out=0;if(list&&n>0){out=bulk_alloc((uint32_t)n*4u);if(out)for(i=0;i<n;++i)irix_guest_write32be(rt,out+(IrixGuestAddr)i*4u,(uint32_t)list[i]);}if(list)XFree(list);if((uint32_t)cpu->gpr[6])irix_guest_write32be(rt,(uint32_t)cpu->gpr[6],(uint32_t)n);cpu->gpr[2]=out;}
-static void bridge_common_XLoadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);cpu->gpr[2]=(d&&s)?(uint32_t)XLoadFont(d,s):0;}
+static void bridge_common_XLoadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);Font f=0;if(d){if(!s||!*s)s="fixed";f=XLoadFont(d,s);if(!f&&strcmp(s,"fixed"))f=XLoadFont(d,"fixed");}fprintf(stderr,"IRIX XLoadFont: name=%s result=%08lx\n",s?s:"<NULL>",(unsigned long)f);cpu->gpr[2]=(uint32_t)f;}
 static void bridge_common_XUnloadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);(void)rt;cpu->gpr[2]=d?(uint32_t)XUnloadFont(d,(Font)(uint32_t)cpu->gpr[5]):0;}
 
 static void bridge_common_XTextWidth(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontStruct*f=irix_x11_primary_font_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);cpu->gpr[2]=(uint64_t)(int64_t)((f&&s)?XTextWidth(f,s,(int)cpu->gpr[6]):0);}
