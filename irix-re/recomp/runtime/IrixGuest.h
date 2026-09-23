@@ -114,6 +114,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc);
+IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt, IrixGuestAddr table, uint32_t num_resources);
 int irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
                                   IrixGuestElfInfo *info_out);
 int irix_guest_load_elf32be(IrixGuestRuntime *rt, const char *path,
