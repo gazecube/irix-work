@@ -1738,6 +1738,27 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     /*
+     * Xt translation/accelerator parser scratch repair.
+     *
+     * The helper at 0x0f627994 immediately stores through a2.  In the
+     * failing XtCvtStringToTranslationTable path, the caller at 0x0f628448
+     * loads a2 from its local output slot at sp+0xea8, but that slot is still
+     * NULL.  Reuse the local slot itself as writable scratch so the parser can
+     * continue instead of dereferencing address zero.
+     */
+    if (address == 0x0f627994u &&
+        (uint32_t)cpu->gpr[6] == 0u) {
+        IrixGuestAddr scratch =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[29] + 0x0ea8u;
+        if (irix_guest_ptr(rt, scratch, 4u)) {
+            fprintf(stderr,
+                    "IRIX Xt translation parser repair: a2=NULL -> %08x\n",
+                    scratch);
+            cpu->gpr[6] = scratch;
+        }
+    }
+
+    /*
      * Resolve the SGI Motif XmDialogShell core-class extension inheritance
      * that Xt class initialization failed to fold.
      *
