@@ -1834,10 +1834,24 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                     arg_value = irix_guest_read32be(rt, arg_addr);
             }
             fprintf(stderr,
-                    "IRIX XtCvtStringToCursor entry: dpy=%08x args=%08x num_args=%08x from=%08x to=%08x closure=%08x arg0.size=%08x arg0.addr=%08x arg0.value=%08x\n",
-                    (uint32_t)cpu->gpr[4], args, (uint32_t)cpu->gpr[6],
-                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
-                    (uint32_t)cpu->gpr[9], arg_size, arg_addr, arg_value);
+                    "IRIX XtCvtStringToCursor entry: caller=%08x dpy=%08x args=%08x num_args=%08x from=%08x to=%08x closure=%08x arg0.size=%08x arg0.addr=%08x arg0.value=%08x",
+                    (uint32_t)cpu->pc, (uint32_t)cpu->gpr[4], args,
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                    arg_size, arg_addr, arg_value);
+            if (args && irix_guest_ptr(rt, args, 32u)) {
+                fprintf(stderr,
+                        " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+                        irix_guest_read32be(rt,args+0u),
+                        irix_guest_read32be(rt,args+4u),
+                        irix_guest_read32be(rt,args+8u),
+                        irix_guest_read32be(rt,args+12u),
+                        irix_guest_read32be(rt,args+16u),
+                        irix_guest_read32be(rt,args+20u),
+                        irix_guest_read32be(rt,args+24u),
+                        irix_guest_read32be(rt,args+28u));
+            }
+            fputc('\n', stderr);
         }
 
         /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
