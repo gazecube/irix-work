@@ -1824,6 +1824,23 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
              (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
         unsigned saved_i;
 
+        /*
+         * Emergency Motif font-list repair.
+         *
+         * A failed String -> XmFontList conversion can leave the literal
+         * bytes "fixe" (from "fixed") in a 4-byte resource field.  When that
+         * value reaches _XmFontListSearch as a0, treating it as XmFontList*
+         * faults immediately.  _XmFontListSearch has a clean NULL path, so
+         * force only this known malformed sentinel to NULL and let Motif take
+         * its normal fallback/default handling.
+         */
+        if (address == 0x0b29c904u &&
+            (uint32_t)cpu->gpr[4] == 0x66697865u) {
+            fprintf(stderr,
+                    "IRIX XmFontList repair: raw \"fixed\" sentinel -> NULL\n");
+            cpu->gpr[4] = 0;
+        }
+
         if (address == 0x0f636998u) {
             IrixGuestAddr args = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
 
