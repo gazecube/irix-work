@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define IRIX_X11_WINDOW_MAX_DISPLAYS 16u
 #define IRIX_N32_XSETWINDOWATTRIBUTES_SIZE 60u
