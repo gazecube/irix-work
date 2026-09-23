@@ -91,6 +91,37 @@ static void bridge_XFindContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             e ? "yes" : "no", e ? e->data : 0u);
 
     if (!e) {
+        /*
+         * Emergency Motif XmDisplay bootstrap compatibility.
+         *
+         * SGI Motif repeatedly probes context -3 while constructing the
+         * per-Display XmDisplay shell.  In the translated path the original
+         * initializer never reaches XSaveContext before recursively asking
+         * for XmDisplay again, so each miss creates another shell until the
+         * stack is exhausted.
+         *
+         * The resource-id argument observed on this path is the freshly
+         * created XmDisplay widget itself.  Seed the missing association on
+         * the first probe, then satisfy the lookup immediately.  Scope this
+         * narrowly to Motif's private context -3 and a plausible guest widget
+         * pointer so ordinary Xlib contexts keep normal semantics.
+         */
+        if (context == -3 && rid >= 0x30000000u && rid < 0x40000000u) {
+            if (ensure_capacity() == 0) {
+                e = &g_ctx.entries[g_ctx.count++];
+                e->display = display;
+                e->rid = rid;
+                e->context = context;
+                e->data = rid;
+                fprintf(stderr,
+                        "IRIX XFindContext: seed XmDisplay context display=%08x rid=%08x context=%08x data=%08x\n",
+                        display, rid, (uint32_t)context, rid);
+                if (out)
+                    irix_guest_write32be(rt, out, rid);
+                cpu->gpr[2] = rt->trapped ? (uint32_t)XCNOENT : 0u;
+                return;
+            }
+        }
         cpu->gpr[2] = (uint32_t)XCNOENT;
         return;
     }
