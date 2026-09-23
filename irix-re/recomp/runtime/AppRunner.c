@@ -9,6 +9,7 @@
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
 #include "IrixRuntimeX11Bridge.h"
+#include "IrixRuntimeXtBridge.h"
 #include "IrixX11WindowBridge.h"
 #include "IrixX11WmBridge.h"
 #include "IrixX11ContextBridge.h"
@@ -104,6 +105,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_x11_wm_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_runtime_x11_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_runtime_xt_bridge_lookup(name);
     if (fn) return fn;
     return irix_x11_bulk_lookup(name);
 }
@@ -788,6 +791,7 @@ int main(int argc, char **argv)
     irix_x11_image_bridge_init(&rt);
     irix_x11_wm_bridge_init(&rt);
     irix_runtime_x11_bridge_init(&rt);
+    irix_runtime_xt_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
 
     /*
