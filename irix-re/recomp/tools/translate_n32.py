@@ -314,6 +314,13 @@ def c_name(name): return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
 def emit_range(path, name, start, size, c_prefix='', shndx=None,
                section_base=0, recover_trailing_delay_slot=False):
+    # SGI libXm's static GetDisplay() is recovered as a truncated 0x70-byte
+    # range at 0x0b294240 even though the function continues into shell
+    # creation/realization code.  Extend this one known range so execution
+    # reaches the real epilogue instead of returning with stale v0 from the
+    # preceding void XtGetApplicationNameAndClass() call.
+    if start == 0x0b294240 and size < 0x160:
+        size = 0x160
     """Emit one function from an already-resolved executable address range.
 
     All front ends use this routine so symbol-backed and metadata-recovered
