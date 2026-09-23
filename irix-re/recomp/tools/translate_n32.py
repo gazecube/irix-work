@@ -364,7 +364,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
             print('            { IrixGuestAddr wc = 0u; IrixGuestAddr frame = (IrixGuestAddr)(uint32_t)cpu->gpr[7]; if ((uint32_t)cpu->gpr[2] == 0x0f6959d8u) { if (frame && irix_guest_ptr(rt, frame + 12u, 4u)) wc = irix_guest_read32be(rt, frame + 12u); if (!wc) wc = 0x0f695a28u; irix_guest_xt_repair_class_resources(rt, wc); cpu->gpr[2] = irix_guest_read32be(rt, wc + 44u); cpu->gpr[16] = cpu->gpr[2]; } }')
         if addr == 0x0f62b6a4:
             print('            { IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[20]; if (w && irix_guest_ptr(rt, w + 4u, 4u)) { IrixGuestAddr wc = irix_guest_read32be(rt, w + 4u); if (wc) irix_guest_xt_repair_class_resources(rt, wc); } }')
-        if addr == 0x0f6160d4:
+        if addr == 0x0f615d60:
             print('            irix_guest_xt_normalize_resource(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[16]);')
         for line in lines: print('            '+line)
         print('            break;')
