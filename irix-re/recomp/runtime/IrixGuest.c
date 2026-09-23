@@ -158,8 +158,8 @@ static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
     return size > 0u && size <= 0x10000u;
 }
 
-static int irix_guest_xt_normalize_resource(IrixGuestRuntime *rt,
-                                            IrixGuestAddr res)
+int irix_guest_xt_normalize_resource(IrixGuestRuntime *rt,
+                                     IrixGuestAddr res)
 {
     uint32_t size;
     uint32_t off;
