@@ -294,6 +294,12 @@ static void bridge_XChangeWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *c
     int rc = 0;
 
     if (!dpy) { cpu->gpr[2] = 0; return; }
+    if (!w) {
+        w = DefaultRootWindow(dpy);
+        fprintf(stderr,
+                "IRIX XChangeWindowAttributes: window=0 -> root=%08lx mask=%08lx\n",
+                (unsigned long)w, valuemask);
+    }
     if (valuemask && !read_window_attributes(rt, guest_attrs, &attrs)) {
         cpu->gpr[2] = 0;
         return;
