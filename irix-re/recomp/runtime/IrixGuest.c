@@ -1734,6 +1734,8 @@ static int trace_dialog_call(const char *name)
 
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
+    static unsigned xm_display_shell_depth;
+    static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     if (!entry) {
         IrixGuestAddr s4 = (IrixGuestAddr)(uint32_t)cpu->gpr[20];
@@ -1781,11 +1783,45 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         rt->trap_code = 0xeeee0003u;
         return -1;
     }
+    /*
+     * SGI Motif XmDisplay singleton bootstrap.
+     *
+     * While the first XmDisplay shell is being constructed, Motif may ask for
+     * XmGetXmDisplay() recursively before its widget-extension context has
+     * been pushed/saved.  The recursive call must see the in-progress
+     * XmDisplay rather than create another shell.
+     */
+    if (xm_display_shell_depth &&
+        address == 0x0b2957dcu &&
+        !xm_display_bootstrap_widget) {
+        IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        if (w >= 0x30000000u && w < 0x40000000u) {
+            xm_display_bootstrap_widget = w;
+            fprintf(stderr,
+                    "IRIX XmDisplay bootstrap widget: %08x\n",
+                    xm_display_bootstrap_widget);
+        }
+    }
+
+    if (xm_display_shell_depth &&
+        address == 0x0b297c70u &&
+        xm_display_bootstrap_widget) {
+        cpu->gpr[2] = xm_display_bootstrap_widget;
+        cpu->gpr[0] = 0;
+        fprintf(stderr,
+                "IRIX XmGetXmDisplay bootstrap return: %08x\n",
+                xm_display_bootstrap_widget);
+        return 0;
+    }
+
     {
         uint64_t caller_saved[9];
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
+        int xm_display_shell_call =
+            (address == 0x0f62caa8u &&
+             (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
         unsigned saved_i;
 
         /* N32 callee-saved integer state. s0-s7 and s8/fp must survive a
@@ -1872,7 +1908,26 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
          */
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+
+        if (xm_display_shell_call) {
+            if (xm_display_shell_depth++ == 0u)
+                xm_display_bootstrap_widget = 0u;
+            fprintf(stderr,
+                    "IRIX XmDisplay shell bootstrap begin depth=%u\n",
+                    xm_display_shell_depth);
+        }
+
         entry->function(rt, cpu);
+
+        if (xm_display_shell_call) {
+            if (xm_display_shell_depth)
+                --xm_display_shell_depth;
+            fprintf(stderr,
+                    "IRIX XmDisplay shell bootstrap end depth=%u widget=%08x\n",
+                    xm_display_shell_depth, xm_display_bootstrap_widget);
+            if (!xm_display_shell_depth)
+                xm_display_bootstrap_widget = 0u;
+        }
 
         /*
          * Emergency SGI libXm compatibility path.
