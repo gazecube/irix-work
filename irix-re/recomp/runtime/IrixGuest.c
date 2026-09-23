@@ -1826,6 +1826,29 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 
         if (address == 0x0f636998u) {
             IrixGuestAddr args = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+
+            /*
+             * Emergency Xt cursor-converter ABI repair.
+             *
+             * SGI Xt's XtCvtStringToCursor expects args[0] to be an N32
+             * XrmValue describing storage that contains the Display pointer.
+             * The translated _XtConvert path currently builds a malformed
+             * { size=0, addr=1 } record.  The converter already receives the
+             * correct Display in a0, so synthesize the one argument it needs
+             * directly in its stack argument block.
+             *
+             * num_args for this converter is one; args+8 is therefore safe
+             * scratch immediately after args[0].
+             */
+            if (args && irix_guest_ptr(rt, args, 12u)) {
+                IrixGuestAddr scratch = args + 8u;
+                irix_guest_write32be(rt, scratch, (uint32_t)cpu->gpr[4]);
+                irix_guest_write32be(rt, args + 0u, 4u);
+                irix_guest_write32be(rt, args + 4u, scratch);
+                fprintf(stderr,
+                        "IRIX XtCvtStringToCursor repair: args=%08x size=4 addr=%08x dpy=%08x\n",
+                        args, scratch, (uint32_t)cpu->gpr[4]);
+            }
             uint32_t arg_size = 0, arg_addr = 0, arg_value = 0;
             if (args && irix_guest_ptr(rt, args, 8u)) {
                 arg_size = irix_guest_read32be(rt, args + 0u);
