@@ -2128,6 +2128,35 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 
         entry->function(rt, cpu);
 
+        /*
+         * SGI Motif XmScreen private-state repair.
+         *
+         * XmGetXmScreen() returns an XmScreen instance whose private pointer
+         * at +0x104 is normally initialized by the XmScreen instance init
+         * path.  The original SGI code allocates exactly 8 bytes there and
+         * initializes word +0 and byte +4 to zero.  Some translated startup
+         * paths miss that side effect, and _XmGetPixmap later dereferences
+         * +0x104 unconditionally.
+         *
+         * Recreate the exact zeroed private block when XmGetXmScreen returns
+         * an otherwise-valid screen object with that field still NULL.
+         */
+        if (!rt->trapped && address == 0x0b2a80acu) {
+            IrixGuestAddr screen = (IrixGuestAddr)(uint32_t)cpu->gpr[2];
+            if (screen && irix_guest_ptr(rt, screen, 0x108u) &&
+                irix_guest_read32be(rt, screen + 0x104u) == 0u) {
+                IrixGuestAddr priv = irix_guest_xt_compat_alloc(rt, 8u);
+                if (priv && irix_guest_ptr(rt, priv, 8u)) {
+                    irix_guest_write32be(rt, priv + 0u, 0u);
+                    irix_guest_write32be(rt, priv + 4u, 0u);
+                    irix_guest_write32be(rt, screen + 0x104u, priv);
+                    fprintf(stderr,
+                            "IRIX XmScreen repair: screen=%08x private=%08x\n",
+                            screen, priv);
+                }
+            }
+        }
+
         if (xm_display_shell_call) {
             if (xm_display_shell_depth)
                 --xm_display_shell_depth;
