@@ -1738,38 +1738,26 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     /*
-     * Motif _XmSortResourceList expects an XrmResourceList[] (an array of
-     * pointers), but some libXm class records still reach it with their raw
-     * contiguous XtResource[] table.  The caller at 0x0b2c1dd8 loads the
-     * class record from libXm's GOT, then passes class->resources (+0x2c) and
-     * class->num_resources (+0x30).
+     * Motif _XmSortResourceList always expects XrmResourceList[]: an array
+     * of pointers to compiled resource records.  Several SGI Motif class
+     * paths reach it with their raw contiguous XtResource[] instead.
      *
-     * Recover that class through the same GOT slot, run the existing Xt class
-     * resource repair, and reload the call arguments from the repaired class.
-     * This fixes the class persistently instead of handing the sorter a
-     * temporary pointer table.
+     * At function entry a0 is the resource table and a1 is the count.  Reuse
+     * the generic Xt compatibility normalizer here for every caller.  It is
+     * idempotent for an already-indirect table and allocates a writable
+     * pointer table for a raw resource array, which is important because
+     * _XmSortResourceList reorders the pointer array in place.
      */
-    if (address == 0x0b2ab1a0u &&
-        (uint32_t)cpu->gpr[31] == 0x0b2c1de4u) {
-        IrixGuestAddr gp = (IrixGuestAddr)(uint32_t)cpu->gpr[28];
-        IrixGuestAddr got_slot = gp - 27424u;
-        IrixGuestAddr wc = 0;
-        if (irix_guest_ptr(rt, got_slot, 4u))
-            wc = irix_guest_read32be(rt, got_slot);
-        if (!rt->trapped && wc && irix_guest_ptr(rt, wc, 0x64u) &&
-            irix_guest_read32be(rt, wc + 0x2cu) ==
-                (uint32_t)cpu->gpr[4]) {
+    if (address == 0x0b2ab1a0u) {
+        IrixGuestAddr table = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        uint32_t count = (uint32_t)cpu->gpr[5];
+        IrixGuestAddr repaired =
+            irix_guest_xt_ensure_resource_table(rt, table, count);
+        if (!rt->trapped && repaired != table) {
             fprintf(stderr,
-                    "IRIX Xm resource repair: class=%08x resources=%08x count=%u\n",
-                    wc, (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5]);
-            irix_guest_xt_repair_class_resources(rt, wc);
-            if (!rt->trapped) {
-                cpu->gpr[4] = irix_guest_read32be(rt, wc + 0x2cu);
-                cpu->gpr[5] = irix_guest_read32be(rt, wc + 0x30u);
-                fprintf(stderr,
-                        "IRIX Xm resource repair: repaired resources=%08x count=%u\n",
-                        (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5]);
-            }
+                    "IRIX XmSortResourceList repair: raw=%08x count=%u -> table=%08x\n",
+                    table, count, repaired);
+            cpu->gpr[4] = repaired;
         }
     }
 
