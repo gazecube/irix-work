@@ -466,7 +466,7 @@ def main():
 
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'
-    compile_flags = '-std=c11 -O0 -Wall -Wextra -Werror -fPIC\n'
+    compile_flags = '-std=c11 -O2 -march=native -mtune=native -Wall -Wextra -Werror -fPIC\n'
     flags_stamp = out / 'compile_flags.txt'
     if not flags_stamp.is_file() or flags_stamp.read_text() != compile_flags:
         flags_stamp.write_text(compile_flags)
@@ -477,7 +477,7 @@ def main():
         newest_input = max(src.stat().st_mtime_ns, header.stat().st_mtime_ns, flags_stamp.stat().st_mtime_ns)
         if dst.is_file() and dst.stat().st_mtime_ns >= newest_input:
             return src, dst, None
-        cmd = [a.cc, '-std=c11', '-O0', '-Wall', '-Wextra', '-Werror', '-fPIC',
+        cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-Wall', '-Wextra', '-Werror', '-fPIC',
                '-I', str(inc), '-c', str(src), '-o', str(dst)]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return src, dst, p
