@@ -48,6 +48,7 @@ reg = _base.reg
 mem_addr = _base.mem_addr
 sx16 = _base.sx16
 sx32_expr = _base.sx32_expr
+static_control_info = _base.static_control_info
 
 
 def main():
