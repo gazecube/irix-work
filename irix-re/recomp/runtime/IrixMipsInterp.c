@@ -27,7 +27,6 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     uint16_t immu = (uint16_t)(insn & 0xffffu);
     int32_t imm = (int16_t)immu;
     IrixGuestAddr a;
-    uint64_t x, y;
 
     rt->current_pc = pc;
     cpu->pc = pc;
@@ -495,8 +494,13 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
         const char *e = getenv("IRIX_INTERPRET_PC");
         init = 1;
         if (e && *e) {
-            char *copy = strdup(e);
-            char *p = copy;
+            size_t n = strlen(e) + 1u;
+            char *copy = (char *)malloc(n);
+            char *p;
+            if (!copy)
+                return 0;
+            memcpy(copy, e, n);
+            p = copy;
             while (p && *p && count < 64u) {
                 char *end = 0;
                 unsigned long v = strtoul(p, &end, 0);
