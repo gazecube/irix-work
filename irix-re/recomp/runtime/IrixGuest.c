@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include "IrixMipsInterp.h"
 #include "IrixCompat.h"
 #include "IrixSyscallNumbers.h"
 
@@ -1811,6 +1812,13 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         }
     }
 
+    if (irix_mips_interp_should_force(address)) {
+        fprintf(stderr,
+                "IRIX dispatcher: forced interpreter target=%08x\n",
+                address);
+        return irix_mips_interp_call(rt, cpu, address);
+    }
+
     if (address == 0x0f6588b8u) {
         fprintf(stderr,
                 "IRIX _XtInherit called: caller_pc=%08x ra=%08x sp=%08x gp=%08x t9=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
@@ -1832,6 +1840,19 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             return rt->trapped ? -1 : 0;
         if (try_shared_return_epilogue(rt, cpu, address))
             return rt->trapped ? -1 : 0;
+
+        /*
+         * Universal IID escape hatch: if original executable code is mapped
+         * at an otherwise-unregistered target, execute the guest MIPS
+         * directly instead of dying on a missing recovered/translated range.
+         * The interpreter itself requires an executable guest segment, so
+         * bogus data/string function pointers still fall through to the
+         * normal INVALID GUEST CALL diagnostic.
+         */
+        if (irix_mips_interp_call(rt, cpu, address) == 0)
+            return 0;
+        if (rt->trapped)
+            return -1;
 
         fprintf(stderr,
                 "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x gp=%08x t9=%08x sp=%08x ra=%08x",
