@@ -612,6 +612,23 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
+            /*
+             * A direct J is often a local intra-function branch, but SGI
+             * import/tail veneers also use it.  If the destination is the
+             * exact start of a registered function/native bridge, hand it
+             * back to the dispatcher and tail-return.  Otherwise keep
+             * interpreting locally.
+             */
+            {
+                IrixGuestFunctionEntry *te =
+                    irix_guest_find_function(rt, target);
+                if (te && te->address == target && target != address) {
+                    cpu->pc = pc;
+                    if (irix_guest_call(rt, cpu, target) != 0)
+                        return -1;
+                    return 0;
+                }
+            }
             pc = target;
             continue;
         }
