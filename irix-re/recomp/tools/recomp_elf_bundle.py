@@ -10,7 +10,8 @@ SHF_WRITE=0x1; SHF_ALLOC=0x2; SHF_EXECINSTR=0x4
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
-BATCH_FUNCTIONS=128
+DEFAULT_MAX_FILE_BYTES=2*1024*1024
+PARTITION_VERSION=1
 BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
 
 def function_body(text):
@@ -26,6 +27,75 @@ def write_if_changed(path, text):
         return False
     path.write_text(text)
     return True
+
+def load_partition(path, max_file_bytes):
+    path=Path(path)
+    if not path.is_file():
+        return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+    try:
+        doc=json.loads(path.read_text())
+    except Exception:
+        return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+    if doc.get('version')!=PARTITION_VERSION or doc.get('max_file_bytes')!=max_file_bytes:
+        return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+    if not isinstance(doc.get('assignments'),dict):
+        doc['assignments']={}
+    return doc
+
+def assign_partitions(entries, sidecar_path, max_file_bytes):
+    """Stable ReXGlue-style address -> output-file assignment by emitted bytes."""
+    part=load_partition(sidecar_path,max_file_bytes)
+    total=sum(e['bytes'] for e in entries)
+    needed=max(1,(total+max_file_bytes-1)//max_file_bytes) if entries else 0
+    old_count=int(part.get('file_count') or 0)
+    if old_count==0:
+        file_count=needed
+    else:
+        file_count=max(old_count,needed)
+
+    buckets=[[] for _ in range(file_count)]
+    bucket_bytes=[0 for _ in range(file_count)]
+    assigned={}
+    old=part.get('assignments',{})
+
+    for i,e in enumerate(entries):
+        key=f'{e["address"]:08X}'
+        b=old.get(key)
+        if isinstance(b,int) and 0<=b<file_count:
+            buckets[b].append(i)
+            bucket_bytes[b]+=e['bytes']
+            assigned[i]=b
+
+    for i,e in enumerate(entries):
+        if i in assigned:
+            continue
+        b=min(range(file_count),key=lambda n:bucket_bytes[n])
+        buckets[b].append(i)
+        bucket_bytes[b]+=e['bytes']
+        assigned[i]=b
+
+    for b in buckets:
+        b.sort(key=lambda i:entries[i]['address'])
+
+    # Drop empty tail buckets while preserving every existing non-empty assignment.
+    while buckets and not buckets[-1]:
+        buckets.pop()
+        bucket_bytes.pop()
+    file_count=len(buckets)
+
+    assignments={}
+    for b,items in enumerate(buckets):
+        for i in items:
+            assignments[f'{entries[i]["address"]:08X}']=b
+
+    doc={
+        'version':PARTITION_VERSION,
+        'max_file_bytes':max_file_bytes,
+        'file_count':file_count,
+        'assignments':dict(sorted(assignments.items())),
+    }
+    write_if_changed(sidecar_path,json.dumps(doc,indent=2)+'\n')
+    return buckets
 
 def raw_function_symbols(path):
     p=Path(path).read_bytes(); h=struct.unpack_from('>16sHHIIIIIHHHHHH',p,0)
@@ -660,6 +730,7 @@ def main():
             boundary_defs.append((n,addr,size,sh,'boundary_entry'))
 
     seen_addr=set(); functions=[]; frame_count=0; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
+    emitted=[]
     # When several discovery mechanisms identify the same entry address, keep
     # the real ELF symbol.  Sorting only by (address, name) let synthetic
     # __debug_frame/__pdr/etc. names win lexically; seen_addr then discarded
@@ -676,17 +747,6 @@ def main():
     }
     all_defs=sorted(defs+zero_defs+frame_defs+pdr_defs+ptr_defs+link_defs+boundary_defs,
                     key=lambda x:(x[1],source_priority.get(x[4],99),x[0]))
-    batches=[]; batch_bodies=[]; batch_rows=[]
-    def flush_batch():
-        nonlocal batch_bodies,batch_rows
-        if not batch_rows: return
-        batch_no=len(batches)
-        dst=out/f'batch_{batch_no:04d}.c'
-        write_if_changed(dst,BATCH_PREAMBLE+''.join(batch_bodies))
-        for row in batch_rows: row['source']=str(dst)
-        batches.append(dst)
-        batch_bodies=[]; batch_rows=[]
-
     for i,(n,addr,size,sh,source_kind) in enumerate(all_defs):
         if addr in seen_addr: continue
 
@@ -717,15 +777,32 @@ def main():
             text=text.replace('        cpu->pc = pc;\n',
                               '        cpu->pc = pc;\n        rt->current_pc = pc;\n')
         row=dict(name=n,address=addr,size=size,c_name='irix_recomp_'+ident(prefix+'_')+ident(n),source_kind=source_kind)
-        functions.append(row); batch_rows.append(row); batch_bodies.append(function_body(text))
-        if len(batch_rows)>=BATCH_FUNCTIONS: flush_batch()
+        body=function_body(text)
+        functions.append(row)
+        emitted.append({'address':addr,'bytes':len(body.encode('utf-8')),'row':row,'body':body})
         if source_kind=='debug_frame': frame_count+=1
         if source_kind=='pdr': pdr_count+=1
         if source_kind=='zero_size': zero_count+=1
         if source_kind=='data_ptr': ptr_count+=1
         if source_kind=='code_link': link_count+=1
         if source_kind=='boundary_entry': boundary_count+=1
-    flush_batch()
+    max_file_bytes=DEFAULT_MAX_FILE_BYTES
+    buckets=assign_partitions(emitted,out/'partition.json',max_file_bytes)
+    batches=[]
+    for batch_no,items in enumerate(buckets):
+        dst=out/f'recomp_{batch_no:04d}.c'
+        write_if_changed(dst,BATCH_PREAMBLE+''.join(emitted[i]['body'] for i in items))
+        for i in items:
+            emitted[i]['row']['source']=str(dst)
+        batches.append(dst)
+
+    # Remove stale legacy/count-batched or old partition files after the new
+    # stable partition has been written.
+    keep={p.name for p in batches}
+    for stale in list(out.glob('batch_*.c'))+list(out.glob('recomp_*.c')):
+        if stale.name not in keep:
+            try: stale.unlink()
+            except OSError: pass
 
     imports=[s for s in raw_syms if s['shndx']==0]
     meta={'path':str(path),'prefix':prefix,'functions':functions,'imports':imports}
