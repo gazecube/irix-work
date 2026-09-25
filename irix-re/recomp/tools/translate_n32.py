@@ -312,6 +312,59 @@ def decode(addr, insn):
 
 def c_name(name): return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
+def static_control_info(addr, insn):
+    """Describe statically-resolvable MIPS control flow for the C backend."""
+    op = insn >> 26
+    rs = (insn >> 21) & 31
+    rt = (insn >> 16) & 31
+    rd = (insn >> 11) & 31
+    fn = insn & 63
+    imm = sx16(insn & 0xffff)
+
+    if op == 0:
+        if fn == 0x08:
+            return {'kind': 'return' if rs == 31 else 'jump_indirect',
+                    'likely': False}
+        if fn == 0x09:
+            return {'kind': 'call_indirect' if rd else 'jump_indirect',
+                    'likely': False}
+
+    if op == 0x02:
+        return {'kind': 'jump',
+                'target': ((addr + 4) & 0xf0000000) |
+                          ((insn & 0x03ffffff) << 2),
+                'likely': False}
+    if op == 0x03:
+        return {'kind': 'call',
+                'target': ((addr + 4) & 0xf0000000) |
+                          ((insn & 0x03ffffff) << 2),
+                'ret': (addr + 8) & 0xffffffff,
+                'likely': False}
+
+    if op in (0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17):
+        return {'kind': 'jump',
+                'target': (addr + 4 + (imm << 2)) & 0xffffffff,
+                'likely': op in (0x14, 0x15, 0x16, 0x17)}
+
+    if op == 0x01:
+        if rt in (0x00, 0x01, 0x02, 0x03):
+            return {'kind': 'jump',
+                    'target': (addr + 4 + (imm << 2)) & 0xffffffff,
+                    'likely': rt in (0x02, 0x03)}
+        if rt in (0x10, 0x11, 0x12, 0x13):
+            return {'kind': 'link',
+                    'target': (addr + 4 + (imm << 2)) & 0xffffffff,
+                    'ret': (addr + 8) & 0xffffffff,
+                    'likely': rt in (0x12, 0x13)}
+
+    if op == 0x11 and rs == 0x08:
+        return {'kind': 'jump',
+                'target': (addr + 4 + (imm << 2)) & 0xffffffff,
+                'likely': bool(rt & 2)}
+
+    return None
+
+
 def emit_range(path, name, start, size, c_prefix='', shndx=None,
                section_base=0, recover_trailing_delay_slot=False):
     # SGI libXm's static GetDisplay() is recovered as a truncated 0x70-byte
@@ -419,6 +472,53 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         for line in lines: print('    '+line)
         print('    if (rt->trapped) return;')
         print('    cpu->gpr[0] = 0;')
+
+        # The instruction immediately before this one is its architectural
+        # delay-slot owner.  For statically-known branch/call targets, resolve
+        # the pending transfer directly to C labels instead of re-entering the
+        # local-PC dispatcher.
+        prev_ctl = None
+        if idx and decoded[idx - 1][0] + 4 == addr:
+            prev_ctl = static_control_info(decoded[idx - 1][0],
+                                           decoded[idx - 1][1])
+        if prev_ctl and 'target' in prev_ctl:
+            target = prev_ctl['target']
+            kind = prev_ctl['kind']
+            if kind == 'jump':
+                if start <= target < start + size:
+                    print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) goto L_%08x;' %
+                          (target, target))
+                else:
+                    print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) {' % target)
+                    print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+                    print('        return;')
+                    print('    }')
+            elif kind == 'call':
+                ret = prev_ctl['ret']
+                print('    if (old_pending == IRIX_PENDING_CALL && old_target == 0x%08xu) {' % target)
+                print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                if start <= ret < start + size:
+                    print('        goto L_%08x;' % ret)
+                else:
+                    print('        return;')
+                print('    }')
+            elif kind == 'link':
+                ret = prev_ctl['ret']
+                print('    if (old_pending == IRIX_PENDING_LINK && old_target == 0x%08xu) {' % target)
+                if start <= target < start + size:
+                    print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+                    print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+                    print('        }')
+                    print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
+                    print('        goto L_%08x;' % target)
+                else:
+                    print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                    if start <= ret < start + size:
+                        print('        goto L_%08x;' % ret)
+                    else:
+                        print('        return;')
+                print('    }')
+
         print('    if (old_pending == IRIX_PENDING_RETURN) {')
         print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
         print('            local_link_depth--; pc = old_target; goto dispatch_local;')
@@ -448,10 +548,20 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('        pc = old_target; goto dispatch_local;')
         print('    }')
         if control:
-            # Control instructions must route through the entry dispatcher so
-            # branch-likely instructions can skip their architectural delay
-            # slot by adjusting pc in the decoder.
-            print('    pc += 4u; goto dispatch_local;')
+            ctl = static_control_info(addr, word)
+            # Direct control transfers always execute the following delay
+            # slot, except branch-likely instructions whose decoder advances
+            # pc by one extra word when the branch is not taken.
+            if idx + 1 < len(decoded):
+                delay = decoded[idx + 1][0]
+                after_delay = decoded[idx + 2][0] if idx + 2 < len(decoded) else None
+                if ctl and ctl.get('likely') and after_delay is not None:
+                    print('    if (pc == 0x%08xu) goto L_%08x;' % (addr, delay))
+                    print('    goto L_%08x;' % after_delay)
+                else:
+                    print('    goto L_%08x;' % delay)
+            else:
+                print('    return;')
         elif idx + 1 < len(decoded):
             print('    goto L_%08x;' % decoded[idx + 1][0])
         else:
