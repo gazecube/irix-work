@@ -13,6 +13,12 @@
       "path": "usr/sbin/fm"
     },
     {
+      "name": "fmprefs",
+      "prefix": "fmprefs",
+      "kind": "runtime",
+      "path": "usr/sbin/fmprefs"
+    },
+    {
       "name": "4dwm",
       "prefix": "d4wm",
       "kind": "runtime",
