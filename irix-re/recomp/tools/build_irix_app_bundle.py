@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Build one IRIX application bundle from the ecosystem manifest."""
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import struct
@@ -471,16 +474,69 @@ def main():
     if not flags_stamp.is_file() or flags_stamp.read_text() != compile_flags:
         flags_stamp.write_text(compile_flags)
 
+    # All ecosystem applications translate large overlapping DSO closures.
+    # Cache generated objects by source contents + ABI header + compiler flags
+    # across generated-<app> directories so libXm/libXt/ViewKit/etc. are not
+    # recompiled independently for FM, Toolchest, 4Dwm, Preferences, and every
+    # other IID executable.
+    object_cache = out.parent / '.irix-object-cache'
+    object_cache.mkdir(parents=True, exist_ok=True)
+    header_digest = hashlib.sha256(header.read_bytes()).digest()
+
+    def cache_key(src):
+        h = hashlib.sha256()
+        h.update(src.read_bytes())
+        h.update(header_digest)
+        h.update(compile_flags.encode('utf-8'))
+        h.update(str(a.cc).encode('utf-8'))
+        return h.hexdigest()
+
+    def install_cached(cache_obj, dst):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if dst.exists():
+                dst.unlink()
+            os.link(cache_obj, dst)
+        except OSError:
+            shutil.copy2(cache_obj, dst)
+
     def compile_one(src):
         rel = src.relative_to(gen)
         dst = obj / (str(rel).replace('/', '__') + '.o')
         newest_input = max(src.stat().st_mtime_ns, header.stat().st_mtime_ns, flags_stamp.stat().st_mtime_ns)
         if dst.is_file() and dst.stat().st_mtime_ns >= newest_input:
             return src, dst, None
-        cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-Wall', '-Wextra', '-Werror', '-fPIC',
-               '-I', str(inc), '-c', str(src), '-o', str(dst)]
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        return src, dst, p
+
+        key = cache_key(src)
+        cache_obj = object_cache / (key + '.o')
+        lock_path = object_cache / (key + '.lock')
+
+        # Per-object advisory locking also makes parallel CMake app targets
+        # converge on one compilation rather than racing to compile the same
+        # translated function in several processes.
+        with open(lock_path, 'a+b') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if cache_obj.is_file():
+                install_cached(cache_obj, dst)
+                return src, dst, None
+
+            cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-Wall', '-Wextra', '-Werror', '-fPIC',
+                   '-I', str(inc), '-c', str(src), '-o', str(dst)]
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if p.returncode == 0:
+                try:
+                    os.link(dst, cache_obj)
+                except FileExistsError:
+                    pass
+                except OSError:
+                    tmp = object_cache / (key + '.tmp.%d' % os.getpid())
+                    shutil.copy2(dst, tmp)
+                    try:
+                        os.replace(tmp, cache_obj)
+                    except OSError:
+                        if tmp.exists():
+                            tmp.unlink()
+            return src, dst, p
 
     objects = []
     rebuilt = 0
