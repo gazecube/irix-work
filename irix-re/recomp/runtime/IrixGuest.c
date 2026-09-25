@@ -1736,30 +1736,9 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 {
     static unsigned xm_display_shell_depth;
     static IrixGuestAddr xm_display_bootstrap_widget;
+    static IrixGuestAddr sg_drop_class[16];
+    static IrixGuestAddr sg_drop_state[16];
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
-    /*
-     * SGI Motif drop-transfer class extension hooks expect the WidgetClass
-     * private/callback state at +0x60 to have been built during Xt class
-     * initialization.  Some translated class-init paths reach these hooks
-     * before that side effect has happened.
-     *
-     * Reuse the existing class-resource repair, which also constructs the
-     * callback_private table, before either suspend/continue hook touches it.
-     */
-    if ((address == 0x0b2f6680u || address == 0x0b2f6690u)) {
-        IrixGuestAddr wc = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-        if (wc && irix_guest_ptr(rt, wc, 0x64u) &&
-            irix_guest_read32be(rt, wc + 0x60u) == 0u) {
-            fprintf(stderr,
-                    "IRIX SG drop-transfer repair: class=%08x callback_private=NULL\n",
-                    wc);
-            irix_guest_xt_repair_class_resources(rt, wc);
-            if (!rt->trapped)
-                fprintf(stderr,
-                        "IRIX SG drop-transfer repair: callback_private=%08x\n",
-                        irix_guest_read32be(rt, wc + 0x60u));
-        }
-    }
 
     /*
      * Motif _XmSortResourceList always expects XrmResourceList[]: an array
@@ -1928,6 +1907,10 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
         IrixGuestAddr caller_pc = cpu->pc;
+        IrixGuestAddr sg_saved_private = 0;
+        IrixGuestAddr sg_class = 0;
+        IrixGuestAddr sg_state = 0;
+        int sg_drop_swap = 0;
         int xm_display_shell_call =
             (address == 0x0f62caa8u &&
              (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
@@ -2130,6 +2113,43 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (entry->name)
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
 
+        /*
+         * SGI Motif gadget class-extension suspend/continue hooks use the
+         * class slot at +0x60 as temporary SG state.  Keep that state separate
+         * from Xt's own class-private/callback data: temporarily swap in a
+         * persistent per-class scratch block only while the SG hook runs, then
+         * restore the original pointer.
+         */
+        if (address == 0x0b2f6680u || address == 0x0b2f6690u) {
+            unsigned i;
+            sg_class = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            if (sg_class && irix_guest_ptr(rt, sg_class, 0x64u)) {
+                sg_saved_private = irix_guest_read32be(rt, sg_class + 0x60u);
+                for (i = 0; i < 16u; ++i) {
+                    if (sg_drop_class[i] == sg_class) {
+                        sg_state = sg_drop_state[i];
+                        break;
+                    }
+                    if (!sg_drop_class[i]) {
+                        sg_state = irix_guest_xt_compat_alloc(rt, 64u);
+                        if (sg_state && irix_guest_ptr(rt, sg_state, 64u)) {
+                            memset(irix_guest_ptr(rt, sg_state, 64u), 0, 64u);
+                            sg_drop_class[i] = sg_class;
+                            sg_drop_state[i] = sg_state;
+                        }
+                        break;
+                    }
+                }
+                if (sg_state) {
+                    irix_guest_write32be(rt, sg_class + 0x60u, sg_state);
+                    sg_drop_swap = 1;
+                    fprintf(stderr,
+                            "IRIX SG drop-transfer state swap: class=%08x saved=%08x scratch=%08x\n",
+                            sg_class, sg_saved_private, sg_state);
+                }
+            }
+        }
+
         if (xm_display_shell_call) {
             if (xm_display_shell_depth++ == 0u)
                 xm_display_bootstrap_widget = 0u;
@@ -2139,6 +2159,14 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         }
 
         entry->function(rt, cpu);
+
+        if (sg_drop_swap && sg_class &&
+            irix_guest_ptr(rt, sg_class + 0x60u, 4u)) {
+            irix_guest_write32be(rt, sg_class + 0x60u, sg_saved_private);
+            fprintf(stderr,
+                    "IRIX SG drop-transfer state restore: class=%08x private=%08x\n",
+                    sg_class, sg_saved_private);
+        }
 
         /*
          * SGI Motif XmScreen private-state repair.
