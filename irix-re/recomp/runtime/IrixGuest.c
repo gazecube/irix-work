@@ -1738,6 +1738,30 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     static IrixGuestAddr xm_display_bootstrap_widget;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     /*
+     * SGI Motif drop-transfer class extension hooks expect the WidgetClass
+     * private/callback state at +0x60 to have been built during Xt class
+     * initialization.  Some translated class-init paths reach these hooks
+     * before that side effect has happened.
+     *
+     * Reuse the existing class-resource repair, which also constructs the
+     * callback_private table, before either suspend/continue hook touches it.
+     */
+    if ((address == 0x0b2f6680u || address == 0x0b2f6690u)) {
+        IrixGuestAddr wc = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        if (wc && irix_guest_ptr(rt, wc, 0x64u) &&
+            irix_guest_read32be(rt, wc + 0x60u) == 0u) {
+            fprintf(stderr,
+                    "IRIX SG drop-transfer repair: class=%08x callback_private=NULL\n",
+                    wc);
+            irix_guest_xt_repair_class_resources(rt, wc);
+            if (!rt->trapped)
+                fprintf(stderr,
+                        "IRIX SG drop-transfer repair: callback_private=%08x\n",
+                        irix_guest_read32be(rt, wc + 0x60u));
+        }
+    }
+
+    /*
      * Motif _XmSortResourceList always expects XrmResourceList[]: an array
      * of pointers to compiled resource records.  Several SGI Motif class
      * paths reach it with their raw contiguous XtResource[] instead.
