@@ -6,7 +6,8 @@ from link_stack_n32 import StackLink
 from translate_n32_core import decode
 
 STT_FUNC=2
-BATCH_FUNCTIONS=128
+DEFAULT_MAX_FILE_BYTES=2*1024*1024
+PARTITION_VERSION=1
 BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]','_',s)
@@ -21,6 +22,52 @@ def write_if_changed(path, text):
  path.parent.mkdir(parents=True,exist_ok=True)
  path.write_text(text)
  return True
+
+def load_partition(path,max_file_bytes):
+ path=Path(path)
+ if not path.is_file():
+  return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+ try:
+  doc=json.loads(path.read_text())
+ except Exception:
+  return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+ if doc.get('version')!=PARTITION_VERSION or doc.get('max_file_bytes')!=max_file_bytes:
+  return {'version':PARTITION_VERSION,'max_file_bytes':max_file_bytes,'file_count':0,'assignments':{}}
+ if not isinstance(doc.get('assignments'),dict): doc['assignments']={}
+ return doc
+
+def assign_partitions(entries,path,max_file_bytes):
+ part=load_partition(path,max_file_bytes)
+ total=sum(e['bytes'] for e in entries)
+ needed=max(1,(total+max_file_bytes-1)//max_file_bytes) if entries else 0
+ old_count=int(part.get('file_count') or 0)
+ file_count=max(old_count,needed) if old_count else needed
+ buckets=[[] for _ in range(file_count)]
+ bucket_bytes=[0 for _ in range(file_count)]
+ placed=set()
+ old=part.get('assignments',{})
+ for i,e in enumerate(entries):
+  b=old.get(f'{e["address"]:08X}')
+  if isinstance(b,int) and 0<=b<file_count:
+   buckets[b].append(i); bucket_bytes[b]+=e['bytes']; placed.add(i)
+ for i,e in enumerate(entries):
+  if i in placed: continue
+  b=min(range(file_count),key=lambda n:bucket_bytes[n])
+  buckets[b].append(i); bucket_bytes[b]+=e['bytes']
+ for bucket in buckets:
+  bucket.sort(key=lambda i:entries[i]['address'])
+ while buckets and not buckets[-1]:
+  buckets.pop(); bucket_bytes.pop()
+ assignments={}
+ for b,items in enumerate(buckets):
+  for i in items: assignments[f'{entries[i]["address"]:08X}']=b
+ write_if_changed(path,json.dumps({
+  'version':PARTITION_VERSION,
+  'max_file_bytes':max_file_bytes,
+  'file_count':len(buckets),
+  'assignments':dict(sorted(assignments.items())),
+ },indent=2)+'\n')
+ return buckets
 
 def render_function(cname, source, name, start, words):
  w=io.StringIO(); p=lambda x='': print(x,file=w)
@@ -77,16 +124,7 @@ def main():
  funcs=[]; failed=[]; changed=0; unchanged=0; batch_count=0
  for oi,o in enumerate(L.objs):
   arc=ident(Path(o.archive).stem); obj=ident(Path(o.name).stem); od=out/'c'/f'{oi:04d}_{arc}_{obj}'; od.mkdir(parents=True,exist_ok=True)
-  batch_bodies=[]; batch_rows=[]; object_batch=0
-  def flush_batch():
-   nonlocal batch_bodies,batch_rows,object_batch,batch_count,changed,unchanged
-   if not batch_rows: return
-   dst=od/f'batch_{object_batch:04d}.c'
-   text=BATCH_PREAMBLE+''.join(batch_bodies)
-   if write_if_changed(dst,text): changed+=1
-   else: unchanged+=1
-   for row in batch_rows: row['source']=str(dst)
-   object_batch+=1; batch_count+=1; batch_bodies=[]; batch_rows=[]
+  emitted=[]
   for si,s in enumerate(o.syms):
    if s['type']!=STT_FUNC or not s['size'] or s['shndx'] not in o.image: continue
    if s['value']+s['size']>len(o.image[s['shndx']]) or s['size']%4: failed.append({'object':o.name,'name':s['name'],'error':'invalid function extent'}); continue
@@ -98,9 +136,22 @@ def main():
    marker=body.find('void '+cname)
    if marker<0: failed.append({'object':o.name,'name':s['name'],'address':start,'error':'generated body marker missing'}); continue
    row={'address':start,'size':s['size'],'name':s['name'],'c_name':cname,'archive':o.archive,'member':o.name}
-   funcs.append(row); batch_rows.append(row); batch_bodies.append(body[marker:].rstrip()+'\n\n')
-   if len(batch_rows)>=BATCH_FUNCTIONS: flush_batch()
-  flush_batch()
+   fbody=body[marker:].rstrip()+'\n\n'
+   funcs.append(row)
+   emitted.append({'address':start,'bytes':len(fbody.encode('utf-8')),'row':row,'body':fbody})
+  buckets=assign_partitions(emitted,od/'partition.json',DEFAULT_MAX_FILE_BYTES)
+  keep=set()
+  for object_batch,items in enumerate(buckets):
+   dst=od/f'recomp_{object_batch:04d}.c'
+   text=BATCH_PREAMBLE+''.join(emitted[i]['body'] for i in items)
+   if write_if_changed(dst,text): changed+=1
+   else: unchanged+=1
+   for i in items: emitted[i]['row']['source']=str(dst)
+   keep.add(dst.name); batch_count+=1
+  for stale in list(od.glob('batch_*.c'))+list(od.glob('recomp_*.c')):
+   if stale.name not in keep:
+    try: stale.unlink()
+    except OSError: pass
  funcs.sort(key=lambda x:x['address'])
  w=io.StringIO(); print('#include "IrixGuest.h"',file=w); print('#include <stdio.h>',file=w); print(file=w)
  print('typedef IrixGuestFunction (*IrixGuestImportResolver)(const char *);',file=w); print(file=w)
