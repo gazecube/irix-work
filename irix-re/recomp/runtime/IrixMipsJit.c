@@ -270,6 +270,22 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
         free(s);
         return 0;
     }
+
+    /*
+     * The IID runtime already owns the IRIX guest virtual address space.
+     * Unicorn's normal CPU TLB mode treats uc_mem_map[_ptr]() addresses as
+     * physical while uc_emu_start() takes virtual PCs, which makes the first
+     * userspace fetch raise EXCP_TLBL.  UC_TLB_VIRTUAL gives us the intended
+     * flat vaddr==mapped-address model and leaves IRIX VM policy to IID.
+     */
+    err = uc_ctl_tlb_mode(s->uc, UC_TLB_VIRTUAL);
+    if (err != UC_ERR_OK) {
+        fprintf(stderr, "IRIX JIT: virtual TLB mode failed: %s\n",
+                uc_strerror(err));
+        uc_close(s->uc);
+        free(s);
+        return 0;
+    }
 #endif
 
     /* R4000 N32 userspace: CU1 + FR + UX + KSU=user. */
