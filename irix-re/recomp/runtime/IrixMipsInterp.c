@@ -141,6 +141,40 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         case 0x2f:
             cpu->gpr[rd] = cpu->gpr[rs] - cpu->gpr[rtno];
             break;
+        case 0x30: /* TGE */
+        case 0x31: /* TGEU */
+        case 0x32: /* TLT */
+        case 0x33: /* TLTU */
+        case 0x34: /* TEQ */
+        case 0x36: { /* TNE */
+            int take = 0;
+            switch (fn) {
+            case 0x30:
+                take = (int64_t)cpu->gpr[rs] >= (int64_t)cpu->gpr[rtno];
+                break;
+            case 0x31:
+                take = cpu->gpr[rs] >= cpu->gpr[rtno];
+                break;
+            case 0x32:
+                take = (int64_t)cpu->gpr[rs] < (int64_t)cpu->gpr[rtno];
+                break;
+            case 0x33:
+                take = cpu->gpr[rs] < cpu->gpr[rtno];
+                break;
+            case 0x34:
+                take = cpu->gpr[rs] == cpu->gpr[rtno];
+                break;
+            case 0x36:
+                take = cpu->gpr[rs] != cpu->gpr[rtno];
+                break;
+            }
+            if (take) {
+                rt->fault_addr = (insn >> 6) & 0x3ffu;
+                irix_guest_trap(rt, cpu, 0xeeee4013u);
+                return -1;
+            }
+            break;
+        }
         case 0x38:
             cpu->gpr[rd] = cpu->gpr[rtno] << sa;
             break;
@@ -170,6 +204,37 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
     } else {
         switch (op) {
+        case 0x01: { /* REGIMM trap-immediate forms */
+            int take = 0;
+            switch (rtno) {
+            case 0x08: /* TGEI */
+                take = (int64_t)cpu->gpr[rs] >= (int64_t)imm;
+                break;
+            case 0x09: /* TGEIU */
+                take = cpu->gpr[rs] >= (uint64_t)(int64_t)imm;
+                break;
+            case 0x0a: /* TLTI */
+                take = (int64_t)cpu->gpr[rs] < (int64_t)imm;
+                break;
+            case 0x0b: /* TLTIU */
+                take = cpu->gpr[rs] < (uint64_t)(int64_t)imm;
+                break;
+            case 0x0c: /* TEQI */
+                take = cpu->gpr[rs] == (uint64_t)(int64_t)imm;
+                break;
+            case 0x0e: /* TNEI */
+                take = cpu->gpr[rs] != (uint64_t)(int64_t)imm;
+                break;
+            default:
+                return 1;
+            }
+            if (take) {
+                rt->fault_addr = (insn >> 6) & 0x3ffu;
+                irix_guest_trap(rt, cpu, 0xeeee4013u);
+                return -1;
+            }
+            break;
+        }
         case 0x08:
         case 0x09:
             cpu->gpr[rtno] = sx32((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -446,7 +511,16 @@ static int is_control(uint32_t insn)
     unsigned fn = insn & 63u;
     if (op == 0u && (fn == 0x08u || fn == 0x09u))
         return 1;
-    if (op == 0x01u || op == 0x02u || op == 0x03u ||
+    if (op == 0x01u) {
+        unsigned rtno = (insn >> 16) & 31u;
+        if (rtno == 0x00u || rtno == 0x01u ||
+            rtno == 0x02u || rtno == 0x03u ||
+            rtno == 0x10u || rtno == 0x11u ||
+            rtno == 0x12u || rtno == 0x13u)
+            return 1;
+        return 0;
+    }
+    if (op == 0x02u || op == 0x03u ||
         op == 0x04u || op == 0x05u || op == 0x06u || op == 0x07u ||
         op == 0x14u || op == 0x15u || op == 0x16u || op == 0x17u)
         return 1;
