@@ -709,6 +709,19 @@ int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr addre
     entry->size = size;
     entry->function = function;
     entry->name = name;
+    {
+        uint32_t slot = (address >> 2) & (IRIX_GUEST_FUNCTION_CACHE_SIZE - 1u);
+        uint32_t start = slot;
+        while (rt->function_cache[slot] &&
+               rt->function_cache[slot]->address != address) {
+            slot = (slot + 1u) & (IRIX_GUEST_FUNCTION_CACHE_SIZE - 1u);
+            if (slot == start)
+                break;
+        }
+        if (!rt->function_cache[slot] ||
+            rt->function_cache[slot]->address == address)
+            rt->function_cache[slot] = entry;
+    }
     return 0;
 }
 
@@ -721,11 +734,25 @@ int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuestAddr address)
 {
     IrixGuestFunctionEntry *containing = 0;
+    uint32_t slot = (address >> 2) & (IRIX_GUEST_FUNCTION_CACHE_SIZE - 1u);
+    uint32_t start = slot;
     size_t i;
+
+    /* Exact callable entries dominate normal guest-call traffic.  Resolve
+       those through the registration-time address hash instead of linearly
+       scanning the entire translated ecosystem on every JAL/JALR. */
+    while (rt->function_cache[slot]) {
+        if (rt->function_cache[slot]->address == address)
+            return rt->function_cache[slot];
+        slot = (slot + 1u) & (IRIX_GUEST_FUNCTION_CACHE_SIZE - 1u);
+        if (slot == start)
+            break;
+    }
+
+    /* Interior-PC dispatch is recovery/fallback behavior.  Preserve the
+       smallest-containing-range rule for those uncommon transfers. */
     for (i = 0; i < rt->function_count; ++i) {
         IrixGuestFunctionEntry *entry = &rt->functions[i];
-        if (entry->address == address)
-            return entry;
         if (entry->size && address > entry->address &&
             (uint64_t)address < (uint64_t)entry->address + entry->size) {
             if (!containing || entry->size < containing->size)
