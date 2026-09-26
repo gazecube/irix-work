@@ -1,5 +1,6 @@
 #include "IrixGuest.h"
 #include "IrixMipsInterp.h"
+#include "IrixMipsJit.h"
 #include "IrixCompat.h"
 #include "IrixSyscallNumbers.h"
 
@@ -85,6 +86,7 @@ void irix_guest_runtime_init(IrixGuestRuntime *rt)
 void irix_guest_runtime_destroy(IrixGuestRuntime *rt)
 {
     size_t i;
+    irix_mips_jit_shutdown(rt);
     for (i = 0; i < rt->memory.count; ++i)
         free(rt->memory.segments[i].host_base);
     memset(rt, 0, sizeof(*rt));
@@ -2340,11 +2342,17 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 {
     if (!entry || entry->address != address)
         return irix_guest_call(rt, cpu, address);
+    if (irix_mips_jit_requested() &&
+        !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE))
+        return irix_mips_jit_call(rt, cpu, address);
     return irix_guest_call_entry_impl(rt, cpu, address, entry);
 }
 
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
-    return irix_guest_call_entry_impl(rt, cpu, address,
-                                      irix_guest_find_function(rt, address));
+    IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    if (irix_mips_jit_requested() &&
+        (!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
+        return irix_mips_jit_call(rt, cpu, address);
+    return irix_guest_call_entry_impl(rt, cpu, address, entry);
 }
