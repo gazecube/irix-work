@@ -1733,13 +1733,14 @@ static int trace_dialog_call(const char *name)
            strstr(name, "waitForDialog__15VkDialogManager") != 0;
 }
 
-int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
+static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                      IrixGuestAddr address,
+                                      IrixGuestFunctionEntry *entry)
 {
     static unsigned xm_display_shell_depth;
     static IrixGuestAddr xm_display_bootstrap_widget;
     static IrixGuestAddr sg_drop_class[16];
     static IrixGuestAddr sg_drop_state[16];
-    IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
 
     /*
      * Motif _XmSortResourceList always expects XrmResourceList[]: an array
@@ -2271,4 +2272,18 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     }
     cpu->gpr[0] = 0;
     return rt->trapped ? -1 : 0;
+}
+
+int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                          IrixGuestAddr address, IrixGuestFunctionEntry *entry)
+{
+    if (!entry || entry->address != address)
+        return irix_guest_call(rt, cpu, address);
+    return irix_guest_call_entry_impl(rt, cpu, address, entry);
+}
+
+int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
+{
+    return irix_guest_call_entry_impl(rt, cpu, address,
+                                      irix_guest_find_function(rt, address));
 }
