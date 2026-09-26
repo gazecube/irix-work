@@ -87,6 +87,7 @@ typedef struct IrixGuestRuntime {
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     IrixGuestFunctionEntry *function_cache[IRIX_GUEST_FUNCTION_CACHE_SIZE];
     size_t function_count;
+    void *profile_state;
     void *jit_state;
 } IrixGuestRuntime;
 
