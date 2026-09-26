@@ -104,10 +104,10 @@ def static_block_labels(decoded,start,end_addr):
  labels=set(static_cfg_entries(decoded,start,end_addr))
  for idx,(addr,word,lines,control) in enumerate(decoded):
   if not control: continue
-  if idx+1<len(decoded): labels.add(decoded[idx+1][0])
   ctl=static_control_info(addr,word)
-  # Native conditional-branch lowering emits an explicit goto to the
-  # post-delay fallthrough block for both normal and likely branches.
+  # Conditional native branches explicitly jump to the post-delay
+  # fallthrough block. Delay slots themselves only need labels when they
+  # are genuine CFG entries from some other edge.
   if ctl and static_branch_condition(addr,word) is not None and idx+2<len(decoded):
    labels.add(decoded[idx+2][0])
  return labels
@@ -155,6 +155,18 @@ def render_function(cname, source, name, start, words):
  p()
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
  block_labels=static_block_labels(decoded,start,end_addr)
+ shared_delay_owners=set()
+ for idx,(addr,word,_lines,control) in enumerate(decoded):
+  if not control or idx+1>=len(decoded) or decoded[idx+1][0]!=addr+4:
+   continue
+  if decoded[idx+1][0] in cfg_entries:
+   shared_delay_owners.add(addr)
+ for owner in sorted(shared_delay_owners):
+  p(f'    int delay_owner_active_{owner:08x} = 0;')
+  ctl=static_control_info(owner,decoded[(owner-start)//4][1])
+  if ctl and static_branch_condition(owner,decoded[(owner-start)//4][1]) is not None:
+   p(f'    int branch_taken_{owner:08x} = 0;')
+ p()
  p(f'    goto L_{start:08x};')
  if has_delay_slot and needs_local_dispatch:
   p('dispatch_local:')
@@ -176,7 +188,8 @@ def render_function(cname, source, name, start, words):
   p('    cpu->pc = pc;')
   p('    rt->current_pc = pc;')
   ctl_raw=static_control_info(addr,word) if control else None
-  has_native_delay=bool(control and idx+1<len(decoded) and decoded[idx+1][0]==addr+4)
+  has_native_delay=bool(control and idx+1<len(decoded) and
+                        decoded[idx+1][0]==addr+4 and not decoded[idx+1][3])
   ctl_here=ctl_raw if has_native_delay else None
   branch_cond=static_branch_condition(addr,word) if ctl_here else None
   if control and ctl_raw is not None and not has_native_delay:
@@ -185,7 +198,10 @@ def render_function(cname, source, name, start, words):
   elif ctl_here and 'target' in ctl_here:
    kind=ctl_here.get('kind')
    if branch_cond is not None and kind in ('jump','link'):
-    p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
+    if addr in shared_delay_owners:
+     p(f'    branch_taken_{addr:08x} = ({branch_cond});')
+    else:
+     p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
    if kind in ('call','link'):
     p(f'    cpu->gpr[31] = (uint64_t)(int64_t)(int32_t)0x{(addr+8)&0xffffffff:08x}u;')
   elif ctl_here and ctl_here.get('kind') in ('return','jump_indirect','call_indirect'):
@@ -206,6 +222,12 @@ def render_function(cname, source, name, start, words):
   # Pending transfers are meaningful only in an architectural delay slot.
   # Keep ordinary straight-line instructions free of the generic resolver.
   if is_delay_slot and prev_ctl:
+   owner_addr=decoded[idx-1][0]
+   shared_delay=owner_addr in shared_delay_owners
+   if shared_delay:
+    p(f'    if (delay_owner_active_{owner_addr:08x}) {{')
+    p(f'        delay_owner_active_{owner_addr:08x} = 0;')
+   indent='        ' if shared_delay else '    '
    kind=prev_ctl.get('kind')
    if 'target' in prev_ctl:
     target=prev_ctl['target']
@@ -283,6 +305,8 @@ def render_function(cname, source, name, start, words):
     p('    if (irix_guest_call(rt, cpu, dynamic_target) != 0) return;')
     if start<=ret<end_addr: p(f'    goto L_{ret:08x};')
     else: p('    return;')
+   if shared_delay:
+    p('    }')
 
   if control:
    ctl=static_control_info(addr,word)
@@ -292,12 +316,13 @@ def render_function(cname, source, name, start, words):
     if ctl and ctl.get('likely') and after is not None:
      cond=static_branch_condition(addr,word)
      if cond is not None and ctl.get('kind') in ('jump','link'):
-      p(f'    if (branch_taken_{addr:08x}) goto L_{delay:08x};')
-      p(f'    goto L_{after:08x};')
-     else:
-      p(f'    goto L_{delay:08x};')
-    else:
-     p(f'    goto L_{delay:08x};')
+      if addr in shared_delay_owners:
+       p(f'    if (branch_taken_{addr:08x}) {{ delay_owner_active_{addr:08x} = 1; goto L_{delay:08x}; }}')
+      p(f'    if (!branch_taken_{addr:08x}) goto L_{after:08x};')
+     elif addr in shared_delay_owners:
+      p(f'    delay_owner_active_{addr:08x} = 1; goto L_{delay:08x};')
+    elif addr in shared_delay_owners:
+     p(f'    delay_owner_active_{addr:08x} = 1; goto L_{delay:08x};')
    else:
     p('    return;')
   elif idx+1<len(decoded):
