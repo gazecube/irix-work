@@ -11,6 +11,7 @@ extern "C" {
 #define IRIX_GUEST_GPR_COUNT 32
 #define IRIX_GUEST_MAX_SEGMENTS 256
 #define IRIX_GUEST_MAX_FUNCTIONS 131072
+#define IRIX_GUEST_FUNCTION_CACHE_SIZE 262144
 #define IRIX_GUEST_RLD_WATCH_MAX 32
 
 typedef uint32_t IrixGuestAddr;
@@ -80,6 +81,7 @@ typedef struct IrixGuestRuntime {
     IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
     unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
+    IrixGuestFunctionEntry *function_cache[IRIX_GUEST_FUNCTION_CACHE_SIZE];
     size_t function_count;
 } IrixGuestRuntime;
 
