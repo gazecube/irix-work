@@ -224,6 +224,7 @@ if(IRIX_DEV_TREE)
             endif()
 
             add_custom_target(irix_ecosystem)
+            add_custom_target(irix_ecosystem_jit)
 
             foreach(_app_line IN LISTS IRIX_ECOSYSTEM_APPS)
                 if(_app_line STREQUAL "")
@@ -327,6 +328,41 @@ if(IRIX_DEV_TREE)
                     m
                 )
                 add_dependencies(irix_ecosystem ${_app_runner_target})
+
+                # Fast bring-up path: run the original IRIX MIPS executable
+                # through the Unicorn R4000 JIT without generating or linking
+                # translated C for the app/core stack.
+                set(_jit_runner_target "irix_${_app_name}_jit_runner")
+                set(_jit_root_dir "${CMAKE_CURRENT_BINARY_DIR}/jit-root/${_app_guest_dir}")
+                add_executable(${_jit_runner_target} runtime/AppRunner.c)
+                set_target_properties(${_jit_runner_target} PROPERTIES
+                    OUTPUT_NAME "${_app_elf_name}"
+                    RUNTIME_OUTPUT_DIRECTORY "${_jit_root_dir}"
+                    BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}"
+                )
+                target_include_directories(${_jit_runner_target} PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                    ${IRIX_ECOSYSTEM_DIR}
+                )
+                target_compile_definitions(${_jit_runner_target} PRIVATE
+                    IRIX_JIT_ONLY=1
+                    IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+                    IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                    IRIX_DEV_TREE="${IRIX_DEV_TREE}"
+                    IRIX_CORE_IMAGE_DIR=""
+                    IRIX_APP_NAME="${_app_name}"
+                    IRIX_APP_PATH="${_app_path}"
+                    IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                )
+                target_link_libraries(${_jit_runner_target} PRIVATE
+                    irix_recomp_libc_bridge
+                    irix_recomp_x11_bridge
+                    irix_recomp_runtime
+                    X11::X11
+                    ${CMAKE_DL_LIBS}
+                    m
+                )
+                add_dependencies(irix_ecosystem_jit ${_jit_runner_target})
             endforeach()
         endif()
     endif()
