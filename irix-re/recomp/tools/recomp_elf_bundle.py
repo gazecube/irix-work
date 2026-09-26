@@ -694,7 +694,11 @@ def main():
 
     pdr_defs=[]
     for n,addr,size,sh in pdr_function_ranges(elf,path,raw_syms):
-        if addr not in recovered_addrs and not covered_by_frame(addr):
+        if (addr not in recovered_addrs and
+                not covered_by_symbol(addr) and
+                not covered_by_frame(addr)):
+            # .pdr is procedure metadata, not stronger function-identity
+            # evidence than a real nonzero-size STT_FUNC owner.
             pdr_defs.append((n,addr,size,sh,'pdr'))
 
     recovered_addrs|={addr for _,addr,_,_,_ in pdr_defs}
@@ -727,7 +731,11 @@ def main():
     recovered_addrs|={addr for _,addr,_,_,_ in link_defs}
     boundary_defs=[]
     for n,addr,size,sh in boundary_entry_function_ranges(elf,recovered_addrs):
-        if addr not in recovered_addrs and not covered_by_frame(addr):
+        if (addr not in recovered_addrs and
+                not covered_by_symbol(addr) and
+                not covered_by_frame(addr)):
+            # Boundary inference is deliberately weaker than ELF function
+            # ownership.  Never split a real function on a heuristic boundary.
             boundary_defs.append((n,addr,size,sh,'boundary_entry'))
 
     seen_addr=set(); functions=[]; frame_count=0; pdr_count=0; zero_count=0; ptr_count=0; link_count=0; boundary_count=0; dropped_count=0
