@@ -23,8 +23,12 @@ typedef struct IrixMipsJitState {
     size_t hooked_function_count;
     IrixJitStopReason stop_reason;
     IrixGuestAddr stop_address;
+    IrixGuestAddr last_block;
+    IrixGuestAddr last_pc;
+    uint32_t interrupt_no;
     uint64_t fault_address;
     int fault_type;
+    int trace_code;
 } IrixMipsJitState;
 
 static const int gpr_regs[32] = {
@@ -163,13 +167,31 @@ static void native_entry_hook(uc_engine *uc, uint64_t address,
     (void)uc_emu_stop(uc);
 }
 
+static void block_hook(uc_engine *uc, uint64_t address,
+                       uint32_t size, void *opaque)
+{
+    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+    (void)uc;
+    (void)size;
+    s->last_block = (IrixGuestAddr)(uint32_t)address;
+}
+
+static void trace_code_hook(uc_engine *uc, uint64_t address,
+                            uint32_t size, void *opaque)
+{
+    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+    (void)uc;
+    (void)size;
+    s->last_pc = (IrixGuestAddr)(uint32_t)address;
+}
+
 static void interrupt_hook(uc_engine *uc, uint32_t intno, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
     uint64_t pc = 0;
-    (void)intno;
     (void)uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
     s->stop_reason = IRIX_JIT_STOP_INTERRUPT;
+    s->interrupt_no = intno;
     s->stop_address = (IrixGuestAddr)(uint32_t)pc;
     (void)uc_emu_stop(uc);
 }
@@ -250,12 +272,22 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
     }
 #endif
 
-    /* R4000 user-mode 64-bit ISA/FPU state used by the N32 ABI:
-       UX enables 64-bit user instructions, FR selects 32 x 64-bit FPRs,
-       and CU1 enables the floating-point coprocessor. */
-    status = 0x24000020u;
+    /* R4000 N32 userspace: CU1 + FR + UX + KSU=user. */
+    status = 0x24000030u;
     (void)uc_reg_write(s->uc, UC_MIPS_REG_CP0_STATUS, &status);
 
+    s->trace_code = getenv("IRIX_JIT_TRACE") != 0;
+
+    err = uc_hook_add(s->uc, &hook, UC_HOOK_BLOCK,
+                      (void *)block_hook, s, 1, 0);
+    if (err != UC_ERR_OK)
+        goto fail;
+    if (s->trace_code) {
+        err = uc_hook_add(s->uc, &hook, UC_HOOK_CODE,
+                          (void *)trace_code_hook, s, 1, 0);
+        if (err != UC_ERR_OK)
+            goto fail;
+    }
     err = uc_hook_add(s->uc, &hook, UC_HOOK_INTR,
                       (void *)interrupt_hook, s, 1, 0);
     if (err != UC_ERR_OK)
@@ -349,9 +381,23 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
         s->stop_reason = IRIX_JIT_STOP_NONE;
         s->stop_address = 0;
+        s->interrupt_no = 0;
+        s->last_block = 0;
+        s->last_pc = 0;
         s->fault_address = 0;
         s->fault_type = 0;
         pc = cpu->pc;
+
+        if (s->trace_code && irix_guest_ptr(rt, pc, 16u)) {
+            fprintf(stderr,
+                    "IRIX JIT enter pc=%08x words=%08x,%08x,%08x,%08x status=%08x\n",
+                    pc,
+                    irix_guest_read32be(rt, pc + 0u),
+                    irix_guest_read32be(rt, pc + 4u),
+                    irix_guest_read32be(rt, pc + 8u),
+                    irix_guest_read32be(rt, pc + 12u),
+                    0x24000030u);
+        }
 
         err = uc_emu_start(s->uc, pc, return_pc, 0, 0);
         if (sync_cpu_from_unicorn(s) != 0) {
@@ -396,10 +442,22 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (s->stop_reason == IRIX_JIT_STOP_INTERRUPT) {
             IrixGuestAddr ipc = s->stop_address;
             uint32_t word = 0;
+
+            if (!ipc && s->last_pc)
+                ipc = s->last_pc;
+
             if (irix_guest_ptr(rt, ipc, 4u))
                 word = irix_guest_read32be(rt, ipc);
-            if (!is_syscall_word(word) && !is_break_word(word) &&
+
+            if (s->interrupt_no == 17u && !is_syscall_word(word) &&
                 ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u)) {
+                uint32_t prev = irix_guest_read32be(rt, ipc - 4u);
+                if (is_syscall_word(prev)) {
+                    ipc -= 4u;
+                    word = prev;
+                }
+            } else if (!is_syscall_word(word) && !is_break_word(word) &&
+                       ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u)) {
                 uint32_t prev = irix_guest_read32be(rt, ipc - 4u);
                 if (is_syscall_word(prev) || is_break_word(prev)) {
                     ipc -= 4u;
@@ -427,8 +485,10 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
 
             fprintf(stderr,
-                    "IRIX JIT: unhandled CPU interrupt at pc=%08x word=%08x; "
-                    "falling back to interpreter\n", ipc, word);
+                    "IRIX JIT: unhandled CPU interrupt intno=%u pc=%08x "
+                    "last_pc=%08x last_block=%08x word=%08x; "
+                    "falling back to interpreter\n",
+                    s->interrupt_no, ipc, s->last_pc, s->last_block, word);
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
             return irix_mips_interp_call(rt, cpu, ipc);
