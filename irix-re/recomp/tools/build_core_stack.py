@@ -195,7 +195,7 @@ def main():
         text.append(f'\nvoid {reg_fn}(IrixGuestRuntime *rt)\n{{\n')
         for row in rows:
             name = json.dumps(row['name'])
-            text.append(f'    irix_guest_register_function(rt, 0x{row["address"]:08x}u, {row["c_name"]}, {name});\n')
+            text.append(f'    irix_guest_register_recompiled_function(rt, 0x{row["address"]:08x}u, {row["c_name"]}, {name});\n')
         text.append('}\n')
         write_if_changed(reg, ''.join(text))
 
