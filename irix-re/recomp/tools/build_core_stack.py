@@ -66,6 +66,8 @@ def main():
                     help='native libirixre shared runtime to link generated DSOs against')
     ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
     ap.add_argument('--generate-only', action='store_true')
+    ap.add_argument('--skip-shared', action='store_true',
+                    help='stop after building the monolithic translated core archive')
     a = ap.parse_args()
 
     here = Path(__file__).resolve().parent
@@ -165,6 +167,11 @@ def main():
         w.write('SAVE\nEND\n')
     with mri.open('rb') as f:
         subprocess.run([a.ar, '-M'], stdin=f, check=True)
+
+    if a.skip_shared:
+        print(f'archive rebuilt from PIC objects: rebuilt={rebuilt} reused={reused}')
+        print(lib)
+        return
 
     # Split the statically translated core back into the original library
     # boundaries. These DSOs deliberately expose a registration entry point:
