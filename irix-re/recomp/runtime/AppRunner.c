@@ -43,6 +43,9 @@ extern char **environ;
 #ifndef IRIX_APP_NAME
 #define IRIX_APP_NAME "desktop"
 #endif
+#ifndef IRIX_APP_PATH
+#define IRIX_APP_PATH "usr/sbin/desktop"
+#endif
 #ifndef IRIX_RECOMP_ROOT
 #define IRIX_RECOMP_ROOT ""
 #endif
@@ -709,6 +712,27 @@ int main(int argc, char **argv)
         return 1;
     }
 
+#ifdef IRIX_JIT_ONLY
+    if (load_elf(&rt, IRIX_RUNTIME_TREE, IRIX_APP_PATH, &app_elf) != 0) {
+        fprintf(stderr, "failed to load original IRIX app %s\n", IRIX_APP_PATH);
+        return 1;
+    }
+    have_app_elf = 1;
+    if (app_elf.interp[0]) {
+        const char *interp_rel = app_elf.interp[0] == '/' ?
+                                 app_elf.interp + 1 : app_elf.interp;
+        if (load_elf(&rt, IRIX_RUNTIME_TREE, interp_rel, &interp_elf) != 0) {
+            fprintf(stderr, "failed to load PT_INTERP %s\n", app_elf.interp);
+            return 1;
+        }
+        have_interp_elf = 1;
+        fprintf(stderr,
+                "IRIX JIT PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
+                app_elf.interp, interp_elf.entry, interp_elf.gp_value);
+    }
+    if (load_elf(&rt, IRIX_RUNTIME_TREE, "lib32/rld", &rld_elf) == 0)
+        have_rld_elf = 1;
+#else
     if (load_core_image(&rt) != 0) {
         fprintf(stderr, "failed to load synthetic core image\n");
         return 1;
@@ -766,6 +790,7 @@ int main(int argc, char **argv)
         }
     }
 
+#endif
     if (irix_libc_bridge_init(&rt, 0x30000000u, 0x04000000u) != 0) {
         fprintf(stderr, "failed to initialize guest heap\n");
         return 1;
@@ -814,6 +839,7 @@ int main(int argc, char **argv)
      * when the import is actually called, after the complete bundle below has
      * been registered.
      */
+#ifndef IRIX_JIT_ONLY
     irix_register_recompiled_stack_imports(&rt, resolve_native);
     register_irix_bridge_imports(&rt, resolve_native);
     register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
@@ -873,6 +899,11 @@ int main(int argc, char **argv)
                 "IRIX native bridge authority: rebound=%zu named translated functions\\n",
                 rebound);
     }
+#else
+    fprintf(stderr,
+            "IRIX JIT-only mode: original MIPS execution; translated "
+            "registries and native DSO overrides disabled\n");
+#endif
 
     if (setup_process_stack(&rt, &cpu, argc, argv,
                             have_app_elf ? &app_elf : 0,
@@ -892,6 +923,12 @@ int main(int argc, char **argv)
             (have_app_elf ? app_elf.entry : 0u);
     if (have_interp_elf)
         cpu.gpr[28] = interp_elf.gp_value;
+#ifdef IRIX_JIT_ONLY
+    if (!entry) {
+        fprintf(stderr, "IRIX JIT-only process has no entry point\n");
+        return 1;
+    }
+#else
     if (!entry || !irix_guest_find_function(&rt, entry)) {
         IrixGuestAddr app_entry = have_app_elf ? app_elf.entry : 0u;
         fprintf(stderr,
@@ -914,7 +951,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "translated %s process entry not found\n", IRIX_APP_NAME);
         return 1;
     }
-
+#endif
     fprintf(stderr,
             "IRIX %s bootstrap: functions=%zu process_entry=0x%08x "
             "interp_entry=0x%08x app_entry=0x%08x gp=0x%08x "
