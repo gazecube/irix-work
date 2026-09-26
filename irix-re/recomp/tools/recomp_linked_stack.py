@@ -136,14 +136,19 @@ def render_function(cname, source, name, start, words):
   ctl is None or ctl.get('kind')=='call_indirect' or
   (ctl.get('kind')=='link' and start<=ctl.get('target',0)<end_addr)
   for ctl in control_infos)
+ has_dynamic_delay=any(
+  idx+1<len(decoded) and control and
+  (static_control_info(addr,word) is None or
+   'target' not in static_control_info(addr,word))
+  for idx,(addr,word,_lines,control) in enumerate(decoded))
  p('    IrixGuestAddr pc = cpu->pc;')
- if needs_local_dispatch: p('    IrixGuestAddr pending_target = 0;')
- if needs_local_dispatch and 'pending_return' in emitted_lines: p('    IrixGuestAddr pending_return = 0;')
- if has_delay_slot or 'pending_kind' in emitted_lines: p('    int pending_kind = IRIX_PENDING_NONE;')
- if has_delay_slot:
+ if has_dynamic_delay:
+  p('    IrixGuestAddr pending_target = 0;')
+  p('    IrixGuestAddr pending_return = 0;')
+  p('    int pending_kind = IRIX_PENDING_NONE;')
   p('    int old_pending;')
-  if needs_local_dispatch: p('    IrixGuestAddr old_target;')
-  if needs_local_dispatch: p('    IrixGuestAddr old_return;')
+  p('    IrixGuestAddr old_target;')
+  p('    IrixGuestAddr old_return;')
   if needs_local_dispatch:
    p('    IrixGuestAddr local_link_returns[64];')
    p('    unsigned local_link_depth = 0;')
