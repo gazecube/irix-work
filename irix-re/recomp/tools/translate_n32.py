@@ -478,17 +478,18 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     block_labels = static_block_labels(decoded, start, size)
     print('    goto L_%08x;' % start)
     print('')
-    print('dispatch_local:')
-    print('    switch (pc) {')
-    for entry in sorted(cfg_entries):
-        print('    case 0x%08xu: goto L_%08x;' % (entry, entry))
-    print('    default:')
-    print('        /* Computed edge outside the recovered CFG: preserve correctness')
-    print('         * by handing this path to the legacy interpreter. */')
-    print('        (void)irix_mips_interp_call(rt, cpu, pc);')
-    print('        return;')
-    print('    }')
-    print('')
+    if has_delay_slot:
+        print('dispatch_local:')
+        print('    switch (pc) {')
+        for entry in sorted(cfg_entries):
+            print('    case 0x%08xu: goto L_%08x;' % (entry, entry))
+        print('    default:')
+        print('        /* Computed edge outside the recovered CFG: preserve correctness')
+        print('         * by handing this path to the legacy interpreter. */')
+        print('        (void)irix_mips_interp_call(rt, cpu, pc);')
+        print('        return;')
+        print('    }')
+        print('')
     for idx,(addr,word,lines,control) in enumerate(decoded):
         is_delay_slot = bool(idx and decoded[idx - 1][0] + 4 == addr and
                              decoded[idx - 1][3] == 'control')
