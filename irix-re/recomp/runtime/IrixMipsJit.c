@@ -715,6 +715,18 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         prev2, prev1, word, next_word, branch_target,
                         target0, target1, target2, target3);
             }
+            if (s->interrupt_no == 20u) { /* EXCP_RI */
+                fprintf(stderr,
+                        "IRIX JIT: single-step RI recovery pc=%08x word=%08x\n",
+                        ipc, word);
+                if (irix_mips_interp_step(rt, cpu, ipc) == 0 &&
+                    !rt->trapped) {
+                    if (cpu->pc == return_pc)
+                        break;
+                    continue;
+                }
+            }
+
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
             return irix_mips_interp_call(rt, cpu, ipc);
