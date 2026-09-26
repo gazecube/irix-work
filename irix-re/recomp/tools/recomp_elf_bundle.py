@@ -658,16 +658,17 @@ def main():
         if addr not in symbol_addrs:
             zero_defs.append((n,addr,size,sh,'zero_size'))
 
-    # DWARF FDEs are authoritative for otherwise-unrecovered procedures.
-    # Do not replace a real ELF function symbol at the same start: some IRIX
-    # DSOs have broad FDEs around prebound/linker entry regions, and replacing
-    # those symbol ranges changes the import-stub ownership seen by the binding
-    # generator.  The FDE still suppresses heuristic interior entries when its
-    # start is not already represented by a symbol.
+    # DWARF FDEs provide unwind/coverage evidence; they are not stronger
+    # function-identity evidence than a real nonzero-size STT_FUNC symbol.
+    # SGI .debug_frame can contain internal ranges within one machine function
+    # (rld's update_oex_state is a concrete example).  Never manufacture a
+    # callable function entry from an FDE that starts inside a real symbol.
+    # Otherwise native recompilation loses the enclosing function's setup state
+    # and invents fake __debug_frame_* functions at internal PCs.
     recovered_before_frames=symbol_addrs|{addr for _,addr,_,_,_ in zero_defs}
     frame_defs=[]
     for n,addr,size,sh in debug_frame_function_ranges(elf,path,raw_syms):
-        if addr not in recovered_before_frames:
+        if addr not in recovered_before_frames and not covered_by_symbol(addr):
             frame_defs.append((n,addr,size,sh,'debug_frame'))
     frame_ranges=[(addr,addr+size) for _,addr,size,_,_ in frame_defs]
 
