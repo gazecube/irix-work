@@ -143,9 +143,10 @@ def render_function(cname, source, name, start, words):
  if has_delay_slot:
   p('    int old_pending;')
   p('    IrixGuestAddr old_target;')
-  p('    IrixGuestAddr old_return;')
-  p('    IrixGuestAddr local_link_returns[64];')
-  p('    unsigned local_link_depth = 0;')
+  if needs_local_dispatch: p('    IrixGuestAddr old_return;')
+  if needs_local_dispatch:
+   p('    IrixGuestAddr local_link_returns[64];')
+   p('    unsigned local_link_depth = 0;')
  p()
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
  block_labels=static_block_labels(decoded,start,end_addr)
@@ -168,7 +169,7 @@ def render_function(cname, source, name, start, words):
   if is_delay_slot:
    p('    old_pending = pending_kind;')
    p('    old_target = pending_target;')
-   p('    old_return = pending_return;')
+   if needs_local_dispatch: p('    old_return = pending_return;')
    p('    pending_kind = IRIX_PENDING_NONE;')
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
