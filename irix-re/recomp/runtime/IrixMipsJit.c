@@ -677,11 +677,29 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 rt->current_pc = ipc;
             }
 
-            fprintf(stderr,
-                    "IRIX JIT: unhandled CPU interrupt intno=%u pc=%08x "
-                    "last_pc=%08x last_block=%08x word=%08x; "
-                    "falling back to interpreter\n",
-                    s->interrupt_no, ipc, s->last_pc, s->last_block, word);
+            {
+                uint32_t next_word = 0;
+                IrixGuestAddr branch_target = 0;
+                unsigned op = word >> 26;
+
+                if (irix_guest_ptr(rt, ipc + 4u, 4u))
+                    next_word = irix_guest_read32be(rt, ipc + 4u);
+
+                if (op == 0x01u || op == 0x04u || op == 0x05u ||
+                    op == 0x06u || op == 0x07u || op == 0x14u ||
+                    op == 0x15u || op == 0x16u || op == 0x17u) {
+                    branch_target =
+                        ipc + 4u +
+                        (IrixGuestAddr)((int32_t)(int16_t)(word & 0xffffu) << 2);
+                }
+
+                fprintf(stderr,
+                        "IRIX JIT: unhandled CPU interrupt intno=%u pc=%08x "
+                        "last_pc=%08x last_block=%08x word=%08x "
+                        "delay=%08x target=%08x; falling back to interpreter\n",
+                        s->interrupt_no, ipc, s->last_pc, s->last_block,
+                        word, next_word, branch_target);
+            }
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
             return irix_mips_interp_call(rt, cpu, ipc);
