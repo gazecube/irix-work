@@ -384,7 +384,7 @@ def main():
  print('}',file=w); print(file=w)
  for f in funcs: print(f'extern void {f["c_name"]}(IrixGuestRuntime *, IrixGuestCpu *);',file=w)
  print('\nvoid irix_register_recompiled_stack(IrixGuestRuntime *rt)\n{',file=w)
- for f in funcs: print(f'    irix_guest_register_function(rt, 0x{f["address"]:08x}u, {f["c_name"]}, "{f["name"]}");',file=w)
+ for f in funcs: print(f'    irix_guest_register_recompiled_function(rt, 0x{f["address"]:08x}u, {f["c_name"]}, "{f["name"]}");',file=w)
  print('}',file=w)
  print('\nvoid irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestImportResolver resolver)\n{',file=w)
  print('    IrixGuestFunction fn;',file=w)
