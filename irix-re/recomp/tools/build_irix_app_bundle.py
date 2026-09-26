@@ -604,24 +604,17 @@ def main():
                 install_cached(cache_obj, dst)
                 return src, dst, None
 
-            cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-pipe',
+            # Bring-up policy: preserve every already-built/cached O2
+            # object, but do not spend minutes optimizing the handful of
+            # generated translation units that are still missing after an
+            # interrupted/failed build. Compile those at O0. Deliberately do
+            # not publish an O0 object under the O2 content-cache key; the
+            # per-build dst remains reusable by timestamp on subsequent runs.
+            cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native', '-pipe',
                    '-Wall', '-Wextra', '-Werror',
                    '-Wno-error=unused-label', '-Wno-error=unused-but-set-variable',
                    '-fPIC', '-I', str(inc), '-c', str(src), '-o', str(dst)]
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if p.returncode == 0:
-                try:
-                    os.link(dst, cache_obj)
-                except FileExistsError:
-                    pass
-                except OSError:
-                    tmp = object_cache / (key + '.tmp.%d' % os.getpid())
-                    shutil.copy2(dst, tmp)
-                    try:
-                        os.replace(tmp, cache_obj)
-                    except OSError:
-                        if tmp.exists():
-                            tmp.unlink()
             return src, dst, p
 
     objects = []
