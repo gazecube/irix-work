@@ -134,7 +134,7 @@ if(IRIX_DEV_TREE)
     )
 
     add_custom_command(
-        OUTPUT "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS}
+        OUTPUT "${IRIX_RECOMP_CORE_LIB}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_RECOMP_CORE_DIR}"
         COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_core_stack.py"
@@ -142,6 +142,7 @@ if(IRIX_DEV_TREE)
                 -o "${IRIX_RECOMP_CORE_DIR}"
                 --cc "${CMAKE_C_COMPILER}"
                 --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
+                --skip-shared
         DEPENDS
             irix_recomp_runtime
             tools/build_core_stack.py
@@ -157,7 +158,7 @@ if(IRIX_DEV_TREE)
     # Static recompilation is opt-in. The JIT/original-binary bring-up
     # path must never trigger the expensive generated-core build implicitly.
     add_custom_target(irix_recompiled_core
-        DEPENDS "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS})
+        DEPENDS "${IRIX_RECOMP_CORE_LIB}")
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
     set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
     add_dependencies(irix_recompiled_stack irix_recompiled_core)
