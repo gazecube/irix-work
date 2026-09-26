@@ -131,12 +131,14 @@ def render_function(cname, source, name, start, words):
  p()
 
  for idx,(addr,word,lines,control) in enumerate(decoded):
+  is_delay_slot=bool(idx and decoded[idx-1][0]+4==addr and decoded[idx-1][3]=='control')
   if addr in block_labels: p(f'L_{addr:08x}:')
   p(f'    /* 0x{addr:08x}: 0x{word:08x} */')
-  p('    old_pending = pending_kind;')
-  p('    old_target = pending_target;')
-  p('    old_return = pending_return;')
-  p('    pending_kind = IRIX_PENDING_NONE;')
+  if is_delay_slot:
+   p('    old_pending = pending_kind;')
+   p('    old_target = pending_target;')
+   p('    old_return = pending_return;')
+   p('    pending_kind = IRIX_PENDING_NONE;')
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
   p('    rt->current_pc = pc;')
@@ -145,7 +147,6 @@ def render_function(cname, source, name, start, words):
   p('    cpu->gpr[0] = 0;')
 
   prev_ctl=None
-  is_delay_slot=bool(idx and decoded[idx-1][0]+4==addr and decoded[idx-1][3]=='control')
   if is_delay_slot:
    prev_ctl=static_control_info(decoded[idx-1][0],decoded[idx-1][1])
   # Pending transfers are meaningful only in an architectural delay slot.
