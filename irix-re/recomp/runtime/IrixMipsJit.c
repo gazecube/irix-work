@@ -679,11 +679,17 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
             {
                 uint32_t next_word = 0;
+                uint32_t prev1 = 0, prev2 = 0;
+                uint32_t target0 = 0, target1 = 0, target2 = 0, target3 = 0;
                 IrixGuestAddr branch_target = 0;
                 unsigned op = word >> 26;
 
                 if (irix_guest_ptr(rt, ipc + 4u, 4u))
                     next_word = irix_guest_read32be(rt, ipc + 4u);
+                if (ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u))
+                    prev1 = irix_guest_read32be(rt, ipc - 4u);
+                if (ipc >= 8u && irix_guest_ptr(rt, ipc - 8u, 4u))
+                    prev2 = irix_guest_read32be(rt, ipc - 8u);
 
                 if (op == 0x01u || op == 0x04u || op == 0x05u ||
                     op == 0x06u || op == 0x07u || op == 0x14u ||
@@ -691,14 +697,23 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     branch_target =
                         ipc + 4u +
                         (IrixGuestAddr)((int32_t)(int16_t)(word & 0xffffu) << 2);
+                    if (irix_guest_ptr(rt, branch_target, 16u)) {
+                        target0 = irix_guest_read32be(rt, branch_target + 0u);
+                        target1 = irix_guest_read32be(rt, branch_target + 4u);
+                        target2 = irix_guest_read32be(rt, branch_target + 8u);
+                        target3 = irix_guest_read32be(rt, branch_target + 12u);
+                    }
                 }
 
                 fprintf(stderr,
                         "IRIX JIT: unhandled CPU interrupt intno=%u pc=%08x "
-                        "last_pc=%08x last_block=%08x word=%08x "
-                        "delay=%08x target=%08x; falling back to interpreter\n",
+                        "last_pc=%08x last_block=%08x "
+                        "prev=%08x,%08x word=%08x delay=%08x target=%08x "
+                        "target_words=%08x,%08x,%08x,%08x; "
+                        "falling back to interpreter\n",
                         s->interrupt_no, ipc, s->last_pc, s->last_block,
-                        word, next_word, branch_target);
+                        prev2, prev1, word, next_word, branch_target,
+                        target0, target1, target2, target3);
             }
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
