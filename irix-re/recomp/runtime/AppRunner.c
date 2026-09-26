@@ -333,10 +333,40 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
                     IrixGuestElfInfo *info_out)
 {
     char path[4096];
+    char alias[4096];
+    const char *selected = path;
     IrixGuestElfInfo info;
+
     snprintf(path, sizeof(path), "%s/%s", root, rel);
-    if (irix_guest_load_elf32be_info(rt, path, &info) != 0) {
-        fprintf(stderr, "failed to load guest ELF: %s\n", path);
+
+    /*
+     * IRIX media/runtime trees are seen in both layouts:
+     *
+     *   /usr/lib32/libc.so.1
+     *   /lib32/libc.so.1
+     *
+     * PT_INTERP records the guest pathname, but extracted trees may flatten
+     * the /usr/lib32 compatibility location into /lib32 (or vice versa).
+     * Resolve that filesystem alias before loading so the guest-visible ELF
+     * ABI/path remains untouched.
+     */
+    if (access(path, R_OK) != 0) {
+        if (!strncmp(rel, "usr/lib32/", 10)) {
+            snprintf(alias, sizeof(alias), "%s/lib32/%s", root, rel + 10);
+            if (access(alias, R_OK) == 0)
+                selected = alias;
+        } else if (!strncmp(rel, "lib32/", 6)) {
+            snprintf(alias, sizeof(alias), "%s/usr/lib32/%s", root, rel + 6);
+            if (access(alias, R_OK) == 0)
+                selected = alias;
+        }
+    }
+
+    if (selected != path)
+        fprintf(stderr, "IRIX ELF path alias: /%s -> %s\n", rel, selected);
+
+    if (irix_guest_load_elf32be_info(rt, selected, &info) != 0) {
+        fprintf(stderr, "failed to load guest ELF: %s\n", selected);
         return -1;
     }
     if (info_out)
