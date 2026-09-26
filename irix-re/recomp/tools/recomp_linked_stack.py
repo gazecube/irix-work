@@ -177,11 +177,10 @@ def render_function(cname, source, name, start, words):
   branch_cond=static_branch_condition(addr,word) if control else None
   if branch_cond is not None and ctl_here and ctl_here.get('kind')=='jump':
    p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
-   for line in lines:
-    if ('pending_kind' not in line and 'pending_target' not in line and
-        'pc += 4' not in line and
-        line.strip() not in (f'if ({branch_cond}) {{','} else {','}')):
-     p('    '+line)
+   # The branch instruction itself has no side effect beyond selecting the
+   # successor. Do not splice fragments of the decoder's pending-state
+   # if/else into native CFG output.
+   pass
   else:
    for line in lines: p('    '+line)
   p('    if (rt->trapped) return;')
