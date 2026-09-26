@@ -293,8 +293,19 @@ int irix_mips_jit_available(void)
 int irix_mips_jit_requested(void)
 {
     const char *v = getenv("IRIX_EXEC_BACKEND");
-    return v && (!strcmp(v, "jit") || !strcmp(v, "dynarec") ||
-                 !strcmp(v, "unicorn"));
+    if (v && *v) {
+        if (!strcmp(v, "static") || !strcmp(v, "recomp") ||
+            !strcmp(v, "interp") || !strcmp(v, "interpreter") ||
+            !strcmp(v, "off"))
+            return 0;
+        return !strcmp(v, "jit") || !strcmp(v, "dynarec") ||
+               !strcmp(v, "unicorn");
+    }
+#ifdef IRIX_DEFAULT_JIT
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
@@ -493,8 +504,19 @@ int irix_mips_jit_available(void)
 int irix_mips_jit_requested(void)
 {
     const char *v = getenv("IRIX_EXEC_BACKEND");
-    return v && (!strcmp(v, "jit") || !strcmp(v, "dynarec") ||
-                 !strcmp(v, "unicorn"));
+    if (v && *v) {
+        if (!strcmp(v, "static") || !strcmp(v, "recomp") ||
+            !strcmp(v, "interp") || !strcmp(v, "interpreter") ||
+            !strcmp(v, "off"))
+            return 0;
+        return !strcmp(v, "jit") || !strcmp(v, "dynarec") ||
+               !strcmp(v, "unicorn");
+    }
+#ifdef IRIX_DEFAULT_JIT
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
