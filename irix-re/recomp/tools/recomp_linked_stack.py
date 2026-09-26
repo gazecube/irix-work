@@ -77,7 +77,7 @@ def static_branch_condition(addr,insn):
  if op in (0x06,0x16): return '(int64_t)%s <= 0'%r(rs)
  if op in (0x07,0x17): return '(int64_t)%s > 0'%r(rs)
  if op==0x01:
-  if rt in (0x00,0x02): return '(int64_t)%s < 0'%r(rs)
+  if rt in (0x00,0x02,0x10,0x12): return '(int64_t)%s < 0'%r(rs)
   if rt in (0x01,0x03,0x11,0x13): return '(int64_t)%s >= 0'%r(rs)
  if op==0x11 and rs==0x08:
   cond='(cpu->fcr31 & (1u << 23)) != 0'
@@ -132,26 +132,22 @@ def render_function(cname, source, name, start, words):
  end_addr=start+len(words)*4
  control_infos=[static_control_info(addr,word)
                 for addr,word,_lines,control in decoded if control]
- needs_local_dispatch=any(
-  ctl is None or ctl.get('kind')=='call_indirect' or
-  (ctl.get('kind')=='link' and start<=ctl.get('target',0)<end_addr)
+ has_dyn_return=any(ctl and ctl.get('kind')=='return' for ctl in control_infos)
+ has_dyn_jump=any(ctl and ctl.get('kind')=='jump_indirect' for ctl in control_infos)
+ has_dyn_call=any(ctl and ctl.get('kind')=='call_indirect' for ctl in control_infos)
+ has_static_local_call=any(
+  ctl and ctl.get('kind') in ('call','link') and
+  start<=ctl.get('target',0)<end_addr
   for ctl in control_infos)
- has_dynamic_delay=any(
-  idx+1<len(decoded) and control and
-  (static_control_info(addr,word) is None or
-   'target' not in static_control_info(addr,word))
-  for idx,(addr,word,_lines,control) in enumerate(decoded))
+ needs_local_link_stack=has_dyn_return and (has_static_local_call or has_dyn_call)
+ needs_local_dispatch=has_dyn_jump or has_dyn_call or needs_local_link_stack
+ has_dynamic_target=has_dyn_return or has_dyn_jump or has_dyn_call
  p('    IrixGuestAddr pc = cpu->pc;')
- if has_dynamic_delay:
-  p('    IrixGuestAddr pending_target = 0;')
-  p('    IrixGuestAddr pending_return = 0;')
-  p('    int pending_kind = IRIX_PENDING_NONE;')
-  p('    int old_pending;')
-  p('    IrixGuestAddr old_target;')
-  p('    IrixGuestAddr old_return;')
-  if needs_local_dispatch:
-   p('    IrixGuestAddr local_link_returns[64];')
-   p('    unsigned local_link_depth = 0;')
+ if has_dynamic_target:
+  p('    IrixGuestAddr dynamic_target = 0;')
+ if needs_local_link_stack:
+  p('    IrixGuestAddr local_link_returns[64];')
+  p('    unsigned local_link_depth = 0;')
  p()
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
  block_labels=static_block_labels(decoded,start,end_addr)
@@ -172,25 +168,25 @@ def render_function(cname, source, name, start, words):
   if addr in block_labels: p(f'L_{addr:08x}:')
   p(f'    /* 0x{addr:08x}: 0x{word:08x} */')
   prev_ctl=static_control_info(decoded[idx-1][0],decoded[idx-1][1]) if is_delay_slot else None
-  dynamic_delay = is_delay_slot and (prev_ctl is None or 'target' not in prev_ctl)
-  if dynamic_delay:
-   p('    old_pending = pending_kind;')
-   p('    old_target = pending_target;')
-   p('    old_return = pending_return;')
-   p('    pending_kind = IRIX_PENDING_NONE;')
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
   p('    rt->current_pc = pc;')
   ctl_here=static_control_info(addr,word) if control else None
   branch_cond=static_branch_condition(addr,word) if control else None
-  if branch_cond is not None and ctl_here and ctl_here.get('kind')=='jump':
-   p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
-  elif ctl_here and 'target' in ctl_here and ctl_here.get('kind') in ('jump','call','link'):
-   # Direct control is represented entirely by the native post-delay CFG.
-   # Preserve non-pending architectural side effects (e.g. link register).
-   for line in lines:
-    if not any(x in line for x in ('pending_kind','pending_target','pending_return')):
-     p('    '+line)
+  if ctl_here and 'target' in ctl_here:
+   kind=ctl_here.get('kind')
+   if branch_cond is not None and kind in ('jump','link'):
+    p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
+   if kind in ('call','link'):
+    p(f'    cpu->gpr[31] = (uint64_t)(int64_t)(int32_t)0x{(addr+8)&0xffffffff:08x}u;')
+  elif ctl_here and ctl_here.get('kind') in ('return','jump_indirect','call_indirect'):
+   kind=ctl_here.get('kind')
+   rs=(word>>21)&31
+   p(f'    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[{rs}];')
+   if kind=='call_indirect':
+    rd=(word>>11)&31
+    if rd:
+     p(f'    cpu->gpr[{rd}] = (uint64_t)(int64_t)(int32_t)0x{(addr+8)&0xffffffff:08x}u;')
   else:
    for line in lines: p('    '+line)
   p('    if (rt->trapped) return;')
@@ -199,9 +195,10 @@ def render_function(cname, source, name, start, words):
   # prev_ctl was classified before delay-slot state emission.
   # Pending transfers are meaningful only in an architectural delay slot.
   # Keep ordinary straight-line instructions free of the generic resolver.
-  if is_delay_slot:
-   if prev_ctl and 'target' in prev_ctl:
-    target=prev_ctl['target']; kind=prev_ctl['kind']
+  if is_delay_slot and prev_ctl:
+   kind=prev_ctl.get('kind')
+   if 'target' in prev_ctl:
+    target=prev_ctl['target']
     if kind=='jump':
      owner_addr=decoded[idx-1][0]
      branch_cond=static_branch_condition(owner_addr,decoded[idx-1][1])
@@ -221,19 +218,20 @@ def render_function(cname, source, name, start, words):
      else:
       p(f'    if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
       p('    return;')
-    elif kind=='call':
+    elif kind in ('call','link'):
      ret=prev_ctl['ret']
-     p(f'    if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
-     if start<=ret<end_addr: p(f'    goto L_{ret:08x};')
-     else: p('    return;')
-    elif kind=='link':
-     ret=prev_ctl['ret']
-     p('    {')
+     owner_addr=decoded[idx-1][0]
+     branch_cond=static_branch_condition(owner_addr,decoded[idx-1][1]) if kind=='link' else None
+     if branch_cond is not None:
+      p(f'    if (branch_taken_{owner_addr:08x}) {{')
+     else:
+      p('    {')
      if start<=target<end_addr:
-      p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-      p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-      p('        }')
-      p(f'        local_link_returns[local_link_depth++] = 0x{ret:08x}u;')
+      if needs_local_link_stack:
+       p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+       p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+       p('        }')
+       p(f'        local_link_returns[local_link_depth++] = 0x{ret:08x}u;')
       p(f'        goto L_{target:08x};')
      else:
       p(f'        {{ static IrixGuestFunctionEntry *direct_entry_{addr:08x};')
@@ -247,40 +245,34 @@ def render_function(cname, source, name, start, words):
       p(f'              if (irix_guest_call_entry(rt, cpu, 0x{target:08x}u, direct_entry) != 0) return;')
       p(f'          }} else if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
       p('        }')
-      if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
-      else: p('        return;')
      p('    }')
-
-   p('    if (old_pending == IRIX_PENDING_RETURN) {')
-   if needs_local_dispatch:
-    p('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-    p('            local_link_depth--; pc = old_target; goto dispatch_local;')
-    p('        }')
-   p('        return;')
-   p('    }')
-   if needs_local_dispatch:
-    p('    if (old_pending == IRIX_PENDING_CALL) {')
-    p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-    p('        pc = old_return; goto dispatch_local;')
+     if start<=ret<end_addr: p(f'    goto L_{ret:08x};')
+     else: p('    return;')
+   elif kind=='return':
+    if needs_local_link_stack:
+     p('    if (local_link_depth && dynamic_target == local_link_returns[local_link_depth - 1]) {')
+     p('        local_link_depth--; pc = dynamic_target; goto dispatch_local;')
+     p('    }')
+    p('    return;')
+   elif kind=='jump_indirect':
+    p(f'    if (dynamic_target < 0x{start:08x}u || dynamic_target >= 0x{end_addr:08x}u) {{')
+    p('        if (irix_guest_call(rt, cpu, dynamic_target) != 0) return;')
+    p('        return;')
     p('    }')
-    p('    if (old_pending == IRIX_PENDING_LINK) {')
-    p(f'        if (old_target >= 0x{start:08x}u && old_target < 0x{end_addr:08x}u) {{')
-    p('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-    p('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-    p('            }')
-    p('            local_link_returns[local_link_depth++] = old_return;')
-    p('            pc = old_target; goto dispatch_local;')
-    p('        }')
-    p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-    p('        pc = old_return; goto dispatch_local;')
+    p('    pc = dynamic_target; goto dispatch_local;')
+   elif kind=='call_indirect':
+    ret=(decoded[idx-1][0]+8)&0xffffffff
+    p(f'    if (dynamic_target >= 0x{start:08x}u && dynamic_target < 0x{end_addr:08x}u) {{')
+    if needs_local_link_stack:
+     p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+     p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+     p('        }')
+     p(f'        local_link_returns[local_link_depth++] = 0x{ret:08x}u;')
+    p('        pc = dynamic_target; goto dispatch_local;')
     p('    }')
-    p('    if (old_pending == IRIX_PENDING_JUMP) {')
-    p(f'        if (old_target < 0x{start:08x}u || old_target >= 0x{end_addr:08x}u) {{')
-    p('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-    p('            return;')
-    p('        }')
-    p('        pc = old_target; goto dispatch_local;')
-    p('    }')
+    p('    if (irix_guest_call(rt, cpu, dynamic_target) != 0) return;')
+    if start<=ret<end_addr: p(f'    goto L_{ret:08x};')
+    else: p('    return;')
 
   if control:
    ctl=static_control_info(addr,word)
@@ -288,8 +280,12 @@ def render_function(cname, source, name, start, words):
     delay=decoded[idx+1][0]
     after=decoded[idx+2][0] if idx+2<len(decoded) else None
     if ctl and ctl.get('likely') and after is not None:
-     p(f'    if (pc == 0x{addr:08x}u) goto L_{delay:08x};')
-     p(f'    goto L_{after:08x};')
+     cond=static_branch_condition(addr,word)
+     if cond is not None and ctl.get('kind') in ('jump','link'):
+      p(f'    if (branch_taken_{addr:08x}) goto L_{delay:08x};')
+      p(f'    goto L_{after:08x};')
+     else:
+      p(f'    goto L_{delay:08x};')
     else:
      p(f'    goto L_{delay:08x};')
    else:
