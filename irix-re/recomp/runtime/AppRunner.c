@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include "IrixMipsJit.h"
 #include "IrixLibcBridge.h"
 #include "IrixPosixBridge.h"
 #include "IrixCLibExtraBridge.h"
@@ -712,6 +713,18 @@ int main(int argc, char **argv)
     irix_guest_runtime_init(&rt);
     irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
+#ifdef IRIX_JIT_ONLY
+    if (!irix_mips_jit_available()) {
+        fprintf(stderr,
+                "IRIX JIT-only runner requires Unicorn; rebuild after installing unicorn\n");
+        return 1;
+    }
+    if (!irix_mips_jit_requested()) {
+        fprintf(stderr,
+                "IRIX JIT-only runner has JIT disabled by IRIX_EXEC_BACKEND\n");
+        return 1;
+    }
+#endif
 
     /* rld's save_pixie_regs/restore_pixie_regs use fixed scratch storage at
        0x00200780.  Map the containing IRIX 16 KiB page so the original rld
@@ -800,6 +813,8 @@ int main(int argc, char **argv)
     }
 
 #endif
+    (void)rld_elf;
+    (void)have_rld_elf;
     if (irix_libc_bridge_init(&rt, 0x30000000u, 0x04000000u) != 0) {
         fprintf(stderr, "failed to initialize guest heap\n");
         return 1;
