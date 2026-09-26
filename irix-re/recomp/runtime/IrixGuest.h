@@ -14,6 +14,9 @@ extern "C" {
 #define IRIX_GUEST_FUNCTION_CACHE_SIZE 262144
 #define IRIX_GUEST_RLD_WATCH_MAX 32
 
+#define IRIX_GUEST_FUNCTION_NATIVE     0x00000001u
+#define IRIX_GUEST_FUNCTION_RECOMPILED 0x00000002u
+
 typedef uint32_t IrixGuestAddr;
 
 typedef struct IrixGuestElfInfo {
@@ -57,6 +60,7 @@ typedef struct IrixGuestFunctionEntry {
     uint32_t size;
     IrixGuestFunction function;
     const char *name;
+    uint32_t flags;
 } IrixGuestFunctionEntry;
 
 typedef struct IrixGuestRldWatchFrame {
@@ -83,6 +87,7 @@ typedef struct IrixGuestRuntime {
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     IrixGuestFunctionEntry *function_cache[IRIX_GUEST_FUNCTION_CACHE_SIZE];
     size_t function_count;
+    void *jit_state;
 } IrixGuestRuntime;
 
 void irix_guest_runtime_init(IrixGuestRuntime *rt);
@@ -113,6 +118,15 @@ int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
 int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr address,
                                        uint32_t size, IrixGuestFunction function,
                                        const char *name);
+int irix_guest_register_recompiled_function(IrixGuestRuntime *rt,
+                                            IrixGuestAddr address,
+                                            IrixGuestFunction function,
+                                            const char *name);
+int irix_guest_register_recompiled_function_range(IrixGuestRuntime *rt,
+                                                  IrixGuestAddr address,
+                                                  uint32_t size,
+                                                  IrixGuestFunction function,
+                                                  const char *name);
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
