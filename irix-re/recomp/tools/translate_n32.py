@@ -365,6 +365,32 @@ def static_control_info(addr, insn):
     return None
 
 
+def static_branch_condition(addr, insn):
+    """Return a C expression for a statically-decodable conditional branch."""
+    op = insn >> 26
+    rs = (insn >> 21) & 31
+    rt = (insn >> 16) & 31
+    if op in (0x04, 0x14):
+        return '%s == %s' % (reg(rs), reg(rt))
+    if op in (0x05, 0x15):
+        return '%s != %s' % (reg(rs), reg(rt))
+    if op in (0x06, 0x16):
+        return '(int64_t)%s <= 0' % reg(rs)
+    if op in (0x07, 0x17):
+        return '(int64_t)%s > 0' % reg(rs)
+    if op == 0x01:
+        if rt in (0x00, 0x02):
+            return '(int64_t)%s < 0' % reg(rs)
+        if rt in (0x01, 0x03, 0x11, 0x13):
+            return '(int64_t)%s >= 0' % reg(rs)
+    if op == 0x11 and rs == 0x08:
+        cond = '(cpu->fcr31 & (1u << 23)) != 0'
+        if not (rt & 1):
+            cond = '!(%s)' % cond
+        return cond
+    return None
+
+
 def static_cfg_entries(decoded, start, size):
     """Return addresses that can legitimately receive local dynamic control."""
     entries = {start}
@@ -548,7 +574,21 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
             print('            fprintf(stderr, "IRIX 4Dwm callee return: v0=%08x a0=%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4]);')
         if 0x0b2a80d8 <= addr <= 0x0b2a8138:
             print('            fprintf(stderr, "IRIX 4Dwm pretable trace: pc=0x%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x s4=%%08x s5=%%08x s6=%%08x s7=%%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t0=%%08x t1=%%08x t2=%%08x t3=%%08x t4=%%08x t5=%%08x t6=%%08x t7=%%08x\\n", (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21], (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23], (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11], (uint32_t)cpu->gpr[12], (uint32_t)cpu->gpr[13], (uint32_t)cpu->gpr[14], (uint32_t)cpu->gpr[15]);' % addr)
-        for line in lines: print('    '+line)
+        ctl_here = static_control_info(addr, word) if control else None
+        branch_cond = static_branch_condition(addr, word) if control else None
+        # For direct conditional branches, preserve the branch decision in a
+        # plain C boolean. The architectural delay slot still executes below,
+        # but it no longer needs pending_kind/target as its CFG representation.
+        if branch_cond is not None and ctl_here and ctl_here.get('kind') == 'jump':
+            print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
+            for line in lines:
+                if ('pending_kind' not in line and
+                        'pending_target' not in line and
+                        'pc += 4' not in line and
+                        line.strip() not in ('if (%s) {' % branch_cond, '} else {', '}')):
+                    print('    '+line)
+        else:
+            for line in lines: print('    '+line)
         print('    if (rt->trapped) return;')
         print('    cpu->gpr[0] = 0;')
 
@@ -568,7 +608,22 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                 target = prev_ctl['target']
                 kind = prev_ctl['kind']
                 if kind == 'jump':
-                    if start <= target < start + size:
+                    owner_addr = decoded[idx - 1][0]
+                    branch_cond = static_branch_condition(owner_addr, decoded[idx - 1][1])
+                    if branch_cond is not None:
+                        after = addr + 4
+                        if start <= target < start + size:
+                            print('    if (branch_taken_%08x) goto L_%08x;' % (owner_addr, target))
+                        else:
+                            print('    if (branch_taken_%08x) {' % owner_addr)
+                            print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                            print('        return;')
+                            print('    }')
+                        if start <= after < start + size:
+                            print('    goto L_%08x;' % after)
+                        else:
+                            print('    return;')
+                    elif start <= target < start + size:
                         print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) goto L_%08x;' %
                               (target, target))
                     else:
