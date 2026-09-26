@@ -558,6 +558,125 @@ static int mapped_exec(IrixGuestRuntime *rt, IrixGuestAddr pc)
     return 0;
 }
 
+int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                          IrixGuestAddr address)
+{
+    IrixGuestAddr pc = address;
+    uint32_t insn, op, rs, rtno, rd, fn;
+    int taken = 0, likely = 0, link = 0;
+    IrixGuestAddr target = 0, next = pc + 8u;
+
+    if (!mapped_exec(rt, pc))
+        return -1;
+
+    insn = irix_guest_read32be(rt, pc);
+    if (rt->trapped)
+        return -1;
+
+    op = insn >> 26;
+    rs = (insn >> 21) & 31u;
+    rtno = (insn >> 16) & 31u;
+    rd = (insn >> 11) & 31u;
+    fn = insn & 63u;
+
+    if (!is_control(insn)) {
+        int rc = exec_simple(rt, cpu, pc, insn);
+        if (rc != 0)
+            return -1;
+        cpu->pc = pc + 4u;
+        rt->current_pc = cpu->pc;
+        cpu->gpr[0] = 0;
+        return rt->trapped ? -1 : 0;
+    }
+
+    if (op == 0u && fn == 0x08u) {
+        target = (IrixGuestAddr)(uint32_t)cpu->gpr[rs];
+        if (exec_delay(rt, cpu, pc + 4u) != 0)
+            return -1;
+        cpu->pc = target;
+        rt->current_pc = target;
+        cpu->gpr[0] = 0;
+        return rt->trapped ? -1 : 0;
+    }
+
+    if (op == 0u && fn == 0x09u) {
+        target = (IrixGuestAddr)(uint32_t)cpu->gpr[rs];
+        if (rd)
+            cpu->gpr[rd] = sx32(pc + 8u);
+        if (exec_delay(rt, cpu, pc + 4u) != 0)
+            return -1;
+        cpu->pc = target;
+        rt->current_pc = target;
+        cpu->gpr[0] = 0;
+        return rt->trapped ? -1 : 0;
+    }
+
+    if (op == 0x02u || op == 0x03u) {
+        target = ((pc + 4u) & 0xf0000000u) |
+                 ((insn & 0x03ffffffu) << 2);
+        if (op == 0x03u)
+            cpu->gpr[31] = sx32(pc + 8u);
+        if (exec_delay(rt, cpu, pc + 4u) != 0)
+            return -1;
+        cpu->pc = target;
+        rt->current_pc = target;
+        cpu->gpr[0] = 0;
+        return rt->trapped ? -1 : 0;
+    }
+
+    if (op == 0x11u && rs == 0x08u) {
+        int tf = rtno & 1u;
+        likely = (rtno & 2u) != 0;
+        taken = ((cpu->fcr31 & (1u << 23)) != 0) == tf;
+        target = pc + 4u +
+                 ((int32_t)(int16_t)(insn & 0xffffu) << 2);
+    } else if (op == 0x01u) {
+        int32_t v = (int32_t)(uint32_t)cpu->gpr[rs];
+        switch (rtno) {
+        case 0x00: taken = v < 0; break;
+        case 0x01: taken = v >= 0; break;
+        case 0x02: taken = v < 0; likely = 1; break;
+        case 0x03: taken = v >= 0; likely = 1; break;
+        case 0x10: taken = v < 0; link = 1; break;
+        case 0x11: taken = v >= 0; link = 1; break;
+        case 0x12: taken = v < 0; link = 1; likely = 1; break;
+        case 0x13: taken = v >= 0; link = 1; likely = 1; break;
+        default:
+            return -1;
+        }
+        target = pc + 4u +
+                 ((int32_t)(int16_t)(insn & 0xffffu) << 2);
+        if (link)
+            cpu->gpr[31] = sx32(pc + 8u);
+    } else {
+        int64_t sv = (int64_t)cpu->gpr[rs];
+        switch (op) {
+        case 0x04: taken = cpu->gpr[rs] == cpu->gpr[rtno]; break;
+        case 0x05: taken = cpu->gpr[rs] != cpu->gpr[rtno]; break;
+        case 0x06: taken = sv <= 0; break;
+        case 0x07: taken = sv > 0; break;
+        case 0x14: taken = cpu->gpr[rs] == cpu->gpr[rtno]; likely = 1; break;
+        case 0x15: taken = cpu->gpr[rs] != cpu->gpr[rtno]; likely = 1; break;
+        case 0x16: taken = sv <= 0; likely = 1; break;
+        case 0x17: taken = sv > 0; likely = 1; break;
+        default:
+            return -1;
+        }
+        target = pc + 4u +
+                 ((int32_t)(int16_t)(insn & 0xffffu) << 2);
+    }
+
+    if (!(likely && !taken)) {
+        if (exec_delay(rt, cpu, pc + 4u) != 0)
+            return -1;
+    }
+
+    cpu->pc = taken ? target : next;
+    rt->current_pc = cpu->pc;
+    cpu->gpr[0] = 0;
+    return rt->trapped ? -1 : 0;
+}
+
 int irix_mips_interp_should_force(IrixGuestAddr address)
 {
     static int init;
