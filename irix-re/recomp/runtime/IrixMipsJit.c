@@ -12,7 +12,9 @@ typedef enum IrixJitStopReason {
     IRIX_JIT_STOP_NONE = 0,
     IRIX_JIT_STOP_NATIVE,
     IRIX_JIT_STOP_INTERRUPT,
-    IRIX_JIT_STOP_MEMORY
+    IRIX_JIT_STOP_MEMORY,
+    IRIX_JIT_STOP_TRAP_SKIP,
+    IRIX_JIT_STOP_TRAP_TAKEN
 } IrixJitStopReason;
 
 typedef struct IrixMipsJitState {
@@ -191,6 +193,75 @@ static void trace_code_hook(uc_engine *uc, uint64_t address,
     s->last_pc = (IrixGuestAddr)(uint32_t)address;
 }
 
+static void trap_instruction_hook(uc_engine *uc, uint64_t address,
+                                  uint32_t size, void *opaque)
+{
+    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+    IrixGuestAddr pc = (IrixGuestAddr)(uint32_t)address;
+    uint32_t insn, op, rs, rtno, fn;
+    uint64_t rsv = 0, rtv = 0;
+    int take = 0;
+    int is_trap = 0;
+    int16_t simm;
+
+    (void)size;
+    if (!irix_guest_ptr(s->rt, pc, 4u))
+        return;
+
+    insn = irix_guest_read32be(s->rt, pc);
+    op = insn >> 26;
+    rs = (insn >> 21) & 31u;
+    rtno = (insn >> 16) & 31u;
+    fn = insn & 63u;
+    simm = (int16_t)(insn & 0xffffu);
+
+    if (op == 0u &&
+        (fn == 0x30u || fn == 0x31u || fn == 0x32u ||
+         fn == 0x33u || fn == 0x34u || fn == 0x36u)) {
+        is_trap = 1;
+        if (uc_reg_read(uc, gpr_regs[rs], &rsv) != UC_ERR_OK ||
+            uc_reg_read(uc, gpr_regs[rtno], &rtv) != UC_ERR_OK)
+            return;
+        switch (fn) {
+        case 0x30u: take = (int64_t)rsv >= (int64_t)rtv; break; /* TGE */
+        case 0x31u: take = rsv >= rtv; break;                    /* TGEU */
+        case 0x32u: take = (int64_t)rsv < (int64_t)rtv; break;  /* TLT */
+        case 0x33u: take = rsv < rtv; break;                     /* TLTU */
+        case 0x34u: take = rsv == rtv; break;                    /* TEQ */
+        case 0x36u: take = rsv != rtv; break;                    /* TNE */
+        }
+    } else if (op == 0x01u &&
+               (rtno == 0x08u || rtno == 0x09u || rtno == 0x0au ||
+                rtno == 0x0bu || rtno == 0x0cu || rtno == 0x0eu)) {
+        uint64_t imm64 = (uint64_t)(int64_t)simm;
+        is_trap = 1;
+        if (uc_reg_read(uc, gpr_regs[rs], &rsv) != UC_ERR_OK)
+            return;
+        switch (rtno) {
+        case 0x08u: take = (int64_t)rsv >= (int64_t)simm; break; /* TGEI */
+        case 0x09u: take = rsv >= imm64; break;                   /* TGEIU */
+        case 0x0au: take = (int64_t)rsv < (int64_t)simm; break;  /* TLTI */
+        case 0x0bu: take = rsv < imm64; break;                    /* TLTIU */
+        case 0x0cu: take = rsv == imm64; break;                   /* TEQI */
+        case 0x0eu: take = rsv != imm64; break;                   /* TNEI */
+        }
+    }
+
+    if (!is_trap)
+        return;
+
+    s->last_pc = pc;
+    s->stop_address = take ? pc : pc + 4u;
+    s->stop_reason = take ? IRIX_JIT_STOP_TRAP_TAKEN
+                          : IRIX_JIT_STOP_TRAP_SKIP;
+    if (s->trace_code) {
+        fprintf(stderr,
+                "IRIX JIT trap shim: pc=%08x insn=%08x take=%d rs=%08x rt=%08x\n",
+                pc, insn, take, (uint32_t)rsv, (uint32_t)rtv);
+    }
+    (void)uc_emu_stop(uc);
+}
+
 static void interrupt_hook(uc_engine *uc, uint32_t intno, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
@@ -331,6 +402,17 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
                       (void *)block_hook, s, 1, 0);
     if (err != UC_ERR_OK)
         goto fail;
+
+    /*
+     * Unicorn's R4000 path currently reports several architectural MIPS trap
+     * instructions as RI.  Intercept them before execution so false traps can
+     * remain on the JIT fast path instead of dropping into the interpreter.
+     */
+    err = uc_hook_add(s->uc, &hook, UC_HOOK_CODE,
+                      (void *)trap_instruction_hook, s, 1, 0);
+    if (err != UC_ERR_OK)
+        goto fail;
+
     if (s->trace_code) {
         err = uc_hook_add(s->uc, &hook, UC_HOOK_CODE,
                           (void *)trace_code_hook, s, 1, 0);
@@ -481,6 +563,22 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         (uint32_t)cpu->gpr[6],
                         (uint32_t)cpu->gpr[7]);
             }
+        }
+
+        if (s->stop_reason == IRIX_JIT_STOP_TRAP_SKIP) {
+            cpu->pc = s->stop_address;
+            rt->current_pc = cpu->pc;
+            continue;
+        }
+
+        if (s->stop_reason == IRIX_JIT_STOP_TRAP_TAKEN) {
+            cpu->pc = s->stop_address;
+            rt->current_pc = cpu->pc;
+            rt->fault_addr = 0;
+            irix_guest_trap(rt, cpu, 0xeeee4013u);
+            if (synthetic_return)
+                cpu->gpr[31] = original_ra;
+            return -1;
         }
 
         if (s->stop_reason == IRIX_JIT_STOP_NATIVE) {
