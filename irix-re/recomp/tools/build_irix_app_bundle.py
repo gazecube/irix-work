@@ -402,11 +402,66 @@ def main():
     # Audit the complete app closure first so decoder holes are reported once.
     run([sys.executable, here / 'audit_n32_bundle.py', *[p for _, p in components]])
 
+    # Translation is substantially more expensive than installing an already
+    # generated tree, and every ecosystem application has a heavily
+    # overlapping DSO closure. Cache the complete recomp_elf_bundle output
+    # across applications before the existing object cache gets involved.
+    #
+    # Include every Python source in the translator directory in the key.
+    # recomp_elf_bundle imports the N32 decoder/emitter modules, so changing
+    # any of those must invalidate generated C even when the guest DSO itself
+    # is unchanged.
+    translation_cache = out.parent / '.irix-translation-cache'
+    translation_cache.mkdir(parents=True, exist_ok=True)
+    translator_digest = hashlib.sha256()
+    for tool_src in sorted(here.glob('*.py')):
+        translator_digest.update(tool_src.name.encode('utf-8'))
+        translator_digest.update(tool_src.read_bytes())
+    translator_digest = translator_digest.digest()
+
+    def translation_key(prefix, binary):
+        h = hashlib.sha256()
+        h.update(binary.read_bytes())
+        h.update(prefix.encode('utf-8'))
+        h.update(translator_digest)
+        return h.hexdigest()
+
+    def install_generated_tree(cache_dir, dst):
+        if dst.exists():
+            shutil.rmtree(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        # copytree's hardlink copy function keeps the per-app generated trees
+        # effectively free on the common filesystem while preserving the path
+        # layout expected by bundle.json and the downstream compiler.
+        try:
+            shutil.copytree(cache_dir, dst, copy_function=os.link)
+        except OSError:
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(cache_dir, dst, copy_function=shutil.copy2)
+
     bundles = []
     for prefix, binary in components:
         dst = gen / prefix
-        run([sys.executable, here / 'recomp_elf_bundle.py', binary,
-             '-o', dst, '--prefix', prefix])
+        key = translation_key(prefix, binary)
+        cache_dir = translation_cache / key
+        lock_path = translation_cache / (key + '.lock')
+        with open(lock_path, 'a+b') as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if not (cache_dir / 'bundle.json').is_file():
+                tmp = translation_cache / (key + '.tmp.%d' % os.getpid())
+                if tmp.exists():
+                    shutil.rmtree(tmp)
+                run([sys.executable, here / 'recomp_elf_bundle.py', binary,
+                     '-o', tmp, '--prefix', prefix])
+                try:
+                    os.replace(tmp, cache_dir)
+                except OSError:
+                    if cache_dir.exists():
+                        shutil.rmtree(tmp, ignore_errors=True)
+                    else:
+                        raise
+            install_generated_tree(cache_dir, dst)
         bundles.append(dst / 'bundle.json')
 
     bind = gen / 'bindings'
