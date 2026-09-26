@@ -504,21 +504,23 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
          start <= ctl.get('target', 0) < start + size)
         for ctl in control_infos
     )
+    has_dynamic_delay = any(
+        idx + 1 < len(decoded) and control and
+        (static_control_info(addr, word) is None or
+         'target' not in static_control_info(addr, word))
+        for idx, (addr, word, _lines, control) in enumerate(decoded)
+    )
     print('    IrixGuestAddr pc = cpu->pc;')
-    if needs_local_dispatch:
+    if has_dynamic_delay:
         print('    IrixGuestAddr pending_target = 0;')
-    if needs_local_dispatch and 'pending_return' in emitted_lines:
         print('    IrixGuestAddr pending_return = 0;')
-    if has_delay_slot or 'pending_kind' in emitted_lines:
         print('    int pending_kind = IRIX_PENDING_NONE;')
-    if has_delay_slot:
         print('    int old_pending;')
-        if needs_local_dispatch:
-            print('    IrixGuestAddr old_target;')
-        if needs_local_dispatch:
-            print('    IrixGuestAddr old_return;')
-            print('    IrixGuestAddr local_link_returns[64];')
-            print('    unsigned local_link_depth = 0;')
+        print('    IrixGuestAddr old_target;')
+        print('    IrixGuestAddr old_return;')
+    if needs_local_dispatch:
+        print('    IrixGuestAddr local_link_returns[64];')
+        print('    unsigned local_link_depth = 0;')
     print('')
     cfg_entries = static_cfg_entries(decoded, start, size)
     block_labels = static_block_labels(decoded, start, size)
