@@ -126,15 +126,16 @@ def render_function(cname, source, name, start, words):
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
  block_labels=static_block_labels(decoded,start,end_addr)
  p(f'    goto L_{start:08x};')
- p('dispatch_local:')
- p('    switch (pc) {')
- for addr in sorted(cfg_entries):
-  p(f'    case 0x{addr:08x}u: goto L_{addr:08x};')
- p('    default:')
- p('        (void)irix_mips_interp_call(rt, cpu, pc);')
- p('        return;')
- p('    }')
- p()
+ if has_delay_slot:
+  p('dispatch_local:')
+  p('    switch (pc) {')
+  for addr in sorted(cfg_entries):
+   p(f'    case 0x{addr:08x}u: goto L_{addr:08x};')
+  p('    default:')
+  p('        (void)irix_mips_interp_call(rt, cpu, pc);')
+  p('        return;')
+  p('    }')
+  p()
 
  for idx,(addr,word,lines,control) in enumerate(decoded):
   is_delay_slot=bool(idx and decoded[idx-1][0]+4==addr and decoded[idx-1][3]=='control')
