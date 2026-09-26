@@ -526,75 +526,81 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # the pending transfer directly to C labels instead of re-entering the
         # local-PC dispatcher.
         prev_ctl = None
-        if idx and decoded[idx - 1][0] + 4 == addr:
+        is_delay_slot = bool(idx and decoded[idx - 1][0] + 4 == addr and
+                             decoded[idx - 1][3] == 'control')
+        if is_delay_slot:
             prev_ctl = static_control_info(decoded[idx - 1][0],
                                            decoded[idx - 1][1])
-        if prev_ctl and 'target' in prev_ctl:
-            target = prev_ctl['target']
-            kind = prev_ctl['kind']
-            if kind == 'jump':
-                if start <= target < start + size:
-                    print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) goto L_%08x;' %
-                          (target, target))
-                else:
-                    print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) {' % target)
-                    print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-                    print('        return;')
-                    print('    }')
-            elif kind == 'call':
-                ret = prev_ctl['ret']
-                print('    if (old_pending == IRIX_PENDING_CALL && old_target == 0x%08xu) {' % target)
-                print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
-                if start <= ret < start + size:
-                    print('        goto L_%08x;' % ret)
-                else:
-                    print('        return;')
-                print('    }')
-            elif kind == 'link':
-                ret = prev_ctl['ret']
-                print('    if (old_pending == IRIX_PENDING_LINK && old_target == 0x%08xu) {' % target)
-                if start <= target < start + size:
-                    print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-                    print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-                    print('        }')
-                    print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
-                    print('        goto L_%08x;' % target)
-                else:
+        # Pending transfers exist only while executing a MIPS delay slot.
+        # Ordinary straight-line instructions cannot observe pending state,
+        # so do not emit the large generic resolver for every instruction.
+        if is_delay_slot:
+            if prev_ctl and 'target' in prev_ctl:
+                target = prev_ctl['target']
+                kind = prev_ctl['kind']
+                if kind == 'jump':
+                    if start <= target < start + size:
+                        print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) goto L_%08x;' %
+                              (target, target))
+                    else:
+                        print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) {' % target)
+                        print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+                        print('        return;')
+                        print('    }')
+                elif kind == 'call':
+                    ret = prev_ctl['ret']
+                    print('    if (old_pending == IRIX_PENDING_CALL && old_target == 0x%08xu) {' % target)
                     print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
                     if start <= ret < start + size:
                         print('        goto L_%08x;' % ret)
                     else:
                         print('        return;')
-                print('    }')
+                    print('    }')
+                elif kind == 'link':
+                    ret = prev_ctl['ret']
+                    print('    if (old_pending == IRIX_PENDING_LINK && old_target == 0x%08xu) {' % target)
+                    if start <= target < start + size:
+                        print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+                        print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+                        print('        }')
+                        print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
+                        print('        goto L_%08x;' % target)
+                    else:
+                        print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                        if start <= ret < start + size:
+                            print('        goto L_%08x;' % ret)
+                        else:
+                            print('        return;')
+                    print('    }')
 
-        print('    if (old_pending == IRIX_PENDING_RETURN) {')
-        print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-        print('            local_link_depth--; pc = old_target; goto dispatch_local;')
-        print('        }')
-        print('        return;')
-        print('    }')
-        print('    if (old_pending == IRIX_PENDING_CALL) {')
-        print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-        print('        pc = old_return; goto dispatch_local;')
-        print('    }')
-        print('    if (old_pending == IRIX_PENDING_LINK) {')
-        print('        if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size))
-        print('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-        print('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-        print('            }')
-        print('            local_link_returns[local_link_depth++] = old_return;')
-        print('            pc = old_target; goto dispatch_local;')
-        print('        }')
-        print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-        print('        pc = old_return; goto dispatch_local;')
-        print('    }')
-        print('    if (old_pending == IRIX_PENDING_JUMP) {')
-        print('        if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size))
-        print('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-        print('            return;')
-        print('        }')
-        print('        pc = old_target; goto dispatch_local;')
-        print('    }')
+            print('    if (old_pending == IRIX_PENDING_RETURN) {')
+            print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
+            print('            local_link_depth--; pc = old_target; goto dispatch_local;')
+            print('        }')
+            print('        return;')
+            print('    }')
+            print('    if (old_pending == IRIX_PENDING_CALL) {')
+            print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+            print('        pc = old_return; goto dispatch_local;')
+            print('    }')
+            print('    if (old_pending == IRIX_PENDING_LINK) {')
+            print('        if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size))
+            print('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+            print('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+            print('            }')
+            print('            local_link_returns[local_link_depth++] = old_return;')
+            print('            pc = old_target; goto dispatch_local;')
+            print('        }')
+            print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+            print('        pc = old_return; goto dispatch_local;')
+            print('    }')
+            print('    if (old_pending == IRIX_PENDING_JUMP) {')
+            print('        if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size))
+            print('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+            print('            return;')
+            print('        }')
+            print('        pc = old_target; goto dispatch_local;')
+            print('    }')
         if control:
             ctl = static_control_info(addr, word)
             # Direct control transfers always execute the following delay
