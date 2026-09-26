@@ -27,6 +27,212 @@ typedef struct IrixKernelSigAction {
 
 static IrixKernelSigAction g_kernel_sigactions[IRIX_NSIG];
 
+
+#define IRIX_PROFILE_FN_SLOTS   262144u
+#define IRIX_PROFILE_EDGE_SLOTS 524288u
+
+typedef struct IrixGuestProfileFunction {
+    IrixGuestAddr address;
+    uint32_t flags;
+    uint64_t count;
+    const char *name;
+    int used;
+} IrixGuestProfileFunction;
+
+typedef struct IrixGuestProfileEdge {
+    IrixGuestAddr caller;
+    IrixGuestAddr callee;
+    uint64_t count;
+    int used;
+} IrixGuestProfileEdge;
+
+typedef struct IrixGuestProfileState {
+    char *path;
+    char *process_name;
+    IrixGuestProfileFunction *functions;
+    IrixGuestProfileEdge *edges;
+    size_t function_used;
+    size_t edge_used;
+} IrixGuestProfileState;
+
+static uint32_t irix_profile_hash32(uint32_t x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static char *irix_profile_strdup(const char *s)
+{
+    size_t n;
+    char *out;
+    if (!s) return 0;
+    n = strlen(s) + 1u;
+    out = (char *)malloc(n);
+    if (out) memcpy(out, s, n);
+    return out;
+}
+
+static void irix_guest_profile_init(IrixGuestRuntime *rt)
+{
+    const char *dir = getenv("IRIX_PROFILE_DIR");
+    const char *name = getenv("IRIX_PROFILE_NAME");
+    IrixGuestProfileState *p;
+    size_t path_n;
+    char *path;
+
+    if (!dir || !*dir)
+        return;
+    if (!name || !*name)
+        name = "irix-process";
+
+    (void)mkdir(dir, 0777);
+    p = (IrixGuestProfileState *)calloc(1, sizeof(*p));
+    if (!p)
+        return;
+    p->functions = (IrixGuestProfileFunction *)calloc(
+        IRIX_PROFILE_FN_SLOTS, sizeof(*p->functions));
+    p->edges = (IrixGuestProfileEdge *)calloc(
+        IRIX_PROFILE_EDGE_SLOTS, sizeof(*p->edges));
+    p->process_name = irix_profile_strdup(name);
+    if (!p->functions || !p->edges || !p->process_name)
+        goto fail;
+
+    path_n = strlen(dir) + strlen(name) + 64u;
+    path = (char *)malloc(path_n);
+    if (!path)
+        goto fail;
+    snprintf(path, path_n, "%s/%s-%ld.tsv", dir, name, (long)getpid());
+    p->path = path;
+    rt->profile_state = p;
+    fprintf(stderr, "IRIX profile: process=%s output=%s\n", name, path);
+    return;
+
+fail:
+    free(p->functions);
+    free(p->edges);
+    free(p->process_name);
+    free(p->path);
+    free(p);
+}
+
+static void irix_guest_profile_hit(IrixGuestRuntime *rt,
+                                   IrixGuestAddr caller,
+                                   IrixGuestAddr callee,
+                                   IrixGuestFunctionEntry *entry)
+{
+    IrixGuestProfileState *p = (IrixGuestProfileState *)rt->profile_state;
+    uint32_t slot, start;
+
+    if (!p || !callee)
+        return;
+
+    slot = irix_profile_hash32(callee) & (IRIX_PROFILE_FN_SLOTS - 1u);
+    start = slot;
+    while (p->functions[slot].used &&
+           p->functions[slot].address != callee) {
+        slot = (slot + 1u) & (IRIX_PROFILE_FN_SLOTS - 1u);
+        if (slot == start)
+            break;
+    }
+    if (!p->functions[slot].used) {
+        p->functions[slot].used = 1;
+        p->functions[slot].address = callee;
+        p->functions[slot].flags = entry ? entry->flags : 0u;
+        p->functions[slot].name = entry ? entry->name : 0;
+        ++p->function_used;
+    }
+    ++p->functions[slot].count;
+
+    if (caller) {
+        uint32_t h = irix_profile_hash32(caller ^ (callee * 0x9e3779b9u));
+        slot = h & (IRIX_PROFILE_EDGE_SLOTS - 1u);
+        start = slot;
+        while (p->edges[slot].used &&
+               (p->edges[slot].caller != caller ||
+                p->edges[slot].callee != callee)) {
+            slot = (slot + 1u) & (IRIX_PROFILE_EDGE_SLOTS - 1u);
+            if (slot == start)
+                break;
+        }
+        if (!p->edges[slot].used) {
+            p->edges[slot].used = 1;
+            p->edges[slot].caller = caller;
+            p->edges[slot].callee = callee;
+            ++p->edge_used;
+        }
+        ++p->edges[slot].count;
+    }
+}
+
+static void irix_profile_write_name(FILE *out, const char *name)
+{
+    const unsigned char *s = (const unsigned char *)(name ? name : "?");
+    while (*s) {
+        unsigned char ch = *s++;
+        fputc((ch == '\t' || ch == '\r' || ch == '\n') ? ' ' : ch, out);
+    }
+}
+
+static void irix_guest_profile_flush(IrixGuestRuntime *rt)
+{
+    IrixGuestProfileState *p = (IrixGuestProfileState *)rt->profile_state;
+    FILE *out;
+    size_t i;
+
+    if (!p || !p->path)
+        return;
+    out = fopen(p->path, "w");
+    if (!out) {
+        fprintf(stderr, "IRIX profile: cannot write %s: %s\n",
+                p->path, strerror(errno));
+        return;
+    }
+
+    fprintf(out, "# irix-call-profile-v1\n");
+    fprintf(out, "# process\t%s\n", p->process_name ? p->process_name : "?");
+    fprintf(out, "# functions\t%zu\n", p->function_used);
+    fprintf(out, "# edges\t%zu\n", p->edge_used);
+    for (i = 0; i < IRIX_PROFILE_FN_SLOTS; ++i) {
+        IrixGuestProfileFunction *fn = &p->functions[i];
+        if (!fn->used)
+            continue;
+        fprintf(out, "F\t%08x\t%llu\t%08x\t",
+                fn->address, (unsigned long long)fn->count, fn->flags);
+        irix_profile_write_name(out, fn->name);
+        fputc('\n', out);
+    }
+    for (i = 0; i < IRIX_PROFILE_EDGE_SLOTS; ++i) {
+        IrixGuestProfileEdge *edge = &p->edges[i];
+        if (!edge->used)
+            continue;
+        fprintf(out, "E\t%08x\t%08x\t%llu\n",
+                edge->caller, edge->callee,
+                (unsigned long long)edge->count);
+    }
+    fclose(out);
+    fprintf(stderr,
+            "IRIX profile: wrote %zu functions and %zu call edges to %s\n",
+            p->function_used, p->edge_used, p->path);
+}
+
+static void irix_guest_profile_destroy(IrixGuestRuntime *rt)
+{
+    IrixGuestProfileState *p = (IrixGuestProfileState *)rt->profile_state;
+    if (!p)
+        return;
+    irix_guest_profile_flush(rt);
+    free(p->functions);
+    free(p->edges);
+    free(p->path);
+    free(p->process_name);
+    free(p);
+    rt->profile_state = 0;
+}
+
 static int read_irix_sigaction_n32(IrixGuestRuntime *rt, IrixGuestAddr addr,
                                    IrixKernelSigAction *out)
 {
@@ -81,11 +287,13 @@ static void memory_fault(IrixGuestRuntime *rt, IrixGuestAddr addr)
 void irix_guest_runtime_init(IrixGuestRuntime *rt)
 {
     memset(rt, 0, sizeof(*rt));
+    irix_guest_profile_init(rt);
 }
 
 void irix_guest_runtime_destroy(IrixGuestRuntime *rt)
 {
     size_t i;
+    irix_guest_profile_destroy(rt);
     irix_mips_jit_shutdown(rt);
     for (i = 0; i < rt->memory.count; ++i)
         free(rt->memory.segments[i].host_base);
@@ -2340,8 +2548,11 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address, IrixGuestFunctionEntry *entry)
 {
+    IrixGuestAddr caller;
     if (!entry || entry->address != address)
         return irix_guest_call(rt, cpu, address);
+    caller = rt->current_pc;
+    irix_guest_profile_hit(rt, caller, address, entry);
     if (irix_mips_jit_requested() &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE))
         return irix_mips_jit_call(rt, cpu, address);
@@ -2350,7 +2561,9 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
+    IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    irix_guest_profile_hit(rt, caller, address, entry);
     if (irix_mips_jit_requested() &&
         (!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_mips_jit_call(rt, cpu, address);
