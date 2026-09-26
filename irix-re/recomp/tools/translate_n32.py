@@ -366,31 +366,43 @@ def static_control_info(addr, insn):
 
 
 def static_cfg_entries(decoded, start, size):
-    """Return addresses that can legitimately receive local dynamic control.
-
-    Straight-line instructions do not need dispatcher cases.  Static edges
-    are emitted as direct C gotos; this set exists only for returns from
-    indirect calls/local link branches and genuinely computed local jumps.
-    """
+    """Return addresses that can legitimately receive local dynamic control."""
     entries = {start}
     end = start + size
-    for idx, (addr, word, _lines, control) in enumerate(decoded):
+    for addr, word, _lines, control in decoded:
         if not control:
             continue
         ctl = static_control_info(addr, word)
         if ctl and 'target' in ctl and start <= ctl['target'] < end:
             entries.add(ctl['target'])
-        # A call/link resumes after its architectural delay slot.  Indirect
-        # calls are included here too: their return PC is statically known.
         if ctl and ctl.get('kind') in ('call', 'call_indirect', 'link'):
             ret = ctl.get('ret', (addr + 8) & 0xffffffff)
             if start <= ret < end:
                 entries.add(ret)
-        elif ctl is None or ctl.get('kind') in ('call_indirect',):
+        elif ctl is None:
             ret = (addr + 8) & 0xffffffff
             if start <= ret < end:
                 entries.add(ret)
     return entries
+
+
+def static_block_labels(decoded, start, size):
+    """Labels required by emitted static CFG edges.
+
+    Ordinary sequential instructions deliberately have no C label.  Delay
+    slots are block entries because control instructions jump to them, and
+    branch-likely needs the post-delay address as a second successor.
+    """
+    labels = set(static_cfg_entries(decoded, start, size))
+    for idx, (addr, word, _lines, control) in enumerate(decoded):
+        if not control:
+            continue
+        if idx + 1 < len(decoded):
+            labels.add(decoded[idx + 1][0])
+        ctl = static_control_info(addr, word)
+        if ctl and ctl.get('likely') and idx + 2 < len(decoded):
+            labels.add(decoded[idx + 2][0])
+    return labels
 
 
 def emit_range(path, name, start, size, c_prefix='', shndx=None,
@@ -451,6 +463,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('    unsigned local_link_depth = 0;')
     print('')
     cfg_entries = static_cfg_entries(decoded, start, size)
+    block_labels = static_block_labels(decoded, start, size)
     print('    goto L_%08x;' % start)
     print('')
     print('dispatch_local:')
@@ -465,7 +478,9 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('    }')
     print('')
     for idx,(addr,word,lines,control) in enumerate(decoded):
-        print('L_%08x: /* 0x%08x */'%(addr,word))
+        if addr in block_labels:
+            print('L_%08x:' % addr)
+        print('    /* 0x%08x: 0x%08x */' % (addr, word))
         print('    old_pending = pending_kind;')
         print('    old_target = pending_target;')
         print('    old_return = pending_return;')
@@ -596,7 +611,10 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
             else:
                 print('    return;')
         elif idx + 1 < len(decoded):
-            print('    goto L_%08x;' % decoded[idx + 1][0])
+            # Straight-line code falls through in C.  Emit no per-instruction
+            # label/goto pair; a label appears only if the next instruction is
+            # a genuine CFG entry for some other edge.
+            pass
         else:
             print('    return;')
         print('')
