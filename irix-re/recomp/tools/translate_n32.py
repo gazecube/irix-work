@@ -514,9 +514,10 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     if has_delay_slot:
         print('    int old_pending;')
         print('    IrixGuestAddr old_target;')
-        print('    IrixGuestAddr old_return;')
-        print('    IrixGuestAddr local_link_returns[64];')
-        print('    unsigned local_link_depth = 0;')
+        if needs_local_dispatch:
+            print('    IrixGuestAddr old_return;')
+            print('    IrixGuestAddr local_link_returns[64];')
+            print('    unsigned local_link_depth = 0;')
     print('')
     cfg_entries = static_cfg_entries(decoded, start, size)
     block_labels = static_block_labels(decoded, start, size)
@@ -543,7 +544,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         if is_delay_slot:
             print('    old_pending = pending_kind;')
             print('    old_target = pending_target;')
-            print('    old_return = pending_return;')
+            if needs_local_dispatch:
+                print('    old_return = pending_return;')
             print('    pending_kind = IRIX_PENDING_NONE;')
         print('    pc = 0x%08xu;' % addr)
         print('    cpu->pc = pc;')
