@@ -106,7 +106,9 @@ def static_block_labels(decoded,start,end_addr):
   if not control: continue
   if idx+1<len(decoded): labels.add(decoded[idx+1][0])
   ctl=static_control_info(addr,word)
-  if ctl and ctl.get('likely') and idx+2<len(decoded):
+  # Native conditional-branch lowering emits an explicit goto to the
+  # post-delay fallthrough block for both normal and likely branches.
+  if ctl and static_branch_condition(addr,word) is not None and idx+2<len(decoded):
    labels.add(decoded[idx+2][0])
  return labels
 
