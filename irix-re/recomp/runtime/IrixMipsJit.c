@@ -335,6 +335,45 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
     return false;
 }
 
+static void trace_stack_write_hook(uc_engine *uc, uc_mem_type type,
+                                   uint64_t address, int size,
+                                   int64_t value, void *opaque)
+{
+    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+    uint64_t pc = 0, sp = 0, ra = 0;
+    uint64_t uvalue = (uint64_t)value;
+    int interesting = 0;
+
+    (void)type;
+
+    /*
+     * Current failing frame restores RA from 0x7fdfe128.  Also report any
+     * guest stack write whose value is 0x1000 so we can catch the producer
+     * if the exact frame shifts slightly between runs.
+     */
+    if (address <= UINT64_C(0x7fdfe128) &&
+        address + (uint64_t)size > UINT64_C(0x7fdfe128))
+        interesting = 1;
+    if (address >= UINT64_C(0x7f000000) &&
+        address < UINT64_C(0x80000000) &&
+        (uint32_t)uvalue == 0x00001000u)
+        interesting = 1;
+
+    if (!interesting)
+        return;
+
+    (void)uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
+    (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+    (void)uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+
+    fprintf(stderr,
+            "IRIX JIT stack write: pc=%08x addr=%08x size=%d "
+            "value=%016llx sp=%08x ra=%08x last_pc=%08x\n",
+            (uint32_t)pc, (uint32_t)address, size,
+            (unsigned long long)uvalue,
+            (uint32_t)sp, (uint32_t)ra, s->last_pc);
+}
+
 static int install_native_hooks(IrixMipsJitState *s)
 {
     size_t i;
@@ -444,6 +483,12 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
                       (void *)interrupt_hook, s, 1, 0);
     if (err != UC_ERR_OK)
         goto fail;
+    if (s->trace_code) {
+        err = uc_hook_add(s->uc, &hook, UC_HOOK_MEM_WRITE,
+                          (void *)trace_stack_write_hook, s, 1, 0);
+        if (err != UC_ERR_OK)
+            goto fail;
+    }
     err = uc_hook_add(s->uc, &hook, UC_HOOK_MEM_UNMAPPED,
                       (void *)invalid_memory_hook, s, 1, 0);
     if (err != UC_ERR_OK)
