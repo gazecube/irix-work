@@ -331,6 +331,48 @@ if(IRIX_DEV_TREE)
                 )
                 add_dependencies(irix_ecosystem ${_app_runner_target})
 
+                # Desktop bring-up shortcut: bypass PT_INTERP/rld entirely and
+                # jump straight into the already translated desktop main using
+                # the proven DesktopRunner harness. This is intentionally a
+                # get-pixels-now path, not a faithful exec/bootstrap model.
+                if(_app_name STREQUAL "desktop")
+                    add_executable(irix_desktop_quick_runner EXCLUDE_FROM_ALL
+                        runtime/DesktopRunner.c)
+                    set_target_properties(irix_desktop_quick_runner PROPERTIES
+                        OUTPUT_NAME "desktop-quick"
+                        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/quick"
+                        BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}"
+                    )
+                    add_dependencies(irix_desktop_quick_runner
+                        irix_recompiled_core
+                        ${_app_build_target}
+                    )
+                    if(TARGET irix_fast_quarks)
+                        add_dependencies(irix_desktop_quick_runner irix_fast_quarks)
+                        target_compile_definitions(irix_desktop_quick_runner PRIVATE
+                            IRIX_HAVE_FAST_QUARKS=1)
+                    endif()
+                    target_include_directories(irix_desktop_quick_runner PRIVATE
+                        ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                        ${IRIX_ECOSYSTEM_DIR}
+                    )
+                    target_compile_definitions(irix_desktop_quick_runner PRIVATE
+                        IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+                        IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                        IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
+                    )
+                    target_link_libraries(irix_desktop_quick_runner PRIVATE
+                        ${_app_bundle_target}
+                        irix_recompiled_stack
+                        irix_recomp_libc_bridge
+                        irix_recomp_x11_bridge
+                        irix_recomp_runtime
+                        X11::X11
+                        ${CMAKE_DL_LIBS}
+                        m
+                    )
+                endif()
+
                 # Fast bring-up path: run the original IRIX MIPS executable
                 # through the Unicorn R4000 JIT without generating or linking
                 # translated C for the app/core stack.
