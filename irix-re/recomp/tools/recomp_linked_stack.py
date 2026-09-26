@@ -145,68 +145,72 @@ def render_function(cname, source, name, start, words):
   p('    cpu->gpr[0] = 0;')
 
   prev_ctl=None
-  if idx and decoded[idx-1][0]+4==addr:
+  is_delay_slot=bool(idx and decoded[idx-1][0]+4==addr and decoded[idx-1][3]=='control')
+  if is_delay_slot:
    prev_ctl=static_control_info(decoded[idx-1][0],decoded[idx-1][1])
-  if prev_ctl and 'target' in prev_ctl:
-   target=prev_ctl['target']; kind=prev_ctl['kind']
-   if kind=='jump':
-    if start<=target<end_addr:
-     p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) goto L_{target:08x};')
-    else:
-     p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) {{')
-     p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-     p('        return;')
-     p('    }')
-   elif kind=='call':
-    ret=prev_ctl['ret']
-    p(f'    if (old_pending == IRIX_PENDING_CALL && old_target == 0x{target:08x}u) {{')
-    p(f'        if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
-    if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
-    else: p('        return;')
-    p('    }')
-   elif kind=='link':
-    ret=prev_ctl['ret']
-    p(f'    if (old_pending == IRIX_PENDING_LINK && old_target == 0x{target:08x}u) {{')
-    if start<=target<end_addr:
-     p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-     p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-     p('        }')
-     p(f'        local_link_returns[local_link_depth++] = 0x{ret:08x}u;')
-     p(f'        goto L_{target:08x};')
-    else:
+  # Pending transfers are meaningful only in an architectural delay slot.
+  # Keep ordinary straight-line instructions free of the generic resolver.
+  if is_delay_slot:
+   if prev_ctl and 'target' in prev_ctl:
+    target=prev_ctl['target']; kind=prev_ctl['kind']
+    if kind=='jump':
+     if start<=target<end_addr:
+      p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) goto L_{target:08x};')
+     else:
+      p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) {{')
+      p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+      p('        return;')
+      p('    }')
+    elif kind=='call':
+     ret=prev_ctl['ret']
+     p(f'    if (old_pending == IRIX_PENDING_CALL && old_target == 0x{target:08x}u) {{')
      p(f'        if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
      if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
      else: p('        return;')
-    p('    }')
+     p('    }')
+    elif kind=='link':
+     ret=prev_ctl['ret']
+     p(f'    if (old_pending == IRIX_PENDING_LINK && old_target == 0x{target:08x}u) {{')
+     if start<=target<end_addr:
+      p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+      p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+      p('        }')
+      p(f'        local_link_returns[local_link_depth++] = 0x{ret:08x}u;')
+      p(f'        goto L_{target:08x};')
+     else:
+      p(f'        if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
+      if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
+      else: p('        return;')
+     p('    }')
 
-  p('    if (old_pending == IRIX_PENDING_RETURN) {')
-  p('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-  p('            local_link_depth--; pc = old_target; goto dispatch_local;')
-  p('        }')
-  p('        return;')
-  p('    }')
-  p('    if (old_pending == IRIX_PENDING_CALL) {')
-  p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-  p('        pc = old_return; goto dispatch_local;')
-  p('    }')
-  p('    if (old_pending == IRIX_PENDING_LINK) {')
-  p(f'        if (old_target >= 0x{start:08x}u && old_target < 0x{end_addr:08x}u) {{')
-  p('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-  p('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-  p('            }')
-  p('            local_link_returns[local_link_depth++] = old_return;')
-  p('            pc = old_target; goto dispatch_local;')
-  p('        }')
-  p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-  p('        pc = old_return; goto dispatch_local;')
-  p('    }')
-  p('    if (old_pending == IRIX_PENDING_JUMP) {')
-  p(f'        if (old_target < 0x{start:08x}u || old_target >= 0x{end_addr:08x}u) {{')
-  p('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-  p('            return;')
-  p('        }')
-  p('        pc = old_target; goto dispatch_local;')
-  p('    }')
+   p('    if (old_pending == IRIX_PENDING_RETURN) {')
+   p('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
+   p('            local_link_depth--; pc = old_target; goto dispatch_local;')
+   p('        }')
+   p('        return;')
+   p('    }')
+   p('    if (old_pending == IRIX_PENDING_CALL) {')
+   p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+   p('        pc = old_return; goto dispatch_local;')
+   p('    }')
+   p('    if (old_pending == IRIX_PENDING_LINK) {')
+   p(f'        if (old_target >= 0x{start:08x}u && old_target < 0x{end_addr:08x}u) {{')
+   p('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+   p('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+   p('            }')
+   p('            local_link_returns[local_link_depth++] = old_return;')
+   p('            pc = old_target; goto dispatch_local;')
+   p('        }')
+   p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+   p('        pc = old_return; goto dispatch_local;')
+   p('    }')
+   p('    if (old_pending == IRIX_PENDING_JUMP) {')
+   p(f'        if (old_target < 0x{start:08x}u || old_target >= 0x{end_addr:08x}u) {{')
+   p('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
+   p('            return;')
+   p('        }')
+   p('        pc = old_target; goto dispatch_local;')
+   p('    }')
 
   if control:
    ctl=static_control_info(addr,word)
