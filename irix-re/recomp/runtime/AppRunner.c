@@ -740,6 +740,10 @@ int main(int argc, char **argv)
     memset(&app_elf, 0, sizeof(app_elf));
     memset(&interp_elf, 0, sizeof(interp_elf));
     memset(&rld_elf, 0, sizeof(rld_elf));
+#ifdef IRIX_DIRECT_MAIN
+    /* Direct translated bring-up deliberately bypasses PT_INTERP/rld. */
+    setenv("IRIX_EXEC_BACKEND", "static", 1);
+#endif
     irix_guest_runtime_init(&rt);
     irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
@@ -814,8 +818,22 @@ int main(int argc, char **argv)
                  * registered below; only their guest memory image is deferred
                  * to rld.
                  */
+#ifdef IRIX_DIRECT_MAIN
+                /*
+                 * The direct translated desktop path does not execute the
+                 * IRIX process loader.  Map only the executable plus the
+                 * internal IMD DSOs whose guest data images the translated
+                 * desktop actually consumes.  PT_INTERP/rld and ordinary
+                 * runtime dependency DSOs stay out of the address space.
+                 */
+                if (component->role != 0)
+                    continue;
+                if (i != 0u && component->kind != 1)
+                    continue;
+#else
                 if (i != 0u && component->role == 0)
                     continue;
+#endif
 
                 if (load_elf(&rt, root, component->path, &info) != 0)
                     return 1;
@@ -973,6 +991,18 @@ int main(int argc, char **argv)
      * interpreter.  Entering the executable directly still skips the libc/rld
      * bootstrap, which is exactly what the previous run demonstrated.
      */
+#ifdef IRIX_DIRECT_MAIN
+    entry = find_named(&rt, "main");
+    if (have_app_elf)
+        cpu.gpr[28] = app_elf.gp_value;
+    fprintf(stderr,
+            "IRIX %s DIRECT translated main: main=0x%08x gp=0x%08x\n",
+            IRIX_APP_NAME, entry, (uint32_t)cpu.gpr[28]);
+    if (!entry) {
+        fprintf(stderr, "translated %s main not found\n", IRIX_APP_NAME);
+        return 1;
+    }
+#else
     entry = have_interp_elf ? interp_elf.entry :
             (have_app_elf ? app_elf.entry : 0u);
     if (have_interp_elf)
@@ -1006,6 +1036,7 @@ int main(int argc, char **argv)
         return 1;
     }
 #endif
+#endif /* IRIX_DIRECT_MAIN */
     fprintf(stderr,
             "IRIX %s bootstrap: functions=%zu process_entry=0x%08x "
             "interp_entry=0x%08x app_entry=0x%08x gp=0x%08x "
