@@ -331,13 +331,13 @@ if(IRIX_DEV_TREE)
                 )
                 add_dependencies(irix_ecosystem ${_app_runner_target})
 
-                # Desktop bring-up shortcut: bypass PT_INTERP/rld entirely and
-                # jump straight into the already translated desktop main using
-                # the proven DesktopRunner harness. This is intentionally a
-                # get-pixels-now path, not a faithful exec/bootstrap model.
+                # Desktop bring-up shortcut: use the normal AppRunner/runtime
+                # but bypass PT_INTERP/rld and enter the translated executable
+                # main directly. Keep one runner implementation; do not revive
+                # the old disposable DesktopRunner harness.
                 if(_app_name STREQUAL "desktop")
                     add_executable(irix_desktop_quick_runner EXCLUDE_FROM_ALL
-                        runtime/DesktopRunner.c)
+                        runtime/AppRunner.c)
                     set_target_properties(irix_desktop_quick_runner PROPERTIES
                         OUTPUT_NAME "desktop-quick"
                         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/quick"
@@ -357,9 +357,16 @@ if(IRIX_DEV_TREE)
                         ${IRIX_ECOSYSTEM_DIR}
                     )
                     target_compile_definitions(irix_desktop_quick_runner PRIVATE
+                        IRIX_DIRECT_MAIN=1
                         IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
                         IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                        IRIX_DEV_TREE="${IRIX_DEV_TREE}"
                         IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
+                        IRIX_APP_NAME="${_app_name}"
+                        IRIX_APP_PATH="${_app_path}"
+                        IRIX_APP_BUILD_DIR="${_app_dir}"
+                        IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                        IRIX_APP_REGISTER=register_${_app_prefix}
                     )
                     target_link_libraries(irix_desktop_quick_runner PRIVATE
                         ${_app_bundle_target}
