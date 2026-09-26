@@ -232,6 +232,7 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
     return rebound;
 }
 
+#ifndef IRIX_JIT_ONLY
 typedef void (*IrixDsoRegister)(IrixGuestRuntime *);
 
 static void register_native_dsos(IrixGuestRuntime *rt)
@@ -290,6 +291,8 @@ static void register_native_dsos(IrixGuestRuntime *rt)
         reg(rt);
     }
 }
+
+#endif
 
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
 {
