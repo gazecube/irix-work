@@ -542,12 +542,13 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         if addr in block_labels:
             print('L_%08x:' % addr)
         print('    /* 0x%08x: 0x%08x */' % (addr, word))
-        if is_delay_slot:
+        prev_ctl = (static_control_info(decoded[idx - 1][0], decoded[idx - 1][1])
+                    if is_delay_slot else None)
+        dynamic_delay = is_delay_slot and (prev_ctl is None or 'target' not in prev_ctl)
+        if dynamic_delay:
             print('    old_pending = pending_kind;')
-            if needs_local_dispatch:
-                print('    old_target = pending_target;')
-            if needs_local_dispatch:
-                print('    old_return = pending_return;')
+            print('    old_target = pending_target;')
+            print('    old_return = pending_return;')
             print('    pending_kind = IRIX_PENDING_NONE;')
         print('    pc = 0x%08xu;' % addr)
         print('    cpu->pc = pc;')
@@ -588,10 +589,11 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # but it no longer needs pending_kind/target as its CFG representation.
         if branch_cond is not None and ctl_here and ctl_here.get('kind') == 'jump':
             print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
-            # The native CFG now represents the branch itself. Emitting only
-            # selected lines from the old pending-state decoder can leave
-            # unmatched C braces, so emit none of that control skeleton.
-            pass
+        elif (ctl_here and 'target' in ctl_here and
+              ctl_here.get('kind') in ('jump', 'call', 'link')):
+            for line in lines:
+                if not any(x in line for x in ('pending_kind', 'pending_target', 'pending_return')):
+                    print('    '+line)
         else:
             for line in lines: print('    '+line)
         print('    if (rt->trapped) return;')
@@ -601,10 +603,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # delay-slot owner.  For statically-known branch/call targets, resolve
         # the pending transfer directly to C labels instead of re-entering the
         # local-PC dispatcher.
-        prev_ctl = None
-        if is_delay_slot:
-            prev_ctl = static_control_info(decoded[idx - 1][0],
-                                           decoded[idx - 1][1])
+        # prev_ctl was classified before delay-slot state emission.
         # Pending transfers exist only while executing a MIPS delay slot.
         # Ordinary straight-line instructions cannot observe pending state,
         # so do not emit the large generic resolver for every instruction.
@@ -629,16 +628,13 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                         else:
                             print('    return;')
                     elif start <= target < start + size:
-                        print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) goto L_%08x;' %
-                              (target, target))
+                        print('    goto L_%08x;' % target)
                     else:
-                        print('    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x%08xu) {' % target)
-                        print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-                        print('        return;')
-                        print('    }')
+                        print('    if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                        print('    return;')
                 elif kind == 'call':
                     ret = prev_ctl['ret']
-                    print('    if (old_pending == IRIX_PENDING_CALL && old_target == 0x%08xu) {' % target)
+                    print('    {')
                     print('        { static IrixGuestFunctionEntry *direct_entry_%08x;' % addr)
                     print('          IrixGuestFunctionEntry *direct_entry = direct_entry_%08x;' % addr)
                     print('          if (!direct_entry) {')
@@ -657,7 +653,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                     print('    }')
                 elif kind == 'link':
                     ret = prev_ctl['ret']
-                    print('    if (old_pending == IRIX_PENDING_LINK && old_target == 0x%08xu) {' % target)
+                    print('    {')
                     if start <= target < start + size:
                         print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
                         print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
