@@ -478,13 +478,16 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('    }')
     print('')
     for idx,(addr,word,lines,control) in enumerate(decoded):
+        is_delay_slot = bool(idx and decoded[idx - 1][0] + 4 == addr and
+                             decoded[idx - 1][3] == 'control')
         if addr in block_labels:
             print('L_%08x:' % addr)
         print('    /* 0x%08x: 0x%08x */' % (addr, word))
-        print('    old_pending = pending_kind;')
-        print('    old_target = pending_target;')
-        print('    old_return = pending_return;')
-        print('    pending_kind = IRIX_PENDING_NONE;')
+        if is_delay_slot:
+            print('    old_pending = pending_kind;')
+            print('    old_target = pending_target;')
+            print('    old_return = pending_return;')
+            print('    pending_kind = IRIX_PENDING_NONE;')
         print('    pc = 0x%08xu;' % addr)
         print('    cpu->pc = pc;')
         print('    rt->current_pc = pc;')
@@ -526,8 +529,6 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # the pending transfer directly to C labels instead of re-entering the
         # local-PC dispatcher.
         prev_ctl = None
-        is_delay_slot = bool(idx and decoded[idx - 1][0] + 4 == addr and
-                             decoded[idx - 1][3] == 'control')
         if is_delay_slot:
             prev_ctl = static_control_info(decoded[idx - 1][0],
                                            decoded[idx - 1][1])
