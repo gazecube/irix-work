@@ -137,7 +137,7 @@ def render_function(cname, source, name, start, words):
   (ctl.get('kind')=='link' and start<=ctl.get('target',0)<end_addr)
   for ctl in control_infos)
  p('    IrixGuestAddr pc = cpu->pc;')
- if has_delay_slot or 'pending_target' in emitted_lines: p('    IrixGuestAddr pending_target = 0;')
+ if needs_local_dispatch: p('    IrixGuestAddr pending_target = 0;')
  if needs_local_dispatch and 'pending_return' in emitted_lines: p('    IrixGuestAddr pending_return = 0;')
  if has_delay_slot or 'pending_kind' in emitted_lines: p('    int pending_kind = IRIX_PENDING_NONE;')
  if has_delay_slot:
