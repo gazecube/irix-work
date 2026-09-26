@@ -740,6 +740,12 @@ int main(int argc, char **argv)
     memset(&app_elf, 0, sizeof(app_elf));
     memset(&interp_elf, 0, sizeof(interp_elf));
     memset(&rld_elf, 0, sizeof(rld_elf));
+    /*
+     * When subsystem profiling is enabled, identify this process by its
+     * ecosystem manifest name. The runtime writes one callgraph per process.
+     */
+    if (getenv("IRIX_PROFILE_DIR") && !getenv("IRIX_PROFILE_NAME"))
+        setenv("IRIX_PROFILE_NAME", IRIX_APP_NAME, 0);
 #ifdef IRIX_DIRECT_MAIN
     /* Direct translated bring-up deliberately bypasses PT_INTERP/rld. */
     setenv("IRIX_EXEC_BACKEND", "static", 1);
