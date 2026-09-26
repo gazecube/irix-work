@@ -412,6 +412,56 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
                                 int64_t value, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+
+    /*
+     * Bring-up cheat: tolerate low NULL-adjacent DATA accesses by lazily
+     * materializing a zero-filled 64 KiB cushion.  Keep it non-executable so
+     * bogus control flow to NULL still faults loudly.
+     */
+    if ((type == UC_MEM_READ_UNMAPPED ||
+         type == UC_MEM_WRITE_UNMAPPED) &&
+        address < UINT64_C(0x00010000)) {
+        size_t idx = s->rt->memory.count;
+        if (!irix_guest_ptr(s->rt, 0u, 1u)) {
+            if (irix_guest_map(s->rt, 0u, 0x00010000u, 3u) == 0) {
+                IrixGuestSegment *seg = &s->rt->memory.segments[idx];
+                uc_err e = uc_mem_map_ptr(uc, 0u, 0x00010000u,
+                                          UC_PROT_READ | UC_PROT_WRITE,
+                                          seg->host_base);
+                if (e == UC_ERR_OK) {
+                    s->mapped[idx] = 1;
+                    fprintf(stderr,
+                            "IRIX JIT HACK: mapped zero-filled low-memory "
+                            "cushion for %s at addr=%08x pc=%08x\n",
+                            type == UC_MEM_READ_UNMAPPED ? "read" : "write",
+                            (uint32_t)address, s->last_pc);
+                    return true;
+                }
+                fprintf(stderr,
+                        "IRIX JIT HACK: low-memory cushion map failed: %s\n",
+                        uc_strerror(e));
+            }
+        } else {
+            size_t i;
+            for (i = 0; i < s->rt->memory.count; ++i) {
+                IrixGuestSegment *seg = &s->rt->memory.segments[i];
+                uint64_t end = (uint64_t)seg->guest_base + seg->size;
+                if (seg->guest_base == 0u && end >= 0x00010000u) {
+                    if (!s->mapped[i]) {
+                        uc_err e = uc_mem_map_ptr(uc, 0u, 0x00010000u,
+                                                  UC_PROT_READ | UC_PROT_WRITE,
+                                                  seg->host_base);
+                        if (e == UC_ERR_OK)
+                            s->mapped[i] = 1;
+                    }
+                    if (s->mapped[i])
+                        return true;
+                    break;
+                }
+            }
+        }
+    }
+
     (void)size;
     (void)value;
     s->stop_reason = IRIX_JIT_STOP_MEMORY;
