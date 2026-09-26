@@ -489,23 +489,27 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     emitted_lines = '\n'.join(
         line for _addr, _word, lines, _control in decoded for line in lines
     )
-    control_infos = [
-        static_control_info(addr, word)
-        for addr, word, _lines, control in decoded if control
-    ]
+    native_control_infos = []
+    for idx, (addr, word, _lines, control) in enumerate(decoded):
+        if (not control or idx + 1 >= len(decoded) or
+                decoded[idx + 1][0] != addr + 4):
+            continue
+        ctl = static_control_info(addr, word)
+        if ctl:
+            native_control_infos.append(ctl)
     has_dyn_return = any(
-        ctl and ctl.get('kind') == 'return' for ctl in control_infos
+        ctl.get('kind') == 'return' for ctl in native_control_infos
     )
     has_dyn_jump = any(
-        ctl and ctl.get('kind') == 'jump_indirect' for ctl in control_infos
+        ctl.get('kind') == 'jump_indirect' for ctl in native_control_infos
     )
     has_dyn_call = any(
-        ctl and ctl.get('kind') == 'call_indirect' for ctl in control_infos
+        ctl.get('kind') == 'call_indirect' for ctl in native_control_infos
     )
     has_static_local_call = any(
-        ctl and ctl.get('kind') in ('call', 'link') and
+        ctl.get('kind') in ('call', 'link') and
         start <= ctl.get('target', 0) < start + size
-        for ctl in control_infos
+        for ctl in native_control_infos
     )
     needs_local_link_stack = (
         has_dyn_return and (has_static_local_call or has_dyn_call)
@@ -577,9 +581,17 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
             print('            fprintf(stderr, "IRIX 4Dwm callee return: v0=%08x a0=%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4]);')
         if 0x0b2a80d8 <= addr <= 0x0b2a8138:
             print('            fprintf(stderr, "IRIX 4Dwm pretable trace: pc=0x%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x s4=%%08x s5=%%08x s6=%%08x s7=%%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t0=%%08x t1=%%08x t2=%%08x t3=%%08x t4=%%08x t5=%%08x t6=%%08x t7=%%08x\\n", (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21], (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23], (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11], (uint32_t)cpu->gpr[12], (uint32_t)cpu->gpr[13], (uint32_t)cpu->gpr[14], (uint32_t)cpu->gpr[15]);' % addr)
-        ctl_here = static_control_info(addr, word) if control else None
-        branch_cond = static_branch_condition(addr, word) if control else None
-        if ctl_here and 'target' in ctl_here:
+        ctl_raw = static_control_info(addr, word) if control else None
+        has_native_delay = bool(
+            control and idx + 1 < len(decoded) and
+            decoded[idx + 1][0] == addr + 4
+        )
+        ctl_here = ctl_raw if has_native_delay else None
+        branch_cond = static_branch_condition(addr, word) if ctl_here else None
+        if control and ctl_raw is not None and not has_native_delay:
+            print('    (void)irix_mips_interp_call(rt, cpu, pc);')
+            print('    return;')
+        elif ctl_here and 'target' in ctl_here:
             kind = ctl_here.get('kind')
             if branch_cond is not None and kind in ('jump', 'link'):
                 print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
