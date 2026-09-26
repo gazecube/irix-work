@@ -130,15 +130,19 @@ def render_function(cname, source, name, start, words):
  )
  emitted_lines='\n'.join(line for _addr,_word,lines,_control in decoded for line in lines)
  end_addr=start+len(words)*4
- control_infos=[static_control_info(addr,word)
-                for addr,word,_lines,control in decoded if control]
- has_dyn_return=any(ctl and ctl.get('kind')=='return' for ctl in control_infos)
- has_dyn_jump=any(ctl and ctl.get('kind')=='jump_indirect' for ctl in control_infos)
- has_dyn_call=any(ctl and ctl.get('kind')=='call_indirect' for ctl in control_infos)
+ native_control_infos=[]
+ for idx,(addr,word,_lines,control) in enumerate(decoded):
+  if not control or idx+1>=len(decoded) or decoded[idx+1][0]!=addr+4:
+   continue
+  ctl=static_control_info(addr,word)
+  if ctl: native_control_infos.append(ctl)
+ has_dyn_return=any(ctl.get('kind')=='return' for ctl in native_control_infos)
+ has_dyn_jump=any(ctl.get('kind')=='jump_indirect' for ctl in native_control_infos)
+ has_dyn_call=any(ctl.get('kind')=='call_indirect' for ctl in native_control_infos)
  has_static_local_call=any(
-  ctl and ctl.get('kind') in ('call','link') and
+  ctl.get('kind') in ('call','link') and
   start<=ctl.get('target',0)<end_addr
-  for ctl in control_infos)
+  for ctl in native_control_infos)
  needs_local_link_stack=has_dyn_return and (has_static_local_call or has_dyn_call)
  needs_local_dispatch=has_dyn_jump or has_dyn_call or needs_local_link_stack
  has_dynamic_target=has_dyn_return or has_dyn_jump or has_dyn_call
@@ -171,9 +175,14 @@ def render_function(cname, source, name, start, words):
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
   p('    rt->current_pc = pc;')
-  ctl_here=static_control_info(addr,word) if control else None
-  branch_cond=static_branch_condition(addr,word) if control else None
-  if ctl_here and 'target' in ctl_here:
+  ctl_raw=static_control_info(addr,word) if control else None
+  has_native_delay=bool(control and idx+1<len(decoded) and decoded[idx+1][0]==addr+4)
+  ctl_here=ctl_raw if has_native_delay else None
+  branch_cond=static_branch_condition(addr,word) if ctl_here else None
+  if control and ctl_raw is not None and not has_native_delay:
+   p('    (void)irix_mips_interp_call(rt, cpu, pc);')
+   p('    return;')
+  elif ctl_here and 'target' in ctl_here:
    kind=ctl_here.get('kind')
    if branch_cond is not None and kind in ('jump','link'):
     p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
