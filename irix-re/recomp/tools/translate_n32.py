@@ -460,6 +460,21 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     emitted_lines = '\n'.join(
         line for _addr, _word, lines, _control in decoded for line in lines
     )
+    control_infos = [
+        static_control_info(addr, word)
+        for addr, word, _lines, control in decoded if control
+    ]
+    # A local PC dispatcher is only required when translated control can
+    # return to an address chosen at runtime. Direct branches/calls resolve
+    # to C labels after their delay slots; an ordinary jr $ra exits the host
+    # function. Keep dispatch for indirect linked calls and intra-function
+    # branch-and-link returns, whose return PC is represented dynamically.
+    needs_local_dispatch = any(
+        ctl is None or ctl.get('kind') == 'call_indirect' or
+        (ctl.get('kind') == 'link' and
+         start <= ctl.get('target', 0) < start + size)
+        for ctl in control_infos
+    )
     print('    IrixGuestAddr pc = cpu->pc;')
     if has_delay_slot or 'pending_target' in emitted_lines:
         print('    IrixGuestAddr pending_target = 0;')
@@ -478,7 +493,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     block_labels = static_block_labels(decoded, start, size)
     print('    goto L_%08x;' % start)
     print('')
-    if has_delay_slot:
+    if has_delay_slot and needs_local_dispatch:
         print('dispatch_local:')
         print('    switch (pc) {')
         for entry in sorted(cfg_entries):
@@ -608,9 +623,10 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                     print('    }')
 
             print('    if (old_pending == IRIX_PENDING_RETURN) {')
-            print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-            print('            local_link_depth--; pc = old_target; goto dispatch_local;')
-            print('        }')
+            if needs_local_dispatch:
+                print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
+                print('            local_link_depth--; pc = old_target; goto dispatch_local;')
+                print('        }')
             print('        return;')
             print('    }')
             print('    if (old_pending == IRIX_PENDING_CALL) {')
