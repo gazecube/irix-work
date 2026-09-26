@@ -9,6 +9,7 @@
 #include "IrixX11Bridge.h"
 #include "IrixX11KeyboardBridge.h"
 #include "IrixRuntimeX11Bridge.h"
+#include "IrixRuntimeXtBridge.h"
 #include "IrixX11WindowBridge.h"
 #include "IrixX11WmBridge.h"
 #include "IrixX11ContextBridge.h"
@@ -92,6 +93,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_x11_wm_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_runtime_x11_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_runtime_xt_bridge_lookup(name);
     if (fn) return fn;
     return irix_x11_bulk_lookup(name);
 }
@@ -216,7 +219,13 @@ int main(int argc, char **argv)
     IrixGuestCpu cpu;
     IrixGuestAddr entry;
 
+    /* This runner exists specifically to bypass IRIX PT_INTERP/rld and run
+       the ahead-of-time translated desktop. Never let the build-wide JIT
+       default silently pull it back through Unicorn. */
+    setenv("IRIX_EXEC_BACKEND", "static", 1);
+
     irix_guest_runtime_init(&rt);
+    irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
 
     /* rld's save_pixie_regs/restore_pixie_regs use a fixed IRIX scratch area
@@ -274,6 +283,7 @@ int main(int argc, char **argv)
     irix_x11_image_bridge_init(&rt);
     irix_x11_wm_bridge_init(&rt);
     irix_runtime_x11_bridge_init(&rt);
+    irix_runtime_xt_bridge_init(&rt);
     irix_x11_bulk_init(&rt);
 
     /* Guest lookup is first-match. Register native import bridges before any
