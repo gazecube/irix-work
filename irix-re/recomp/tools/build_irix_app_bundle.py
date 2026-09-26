@@ -283,7 +283,7 @@ def main():
                     help='native libirixre shared runtime to link generated DSOs against')
     ap.add_argument('--rootfs', type=Path,
                     help='shared reconstructed IRIX root; DSOs are emitted at original guest paths')
-    ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
+    ap.add_argument('-j', '--jobs', type=int, default=min(2, max(1, os.cpu_count() or 1)))
     ap.add_argument('--generate-only', action='store_true')
     a = ap.parse_args()
 
