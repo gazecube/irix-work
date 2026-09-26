@@ -505,7 +505,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         for ctl in control_infos
     )
     print('    IrixGuestAddr pc = cpu->pc;')
-    if has_delay_slot or 'pending_target' in emitted_lines:
+    if needs_local_dispatch:
         print('    IrixGuestAddr pending_target = 0;')
     if needs_local_dispatch and 'pending_return' in emitted_lines:
         print('    IrixGuestAddr pending_return = 0;')
