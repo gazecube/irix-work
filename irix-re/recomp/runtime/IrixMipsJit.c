@@ -36,6 +36,9 @@ typedef struct IrixMipsJitState {
     uint64_t fault_t9;
     uint64_t fault_gp;
     uint64_t fault_sp;
+    uint64_t trace_ra;
+    IrixGuestAddr trace_ra_pc;
+    int trace_ra_valid;
     int trace_code;
 } IrixMipsJitState;
 
@@ -188,9 +191,27 @@ static void trace_code_hook(uc_engine *uc, uint64_t address,
                             uint32_t size, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
-    (void)uc;
+    IrixGuestAddr pc = (IrixGuestAddr)(uint32_t)address;
+    uint64_t ra = 0;
+
     (void)size;
-    s->last_pc = (IrixGuestAddr)(uint32_t)address;
+    if (uc_reg_read(uc, UC_MIPS_REG_RA, &ra) == UC_ERR_OK) {
+        if (s->trace_ra_valid && ra != s->trace_ra) {
+            uint32_t prev_word = 0;
+            if (irix_guest_ptr(s->rt, s->trace_ra_pc, 4u))
+                prev_word = irix_guest_read32be(s->rt, s->trace_ra_pc);
+            fprintf(stderr,
+                    "IRIX JIT RA change: after_pc=%08x insn=%08x "
+                    "ra:%08x->%08x next_pc=%08x sp=%08x\n",
+                    s->trace_ra_pc, prev_word,
+                    (uint32_t)s->trace_ra, (uint32_t)ra, pc,
+                    (uint32_t)s->cpu->gpr[29]);
+        }
+        s->trace_ra = ra;
+        s->trace_ra_pc = pc;
+        s->trace_ra_valid = 1;
+    }
+    s->last_pc = pc;
 }
 
 static void trap_instruction_hook(uc_engine *uc, uint64_t address,
@@ -516,6 +537,7 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         s->interrupt_gpr_valid = 0;
         s->last_block = 0;
         s->last_pc = 0;
+        s->trace_ra_valid = 0;
         s->fault_address = 0;
         s->fault_type = 0;
         s->fault_ra = 0;
