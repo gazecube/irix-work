@@ -1,6 +1,16 @@
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(UNICORN QUIET IMPORTED_TARGET unicorn)
+endif()
+if(NOT TARGET PkgConfig::UNICORN)
+    find_path(UNICORN_INCLUDE_DIR NAMES unicorn/unicorn.h)
+    find_library(UNICORN_LIBRARY NAMES unicorn)
+endif()
+
 add_library(irix_recomp_runtime SHARED
     runtime/IrixGuest.c
     runtime/IrixMipsInterp.c
+    runtime/IrixMipsJit.c
     runtime/IrixCompat.c
     runtime/IrixElf.c
 )
@@ -10,6 +20,19 @@ target_include_directories(irix_recomp_runtime PUBLIC
 )
 
 target_link_libraries(irix_recomp_runtime PRIVATE m)
+
+if(TARGET PkgConfig::UNICORN)
+    message(STATUS "IRIX MIPS JIT: using Unicorn via pkg-config")
+    target_compile_definitions(irix_recomp_runtime PRIVATE IRIX_HAVE_UNICORN=1 IRIX_DEFAULT_JIT=1)
+    target_link_libraries(irix_recomp_runtime PRIVATE PkgConfig::UNICORN)
+elseif(UNICORN_INCLUDE_DIR AND UNICORN_LIBRARY)
+    message(STATUS "IRIX MIPS JIT: using Unicorn ${UNICORN_LIBRARY}")
+    target_compile_definitions(irix_recomp_runtime PRIVATE IRIX_HAVE_UNICORN=1 IRIX_DEFAULT_JIT=1)
+    target_include_directories(irix_recomp_runtime PRIVATE ${UNICORN_INCLUDE_DIR})
+    target_link_libraries(irix_recomp_runtime PRIVATE ${UNICORN_LIBRARY})
+else()
+    message(WARNING "Unicorn not found; IRIX JIT backend disabled (install Unicorn development files)")
+endif()
 
 set_target_properties(irix_recomp_runtime PROPERTIES
     POSITION_INDEPENDENT_CODE ON
