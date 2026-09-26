@@ -114,6 +114,8 @@ int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr addre
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt,
                                                   IrixGuestAddr address);
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address);
+int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                          IrixGuestAddr address, IrixGuestFunctionEntry *entry);
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc);
