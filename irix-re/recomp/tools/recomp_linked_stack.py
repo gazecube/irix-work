@@ -8,7 +8,7 @@ from translate_n32_core import decode, static_control_info
 STT_FUNC=2
 DEFAULT_MAX_FILE_BYTES=2*1024*1024
 PARTITION_VERSION=1
-BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]','_',s)
 
