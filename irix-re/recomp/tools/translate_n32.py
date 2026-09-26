@@ -517,7 +517,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     needs_local_dispatch = (
         has_dyn_jump or has_dyn_call or needs_local_link_stack
     )
-    has_dynamic_target = has_dyn_return or has_dyn_jump or has_dyn_call
+    has_dynamic_target = has_dyn_jump or has_dyn_call or needs_local_link_stack
     print('    IrixGuestAddr pc = cpu->pc;')
     if has_dynamic_target:
         print('    IrixGuestAddr dynamic_target = 0;')
@@ -601,7 +601,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         elif ctl_here and ctl_here.get('kind') in ('return', 'jump_indirect', 'call_indirect'):
             kind = ctl_here.get('kind')
             rs = (word >> 21) & 31
-            print('    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[%d];' % rs)
+            if kind != 'return' or needs_local_link_stack:
+                print('    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[%d];' % rs)
             if kind == 'call_indirect':
                 rd = (word >> 11) & 31
                 if rd:
