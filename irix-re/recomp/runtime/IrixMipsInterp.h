@@ -9,6 +9,8 @@ extern "C" {
 
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address);
+int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                          IrixGuestAddr address);
 int irix_mips_interp_should_force(IrixGuestAddr address);
 
 #ifdef __cplusplus
