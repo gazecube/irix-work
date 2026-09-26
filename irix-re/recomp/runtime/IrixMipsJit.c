@@ -26,6 +26,8 @@ typedef struct IrixMipsJitState {
     IrixGuestAddr last_block;
     IrixGuestAddr last_pc;
     uint32_t interrupt_no;
+    uint64_t interrupt_gpr[32];
+    int interrupt_gpr_valid;
     uint64_t fault_address;
     int fault_type;
     int trace_code;
@@ -189,6 +191,26 @@ static void interrupt_hook(uc_engine *uc, uint32_t intno, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
     uint64_t pc = 0;
+    unsigned i;
+
+    /*
+     * Snapshot the architectural GPRs while Unicorn is still inside the
+     * exception callback.  Its MIPS exception plumbing rewrites PC to
+     * uc->next_pc before invoking UC_HOOK_INTR, and some builds expose
+     * unstable register state after uc_emu_start() returns.  Syscalls need
+     * the exact pre-handler ABI state, especially v0.
+     */
+    s->interrupt_gpr[0] = 0;
+    s->interrupt_gpr_valid = 1;
+    for (i = 1; i < 32u; ++i) {
+        uint64_t v = 0;
+        if (uc_reg_read(uc, gpr_regs[i], &v) != UC_ERR_OK) {
+            s->interrupt_gpr_valid = 0;
+            break;
+        }
+        s->interrupt_gpr[i] = v;
+    }
+
     (void)uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
     s->stop_reason = IRIX_JIT_STOP_INTERRUPT;
     s->interrupt_no = intno;
@@ -398,6 +420,7 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         s->stop_reason = IRIX_JIT_STOP_NONE;
         s->stop_address = 0;
         s->interrupt_no = 0;
+        s->interrupt_gpr_valid = 0;
         s->last_block = 0;
         s->last_pc = 0;
         s->fault_address = 0;
@@ -420,6 +443,29 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
             return -1;
+        }
+
+        /*
+         * For MIPS exceptions use the register image captured by
+         * interrupt_hook(), before Unicorn unwinds back to uc_emu_start().
+         */
+        if (s->stop_reason == IRIX_JIT_STOP_INTERRUPT &&
+            s->interrupt_gpr_valid) {
+            unsigned i;
+            for (i = 1; i < 32u; ++i)
+                cpu->gpr[i] = s->interrupt_gpr[i];
+            cpu->gpr[0] = 0;
+            if (s->trace_code) {
+                fprintf(stderr,
+                        "IRIX JIT interrupt snapshot: intno=%u v0=%08x "
+                        "a0-a3=%08x,%08x,%08x,%08x\n",
+                        s->interrupt_no,
+                        (uint32_t)cpu->gpr[2],
+                        (uint32_t)cpu->gpr[4],
+                        (uint32_t)cpu->gpr[5],
+                        (uint32_t)cpu->gpr[6],
+                        (uint32_t)cpu->gpr[7]);
+            }
         }
 
         if (s->stop_reason == IRIX_JIT_STOP_NATIVE) {
