@@ -453,8 +453,13 @@ def main():
             source = Path(fn['source'])
             fn['source'] = str(dst / source.name)
         bundle_tmp = dst / ('.bundle.json.tmp.%d' % os.getpid())
-        bundle_tmp.write_text(json.dumps(meta, indent=2) + '\\n')
+        with bundle_tmp.open('w') as f:
+            json.dump(meta, f, indent=2)
+            f.write('\\n')
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(bundle_tmp, bundle)
+        json.loads(bundle.read_text())
 
     bundles = []
     for prefix, binary in components:
@@ -464,7 +469,15 @@ def main():
         lock_path = translation_cache / (key + '.lock')
         with open(lock_path, 'a+b') as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            if not (cache_dir / 'bundle.json').is_file():
+            cache_bundle = cache_dir / 'bundle.json'
+            cache_valid = cache_bundle.is_file()
+            if cache_valid:
+                try:
+                    json.loads(cache_bundle.read_text())
+                except (OSError, json.JSONDecodeError):
+                    cache_valid = False
+                    shutil.rmtree(cache_dir, ignore_errors=True)
+            if not cache_valid:
                 tmp = translation_cache / (key + '.tmp.%d' % os.getpid())
                 if tmp.exists():
                     shutil.rmtree(tmp)
