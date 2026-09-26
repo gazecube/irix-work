@@ -414,6 +414,55 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
 
     /*
+     * Bring-up cheat #2: some IRIX/rld paths walk a few bytes beyond a data
+     * mapping while constructing loader state.  If an unmapped data access
+     * lands within 64 KiB immediately after an existing writable segment,
+     * grow guest memory one zero-filled page and retry.  Never make these
+     * pages executable.
+     */
+    if (type == UC_MEM_READ_UNMAPPED ||
+        type == UC_MEM_WRITE_UNMAPPED) {
+        IrixGuestAddr page = (IrixGuestAddr)((uint32_t)address & ~0xfffu);
+        size_t i;
+        int adjacent = 0;
+
+        for (i = 0; i < s->rt->memory.count; ++i) {
+            IrixGuestSegment *seg = &s->rt->memory.segments[i];
+            uint64_t end = (uint64_t)seg->guest_base + (uint64_t)seg->size;
+            if (!(seg->flags & 2u))
+                continue;
+            if ((uint64_t)page >= end &&
+                (uint64_t)page < end + UINT64_C(0x00010000)) {
+                adjacent = 1;
+                break;
+            }
+        }
+
+        if (adjacent && !irix_guest_ptr(s->rt, page, 1u)) {
+            size_t idx = s->rt->memory.count;
+            if (irix_guest_map(s->rt, page, 0x1000u, 3u) == 0) {
+                IrixGuestSegment *seg = &s->rt->memory.segments[idx];
+                uc_err e = uc_mem_map_ptr(uc, page, 0x1000u,
+                                          UC_PROT_READ | UC_PROT_WRITE,
+                                          seg->host_base);
+                if (e == UC_ERR_OK) {
+                    s->mapped[idx] = 1;
+                    fprintf(stderr,
+                            "IRIX JIT HACK: elastically mapped data page "
+                            "%08x for %s at addr=%08x pc=%08x\n",
+                            page,
+                            type == UC_MEM_READ_UNMAPPED ? "read" : "write",
+                            (uint32_t)address, s->last_pc);
+                    return true;
+                }
+                fprintf(stderr,
+                        "IRIX JIT HACK: elastic page map %08x failed: %s\n",
+                        page, uc_strerror(e));
+            }
+        }
+    }
+
+    /*
      * Bring-up cheat: tolerate low NULL-adjacent DATA accesses by lazily
      * materializing a zero-filled 64 KiB cushion.  Keep it non-executable so
      * bogus control flow to NULL still faults loudly.
