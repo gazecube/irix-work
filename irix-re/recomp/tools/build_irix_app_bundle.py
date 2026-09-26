@@ -414,7 +414,16 @@ def main():
     translation_cache = out.parent / '.irix-translation-cache'
     translation_cache.mkdir(parents=True, exist_ok=True)
     translator_digest = hashlib.sha256()
-    for tool_src in sorted(here.glob('*.py')):
+    # Only code that can change generated translation output belongs in this
+    # cache key. Build orchestration, profiling/merge tools, audit scripts,
+    # etc. must not force every IRIX DSO through recomp_elf_bundle again.
+    translator_sources = [
+        here / 'recomp_elf_bundle.py',
+        here / 'translate_n32_regimm.py',
+        here / 'translate_n32_core.py',
+        here / 'translate_n32.py',
+    ]
+    for tool_src in translator_sources:
         translator_digest.update(tool_src.name.encode('utf-8'))
         translator_digest.update(tool_src.read_bytes())
     translator_digest = translator_digest.digest()
