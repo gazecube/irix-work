@@ -564,7 +564,11 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                 elif kind == 'call':
                     ret = prev_ctl['ret']
                     print('    if (old_pending == IRIX_PENDING_CALL && old_target == 0x%08xu) {' % target)
-                    print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                    print('        { IrixGuestFunctionEntry *direct_entry = irix_guest_find_function(rt, 0x%08xu);' % target)
+                    print('          if (direct_entry && direct_entry->address == 0x%08xu) {' % target)
+                    print('              if (irix_guest_call_entry(rt, cpu, 0x%08xu, direct_entry) != 0) return;' % target)
+                    print('          } else if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                    print('        }')
                     if start <= ret < start + size:
                         print('        goto L_%08x;' % ret)
                     else:
@@ -580,7 +584,11 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                         print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
                         print('        goto L_%08x;' % target)
                     else:
-                        print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                        print('        { IrixGuestFunctionEntry *direct_entry = irix_guest_find_function(rt, 0x%08xu);' % target)
+                    print('          if (direct_entry && direct_entry->address == 0x%08xu) {' % target)
+                    print('              if (irix_guest_call_entry(rt, cpu, 0x%08xu, direct_entry) != 0) return;' % target)
+                    print('          } else if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
+                    print('        }')
                         if start <= ret < start + size:
                             print('        goto L_%08x;' % ret)
                         else:
