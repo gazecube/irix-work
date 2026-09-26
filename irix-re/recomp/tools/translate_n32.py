@@ -365,6 +365,34 @@ def static_control_info(addr, insn):
     return None
 
 
+def static_cfg_entries(decoded, start, size):
+    """Return addresses that can legitimately receive local dynamic control.
+
+    Straight-line instructions do not need dispatcher cases.  Static edges
+    are emitted as direct C gotos; this set exists only for returns from
+    indirect calls/local link branches and genuinely computed local jumps.
+    """
+    entries = {start}
+    end = start + size
+    for idx, (addr, word, _lines, control) in enumerate(decoded):
+        if not control:
+            continue
+        ctl = static_control_info(addr, word)
+        if ctl and 'target' in ctl and start <= ctl['target'] < end:
+            entries.add(ctl['target'])
+        # A call/link resumes after its architectural delay slot.  Indirect
+        # calls are included here too: their return PC is statically known.
+        if ctl and ctl.get('kind') in ('call', 'call_indirect', 'link'):
+            ret = ctl.get('ret', (addr + 8) & 0xffffffff)
+            if start <= ret < end:
+                entries.add(ret)
+        elif ctl is None or ctl.get('kind') in ('call_indirect',):
+            ret = (addr + 8) & 0xffffffff
+            if start <= ret < end:
+                entries.add(ret)
+    return entries
+
+
 def emit_range(path, name, start, size, c_prefix='', shndx=None,
                section_base=0, recover_trailing_delay_slot=False):
     # SGI libXm's static GetDisplay() is recovered as a truncated 0x70-byte
@@ -409,7 +437,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
 
     fn='irix_recomp_%s%s'%(c_name(c_prefix),c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */'%(path,name,start,size))
-    print('#include "IrixGuest.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
+    print('#include "IrixGuest.h"'); print('#include "IrixMipsInterp.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
     print('    IrixGuestAddr pc = cpu->pc;')
@@ -422,13 +450,18 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('    IrixGuestAddr local_link_returns[64];')
     print('    unsigned local_link_depth = 0;')
     print('')
-    print('    goto dispatch_local;')
+    cfg_entries = static_cfg_entries(decoded, start, size)
+    print('    goto L_%08x;' % start)
     print('')
     print('dispatch_local:')
     print('    switch (pc) {')
-    for _addr, _word, _lines, _control in decoded:
-        print('    case 0x%08xu: goto L_%08x;' % (_addr, _addr))
-    print('    default: return;')
+    for entry in sorted(cfg_entries):
+        print('    case 0x%08xu: goto L_%08x;' % (entry, entry))
+    print('    default:')
+    print('        /* Computed edge outside the recovered CFG: preserve correctness')
+    print('         * by handing this path to the legacy interpreter. */')
+    print('        (void)irix_mips_interp_call(rt, cpu, pc);')
+    print('        return;')
     print('    }')
     print('')
     for idx,(addr,word,lines,control) in enumerate(decoded):
