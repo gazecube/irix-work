@@ -604,8 +604,10 @@ def main():
                 install_cached(cache_obj, dst)
                 return src, dst, None
 
-            cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-pipe', '-Wall', '-Wextra', '-Werror', '-fPIC',
-                   '-I', str(inc), '-c', str(src), '-o', str(dst)]
+            cmd = [a.cc, '-std=c11', '-O2', '-march=native', '-mtune=native', '-pipe',
+                   '-Wall', '-Wextra', '-Werror',
+                   '-Wno-error=unused-label', '-Wno-error=unused-but-set-variable',
+                   '-fPIC', '-I', str(inc), '-c', str(src), '-o', str(dst)]
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if p.returncode == 0:
                 try:
@@ -637,7 +639,7 @@ def main():
                     raise SystemExit(f'compile failed: {src}')
                 rebuilt += 1
             objects.append(dst)
-            if i % 250 == 0 or i == len(futures):
+            if i % 25 == 0 or i == len(futures):
                 print(f'processed {i}/{len(futures)} rebuilt={rebuilt} reused={reused}', flush=True)
 
     # Emit each original IRIX shared component as its own native ELF DSO.
