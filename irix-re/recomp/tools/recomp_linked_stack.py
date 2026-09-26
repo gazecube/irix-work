@@ -8,7 +8,7 @@ from translate_n32_core import decode, static_control_info
 STT_FUNC=2
 DEFAULT_MAX_FILE_BYTES=2*1024*1024
 PARTITION_VERSION=1
-BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN };\n\n'
 
 def ident(s): return re.sub(r'[^A-Za-z0-9_]','_',s)
 
@@ -69,6 +69,18 @@ def assign_partitions(entries,path,max_file_bytes):
  },indent=2)+'\n')
  return buckets
 
+def static_cfg_entries(decoded, start, end_addr):
+ entries={start}
+ for addr,word,lines,control in decoded:
+  if not control: continue
+  ctl=static_control_info(addr,word)
+  if ctl and 'target' in ctl and start<=ctl['target']<end_addr:
+   entries.add(ctl['target'])
+  if ctl and ctl.get('kind') in ('call','call_indirect','link'):
+   ret=ctl.get('ret',(addr+8)&0xffffffff)
+   if start<=ret<end_addr: entries.add(ret)
+ return entries
+
 def render_function(cname, source, name, start, words):
  w=io.StringIO(); p=lambda x='': print(x,file=w)
  decoded=[]
@@ -91,16 +103,19 @@ def render_function(cname, source, name, start, words):
  p('    IrixGuestAddr local_link_returns[64];')
  p('    unsigned local_link_depth = 0;')
  p()
- p('    goto dispatch_local;')
+ end_addr=start+len(words)*4
+ cfg_entries=static_cfg_entries(decoded,start,end_addr)
+ p(f'    goto L_{start:08x};')
  p('dispatch_local:')
  p('    switch (pc) {')
- for addr,word,lines,control in decoded:
+ for addr in sorted(cfg_entries):
   p(f'    case 0x{addr:08x}u: goto L_{addr:08x};')
- p('    default: return;')
+ p('    default:')
+ p('        (void)irix_mips_interp_call(rt, cpu, pc);')
+ p('        return;')
  p('    }')
  p()
 
- end_addr=start+len(words)*4
  for idx,(addr,word,lines,control) in enumerate(decoded):
   p(f'L_{addr:08x}: /* 0x{word:08x} */')
   p('    old_pending = pending_kind;')
