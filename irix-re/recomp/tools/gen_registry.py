@@ -17,7 +17,7 @@ def main():
   w.write('#include "IrixGuest.h"\n\n')
   for _,obj,n in rows:w.write('extern void recomp_%s_%s(IrixRuntime *, IrixCpu *);\n'%(ident(obj),ident(n)))
   w.write('\nvoid irix_register_recompiled_stack(IrixRuntime *rt)\n{\n')
-  for addr,obj,n in rows:w.write('    irix_guest_register_function(rt, 0x%08xu, recomp_%s_%s);\n'%(addr,ident(obj),ident(n)))
+  for addr,obj,n in rows:w.write('    irix_guest_register_recompiled_function(rt, 0x%08xu, recomp_%s_%s);\n'%(addr,ident(obj),ident(n)))
   w.write('}\n')
  print('registered',len(rows),'functions')
 if __name__=='__main__':main()
