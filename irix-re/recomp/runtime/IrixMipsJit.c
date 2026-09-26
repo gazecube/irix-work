@@ -192,20 +192,37 @@ static void trace_code_hook(uc_engine *uc, uint64_t address,
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
     IrixGuestAddr pc = (IrixGuestAddr)(uint32_t)address;
-    uint64_t ra = 0;
+    uint64_t ra = 0, sp = 0;
 
     (void)size;
+    (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
     if (uc_reg_read(uc, UC_MIPS_REG_RA, &ra) == UC_ERR_OK) {
         if (s->trace_ra_valid && ra != s->trace_ra) {
             uint32_t prev_word = 0;
+            IrixGuestAddr load_addr = 0;
             if (irix_guest_ptr(s->rt, s->trace_ra_pc, 4u))
                 prev_word = irix_guest_read32be(s->rt, s->trace_ra_pc);
+
+            /*
+             * If the instruction that changed RA was LD ra,imm(sp), show
+             * the exact guest address it loaded.  This uses the live Unicorn
+             * SP, not the runtime CPU snapshot.
+             */
+            if ((prev_word >> 26) == 0x37u &&
+                ((prev_word >> 21) & 31u) == 29u &&
+                ((prev_word >> 16) & 31u) == 31u) {
+                int16_t imm = (int16_t)(prev_word & 0xffffu);
+                load_addr = (IrixGuestAddr)((uint32_t)sp +
+                                             (int32_t)imm);
+            }
+
             fprintf(stderr,
                     "IRIX JIT RA change: after_pc=%08x insn=%08x "
-                    "ra:%08x->%08x next_pc=%08x sp=%08x\n",
+                    "ra:%08x->%08x next_pc=%08x live_sp=%08x "
+                    "load_addr=%08x\n",
                     s->trace_ra_pc, prev_word,
                     (uint32_t)s->trace_ra, (uint32_t)ra, pc,
-                    (uint32_t)s->cpu->gpr[29]);
+                    (uint32_t)sp, load_addr);
         }
         s->trace_ra = ra;
         s->trace_ra_pc = pc;
