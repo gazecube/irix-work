@@ -584,12 +584,10 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # but it no longer needs pending_kind/target as its CFG representation.
         if branch_cond is not None and ctl_here and ctl_here.get('kind') == 'jump':
             print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
-            for line in lines:
-                if ('pending_kind' not in line and
-                        'pending_target' not in line and
-                        'pc += 4' not in line and
-                        line.strip() not in ('if (%s) {' % branch_cond, '} else {', '}')):
-                    print('    '+line)
+            # The native CFG now represents the branch itself. Emitting only
+            # selected lines from the old pending-state decoder can leave
+            # unmatched C braces, so emit none of that control skeleton.
+            pass
         else:
             for line in lines: print('    '+line)
         print('    if (rt->trapped) return;')
