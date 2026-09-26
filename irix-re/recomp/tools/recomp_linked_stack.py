@@ -111,6 +111,13 @@ def render_function(cname, source, name, start, words):
   for idx,(addr,_word,_lines,_control) in enumerate(decoded)
  )
  emitted_lines='\n'.join(line for _addr,_word,lines,_control in decoded for line in lines)
+ end_addr=start+len(words)*4
+ control_infos=[static_control_info(addr,word)
+                for addr,word,_lines,control in decoded if control]
+ needs_local_dispatch=any(
+  ctl is None or ctl.get('kind')=='call_indirect' or
+  (ctl.get('kind')=='link' and start<=ctl.get('target',0)<end_addr)
+  for ctl in control_infos)
  p('    IrixGuestAddr pc = cpu->pc;')
  if has_delay_slot or 'pending_target' in emitted_lines: p('    IrixGuestAddr pending_target = 0;')
  if has_delay_slot or 'pending_return' in emitted_lines: p('    IrixGuestAddr pending_return = 0;')
@@ -122,11 +129,10 @@ def render_function(cname, source, name, start, words):
   p('    IrixGuestAddr local_link_returns[64];')
   p('    unsigned local_link_depth = 0;')
  p()
- end_addr=start+len(words)*4
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
  block_labels=static_block_labels(decoded,start,end_addr)
  p(f'    goto L_{start:08x};')
- if has_delay_slot:
+ if has_delay_slot and needs_local_dispatch:
   p('dispatch_local:')
   p('    switch (pc) {')
   for addr in sorted(cfg_entries):
@@ -202,9 +208,10 @@ def render_function(cname, source, name, start, words):
      p('    }')
 
    p('    if (old_pending == IRIX_PENDING_RETURN) {')
-   p('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-   p('            local_link_depth--; pc = old_target; goto dispatch_local;')
-   p('        }')
+   if needs_local_dispatch:
+    p('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
+    p('            local_link_depth--; pc = old_target; goto dispatch_local;')
+    p('        }')
    p('        return;')
    p('    }')
    p('    if (old_pending == IRIX_PENDING_CALL) {')
