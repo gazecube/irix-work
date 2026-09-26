@@ -513,7 +513,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('    int pending_kind = IRIX_PENDING_NONE;')
     if has_delay_slot:
         print('    int old_pending;')
-        print('    IrixGuestAddr old_target;')
+        if needs_local_dispatch:
+            print('    IrixGuestAddr old_target;')
         if needs_local_dispatch:
             print('    IrixGuestAddr old_return;')
             print('    IrixGuestAddr local_link_returns[64];')
@@ -543,7 +544,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('    /* 0x%08x: 0x%08x */' % (addr, word))
         if is_delay_slot:
             print('    old_pending = pending_kind;')
-            print('    old_target = pending_target;')
+            if needs_local_dispatch:
+                print('    old_target = pending_target;')
             if needs_local_dispatch:
                 print('    old_return = pending_return;')
             print('    pending_kind = IRIX_PENDING_NONE;')
