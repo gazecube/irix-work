@@ -39,6 +39,8 @@ typedef struct IrixMipsJitState {
     uint64_t trace_ra;
     IrixGuestAddr trace_ra_pc;
     int trace_ra_valid;
+    IrixGuestAddr shadow_ra[4096];
+    size_t shadow_ra_depth;
     int trace_code;
 } IrixMipsJitState;
 
@@ -185,6 +187,80 @@ static void block_hook(uc_engine *uc, uint64_t address,
     (void)uc;
     (void)size;
     s->last_block = (IrixGuestAddr)(uint32_t)address;
+}
+
+static int jit_guest_exec_mapped(IrixMipsJitState *s, IrixGuestAddr pc)
+{
+    size_t i;
+    for (i = 0; i < s->rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &s->rt->memory.segments[i];
+        uint64_t end = (uint64_t)seg->guest_base + (uint64_t)seg->size;
+        if ((uint64_t)pc >= seg->guest_base &&
+            (uint64_t)pc + 4u <= end)
+            return (seg->flags & 4u) != 0;
+    }
+    return 0;
+}
+
+static void shadow_return_hook(uc_engine *uc, uint64_t address,
+                               uint32_t size, void *opaque)
+{
+    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
+    IrixGuestAddr pc = (IrixGuestAddr)(uint32_t)address;
+    uint32_t insn, op, rs, rd, fn;
+    uint64_t ra64 = 0;
+    IrixGuestAddr ra;
+
+    (void)size;
+    if (!irix_guest_ptr(s->rt, pc, 4u))
+        return;
+
+    insn = irix_guest_read32be(s->rt, pc);
+    op = insn >> 26;
+    rs = (insn >> 21) & 31u;
+    rd = (insn >> 11) & 31u;
+    fn = insn & 63u;
+
+    /* JAL always links to pc+8. */
+    if (op == 0x03u) {
+        if (s->shadow_ra_depth < 4096u)
+            s->shadow_ra[s->shadow_ra_depth++] = pc + 8u;
+        return;
+    }
+
+    /* JALR only matters to us when the architectural link register is RA. */
+    if (op == 0u && fn == 0x09u && rd == 31u) {
+        if (s->shadow_ra_depth < 4096u)
+            s->shadow_ra[s->shadow_ra_depth++] = pc + 8u;
+        return;
+    }
+
+    if (!(op == 0u && fn == 0x08u && rs == 31u))
+        return;
+
+    if (uc_reg_read(uc, UC_MIPS_REG_RA, &ra64) != UC_ERR_OK)
+        return;
+    ra = (IrixGuestAddr)(uint32_t)ra64;
+
+    if (s->shadow_ra_depth) {
+        IrixGuestAddr expected = s->shadow_ra[s->shadow_ra_depth - 1u];
+
+        if (ra == expected) {
+            --s->shadow_ra_depth;
+            return;
+        }
+
+        if (!jit_guest_exec_mapped(s, ra) &&
+            jit_guest_exec_mapped(s, expected)) {
+            uint64_t repaired = (uint64_t)(int64_t)(int32_t)expected;
+            fprintf(stderr,
+                    "IRIX JIT HACK: repairing bogus jr ra at pc=%08x "
+                    "ra=%08x -> %08x shadow_depth=%zu\n",
+                    pc, ra, expected, s->shadow_ra_depth);
+            (void)uc_reg_write(uc, UC_MIPS_REG_RA, &repaired);
+            --s->shadow_ra_depth;
+        }
+    }
 }
 
 static void trace_code_hook(uc_engine *uc, uint64_t address,
@@ -477,6 +553,16 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
 
     err = uc_hook_add(s->uc, &hook, UC_HOOK_BLOCK,
                       (void *)block_hook, s, 1, 0);
+    if (err != UC_ERR_OK)
+        goto fail;
+
+    /*
+     * Bring-up cheat: maintain a shadow call/return stack.  If guest state
+     * restores an obviously bogus RA and then executes jr ra, substitute the
+     * most recent executable architectural return address.
+     */
+    err = uc_hook_add(s->uc, &hook, UC_HOOK_CODE,
+                      (void *)shadow_return_hook, s, 1, 0);
     if (err != UC_ERR_OK)
         goto fail;
 
