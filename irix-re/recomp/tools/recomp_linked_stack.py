@@ -79,7 +79,20 @@ def static_cfg_entries(decoded, start, end_addr):
   if ctl and ctl.get('kind') in ('call','call_indirect','link'):
    ret=ctl.get('ret',(addr+8)&0xffffffff)
    if start<=ret<end_addr: entries.add(ret)
+  elif ctl is None:
+   ret=(addr+8)&0xffffffff
+   if start<=ret<end_addr: entries.add(ret)
  return entries
+
+def static_block_labels(decoded,start,end_addr):
+ labels=set(static_cfg_entries(decoded,start,end_addr))
+ for idx,(addr,word,lines,control) in enumerate(decoded):
+  if not control: continue
+  if idx+1<len(decoded): labels.add(decoded[idx+1][0])
+  ctl=static_control_info(addr,word)
+  if ctl and ctl.get('likely') and idx+2<len(decoded):
+   labels.add(decoded[idx+2][0])
+ return labels
 
 def render_function(cname, source, name, start, words):
  w=io.StringIO(); p=lambda x='': print(x,file=w)
@@ -105,6 +118,7 @@ def render_function(cname, source, name, start, words):
  p()
  end_addr=start+len(words)*4
  cfg_entries=static_cfg_entries(decoded,start,end_addr)
+ block_labels=static_block_labels(decoded,start,end_addr)
  p(f'    goto L_{start:08x};')
  p('dispatch_local:')
  p('    switch (pc) {')
@@ -117,7 +131,8 @@ def render_function(cname, source, name, start, words):
  p()
 
  for idx,(addr,word,lines,control) in enumerate(decoded):
-  p(f'L_{addr:08x}: /* 0x{word:08x} */')
+  if addr in block_labels: p(f'L_{addr:08x}:')
+  p(f'    /* 0x{addr:08x}: 0x{word:08x} */')
   p('    old_pending = pending_kind;')
   p('    old_target = pending_target;')
   p('    old_return = pending_return;')
@@ -206,7 +221,7 @@ def render_function(cname, source, name, start, words):
    else:
     p('    return;')
   elif idx+1<len(decoded):
-   p(f'    goto L_{decoded[idx+1][0]:08x};')
+   pass
   else:
    p('    return;')
   p()
