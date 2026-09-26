@@ -69,6 +69,22 @@ def assign_partitions(entries,path,max_file_bytes):
  },indent=2)+'\n')
  return buckets
 
+def static_branch_condition(addr,insn):
+ op=insn>>26; rs=(insn>>21)&31; rt=(insn>>16)&31
+ r=lambda n: 'cpu->gpr[%d]'%n
+ if op in (0x04,0x14): return '%s == %s'%(r(rs),r(rt))
+ if op in (0x05,0x15): return '%s != %s'%(r(rs),r(rt))
+ if op in (0x06,0x16): return '(int64_t)%s <= 0'%r(rs)
+ if op in (0x07,0x17): return '(int64_t)%s > 0'%r(rs)
+ if op==0x01:
+  if rt in (0x00,0x02): return '(int64_t)%s < 0'%r(rs)
+  if rt in (0x01,0x03,0x11,0x13): return '(int64_t)%s >= 0'%r(rs)
+ if op==0x11 and rs==0x08:
+  cond='(cpu->fcr31 & (1u << 23)) != 0'
+  if not (rt&1): cond='!(%s)'%cond
+  return cond
+ return None
+
 def static_cfg_entries(decoded, start, end_addr):
  entries={start}
  for addr,word,lines,control in decoded:
@@ -155,7 +171,17 @@ def render_function(cname, source, name, start, words):
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
   p('    rt->current_pc = pc;')
-  for line in lines: p('    '+line)
+  ctl_here=static_control_info(addr,word) if control else None
+  branch_cond=static_branch_condition(addr,word) if control else None
+  if branch_cond is not None and ctl_here and ctl_here.get('kind')=='jump':
+   p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
+   for line in lines:
+    if ('pending_kind' not in line and 'pending_target' not in line and
+        'pc += 4' not in line and
+        line.strip() not in (f'if ({branch_cond}) {{','} else {','}')):
+     p('    '+line)
+  else:
+   for line in lines: p('    '+line)
   p('    if (rt->trapped) return;')
   p('    cpu->gpr[0] = 0;')
 
@@ -168,7 +194,20 @@ def render_function(cname, source, name, start, words):
    if prev_ctl and 'target' in prev_ctl:
     target=prev_ctl['target']; kind=prev_ctl['kind']
     if kind=='jump':
-     if start<=target<end_addr:
+     owner_addr=decoded[idx-1][0]
+     branch_cond=static_branch_condition(owner_addr,decoded[idx-1][1])
+     if branch_cond is not None:
+      after=addr+4
+      if start<=target<end_addr:
+       p(f'    if (branch_taken_{owner_addr:08x}) goto L_{target:08x};')
+      else:
+       p(f'    if (branch_taken_{owner_addr:08x}) {{')
+       p(f'        if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
+       p('        return;')
+       p('    }')
+      if start<=after<end_addr: p(f'    goto L_{after:08x};')
+      else: p('    return;')
+     elif start<=target<end_addr:
       p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) goto L_{target:08x};')
      else:
       p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) {{')
