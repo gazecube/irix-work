@@ -505,45 +505,63 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             IrixGuestAddr ipc = s->stop_address;
             uint32_t word = 0;
 
-            if (!ipc && s->last_pc)
-                ipc = s->last_pc;
-
-            if (irix_guest_ptr(rt, ipc, 4u))
-                word = irix_guest_read32be(rt, ipc);
-
-            if (s->interrupt_no == 17u && !is_syscall_word(word) &&
-                ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u)) {
-                uint32_t prev = irix_guest_read32be(rt, ipc - 4u);
-                if (is_syscall_word(prev)) {
-                    ipc -= 4u;
-                    word = prev;
+            /*
+             * Unicorn reports MIPS exception classes directly.  Do not infer
+             * "syscall" merely because an unrelated later exception happens
+             * near a syscall instruction: that turned EXCP_RI into a bogus
+             * second syscall with whatever value happened to be in v0.
+             */
+            if (s->interrupt_no == 17u) { /* EXCP_SYSCALL */
+                if (!ipc && s->last_pc)
+                    ipc = s->last_pc;
+                if (irix_guest_ptr(rt, ipc, 4u))
+                    word = irix_guest_read32be(rt, ipc);
+                if (!is_syscall_word(word) &&
+                    ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u)) {
+                    uint32_t prev = irix_guest_read32be(rt, ipc - 4u);
+                    if (is_syscall_word(prev)) {
+                        ipc -= 4u;
+                        word = prev;
+                    }
                 }
-            } else if (!is_syscall_word(word) && !is_break_word(word) &&
-                       ipc >= 4u && irix_guest_ptr(rt, ipc - 4u, 4u)) {
-                uint32_t prev = irix_guest_read32be(rt, ipc - 4u);
-                if (is_syscall_word(prev) || is_break_word(prev)) {
-                    ipc -= 4u;
-                    word = prev;
+                cpu->pc = ipc;
+                rt->current_pc = ipc;
+                if (is_syscall_word(word)) {
+                    irix_guest_syscall(rt, cpu);
+                    if (rt->trapped) {
+                        if (synthetic_return)
+                            cpu->gpr[31] = original_ra;
+                        return -1;
+                    }
+                    cpu->pc = ipc + 4u;
+                    rt->current_pc = cpu->pc;
+                    continue;
                 }
-            }
-            cpu->pc = ipc;
-            rt->current_pc = ipc;
-            if (is_syscall_word(word)) {
-                irix_guest_syscall(rt, cpu);
-                if (rt->trapped) {
+            } else if (s->interrupt_no == 18u) { /* EXCP_BREAK */
+                if (s->last_pc)
+                    ipc = s->last_pc;
+                if (irix_guest_ptr(rt, ipc, 4u))
+                    word = irix_guest_read32be(rt, ipc);
+                cpu->pc = ipc;
+                rt->current_pc = ipc;
+                if (is_break_word(word)) {
+                    irix_guest_trap(rt, cpu, (word >> 6) & 0xfffffu);
                     if (synthetic_return)
                         cpu->gpr[31] = original_ra;
                     return -1;
                 }
-                cpu->pc = ipc + 4u;
-                rt->current_pc = cpu->pc;
-                continue;
-            }
-            if (is_break_word(word)) {
-                irix_guest_trap(rt, cpu, (word >> 6) & 0xfffffu);
-                if (synthetic_return)
-                    cpu->gpr[31] = original_ra;
-                return -1;
+            } else {
+                /*
+                 * For RI/TLB/FPE/etc., the code hook is the best offending
+                 * instruction address.  Unicorn may expose next_pc through
+                 * the interrupt callback.
+                 */
+                if (s->last_pc)
+                    ipc = s->last_pc;
+                if (irix_guest_ptr(rt, ipc, 4u))
+                    word = irix_guest_read32be(rt, ipc);
+                cpu->pc = ipc;
+                rt->current_pc = ipc;
             }
 
             fprintf(stderr,
