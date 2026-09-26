@@ -145,7 +145,7 @@ def render_function(cname, source, name, start, words):
   for ctl in native_control_infos)
  needs_local_link_stack=has_dyn_return and (has_static_local_call or has_dyn_call)
  needs_local_dispatch=has_dyn_jump or has_dyn_call or needs_local_link_stack
- has_dynamic_target=has_dyn_return or has_dyn_jump or has_dyn_call
+ has_dynamic_target=has_dyn_jump or has_dyn_call or needs_local_link_stack
  p('    IrixGuestAddr pc = cpu->pc;')
  if has_dynamic_target:
   p('    IrixGuestAddr dynamic_target = 0;')
@@ -191,7 +191,8 @@ def render_function(cname, source, name, start, words):
   elif ctl_here and ctl_here.get('kind') in ('return','jump_indirect','call_indirect'):
    kind=ctl_here.get('kind')
    rs=(word>>21)&31
-   p(f'    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[{rs}];')
+   if kind!='return' or needs_local_link_stack:
+    p(f'    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[{rs}];')
    if kind=='call_indirect':
     rd=(word>>11)&31
     if rd:
