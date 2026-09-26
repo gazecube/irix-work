@@ -819,6 +819,16 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     0x24000030u);
         }
 
+        if (s->trace_code && pc >= 0x0fb71670u && pc <= 0x0fb71690u &&
+            irix_guest_ptr(rt, 0x0fb71670u, 64u)) {
+            unsigned k;
+            fprintf(stderr, "IRIX JIT memset-loop context:");
+            for (k = 0; k < 16u; ++k)
+                fprintf(stderr, " %08x",
+                        irix_guest_read32be(rt, 0x0fb71670u + k * 4u));
+            fprintf(stderr, "\n");
+        }
+
         err = uc_emu_start(s->uc, pc, return_pc, 0, 0);
         if (sync_cpu_from_unicorn(s) != 0) {
             if (synthetic_return)
