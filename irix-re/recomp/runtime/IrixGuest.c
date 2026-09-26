@@ -98,7 +98,12 @@ int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsi
     if (find_segment(rt, base, size))
         return -1;
     seg = &rt->memory.segments[rt->memory.count];
-    seg->host_base = (uint8_t *)calloc(1, size);
+    {
+        size_t alloc_size = ((size_t)size + 0xfffu) & ~(size_t)0xfffu;
+        if (alloc_size < size)
+            return -1;
+        seg->host_base = (uint8_t *)calloc(1, alloc_size);
+    }
     if (!seg->host_base)
         return -1;
     seg->guest_base = base;
@@ -697,9 +702,9 @@ void irix_guest_fpr_set_d(IrixGuestCpu *cpu, unsigned reg, double value)
     cpu->fpr[reg & 31u] = v.u;
 }
 
-int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr address,
-                                       uint32_t size, IrixGuestFunction function,
-                                       const char *name)
+static int irix_guest_register_function_range_flags(
+    IrixGuestRuntime *rt, IrixGuestAddr address, uint32_t size,
+    IrixGuestFunction function, const char *name, uint32_t flags)
 {
     IrixGuestFunctionEntry *entry;
     if (!function || rt->function_count >= IRIX_GUEST_MAX_FUNCTIONS)
@@ -709,6 +714,7 @@ int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr addre
     entry->size = size;
     entry->function = function;
     entry->name = name;
+    entry->flags = flags;
     {
         uint32_t slot = (address >> 2) & (IRIX_GUEST_FUNCTION_CACHE_SIZE - 1u);
         uint32_t start = slot;
@@ -718,17 +724,45 @@ int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr addre
             if (slot == start)
                 break;
         }
-        if (!rt->function_cache[slot] ||
-            rt->function_cache[slot]->address == address)
+        /*
+         * Preserve the registry's historical first-registration-wins
+         * semantics for exact duplicate addresses. Native overrides are
+         * intentionally registered before guest translations.
+         */
+        if (!rt->function_cache[slot])
             rt->function_cache[slot] = entry;
     }
     return 0;
+}
+
+int irix_guest_register_function_range(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                       uint32_t size, IrixGuestFunction function,
+                                       const char *name)
+{
+    return irix_guest_register_function_range_flags(
+        rt, address, size, function, name, IRIX_GUEST_FUNCTION_NATIVE);
 }
 
 int irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr address,
                                  IrixGuestFunction function, const char *name)
 {
     return irix_guest_register_function_range(rt, address, 0u, function, name);
+}
+
+int irix_guest_register_recompiled_function_range(
+    IrixGuestRuntime *rt, IrixGuestAddr address, uint32_t size,
+    IrixGuestFunction function, const char *name)
+{
+    return irix_guest_register_function_range_flags(
+        rt, address, size, function, name, IRIX_GUEST_FUNCTION_RECOMPILED);
+}
+
+int irix_guest_register_recompiled_function(
+    IrixGuestRuntime *rt, IrixGuestAddr address,
+    IrixGuestFunction function, const char *name)
+{
+    return irix_guest_register_recompiled_function_range(
+        rt, address, 0u, function, name);
 }
 
 IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuestAddr address)
