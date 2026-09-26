@@ -414,50 +414,65 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
 
     /*
-     * Bring-up cheat #2: some IRIX/rld paths walk a few bytes beyond a data
-     * mapping while constructing loader state.  If an unmapped data access
-     * lands within 64 KiB immediately after an existing writable segment,
-     * grow guest memory one zero-filled page and retry.  Never make these
-     * pages executable.
+     * Bring-up cheat #2: some IRIX/rld paths walk well beyond a data mapping
+     * while constructing loader state.  Mapping one page per miss exhausts
+     * IRIX_GUEST_MAX_SEGMENTS quickly, so grow a single large RW slab instead.
+     * Cap it at the next existing guest segment (or 16 MiB) to avoid overlap.
+     * Never make these pages executable.
      */
     if (type == UC_MEM_READ_UNMAPPED ||
         type == UC_MEM_WRITE_UNMAPPED) {
         IrixGuestAddr page = (IrixGuestAddr)((uint32_t)address & ~0xfffu);
+        uint64_t limit = (uint64_t)page + UINT64_C(0x01000000);
+        uint64_t next_base = UINT64_C(0x100000000);
         size_t i;
         int adjacent = 0;
 
         for (i = 0; i < s->rt->memory.count; ++i) {
             IrixGuestSegment *seg = &s->rt->memory.segments[i];
             uint64_t end = (uint64_t)seg->guest_base + (uint64_t)seg->size;
-            if (!(seg->flags & 2u))
-                continue;
-            if ((uint64_t)page >= end &&
-                (uint64_t)page < end + UINT64_C(0x00010000)) {
+
+            if ((seg->flags & 2u) &&
+                (uint64_t)page >= end &&
+                (uint64_t)page < end + UINT64_C(0x00010000))
                 adjacent = 1;
-                break;
-            }
+
+            if ((uint64_t)seg->guest_base > (uint64_t)page &&
+                (uint64_t)seg->guest_base < next_base)
+                next_base = seg->guest_base;
         }
 
-        if (adjacent && !irix_guest_ptr(s->rt, page, 1u)) {
+        if (next_base < limit)
+            limit = next_base;
+
+        limit &= ~UINT64_C(0xfff);
+
+        if (adjacent && !irix_guest_ptr(s->rt, page, 1u) &&
+            limit > (uint64_t)page) {
+            uint64_t span64 = limit - (uint64_t)page;
+            uint32_t span = span64 > UINT32_MAX ?
+                            UINT32_MAX & ~0xfffu : (uint32_t)span64;
             size_t idx = s->rt->memory.count;
-            if (irix_guest_map(s->rt, page, 0x1000u, 3u) == 0) {
+
+            if (span >= 0x1000u &&
+                irix_guest_map(s->rt, page, span, 3u) == 0) {
                 IrixGuestSegment *seg = &s->rt->memory.segments[idx];
-                uc_err e = uc_mem_map_ptr(uc, page, 0x1000u,
+                uc_err e = uc_mem_map_ptr(uc, page, span,
                                           UC_PROT_READ | UC_PROT_WRITE,
                                           seg->host_base);
                 if (e == UC_ERR_OK) {
                     s->mapped[idx] = 1;
                     fprintf(stderr,
-                            "IRIX JIT HACK: elastically mapped data page "
-                            "%08x for %s at addr=%08x pc=%08x\n",
-                            page,
+                            "IRIX JIT HACK: elastically mapped RW slab "
+                            "%08x+%08x for %s at addr=%08x pc=%08x\n",
+                            page, span,
                             type == UC_MEM_READ_UNMAPPED ? "read" : "write",
                             (uint32_t)address, s->last_pc);
                     return true;
                 }
                 fprintf(stderr,
-                        "IRIX JIT HACK: elastic page map %08x failed: %s\n",
-                        page, uc_strerror(e));
+                        "IRIX JIT HACK: elastic slab %08x+%08x failed: %s\n",
+                        page, span, uc_strerror(e));
             }
         }
     }
