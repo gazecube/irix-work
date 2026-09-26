@@ -166,10 +166,12 @@ def render_function(cname, source, name, start, words):
   is_delay_slot=bool(idx and decoded[idx-1][0]+4==addr and decoded[idx-1][3]=='control')
   if addr in block_labels: p(f'L_{addr:08x}:')
   p(f'    /* 0x{addr:08x}: 0x{word:08x} */')
-  if is_delay_slot:
+  prev_ctl=static_control_info(decoded[idx-1][0],decoded[idx-1][1]) if is_delay_slot else None
+  dynamic_delay = is_delay_slot and (prev_ctl is None or 'target' not in prev_ctl)
+  if dynamic_delay:
    p('    old_pending = pending_kind;')
-   if needs_local_dispatch: p('    old_target = pending_target;')
-   if needs_local_dispatch: p('    old_return = pending_return;')
+   p('    old_target = pending_target;')
+   p('    old_return = pending_return;')
    p('    pending_kind = IRIX_PENDING_NONE;')
   p(f'    pc = 0x{addr:08x}u;')
   p('    cpu->pc = pc;')
@@ -178,18 +180,18 @@ def render_function(cname, source, name, start, words):
   branch_cond=static_branch_condition(addr,word) if control else None
   if branch_cond is not None and ctl_here and ctl_here.get('kind')=='jump':
    p(f'    int branch_taken_{addr:08x} = ({branch_cond});')
-   # The branch instruction itself has no side effect beyond selecting the
-   # successor. Do not splice fragments of the decoder's pending-state
-   # if/else into native CFG output.
-   pass
+  elif ctl_here and 'target' in ctl_here and ctl_here.get('kind') in ('jump','call','link'):
+   # Direct control is represented entirely by the native post-delay CFG.
+   # Preserve non-pending architectural side effects (e.g. link register).
+   for line in lines:
+    if not any(x in line for x in ('pending_kind','pending_target','pending_return')):
+     p('    '+line)
   else:
    for line in lines: p('    '+line)
   p('    if (rt->trapped) return;')
   p('    cpu->gpr[0] = 0;')
 
-  prev_ctl=None
-  if is_delay_slot:
-   prev_ctl=static_control_info(decoded[idx-1][0],decoded[idx-1][1])
+  # prev_ctl was classified before delay-slot state emission.
   # Pending transfers are meaningful only in an architectural delay slot.
   # Keep ordinary straight-line instructions free of the generic resolver.
   if is_delay_slot:
@@ -210,22 +212,18 @@ def render_function(cname, source, name, start, words):
       if start<=after<end_addr: p(f'    goto L_{after:08x};')
       else: p('    return;')
      elif start<=target<end_addr:
-      p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) goto L_{target:08x};')
+      p(f'    goto L_{target:08x};')
      else:
-      p(f'    if (old_pending == IRIX_PENDING_JUMP && old_target == 0x{target:08x}u) {{')
-      p('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-      p('        return;')
-      p('    }')
+      p(f'    if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
+      p('    return;')
     elif kind=='call':
      ret=prev_ctl['ret']
-     p(f'    if (old_pending == IRIX_PENDING_CALL && old_target == 0x{target:08x}u) {{')
-     p(f'        if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
-     if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
-     else: p('        return;')
-     p('    }')
+     p(f'    if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
+     if start<=ret<end_addr: p(f'    goto L_{ret:08x};')
+     else: p('    return;')
     elif kind=='link':
      ret=prev_ctl['ret']
-     p(f'    if (old_pending == IRIX_PENDING_LINK && old_target == 0x{target:08x}u) {{')
+     p('    {')
      if start<=target<end_addr:
       p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
       p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
