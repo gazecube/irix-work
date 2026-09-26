@@ -415,19 +415,16 @@ def static_cfg_entries(decoded, start, size):
 def static_block_labels(decoded, start, size):
     """Labels required by emitted static CFG edges.
 
-    Ordinary sequential instructions deliberately have no C label.  Delay
-    slots are block entries because control instructions jump to them, and
-    branch-likely needs the post-delay address as a second successor.
+    Sequential instructions, including private delay slots, fall through in
+    C. A delay slot receives a label only if some independent CFG edge can
+    enter it. Conditional branches also need their post-delay fallthrough
+    address labeled because the native resolver jumps there explicitly.
     """
     labels = set(static_cfg_entries(decoded, start, size))
     for idx, (addr, word, _lines, control) in enumerate(decoded):
         if not control:
             continue
-        if idx + 1 < len(decoded):
-            labels.add(decoded[idx + 1][0])
         ctl = static_control_info(addr, word)
-        # Native conditional-branch lowering explicitly jumps to the
-        # post-delay fallthrough block, so it must have a C label.
         if (ctl and static_branch_condition(addr, word) is not None and
                 idx + 2 < len(decoded)):
             labels.add(decoded[idx + 2][0])
@@ -527,6 +524,20 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('')
     cfg_entries = static_cfg_entries(decoded, start, size)
     block_labels = static_block_labels(decoded, start, size)
+    shared_delay_owners = set()
+    for idx, (addr, word, _lines, control) in enumerate(decoded):
+        if (not control or idx + 1 >= len(decoded) or
+                decoded[idx + 1][0] != addr + 4):
+            continue
+        if decoded[idx + 1][0] in cfg_entries:
+            shared_delay_owners.add(addr)
+    for owner in sorted(shared_delay_owners):
+        print('    int delay_owner_active_%08x = 0;' % owner)
+        owner_idx = (owner - start) // 4
+        ctl = static_control_info(owner, decoded[owner_idx][1])
+        if ctl and static_branch_condition(owner, decoded[owner_idx][1]) is not None:
+            print('    int branch_taken_%08x = 0;' % owner)
+    print('')
     print('    goto L_%08x;' % start)
     print('')
     if has_delay_slot and needs_local_dispatch:
@@ -584,7 +595,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         ctl_raw = static_control_info(addr, word) if control else None
         has_native_delay = bool(
             control and idx + 1 < len(decoded) and
-            decoded[idx + 1][0] == addr + 4
+            decoded[idx + 1][0] == addr + 4 and
+            not decoded[idx + 1][3]
         )
         ctl_here = ctl_raw if has_native_delay else None
         branch_cond = static_branch_condition(addr, word) if ctl_here else None
@@ -594,7 +606,10 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         elif ctl_here and 'target' in ctl_here:
             kind = ctl_here.get('kind')
             if branch_cond is not None and kind in ('jump', 'link'):
-                print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
+                if addr in shared_delay_owners:
+                    print('    branch_taken_%08x = (%s);' % (addr, branch_cond))
+                else:
+                    print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
             if kind in ('call', 'link'):
                 print('    cpu->gpr[31] = (uint64_t)(int64_t)(int32_t)0x%08xu;' %
                       ((addr + 8) & 0xffffffff))
@@ -623,6 +638,11 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # Ordinary straight-line instructions cannot observe pending state,
         # so do not emit the large generic resolver for every instruction.
         if is_delay_slot and prev_ctl:
+            owner_addr = decoded[idx - 1][0]
+            shared_delay = owner_addr in shared_delay_owners
+            if shared_delay:
+                print('    if (delay_owner_active_%08x) {' % owner_addr)
+                print('        delay_owner_active_%08x = 0;' % owner_addr)
             kind = prev_ctl.get('kind')
             if 'target' in prev_ctl:
                 target = prev_ctl['target']
@@ -710,6 +730,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                     print('    goto L_%08x;' % ret)
                 else:
                     print('    return;')
+            if shared_delay:
+                print('    }')
 
         if control:
             ctl = static_control_info(addr, word)
@@ -722,13 +744,17 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                 if ctl and ctl.get('likely') and after_delay is not None:
                     cond = static_branch_condition(addr, word)
                     if cond is not None and ctl.get('kind') in ('jump', 'link'):
-                        print('    if (branch_taken_%08x) goto L_%08x;' %
+                        if addr in shared_delay_owners:
+                            print('    if (branch_taken_%08x) { delay_owner_active_%08x = 1; goto L_%08x; }' %
+                                  (addr, addr, delay))
+                        print('    if (!branch_taken_%08x) goto L_%08x;' %
+                              (addr, after_delay))
+                    elif addr in shared_delay_owners:
+                        print('    delay_owner_active_%08x = 1; goto L_%08x;' %
                               (addr, delay))
-                        print('    goto L_%08x;' % after_delay)
-                    else:
-                        print('    goto L_%08x;' % delay)
-                else:
-                    print('    goto L_%08x;' % delay)
+                elif addr in shared_delay_owners:
+                    print('    delay_owner_active_%08x = 1; goto L_%08x;' %
+                          (addr, delay))
             else:
                 print('    return;')
         elif idx + 1 < len(decoded):
