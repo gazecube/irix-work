@@ -12,7 +12,7 @@ def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
 DEFAULT_MAX_FILE_BYTES=2*1024*1024
 PARTITION_VERSION=1
-BATCH_PREAMBLE='#include "IrixGuest.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
 
 def function_body(text):
     marker='void irix_recomp_'
