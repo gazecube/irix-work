@@ -440,6 +440,22 @@ def main():
                 shutil.rmtree(dst)
             shutil.copytree(cache_dir, dst, copy_function=shutil.copy2)
 
+        # recomp_elf_bundle records absolute generated-C paths in bundle.json.
+        # A cached tree was originally emitted under a temporary cache path,
+        # so those paths become stale when the tree is moved into the cache
+        # and again when it is installed into an application's generated tree.
+        # Rewrite only the installed manifest.  Use os.replace rather than
+        # writing bundle.json in place because copytree may have hardlinked it
+        # to the shared cache, which must remain immutable for other apps.
+        bundle = dst / 'bundle.json'
+        meta = json.loads(bundle.read_text())
+        for fn in meta.get('functions', []):
+            source = Path(fn['source'])
+            fn['source'] = str(dst / source.name)
+        bundle_tmp = dst / ('.bundle.json.tmp.%d' % os.getpid())
+        bundle_tmp.write_text(json.dumps(meta, indent=2) + '\\n')
+        os.replace(bundle_tmp, bundle)
+
     bundles = []
     for prefix, binary in components:
         dst = gen / prefix
