@@ -30,6 +30,10 @@ typedef struct IrixMipsJitState {
     int interrupt_gpr_valid;
     uint64_t fault_address;
     int fault_type;
+    uint64_t fault_ra;
+    uint64_t fault_t9;
+    uint64_t fault_gp;
+    uint64_t fault_sp;
     int trace_code;
 } IrixMipsJitState;
 
@@ -223,12 +227,19 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
                                 int64_t value, void *opaque)
 {
     IrixMipsJitState *s = (IrixMipsJitState *)opaque;
-    (void)uc;
     (void)size;
     (void)value;
     s->stop_reason = IRIX_JIT_STOP_MEMORY;
     s->fault_address = address;
     s->fault_type = (int)type;
+    s->fault_ra = 0;
+    s->fault_t9 = 0;
+    s->fault_gp = 0;
+    s->fault_sp = 0;
+    (void)uc_reg_read(uc, UC_MIPS_REG_RA, &s->fault_ra);
+    (void)uc_reg_read(uc, UC_MIPS_REG_T9, &s->fault_t9);
+    (void)uc_reg_read(uc, UC_MIPS_REG_GP, &s->fault_gp);
+    (void)uc_reg_read(uc, UC_MIPS_REG_SP, &s->fault_sp);
     return false;
 }
 
@@ -425,6 +436,10 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         s->last_pc = 0;
         s->fault_address = 0;
         s->fault_type = 0;
+        s->fault_ra = 0;
+        s->fault_t9 = 0;
+        s->fault_gp = 0;
+        s->fault_sp = 0;
         pc = cpu->pc;
 
         if (s->trace_code && irix_guest_ptr(rt, pc, 16u)) {
@@ -575,13 +590,33 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
 
         if (s->stop_reason == IRIX_JIT_STOP_MEMORY) {
+            IrixGuestAddr src = s->last_pc;
+            uint32_t w0 = 0, wm1 = 0, wm2 = 0, wm3 = 0;
+            if (src && irix_guest_ptr(rt, src, 4u))
+                w0 = irix_guest_read32be(rt, src);
+            if (src >= 4u && irix_guest_ptr(rt, src - 4u, 4u))
+                wm1 = irix_guest_read32be(rt, src - 4u);
+            if (src >= 8u && irix_guest_ptr(rt, src - 8u, 4u))
+                wm2 = irix_guest_read32be(rt, src - 8u);
+            if (src >= 12u && irix_guest_ptr(rt, src - 12u, 4u))
+                wm3 = irix_guest_read32be(rt, src - 12u);
+
             rt->trapped = 1;
-            rt->trap_pc = cpu->pc;
+            rt->trap_pc = src ? src : cpu->pc;
             rt->fault_addr = (IrixGuestAddr)(uint32_t)s->fault_address;
             rt->trap_code = 0xeeee0004u;
             fprintf(stderr,
-                    "IRIX JIT: memory fault type=%d pc=%08x addr=%08x\n",
-                    s->fault_type, cpu->pc, rt->fault_addr);
+                    "IRIX JIT: memory fault type=%d fetchpc=%08x addr=%08x "
+                    "last_pc=%08x last_block=%08x "
+                    "ra=%08x t9=%08x gp=%08x sp=%08x "
+                    "insn[-3..0]=%08x,%08x,%08x,%08x\n",
+                    s->fault_type, cpu->pc, rt->fault_addr,
+                    src, s->last_block,
+                    (uint32_t)s->fault_ra, (uint32_t)s->fault_t9,
+                    (uint32_t)s->fault_gp, (uint32_t)s->fault_sp,
+                    wm3, wm2, wm1, w0);
+            cpu->pc = rt->trap_pc;
+            rt->current_pc = cpu->pc;
             if (synthetic_return)
                 cpu->gpr[31] = original_ra;
             return -1;
