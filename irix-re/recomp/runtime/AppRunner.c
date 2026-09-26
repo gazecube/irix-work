@@ -71,6 +71,7 @@ IrixGuestFunction irix_x11_bulk_lookup(const char *name);
 void irix_x11_image_bridge_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_image_bridge_lookup(const char *name);
 
+#ifndef IRIX_JIT_ONLY
 static IrixGuestFunction resolve_native(const char *name)
 {
     IrixGuestFunction fn = irix_libc_bridge_lookup(name);
@@ -232,6 +233,8 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
     return rebound;
 }
 
+#endif
+
 #ifndef IRIX_JIT_ONLY
 typedef void (*IrixDsoRegister)(IrixGuestRuntime *);
 
@@ -294,6 +297,7 @@ static void register_native_dsos(IrixGuestRuntime *rt)
 
 #endif
 
+#ifndef IRIX_JIT_ONLY
 static int load_blob(IrixGuestRuntime *rt, const char *path, IrixGuestAddr base)
 {
     FILE *f = fopen(path, "rb");
@@ -321,6 +325,8 @@ static int load_core_image(IrixGuestRuntime *rt)
     if (load_blob(rt, path, 0x60000000u) != 0) return -1;
     return 0;
 }
+
+#endif
 
 static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
                     IrixGuestElfInfo *info_out)
