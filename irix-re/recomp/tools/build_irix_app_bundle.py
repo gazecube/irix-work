@@ -455,7 +455,7 @@ def main():
         bundle_tmp = dst / ('.bundle.json.tmp.%d' % os.getpid())
         with bundle_tmp.open('w') as f:
             json.dump(meta, f, indent=2)
-            f.write('\\n')
+            f.write('\n')
             f.flush()
             os.fsync(f.fileno())
         os.replace(bundle_tmp, bundle)
