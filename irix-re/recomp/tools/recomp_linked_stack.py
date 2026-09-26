@@ -240,7 +240,7 @@ def render_function(cname, source, name, start, words):
       p('          }')
       p(f'          if (direct_entry && direct_entry->address == 0x{target:08x}u) {{')
       p(f'              if (irix_guest_call_entry(rt, cpu, 0x{target:08x}u, direct_entry) != 0) return;')
-      p(f'          } else if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
+      p(f'          }} else if (irix_guest_call(rt, cpu, 0x{target:08x}u) != 0) return;')
       p('        }')
       if start<=ret<end_addr: p(f'        goto L_{ret:08x};')
       else: p('        return;')
