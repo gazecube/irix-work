@@ -452,15 +452,27 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
     print('#include "IrixGuest.h"'); print('#include "IrixMipsInterp.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
+    has_delay_slot = any(
+        idx and decoded[idx - 1][0] + 4 == addr and
+        decoded[idx - 1][3] == 'control'
+        for idx, (addr, _word, _lines, _control) in enumerate(decoded)
+    )
+    emitted_lines = '\n'.join(
+        line for _addr, _word, lines, _control in decoded for line in lines
+    )
     print('    IrixGuestAddr pc = cpu->pc;')
-    print('    IrixGuestAddr pending_target = 0;')
-    print('    IrixGuestAddr pending_return = 0;')
-    print('    int pending_kind = IRIX_PENDING_NONE;')
-    print('    int old_pending;')
-    print('    IrixGuestAddr old_target;')
-    print('    IrixGuestAddr old_return;')
-    print('    IrixGuestAddr local_link_returns[64];')
-    print('    unsigned local_link_depth = 0;')
+    if has_delay_slot or 'pending_target' in emitted_lines:
+        print('    IrixGuestAddr pending_target = 0;')
+    if has_delay_slot or 'pending_return' in emitted_lines:
+        print('    IrixGuestAddr pending_return = 0;')
+    if has_delay_slot or 'pending_kind' in emitted_lines:
+        print('    int pending_kind = IRIX_PENDING_NONE;')
+    if has_delay_slot:
+        print('    int old_pending;')
+        print('    IrixGuestAddr old_target;')
+        print('    IrixGuestAddr old_return;')
+        print('    IrixGuestAddr local_link_returns[64];')
+        print('    unsigned local_link_depth = 0;')
     print('')
     cfg_entries = static_cfg_entries(decoded, start, size)
     block_labels = static_block_labels(decoded, start, size)
