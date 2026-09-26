@@ -379,7 +379,7 @@ def static_branch_condition(addr, insn):
     if op in (0x07, 0x17):
         return '(int64_t)%s > 0' % reg(rs)
     if op == 0x01:
-        if rt in (0x00, 0x02):
+        if rt in (0x00, 0x02, 0x10, 0x12):
             return '(int64_t)%s < 0' % reg(rs)
         if rt in (0x01, 0x03, 0x11, 0x13):
             return '(int64_t)%s >= 0' % reg(rs)
@@ -493,32 +493,31 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         static_control_info(addr, word)
         for addr, word, _lines, control in decoded if control
     ]
-    # A local PC dispatcher is only required when translated control can
-    # return to an address chosen at runtime. Direct branches/calls resolve
-    # to C labels after their delay slots; an ordinary jr $ra exits the host
-    # function. Keep dispatch for indirect linked calls and intra-function
-    # branch-and-link returns, whose return PC is represented dynamically.
-    needs_local_dispatch = any(
-        ctl is None or ctl.get('kind') == 'call_indirect' or
-        (ctl.get('kind') == 'link' and
-         start <= ctl.get('target', 0) < start + size)
+    has_dyn_return = any(
+        ctl and ctl.get('kind') == 'return' for ctl in control_infos
+    )
+    has_dyn_jump = any(
+        ctl and ctl.get('kind') == 'jump_indirect' for ctl in control_infos
+    )
+    has_dyn_call = any(
+        ctl and ctl.get('kind') == 'call_indirect' for ctl in control_infos
+    )
+    has_static_local_call = any(
+        ctl and ctl.get('kind') in ('call', 'link') and
+        start <= ctl.get('target', 0) < start + size
         for ctl in control_infos
     )
-    has_dynamic_delay = any(
-        idx + 1 < len(decoded) and control and
-        (static_control_info(addr, word) is None or
-         'target' not in static_control_info(addr, word))
-        for idx, (addr, word, _lines, control) in enumerate(decoded)
+    needs_local_link_stack = (
+        has_dyn_return and (has_static_local_call or has_dyn_call)
     )
+    needs_local_dispatch = (
+        has_dyn_jump or has_dyn_call or needs_local_link_stack
+    )
+    has_dynamic_target = has_dyn_return or has_dyn_jump or has_dyn_call
     print('    IrixGuestAddr pc = cpu->pc;')
-    if has_dynamic_delay:
-        print('    IrixGuestAddr pending_target = 0;')
-        print('    IrixGuestAddr pending_return = 0;')
-        print('    int pending_kind = IRIX_PENDING_NONE;')
-        print('    int old_pending;')
-        print('    IrixGuestAddr old_target;')
-        print('    IrixGuestAddr old_return;')
-    if needs_local_dispatch:
+    if has_dynamic_target:
+        print('    IrixGuestAddr dynamic_target = 0;')
+    if needs_local_link_stack:
         print('    IrixGuestAddr local_link_returns[64];')
         print('    unsigned local_link_depth = 0;')
     print('')
@@ -546,12 +545,6 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('    /* 0x%08x: 0x%08x */' % (addr, word))
         prev_ctl = (static_control_info(decoded[idx - 1][0], decoded[idx - 1][1])
                     if is_delay_slot else None)
-        dynamic_delay = is_delay_slot and (prev_ctl is None or 'target' not in prev_ctl)
-        if dynamic_delay:
-            print('    old_pending = pending_kind;')
-            print('    old_target = pending_target;')
-            print('    old_return = pending_return;')
-            print('    pending_kind = IRIX_PENDING_NONE;')
         print('    pc = 0x%08xu;' % addr)
         print('    cpu->pc = pc;')
         print('    rt->current_pc = pc;')
@@ -569,35 +562,28 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         if addr == 0x0f62b6a4:
             print('            { IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[20]; if (w && irix_guest_ptr(rt, w + 4u, 4u)) { IrixGuestAddr wc = irix_guest_read32be(rt, w + 4u); if (wc) irix_guest_xt_repair_class_resources(rt, wc); } }')
         if addr == 0x0f615d60:
-            print('            { IrixGuestAddr r = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; uint32_t qcall = (uint32_t)cpu->gpr[13]; fprintf(stderr, "IRIX Xt default snapshot: s0=%08x type=%08x size=%08x def_type=%08x def_addr=%08x qcall=%08x\\n", (uint32_t)r, irix_guest_read32be(rt, r + 8u), irix_guest_read32be(rt, r + 12u), irix_guest_read32be(rt, r + 20u), irix_guest_read32be(rt, r + 24u), qcall); irix_guest_xt_normalize_resource(rt, r); fprintf(stderr, "IRIX Xt default normalized: def_type=%08x def_addr=%08x\\n", irix_guest_read32be(rt, r + 20u), irix_guest_read32be(rt, r + 24u)); }')
-        if addr == 0x0b2a813c:
-            print('            { IrixGuestAddr p = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; fprintf(stderr, "IRIX 4Dwm table probe: pc=0x0b2a813c s0=%08x prev=%08x cur=%08x next=%08x next2=%08x ra=%08x gp=%08x\\n", (uint32_t)p, p >= 4u ? irix_guest_read32be(rt, p - 4u) : 0u, irix_guest_read32be(rt, p), irix_guest_read32be(rt, p + 4u), irix_guest_read32be(rt, p + 8u), (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[28]); }')
-        if addr == 0x0b2a80d8:
-            print('            fprintf(stderr, "IRIX 4Dwm setup insns: 80d8=%08x 80dc=%08x 80e0=%08x 80e4=%08x 80e8=%08x 80ec=%08x 80f0=%08x 80f4=%08x 80f8=%08x 80fc=%08x 8100=%08x 8104=%08x 8108=%08x 810c=%08x 8110=%08x 8114=%08x 8118=%08x 811c=%08x 8120=%08x 8124=%08x\\n", irix_guest_read32be(rt,0x0b2a80d8u),irix_guest_read32be(rt,0x0b2a80dcu),irix_guest_read32be(rt,0x0b2a80e0u),irix_guest_read32be(rt,0x0b2a80e4u),irix_guest_read32be(rt,0x0b2a80e8u),irix_guest_read32be(rt,0x0b2a80ecu),irix_guest_read32be(rt,0x0b2a80f0u),irix_guest_read32be(rt,0x0b2a80f4u),irix_guest_read32be(rt,0x0b2a80f8u),irix_guest_read32be(rt,0x0b2a80fcu),irix_guest_read32be(rt,0x0b2a8100u),irix_guest_read32be(rt,0x0b2a8104u),irix_guest_read32be(rt,0x0b2a8108u),irix_guest_read32be(rt,0x0b2a810cu),irix_guest_read32be(rt,0x0b2a8110u),irix_guest_read32be(rt,0x0b2a8114u),irix_guest_read32be(rt,0x0b2a8118u),irix_guest_read32be(rt,0x0b2a811cu),irix_guest_read32be(rt,0x0b2a8120u),irix_guest_read32be(rt,0x0b2a8124u));')
-        if 0x0b294288 <= addr < 0x0b294380:
-            print('            fprintf(stderr, "IRIX Xm GetDisplay: pc=0x%08x insn=%08x v0=%%08x a0=%%08x a1=%%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x t9=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[31]);' % (addr,word))
-        if addr == 0x0b2a80d4:
-            print('            fprintf(stderr, "IRIX 4Dwm call probe: pc=0x0b2a80d4 t9=%08x a0=%08x a1=%08x a2=%08x a3=%08x gp=%08x ra=%08x\\n", (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);')
-        if addr == 0x0b2a80d8:
-            print('            { IrixGuestFunctionEntry *e = irix_guest_find_function(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[25]); fprintf(stderr, "IRIX 4Dwm callee: t9=%08x name=%s a0=%08x\\n", (uint32_t)cpu->gpr[25], e && e->name ? e->name : "?", (uint32_t)cpu->gpr[4]); }')
-        if addr == 0x0b2a80dc:
-            print('            fprintf(stderr, "IRIX 4Dwm callee return: v0=%08x a0=%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4]);')
-        if 0x0b2a80d8 <= addr <= 0x0b2a8138:
-            print('            fprintf(stderr, "IRIX 4Dwm pretable trace: pc=0x%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x s4=%%08x s5=%%08x s6=%%08x s7=%%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t0=%%08x t1=%%08x t2=%%08x t3=%%08x t4=%%08x t5=%%08x t6=%%08x t7=%%08x\\n", (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21], (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23], (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11], (uint32_t)cpu->gpr[12], (uint32_t)cpu->gpr[13], (uint32_t)cpu->gpr[14], (uint32_t)cpu->gpr[15]);' % addr)
+            print('            { IrixGuestAddr r = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; uint32_t qcall = (uint32_t)cpu->gpr[13]; fprintf(stderr, "IRIX Xt class probe: object=%%08x qcall=%%08x\\n", r, qcall); }')
         ctl_here = static_control_info(addr, word) if control else None
         branch_cond = static_branch_condition(addr, word) if control else None
-        # For direct conditional branches, preserve the branch decision in a
-        # plain C boolean. The architectural delay slot still executes below,
-        # but it no longer needs pending_kind/target as its CFG representation.
-        if branch_cond is not None and ctl_here and ctl_here.get('kind') == 'jump':
-            print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
-        elif (ctl_here and 'target' in ctl_here and
-              ctl_here.get('kind') in ('jump', 'call', 'link')):
-            for line in lines:
-                if not any(x in line for x in ('pending_kind', 'pending_target', 'pending_return')):
-                    print('    '+line)
+        if ctl_here and 'target' in ctl_here:
+            kind = ctl_here.get('kind')
+            if branch_cond is not None and kind in ('jump', 'link'):
+                print('    int branch_taken_%08x = (%s);' % (addr, branch_cond))
+            if kind in ('call', 'link'):
+                print('    cpu->gpr[31] = (uint64_t)(int64_t)(int32_t)0x%08xu;' %
+                      ((addr + 8) & 0xffffffff))
+        elif ctl_here and ctl_here.get('kind') in ('return', 'jump_indirect', 'call_indirect'):
+            kind = ctl_here.get('kind')
+            rs = (word >> 21) & 31
+            print('    dynamic_target = (IrixGuestAddr)(uint32_t)cpu->gpr[%d];' % rs)
+            if kind == 'call_indirect':
+                rd = (word >> 11) & 31
+                if rd:
+                    print('    cpu->gpr[%d] = (uint64_t)(int64_t)(int32_t)0x%08xu;' %
+                          (rd, (addr + 8) & 0xffffffff))
         else:
-            for line in lines: print('    '+line)
+            for line in lines:
+                print('    '+line)
         print('    if (rt->trapped) return;')
         print('    cpu->gpr[0] = 0;')
 
@@ -609,17 +595,18 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         # Pending transfers exist only while executing a MIPS delay slot.
         # Ordinary straight-line instructions cannot observe pending state,
         # so do not emit the large generic resolver for every instruction.
-        if is_delay_slot:
-            if prev_ctl and 'target' in prev_ctl:
+        if is_delay_slot and prev_ctl:
+            kind = prev_ctl.get('kind')
+            if 'target' in prev_ctl:
                 target = prev_ctl['target']
-                kind = prev_ctl['kind']
                 if kind == 'jump':
                     owner_addr = decoded[idx - 1][0]
                     branch_cond = static_branch_condition(owner_addr, decoded[idx - 1][1])
                     if branch_cond is not None:
                         after = addr + 4
                         if start <= target < start + size:
-                            print('    if (branch_taken_%08x) goto L_%08x;' % (owner_addr, target))
+                            print('    if (branch_taken_%08x) goto L_%08x;' %
+                                  (owner_addr, target))
                         else:
                             print('    if (branch_taken_%08x) {' % owner_addr)
                             print('        if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
@@ -634,33 +621,21 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                     else:
                         print('    if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
                         print('    return;')
-                elif kind == 'call':
+                elif kind in ('call', 'link'):
                     ret = prev_ctl['ret']
-                    print('    {')
-                    print('        { static IrixGuestFunctionEntry *direct_entry_%08x;' % addr)
-                    print('          IrixGuestFunctionEntry *direct_entry = direct_entry_%08x;' % addr)
-                    print('          if (!direct_entry) {')
-                    print('              direct_entry = irix_guest_find_function(rt, 0x%08xu);' % target)
-                    print('              if (direct_entry && direct_entry->address == 0x%08xu)' % target)
-                    print('                  direct_entry_%08x = direct_entry;' % addr)
-                    print('          }')
-                    print('          if (direct_entry && direct_entry->address == 0x%08xu) {' % target)
-                    print('              if (irix_guest_call_entry(rt, cpu, 0x%08xu, direct_entry) != 0) return;' % target)
-                    print('          } else if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
-                    print('        }')
-                    if start <= ret < start + size:
-                        print('        goto L_%08x;' % ret)
+                    owner_addr = decoded[idx - 1][0]
+                    branch_cond = (static_branch_condition(owner_addr, decoded[idx - 1][1])
+                                   if kind == 'link' else None)
+                    if branch_cond is not None:
+                        print('    if (branch_taken_%08x) {' % owner_addr)
                     else:
-                        print('        return;')
-                    print('    }')
-                elif kind == 'link':
-                    ret = prev_ctl['ret']
-                    print('    {')
+                        print('    {')
                     if start <= target < start + size:
-                        print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-                        print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-                        print('        }')
-                        print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
+                        if needs_local_link_stack:
+                            print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+                            print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+                            print('        }')
+                            print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
                         print('        goto L_%08x;' % target)
                     else:
                         print('        { static IrixGuestFunctionEntry *direct_entry_%08x;' % addr)
@@ -674,42 +649,41 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                         print('              if (irix_guest_call_entry(rt, cpu, 0x%08xu, direct_entry) != 0) return;' % target)
                         print('          } else if (irix_guest_call(rt, cpu, 0x%08xu) != 0) return;' % target)
                         print('        }')
-                        if start <= ret < start + size:
-                            print('        goto L_%08x;' % ret)
-                        else:
-                            print('        return;')
                     print('    }')
+                    if start <= ret < start + size:
+                        print('    goto L_%08x;' % ret)
+                    else:
+                        print('    return;')
+            elif kind == 'return':
+                if needs_local_link_stack:
+                    print('    if (local_link_depth && dynamic_target == local_link_returns[local_link_depth - 1]) {')
+                    print('        local_link_depth--; pc = dynamic_target; goto dispatch_local;')
+                    print('    }')
+                print('    return;')
+            elif kind == 'jump_indirect':
+                print('    if (dynamic_target < 0x%08xu || dynamic_target >= 0x%08xu) {' %
+                      (start, start + size))
+                print('        if (irix_guest_call(rt, cpu, dynamic_target) != 0) return;')
+                print('        return;')
+                print('    }')
+                print('    pc = dynamic_target; goto dispatch_local;')
+            elif kind == 'call_indirect':
+                ret = (decoded[idx - 1][0] + 8) & 0xffffffff
+                print('    if (dynamic_target >= 0x%08xu && dynamic_target < 0x%08xu) {' %
+                      (start, start + size))
+                if needs_local_link_stack:
+                    print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
+                    print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
+                    print('        }')
+                    print('        local_link_returns[local_link_depth++] = 0x%08xu;' % ret)
+                print('        pc = dynamic_target; goto dispatch_local;')
+                print('    }')
+                print('    if (irix_guest_call(rt, cpu, dynamic_target) != 0) return;')
+                if start <= ret < start + size:
+                    print('    goto L_%08x;' % ret)
+                else:
+                    print('    return;')
 
-            print('    if (old_pending == IRIX_PENDING_RETURN) {')
-            if needs_local_dispatch:
-                print('        if (local_link_depth && old_target == local_link_returns[local_link_depth - 1]) {')
-                print('            local_link_depth--; pc = old_target; goto dispatch_local;')
-                print('        }')
-            print('        return;')
-            print('    }')
-            if needs_local_dispatch:
-                print('    if (old_pending == IRIX_PENDING_CALL) {')
-                print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-                print('        pc = old_return; goto dispatch_local;')
-                print('    }')
-                print('    if (old_pending == IRIX_PENDING_LINK) {')
-                print('        if (old_target >= 0x%08xu && old_target < 0x%08xu) {'%(start,start+size))
-                print('            if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
-                print('                irix_guest_trap(rt, cpu, 0xeeee0003u); return;')
-                print('            }')
-                print('            local_link_returns[local_link_depth++] = old_return;')
-                print('            pc = old_target; goto dispatch_local;')
-                print('        }')
-                print('        if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-                print('        pc = old_return; goto dispatch_local;')
-                print('    }')
-                print('    if (old_pending == IRIX_PENDING_JUMP) {')
-                print('        if (old_target < 0x%08xu || old_target >= 0x%08xu) {'%(start,start+size))
-                print('            if (irix_guest_call(rt, cpu, old_target) != 0) return;')
-                print('            return;')
-                print('        }')
-                print('        pc = old_target; goto dispatch_local;')
-                print('    }')
         if control:
             ctl = static_control_info(addr, word)
             # Direct control transfers always execute the following delay
@@ -719,8 +693,13 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                 delay = decoded[idx + 1][0]
                 after_delay = decoded[idx + 2][0] if idx + 2 < len(decoded) else None
                 if ctl and ctl.get('likely') and after_delay is not None:
-                    print('    if (pc == 0x%08xu) goto L_%08x;' % (addr, delay))
-                    print('    goto L_%08x;' % after_delay)
+                    cond = static_branch_condition(addr, word)
+                    if cond is not None and ctl.get('kind') in ('jump', 'link'):
+                        print('    if (branch_taken_%08x) goto L_%08x;' %
+                              (addr, delay))
+                        print('    goto L_%08x;' % after_delay)
+                    else:
+                        print('    goto L_%08x;' % delay)
                 else:
                     print('    goto L_%08x;' % delay)
             else:
