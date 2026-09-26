@@ -154,7 +154,9 @@ if(IRIX_DEV_TREE)
         VERBATIM
     )
 
-    add_custom_target(irix_recompiled_core ALL
+    # Static recompilation is opt-in. The JIT/original-binary bring-up
+    # path must never trigger the expensive generated-core build implicitly.
+    add_custom_target(irix_recompiled_core
         DEPENDS "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS})
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
     set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
@@ -291,7 +293,7 @@ if(IRIX_DEV_TREE)
                 # produced artifact is the reconstructed IRIX program itself.
                 # AppRunner.c is now bootstrap/startup glue for that ELF, not
                 # the public identity of the executable.
-                add_executable(${_app_runner_target} runtime/AppRunner.c)
+                add_executable(${_app_runner_target} EXCLUDE_FROM_ALL runtime/AppRunner.c)
                 set_target_properties(${_app_runner_target} PROPERTIES
                     OUTPUT_NAME "${_app_elf_name}"
                     RUNTIME_OUTPUT_DIRECTORY "${_app_root_dir}"
