@@ -8,6 +8,9 @@
 /* Runtime-private ownership lookup; kept out of IrixGuest.h so changing this
    interpreter plumbing does not invalidate every generated translation TU. */
 extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
+/* Runtime-private allocator metadata query. Kept out of public headers so
+   this narrow Motif bring-up repair does not invalidate generated units. */
+extern uint32_t irix_libc_guest_allocation_size(IrixGuestAddr addr);
 
 static uint64_t sx32(uint32_t v)
 {
@@ -735,6 +738,50 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             address, (uint32_t)cpu->gpr[31]);
 
     while (!rt->trapped && steps++ < max_steps) {
+        /*
+         * SGI Motif _XmBuildResources count repair.
+         *
+         * At 0x0b2a957c the original N32 routine begins computing:
+         *
+         *   (wc_num_resources + sc_num_resources) * 20
+         *
+         * for its merged XmSyntheticResource allocation. The observed state
+         * has s2=wc_num_resources=7, but s1 (which this machine code uses as
+         * sc_num_resources) contains the superclass resource-array pointer
+         * itself, e.g. 0x3000acf0. That yields malloc(0xc00d834c), followed by
+         * an equally bogus memcpy length.
+         *
+         * The superclass array is allocated by the guest libc bridge, whose
+         * live-allocation metadata gives us its exact byte size. Recover the
+         * element count here, before any size arithmetic executes, and let the
+         * original SGI instructions perform both malloc and memcpy sizing.
+         */
+        if (pc == 0x0b2a957cu) {
+            IrixGuestAddr sc_resources =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+
+            if (sc_resources >= 0x30000000u &&
+                sc_resources < 0x34000000u) {
+                uint32_t bytes =
+                    irix_libc_guest_allocation_size(sc_resources);
+
+                if (bytes >= 20u && (bytes % 20u) == 0u) {
+                    uint32_t sc_num = bytes / 20u;
+                    uint32_t wc_num = (uint32_t)cpu->gpr[18];
+
+                    if (sc_num < 4096u && wc_num < 4096u) {
+                        fprintf(stderr,
+                                "IRIX XmBuildResources interp repair: "
+                                "pc=%08x sc_resources=%08x bytes=%u "
+                                "sc_num=%u wc_num=%u\n",
+                                pc, sc_resources, bytes, sc_num, wc_num);
+                        cpu->gpr[17] =
+                            (uint64_t)(int64_t)(int32_t)sc_num;
+                    }
+                }
+            }
+        }
+
         /*
          * SGI Xt translation-merge bring-up repair.
          *
