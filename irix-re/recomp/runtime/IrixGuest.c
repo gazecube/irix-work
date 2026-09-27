@@ -53,12 +53,41 @@ void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
 static IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address)
 {
     size_t i;
+    static int warned_vk_fallback;
+
     for (i = g_guest_gp_range_count; i > 0; --i) {
         const IrixGuestGpRange *r = &g_guest_gp_ranges[i - 1u];
         uint64_t end = (uint64_t)r->base + (uint64_t)r->size;
         if ((uint64_t)address >= r->base && (uint64_t)address < end)
             return r->gp;
     }
+
+    /*
+     * Direct-main bring-up fallback for SGI ViewKit/libvk.
+     *
+     * The original libvk text executes in the 0x0d6xxxxx region and its
+     * verified N32 GP is 0x0d6cf058. Some extracted libvk images do not expose
+     * usable GP metadata through the loader path yet, leaving this range
+     * unowned and allowing callers to inherit libXt's 0x0f69eef0 GP.
+     *
+     * That produces the reproducible failure at 0x0d6352e0:
+     *
+     *   lw t9,-0x7480(gp)
+     *   -> with Xt GP reads ASCII "mous" (0x6d6f7573)
+     *   -> jalr t9
+     *
+     * Keep this fallback address-based and subordinate to all discovered GP
+     * ranges so a proper ELF-derived registration automatically wins.
+     */
+    if (address >= 0x0d600000u && address < 0x0d700000u) {
+        if (!warned_vk_fallback) {
+            fprintf(stderr,
+                    "IRIX GP ownership fallback: ViewKit/libvk 0x0d6xxxxx -> gp=0x0d6cf058\n");
+            warned_vk_fallback = 1;
+        }
+        return 0x0d6cf058u;
+    }
+
     return 0;
 }
 
