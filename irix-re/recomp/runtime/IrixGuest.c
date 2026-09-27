@@ -2128,6 +2128,31 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * SGI Xt TMparse internal entry reached from 0x0f625074 via BAL.
+     *
+     * The public-name fallback below is not sufficient because this parser
+     * path enters through a stripped/static helper. The failing translated
+     * path eventually treats XrmValue.size (0x1a) as a String pointer and
+     * faults at 0x0f628410. Execute the internal parser entry as original
+     * MIPS so its stack/XrmValue state stays exactly as SGI compiled it.
+     */
+    if (address == 0x0f623fccu) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        fprintf(stderr,
+                "IRIX Xt TMparse internal fallback: %08x -> original MIPS\n",
+                address);
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
+    }
+
+    /*
      * Bring-up escape hatch for Xt's translation manager.
      *
      * The translated converter path has repeatedly exposed malformed XrmValue
