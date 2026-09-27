@@ -183,31 +183,75 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         IrixGuestAddr callsite = ra >= 8u ? ra - 8u : 0u;
         unsigned i;
 
-        fprintf(stderr,
-                "IRIX malloc BAD REQUEST: size=%08x pc=%08x ra=%08x "
-                "callsite=%08x gp=%08x t9=%08x "
-                "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
-                "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
-                size, (uint32_t)cpu->pc, ra, callsite,
-                (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25],
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
-                (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
-                (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23]);
+        {
+            IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+            IrixGuestAddr outer_ra = 0u;
+            IrixGuestAddr outer_callsite = 0u;
 
-        if (callsite >= 24u &&
-            irix_guest_ptr(rt, callsite - 24u, 56u)) {
-            fprintf(stderr, "IRIX malloc caller-insn:");
-            for (i = 0; i < 14u; ++i) {
-                IrixGuestAddr a = callsite - 24u + i * 4u;
-                fprintf(stderr, " [%08x]=%08x",
-                        a, irix_guest_read32be(rt, a));
+            /*
+             * SGI XtMalloc at 0x0f614498 saves its caller RA with
+             *     sd $ra,0x10($sp)
+             * before jalr'ing libc malloc at 0x0f6144b0.  Recover that
+             * saved RA here so an absurd allocation report names the code
+             * that CALCULATED the bad size, not merely the XtMalloc wrapper.
+             */
+            if (sp && irix_guest_ptr(rt, sp + 0x10u, 8u)) {
+                uint64_t saved_ra64 = irix_guest_read64be(rt, sp + 0x10u);
+                outer_ra = (IrixGuestAddr)(uint32_t)saved_ra64;
+                if (outer_ra >= 8u)
+                    outer_callsite = outer_ra - 8u;
             }
-            fputc('\n', stderr);
+
+            fprintf(stderr,
+                    "IRIX malloc BAD REQUEST: size=%08x pc=%08x ra=%08x "
+                    "callsite=%08x sp=%08x outer_ra=%08x outer_callsite=%08x "
+                    "gp=%08x t9=%08x "
+                    "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+                    "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    size, (uint32_t)cpu->pc, ra, callsite, sp,
+                    outer_ra, outer_callsite,
+                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
+                    (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23]);
+
+            if (callsite >= 24u &&
+                irix_guest_ptr(rt, callsite - 24u, 56u)) {
+                fprintf(stderr, "IRIX malloc wrapper-insn:");
+                for (i = 0; i < 14u; ++i) {
+                    IrixGuestAddr a = callsite - 24u + i * 4u;
+                    fprintf(stderr, " [%08x]=%08x",
+                            a, irix_guest_read32be(rt, a));
+                }
+                fputc('\n', stderr);
+            }
+
+            if (outer_callsite >= 32u &&
+                irix_guest_ptr(rt, outer_callsite - 32u, 80u)) {
+                fprintf(stderr, "IRIX malloc producer-insn:");
+                for (i = 0; i < 20u; ++i) {
+                    IrixGuestAddr a = outer_callsite - 32u + i * 4u;
+                    fprintf(stderr, " [%08x]=%08x",
+                            a, irix_guest_read32be(rt, a));
+                }
+                fputc('\n', stderr);
+            }
+
+            if (sp && irix_guest_ptr(rt, sp, 64u)) {
+                fprintf(stderr, "IRIX malloc wrapper-stack:");
+                for (i = 0; i < 8u; ++i) {
+                    IrixGuestAddr a = sp + i * 8u;
+                    fprintf(stderr, " [%08x]=%016llx",
+                            a,
+                            (unsigned long long)irix_guest_read64be(rt, a));
+                }
+                fputc('\n', stderr);
+            }
         }
     }
 
