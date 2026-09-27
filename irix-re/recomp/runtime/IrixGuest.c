@@ -2208,14 +2208,35 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          * Universal IID escape hatch: if original executable code is mapped
          * at an otherwise-unregistered target, execute the guest MIPS
          * directly instead of dying on a missing recovered/translated range.
-         * The interpreter itself requires an executable guest segment, so
-         * bogus data/string function pointers still fall through to the
-         * normal INVALID GUEST CALL diagnostic.
+         *
+         * This is still an N32 function call boundary. Preserve the caller's
+         * $gp exactly like the translated dispatcher does. Without this, an
+         * unregistered Xt helper can establish libXt's GP in its PIC prologue,
+         * return successfully, and leave ViewKit executing with Xt's GOT.
+         * That exact leak produced t9=0x6d6f7573 ("mous") at 0x0d6352e8.
          */
-        if (irix_mips_interp_call(rt, cpu, address) == 0)
-            return 0;
-        if (rt->trapped)
-            return -1;
+        {
+            uint64_t saved_gp = cpu->gpr[28];
+            IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+            int interp_rc;
+
+            if (target_gp)
+                cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+            cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+
+            interp_rc = irix_mips_interp_call(rt, cpu, address);
+            if (interp_rc == 0) {
+                if (!rt->trapped)
+                    cpu->gpr[28] = saved_gp;
+                return 0;
+            }
+            if (rt->trapped)
+                return -1;
+
+            /* No executable mapping / not a real guest function. Restore the
+               caller before producing the INVALID GUEST CALL diagnostic. */
+            cpu->gpr[28] = saved_gp;
+        }
 
         fprintf(stderr,
                 "INVALID GUEST CALL target=0x%08x caller=0x%08x s4=0x%08x gp=%08x t9=%08x sp=%08x ra=%08x",
