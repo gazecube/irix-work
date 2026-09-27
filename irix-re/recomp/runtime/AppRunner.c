@@ -826,15 +826,18 @@ int main(int argc, char **argv)
                  */
 #ifdef IRIX_DIRECT_MAIN
                 /*
-                 * The direct translated desktop path does not execute the
-                 * IRIX process loader.  Map only the executable plus the
-                 * internal IMD DSOs whose guest data images the translated
-                 * desktop actually consumes.  PT_INTERP/rld and ordinary
-                 * runtime dependency DSOs stay out of the address space.
+                 * Direct translated execution bypasses IRIX rld, but translated
+                 * DSO code still performs ordinary GP-relative accesses into
+                 * each DSO's original .data/.bss/.got image. Therefore every
+                 * ordinary component in the resolved closure must have its
+                 * guest PT_LOAD image mapped even though its code executes as
+                 * host-native translated C.
+                 *
+                 * Keep only PT_INTERP/rld out of the direct-main address space.
+                 * Existing prebound data/GOT patching below then repairs the
+                 * mapped images before guest execution begins.
                  */
                 if (component->role != 0)
-                    continue;
-                if (i != 0u && component->kind != 1)
                     continue;
 #else
                 if (i != 0u && component->role == 0)
