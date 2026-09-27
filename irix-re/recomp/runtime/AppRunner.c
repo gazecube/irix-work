@@ -521,10 +521,14 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             fprintf(stderr, " [%08x]=%08x", q, irix_guest_read32be(rt, q));
         fputc('\n', stderr);
         fprintf(stderr,
-                "  caller-regs: at=%08x t9=%08x s0=%08x s1=%08x s2=%08x s3=%08x gp=%08x\n",
+                "  caller-regs: at=%08x t9=%08x "
+                "s0=%08x s1=%08x s2=%08x s3=%08x "
+                "s4=%08x s5=%08x s6=%08x s7=%08x gp=%08x\n",
                 (uint32_t)cpu->gpr[1], (uint32_t)cpu->gpr[25],
                 (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
                 (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
+                (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23],
                 (uint32_t)cpu->gpr[28]);
     }
     report_guest_words(rt, "v0", (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
