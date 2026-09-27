@@ -16,6 +16,8 @@
 typedef struct IrixGuestAllocation {
     IrixGuestAddr addr;
     uint32_t size;
+    uint32_t capacity;
+    int in_use;
 } IrixGuestAllocation;
 
 typedef struct IrixEnvCacheEntry {
@@ -56,7 +58,8 @@ static IrixGuestAllocation *find_alloc(IrixGuestAddr addr)
 {
     size_t i;
     for (i = 0; i < g_libc.alloc_count; ++i)
-        if (g_libc.allocs[i].addr == addr)
+        if (g_libc.allocs[i].in_use &&
+            g_libc.allocs[i].addr == addr)
             return &g_libc.allocs[i];
     return 0;
 }
@@ -65,14 +68,60 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
 {
     IrixGuestAddr addr;
     uint32_t n = size ? size : 1u;
+    size_t i;
+
+    if (align < 1u)
+        align = 1u;
+    if (align & (align - 1u))
+        return 0;
+
+    /*
+     * Reuse released blocks before extending the bump frontier.
+     *
+     * The original bring-up allocator intentionally made free() a no-op.
+     * Xt/Motif performs enough short-lived allocation during resource and
+     * translation initialization to exhaust either the 64 MB guest heap or
+     * the 65536 allocation records.  Preserve stable guest addresses while
+     * giving ordinary malloc/free semantics back to the application.
+     *
+     * We reuse an entire old block rather than split it.  That keeps this
+     * allocator simple and deterministic while still eliminating the
+     * pathological monotonic leak.
+     */
+    for (i = 0; i < g_libc.alloc_count; ++i) {
+        IrixGuestAllocation *a = &g_libc.allocs[i];
+        if (!a->in_use && a->capacity >= n &&
+            (a->addr & (align - 1u)) == 0u) {
+            a->size = n;
+            a->in_use = 1;
+            return a->addr;
+        }
+    }
+
     addr = align_addr(g_libc.heap_cur, align);
-    if (!addr || addr < g_libc.heap_cur || addr + n < addr || addr + n > g_libc.heap_end)
+    if (!addr || addr < g_libc.heap_cur ||
+        addr + n < addr || addr + n > g_libc.heap_end) {
+        fprintf(stderr,
+                "IRIX guest malloc exhausted: request=%u align=%u "
+                "heap_cur=%08x heap_end=%08x allocs=%zu\n",
+                n, align, g_libc.heap_cur, g_libc.heap_end,
+                g_libc.alloc_count);
         return 0;
-    if (g_libc.alloc_count >= IRIX_LIBC_MAX_ALLOCS)
+    }
+    if (g_libc.alloc_count >= IRIX_LIBC_MAX_ALLOCS) {
+        fprintf(stderr,
+                "IRIX guest malloc allocation-table exhausted: "
+                "request=%u align=%u heap_cur=%08x allocs=%zu max=%u\n",
+                n, align, g_libc.heap_cur, g_libc.alloc_count,
+                IRIX_LIBC_MAX_ALLOCS);
         return 0;
+    }
+
     g_libc.heap_cur = align_addr(addr + n, 16u);
     g_libc.allocs[g_libc.alloc_count].addr = addr;
     g_libc.allocs[g_libc.alloc_count].size = n;
+    g_libc.allocs[g_libc.alloc_count].capacity = n;
+    g_libc.allocs[g_libc.alloc_count].in_use = 1;
     ++g_libc.alloc_count;
     return addr;
 }
@@ -153,15 +202,33 @@ static void bridge_realloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     if (!new_size) {
+        if (old)
+            old->in_use = 0;
         cpu->gpr[2] = 0;
         return;
     }
+
+    /* A real realloc may keep the same address. Do that whenever the
+       existing guest block has enough capacity. */
+    if (old && old->capacity >= new_size) {
+        old->size = new_size;
+        cpu->gpr[2] = old_addr;
+        return;
+    }
+
     addr = alloc_guest(new_size, 16u);
-    if (!addr) { cpu->gpr[2] = 0; return; }
+    if (!addr) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
     copy_size = old && old->size < new_size ? old->size : new_size;
     dst = irix_guest_ptr(rt, addr, copy_size);
     src = irix_guest_ptr(rt, old_addr, copy_size);
-    if (dst && src) memcpy(dst, src, copy_size);
+    if (dst && src)
+        memcpy(dst, src, copy_size);
+    if (old)
+        old->in_use = 0;
     cpu->gpr[2] = addr;
 }
 
@@ -173,8 +240,18 @@ static void bridge_memalign(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAllocation *a;
     (void)rt;
-    (void)cpu;
+
+    if (!addr)
+        return;
+
+    a = find_alloc(addr);
+    if (a) {
+        a->in_use = 0;
+        a->size = 0u;
+    }
 }
 
 static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
