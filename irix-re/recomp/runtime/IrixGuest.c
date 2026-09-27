@@ -2374,46 +2374,66 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          * followed by memcpy(..., sc_num_resources * sizeof(...)).
          *
          * The IRIX N32 object uses a 20-byte XmSyntheticResource. At the
-         * observed callsite 0x0b2a9588, s2 is wc_num_resources (7) but s1,
+         * observed producer 0x0b2a9588, s2 is wc_num_resources (7) but s1,
          * which the original machine code uses as sc_num_resources, has been
-         * polluted with sc_resources itself (a guest heap pointer such as
-         * 0x3000acf0). This produces malloc(0xc00d834c) and would also poison
-         * the immediately following memcpy length.
+         * polluted with the superclass resource-array pointer (for example
+         * 0x3000acf0). That produces malloc(0xc00d834c) and would poison the
+         * following memcpy length as well.
          *
-         * Recover the superclass count from the allocation that backs the
-         * synthetic-resource array, then repair both the live saved register
-         * and XtMalloc's size argument before we snapshot callee-saved state.
-         * Restrict this to the exact producer return PC so ordinary XtMalloc
-         * calls are untouched.
+         * The producer calls the original XtMalloc MIPS wrapper at
+         * 0x0f614498. XtMalloc then calls the native libc malloc bridge with
+         * ra=0x0f6144b8 while its own saved caller RA (0x0b2a9590) sits at
+         * sp+0x10. Therefore the dispatcher-visible boundary is malloc, not
+         * XtMalloc. Repair here, before caller_saved[] snapshots s1, so the
+         * corrected count survives the malloc return into _XmBuildResources.
          */
-        if (entry && entry->name &&
-            (!strcmp(entry->name, "XtMalloc") ||
-             !strcmp(entry->name, "__XtMalloc")) &&
-            (uint32_t)cpu->gpr[31] == 0x0b2a9590u) {
-            IrixGuestAddr sc_resources =
-                (IrixGuestAddr)(uint32_t)cpu->gpr[17];
-            uint32_t wc_num = (uint32_t)cpu->gpr[18];
-            uint32_t bytes =
-                irix_libc_guest_allocation_size(sc_resources);
+        if ((uint32_t)cpu->gpr[31] == 0x0f6144b8u) {
+            IrixGuestAddr sp =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+            IrixGuestAddr xt_caller_ra = 0u;
 
-            if (sc_resources >= 0x30000000u &&
-                sc_resources < 0x34000000u &&
-                bytes >= 20u && (bytes % 20u) == 0u) {
-                uint32_t sc_num = bytes / 20u;
-                uint64_t total = (uint64_t)(wc_num + sc_num) * 20u;
+            if (sp && irix_guest_ptr(rt, sp + 0x10u, 8u))
+                xt_caller_ra = (IrixGuestAddr)(uint32_t)
+                    irix_guest_read64be(rt, sp + 0x10u);
 
-                if (sc_num < 4096u && wc_num < 4096u &&
-                    total <= 0x00100000u) {
+            if (xt_caller_ra == 0x0b2a9590u) {
+                IrixGuestAddr sc_resources =
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+                uint32_t wc_num = (uint32_t)cpu->gpr[18];
+                uint32_t bytes =
+                    irix_libc_guest_allocation_size(sc_resources);
+
+                if (sc_resources >= 0x30000000u &&
+                    sc_resources < 0x34000000u &&
+                    bytes >= 20u && (bytes % 20u) == 0u) {
+                    uint32_t sc_num = bytes / 20u;
+                    uint64_t total =
+                        (uint64_t)(wc_num + sc_num) * 20u;
+
+                    if (sc_num < 4096u && wc_num < 4096u &&
+                        total <= 0x00100000u) {
+                        fprintf(stderr,
+                                "IRIX XmBuildResources repair: "
+                                "sc_resources=%08x bytes=%u -> sc_num=%u "
+                                "wc_num=%u malloc=%u\n",
+                                sc_resources, bytes, sc_num, wc_num,
+                                (uint32_t)total);
+                        cpu->gpr[17] =
+                            (uint64_t)(int64_t)(int32_t)sc_num;
+                        cpu->gpr[4] =
+                            (uint64_t)(int64_t)(int32_t)(uint32_t)total;
+                    } else {
+                        fprintf(stderr,
+                                "IRIX XmBuildResources repair rejected: "
+                                "sc_resources=%08x bytes=%u sc_num=%u "
+                                "wc_num=%u\n",
+                                sc_resources, bytes, sc_num, wc_num);
+                    }
+                } else {
                     fprintf(stderr,
-                            "IRIX XmBuildResources repair: "
-                            "sc_resources=%08x bytes=%u -> sc_num=%u "
-                            "wc_num=%u malloc=%u\n",
-                            sc_resources, bytes, sc_num, wc_num,
-                            (uint32_t)total);
-                    cpu->gpr[17] =
-                        (uint64_t)(int64_t)(int32_t)sc_num;
-                    cpu->gpr[4] =
-                        (uint64_t)(int64_t)(int32_t)(uint32_t)total;
+                            "IRIX XmBuildResources repair unresolved: "
+                            "sc_resources=%08x allocation_bytes=%u\n",
+                            sc_resources, bytes);
                 }
             }
         }
