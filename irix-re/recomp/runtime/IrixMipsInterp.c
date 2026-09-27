@@ -747,6 +747,13 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (!is_control(insn)) {
             int rc = exec_simple(rt, cpu, pc, insn);
             if (rc != 0) {
+                if (rt->trapped) {
+                    fprintf(stderr,
+                            "IRIX MIPS interpreter: memory/trap failure "
+                            "pc=%08x insn=%08x op=%02x fn=%02x fault=%08x\n",
+                            pc, insn, op, fn, rt->fault_addr);
+                    return -1;
+                }
                 fprintf(stderr,
                         "IRIX MIPS interpreter: unsupported pc=%08x insn=%08x op=%02x fn=%02x\n",
                         pc, insn, op, fn);
@@ -762,6 +769,17 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
         if (op == 0u && fn == 0x08u) {
             target = (IrixGuestAddr)(uint32_t)cpu->gpr[rs];
+            if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
+                (target >= 0x0f627000u && target < 0x0f630000u)) {
+                fprintf(stderr,
+                        "IRIX MIPS interp JR: pc=%08x rs=%u target=%08x "
+                        "ra=%08x s0=%08x s1=%08x t9=%08x\n",
+                        pc, rs, target,
+                        (uint32_t)cpu->gpr[31],
+                        (uint32_t)cpu->gpr[16],
+                        (uint32_t)cpu->gpr[17],
+                        (uint32_t)cpu->gpr[25]);
+            }
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
             if (rs == 31u) {
@@ -798,6 +816,16 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (op == 0x02u || op == 0x03u) {
             target = ((pc + 4u) & 0xf0000000u) | ((insn & 0x03ffffffu) << 2);
             if (op == 0x03u) {
+                if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
+                    (target >= 0x0f627000u && target < 0x0f630000u)) {
+                    fprintf(stderr,
+                            "IRIX MIPS interp JAL: pc=%08x target=%08x "
+                            "ra(new)=%08x s0=%08x s1=%08x t9=%08x\n",
+                            pc, target, pc + 8u,
+                            (uint32_t)cpu->gpr[16],
+                            (uint32_t)cpu->gpr[17],
+                            (uint32_t)cpu->gpr[25]);
+                }
                 cpu->gpr[31] = sx32(pc + 8u);
                 if (exec_delay(rt, cpu, pc + 4u) != 0)
                     return -1;
@@ -819,6 +847,19 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             {
                 IrixGuestFunctionEntry *te =
                     irix_guest_find_function(rt, target);
+                if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
+                    (target >= 0x0f627000u && target < 0x0f630000u)) {
+                    fprintf(stderr,
+                            "IRIX MIPS interp J: pc=%08x target=%08x "
+                            "entry=%08x:%s ra=%08x s0=%08x s1=%08x t9=%08x\n",
+                            pc, target,
+                            te ? te->address : 0u,
+                            (te && te->name) ? te->name : "?",
+                            (uint32_t)cpu->gpr[31],
+                            (uint32_t)cpu->gpr[16],
+                            (uint32_t)cpu->gpr[17],
+                            (uint32_t)cpu->gpr[25]);
+                }
                 if (te && te->address == target && target != address) {
                     cpu->pc = pc;
                     if (irix_guest_call(rt, cpu, target) != 0)
