@@ -15,6 +15,11 @@
 #include <fcntl.h>
 #include <limits.h>
 
+/* Private runtime query used by the narrow _XmBuildResources ABI repair
+   below. Keep this out of IrixGuest.h so the compatibility tweak does not
+   invalidate every generated translation unit. */
+extern uint32_t irix_libc_guest_allocation_size(IrixGuestAddr addr);
+
 #define IRIX_NSIG 128u
 #define IRIX_SIGACTION_N32_SIZE 32u
 
@@ -2357,6 +2362,61 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             (address == 0x0f62caa8u &&
              (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
         unsigned saved_i;
+
+        /*
+         * SGI Motif _XmBuildResources ABI repair.
+         *
+         * OpenMotif's routine allocates:
+         *
+         *   sizeof(XmSyntheticResource) *
+         *       (wc_num_resources + sc_num_resources)
+         *
+         * followed by memcpy(..., sc_num_resources * sizeof(...)).
+         *
+         * The IRIX N32 object uses a 20-byte XmSyntheticResource. At the
+         * observed callsite 0x0b2a9588, s2 is wc_num_resources (7) but s1,
+         * which the original machine code uses as sc_num_resources, has been
+         * polluted with sc_resources itself (a guest heap pointer such as
+         * 0x3000acf0). This produces malloc(0xc00d834c) and would also poison
+         * the immediately following memcpy length.
+         *
+         * Recover the superclass count from the allocation that backs the
+         * synthetic-resource array, then repair both the live saved register
+         * and XtMalloc's size argument before we snapshot callee-saved state.
+         * Restrict this to the exact producer return PC so ordinary XtMalloc
+         * calls are untouched.
+         */
+        if (entry && entry->name &&
+            (!strcmp(entry->name, "XtMalloc") ||
+             !strcmp(entry->name, "__XtMalloc")) &&
+            (uint32_t)cpu->gpr[31] == 0x0b2a9590u) {
+            IrixGuestAddr sc_resources =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+            uint32_t wc_num = (uint32_t)cpu->gpr[18];
+            uint32_t bytes =
+                irix_libc_guest_allocation_size(sc_resources);
+
+            if (sc_resources >= 0x30000000u &&
+                sc_resources < 0x34000000u &&
+                bytes >= 20u && (bytes % 20u) == 0u) {
+                uint32_t sc_num = bytes / 20u;
+                uint64_t total = (uint64_t)(wc_num + sc_num) * 20u;
+
+                if (sc_num < 4096u && wc_num < 4096u &&
+                    total <= 0x00100000u) {
+                    fprintf(stderr,
+                            "IRIX XmBuildResources repair: "
+                            "sc_resources=%08x bytes=%u -> sc_num=%u "
+                            "wc_num=%u malloc=%u\n",
+                            sc_resources, bytes, sc_num, wc_num,
+                            (uint32_t)total);
+                    cpu->gpr[17] =
+                        (uint64_t)(int64_t)(int32_t)sc_num;
+                    cpu->gpr[4] =
+                        (uint64_t)(int64_t)(int32_t)(uint32_t)total;
+                }
+            }
+        }
 
         /*
          * Emergency XtGetValues/_XtCopyToArg guard.
