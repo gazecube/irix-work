@@ -400,6 +400,10 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
                                          info.gp_value);
         }
     }
+    fprintf(stderr,
+            "IRIX ELF loaded: %s base=0x%08x entry=0x%08x gp=0x%08x segments=%zu..%zu\n",
+            selected, info.load_base, info.entry, info.gp_value,
+            segment_count_before, rt->memory.count);
     if (info_out)
         *info_out = info;
     return 0;
