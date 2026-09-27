@@ -15,6 +15,34 @@ static uint32_t read_be32(const unsigned char *p)
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+/*
+ * SGI MIPS .MIPS.options / PT_MIPS_OPTIONS records.
+ *
+ * Elf_Options is 8 bytes:
+ *   uint8 kind, uint8 size, uint16 section, uint32 info
+ *
+ * ODK_REGINFO (kind == 1) is followed by a 24-byte Elf32_RegInfo whose
+ * ri_gp_value is the final 32-bit word at offset +20 within RegInfo.
+ * N32 DSOs commonly use this representation instead of PT_MIPS_REGINFO.
+ */
+static uint32_t read_mips_options_gp(const unsigned char *p, size_t size)
+{
+    size_t off = 0;
+    while (off + 8u <= size) {
+        uint8_t kind = p[off + 0u];
+        uint8_t rec_size = p[off + 1u];
+
+        if (rec_size < 8u || off + rec_size > size)
+            break;
+
+        if (kind == 1u && rec_size >= 32u)
+            return read_be32(p + off + 8u + 20u);
+
+        off += rec_size;
+    }
+    return 0;
+}
+
 int
 irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
                              IrixGuestElfInfo *info_out)
@@ -106,6 +134,13 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
         } else if (type == 0x70000000u) { /* PT_MIPS_REGINFO */
             if ((uint64_t)offset + 24u <= file_size)
                 info.gp_value = read_be32(file_data + offset + 20u);
+        } else if (type == 0x70000002u) { /* PT_MIPS_OPTIONS */
+            if ((uint64_t)offset + filesz <= file_size) {
+                uint32_t gp =
+                    read_mips_options_gp(file_data + offset, (size_t)filesz);
+                if (gp)
+                    info.gp_value = gp;
+            }
         }
         uint32_t memsz;
         uint32_t flags;
