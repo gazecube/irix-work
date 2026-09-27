@@ -68,7 +68,7 @@ extern const IrixAppGuestComponent irix_app_guest_components[];
 extern const size_t irix_app_guest_component_count;
 void irix_register_app_bundle(IrixGuestRuntime *rt);
 void register_irix_bridge_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
-void register_irix_prebound_imports(IrixGuestRuntime *rt, IrixGuestAddr (*data_resolver)(const char *));
+void register_irix_prebound_imports(IrixGuestRuntime *rt, IrixGuestAddr (*data_resolver)(const char *), int prefer_dso_data);
 void irix_x11_extra_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_extra_lookup(const char *name);
 void irix_x11_connection_bridge_init(IrixGuestRuntime *rt);
@@ -957,7 +957,11 @@ int main(int argc, char **argv)
 #ifndef IRIX_JIT_ONLY
     irix_register_recompiled_stack_imports(&rt, resolve_native);
     register_irix_bridge_imports(&rt, resolve_native);
-    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup);
+#ifdef IRIX_DIRECT_MAIN
+    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup, 1);
+#else
+    register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup, 0);
+#endif
     if (irix_guest_ptr(&rt, 0x0fb5291cu, 4u))
         fprintf(stderr,
                 "IRIX libc GOT startup watch: after import patching "
