@@ -2127,6 +2127,36 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         return irix_mips_interp_call(rt, cpu, address);
     }
 
+    /*
+     * Bring-up escape hatch for Xt's translation manager.
+     *
+     * The translated converter path has repeatedly exposed malformed XrmValue
+     * state (including {size=0,addr=1} for the cursor converter and now a
+     * translation parser source becoming the scalar size 0x1a). Run the
+     * public translation/accelerator conversion entry points as original MIPS
+     * for now. This keeps the rest of Xt statically translated while making
+     * TMparse use SGI's exact structure accesses and internal helper flow.
+     */
+    if (entry && entry->name &&
+        (!strcmp(entry->name, "XtCvtStringToTranslationTable") ||
+         !strcmp(entry->name, "XtCvtStringToAcceleratorTable") ||
+         !strcmp(entry->name, "XtParseTranslationTable") ||
+         !strcmp(entry->name, "XtParseAcceleratorTable"))) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        fprintf(stderr,
+                "IRIX Xt TMparse fallback: %s @ %08x -> original MIPS\n",
+                entry->name, address);
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
+    }
+
     if (address == 0x0f6588b8u) {
         fprintf(stderr,
                 "IRIX _XtInherit called: caller_pc=%08x ra=%08x sp=%08x gp=%08x t9=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
