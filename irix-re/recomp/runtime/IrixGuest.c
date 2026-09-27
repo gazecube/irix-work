@@ -2511,20 +2511,22 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
 
         /*
-         * A translated function executes against the GOT/data image of the ELF
-         * that owns its guest address. The dispatcher already preserves the
-         * caller's $gp across calls; supply the missing callee half here.
+         * Any callable guest address must execute with the $gp of the ELF
+         * image that owns that address.
          *
-         * This is especially important for recovered/static translations that
-         * no longer execute an original .cpload/.cpsetup prologue. Without it,
-         * cross-DSO calls can use the caller's GOT (for example libc _uspsema
-         * accidentally reading an Xt GOT slot).
+         * Do NOT key this on registration flags. The same guest entry can be
+         * reached through translated registries, native bridge overrides,
+         * import forwarders, recovered wrappers, or first-registration aliases.
+         * Registration is an implementation detail; MIPS PIC ownership is not.
+         *
+         * We previously switched GP only for RECOMPILED entries. That allowed
+         * a ViewKit/libvk entry around 0x0d635xxx to execute with libXt's
+         * 0x0f69eef0 GP, causing a GOT load to return ASCII "mous"
+         * (0x6d6f7573) and jalr into it.
          */
-        if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED) {
-            callee_gp = irix_guest_gp_for_address(address);
-            if (callee_gp)
-                cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)callee_gp;
-        }
+        callee_gp = irix_guest_gp_for_address(address);
+        if (callee_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)callee_gp;
 
         cpu->pc = address;
         rt->current_pc = address;
