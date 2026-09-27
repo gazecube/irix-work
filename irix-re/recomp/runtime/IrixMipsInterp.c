@@ -726,6 +726,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     IrixGuestAddr outer_ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
     uint64_t steps = 0;
     const uint64_t max_steps = UINT64_C(100000000);
+    static unsigned xt_tm_repair_depth;
 
     if (!mapped_exec(rt, address))
         return -1;
@@ -734,6 +735,61 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             address, (uint32_t)cpu->gpr[31]);
 
     while (!rt->trapped && steps++ < max_steps) {
+        /*
+         * SGI Xt translation-merge bring-up repair.
+         *
+         * XtOverrideTranslations reaches the private helper at 0x0f622e2c
+         * with a3 expected to be an XtTranslations object. In the failing
+         * Motif path a3 instead points directly at the class translation
+         * string ("<EnterWindow>:ManagerEnter..."). The helper interprets the
+         * first byte '<' as hasBindings != 0, then reads a3+4 ("erWi") as the
+         * embedded xlations pointer and later faults through s7=0x65725769.
+         *
+         * Parse only that demonstrably raw-string case with SGI's own
+         * XtParseTranslationTable, preserve the helper's complete CPU state,
+         * and substitute the resulting opaque translation object for a3.
+         */
+        if (pc == 0x0f622e2cu && !xt_tm_repair_depth) {
+            IrixGuestAddr raw = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+            uint8_t ch = 0u;
+
+            if (raw && irix_guest_ptr(rt, raw, 1u))
+                ch = irix_guest_read8(rt, raw);
+
+            if (ch == '<' || ch == '#' || ch == ' ' ||
+                ch == '\\t' || ch == '\\n') {
+                IrixGuestCpu saved_cpu = *cpu;
+                IrixGuestAddr saved_current_pc = rt->current_pc;
+                IrixGuestAddr parsed = 0u;
+                int parse_rc;
+
+                ++xt_tm_repair_depth;
+                cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)raw;
+                cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)0x0f6285e0u;
+                parse_rc = irix_guest_call(rt, cpu, 0x0f6285e0u);
+                if (parse_rc == 0 && !rt->trapped)
+                    parsed = (IrixGuestAddr)(uint32_t)cpu->gpr[2];
+                --xt_tm_repair_depth;
+
+                if (!rt->trapped) {
+                    *cpu = saved_cpu;
+                    rt->current_pc = saved_current_pc;
+                    if (parsed && irix_guest_ptr(rt, parsed, 4u)) {
+                        cpu->gpr[7] =
+                            (uint64_t)(int64_t)(int32_t)parsed;
+                        fprintf(stderr,
+                                "IRIX Xt translation repair: helper=0f622e2c "
+                                "raw=%08x -> parsed=%08x\n",
+                                raw, parsed);
+                    } else {
+                        fprintf(stderr,
+                                "IRIX Xt translation repair FAILED: "
+                                "raw=%08x parsed=%08x rc=%d\n",
+                                raw, parsed, parse_rc);
+                    }
+                }
+            }
+        }
         uint32_t insn, op, rs, rtno, rd, fn;
         int taken = 0, likely = 0, link = 0;
         IrixGuestAddr target = 0, next = pc + 8u;
