@@ -27,6 +27,41 @@ typedef struct IrixKernelSigAction {
 
 static IrixKernelSigAction g_kernel_sigactions[IRIX_NSIG];
 
+#define IRIX_GUEST_GP_RANGE_MAX 512u
+
+typedef struct IrixGuestGpRange {
+    IrixGuestAddr base;
+    uint32_t size;
+    IrixGuestAddr gp;
+} IrixGuestGpRange;
+
+static IrixGuestGpRange g_guest_gp_ranges[IRIX_GUEST_GP_RANGE_MAX];
+static size_t g_guest_gp_range_count;
+
+void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
+                                  IrixGuestAddr gp)
+{
+    IrixGuestGpRange *r;
+    if (!size || !gp || g_guest_gp_range_count >= IRIX_GUEST_GP_RANGE_MAX)
+        return;
+    r = &g_guest_gp_ranges[g_guest_gp_range_count++];
+    r->base = base;
+    r->size = size;
+    r->gp = gp;
+}
+
+static IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address)
+{
+    size_t i;
+    for (i = g_guest_gp_range_count; i > 0; --i) {
+        const IrixGuestGpRange *r = &g_guest_gp_ranges[i - 1u];
+        uint64_t end = (uint64_t)r->base + (uint64_t)r->size;
+        if ((uint64_t)address >= r->base && (uint64_t)address < end)
+            return r->gp;
+    }
+    return 0;
+}
+
 
 #define IRIX_PROFILE_FN_SLOTS   262144u
 #define IRIX_PROFILE_EDGE_SLOTS 524288u
@@ -287,6 +322,7 @@ static void memory_fault(IrixGuestRuntime *rt, IrixGuestAddr addr)
 void irix_guest_runtime_init(IrixGuestRuntime *rt)
 {
     memset(rt, 0, sizeof(*rt));
+    g_guest_gp_range_count = 0u;
     irix_guest_profile_init(rt);
 }
 
@@ -2199,6 +2235,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         uint64_t caller_saved[9];
         uint64_t caller_gp = cpu->gpr[28];
         uint64_t caller_sp = cpu->gpr[29];
+        IrixGuestAddr callee_gp = 0u;
         IrixGuestAddr caller_pc = cpu->pc;
         IrixGuestAddr sg_saved_private = 0;
         IrixGuestAddr sg_class = 0;
@@ -2418,6 +2455,22 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     (uint32_t)cpu->gpr[11]);
         }
 
+        /*
+         * A translated function executes against the GOT/data image of the ELF
+         * that owns its guest address. The dispatcher already preserves the
+         * caller's $gp across calls; supply the missing callee half here.
+         *
+         * This is especially important for recovered/static translations that
+         * no longer execute an original .cpload/.cpsetup prologue. Without it,
+         * cross-DSO calls can use the caller's GOT (for example libc _uspsema
+         * accidentally reading an Xt GOT slot).
+         */
+        if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED) {
+            callee_gp = irix_guest_gp_for_address(address);
+            if (callee_gp)
+                cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)callee_gp;
+        }
+
         cpu->pc = address;
         rt->current_pc = address;
         /*
@@ -2603,10 +2656,18 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
      */
     if (entry && entry->address != address &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
         fprintf(stderr,
                 "IRIX interior guest call: target=0x%08x containing=0x%08x:%s -> interpreter\n",
                 address, entry->address, entry->name ? entry->name : "?");
-        return irix_mips_interp_call(rt, cpu, address);
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
     }
 
     if (irix_mips_jit_requested() &&
