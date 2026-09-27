@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Runtime-private ownership lookup; kept out of IrixGuest.h so changing this
+   interpreter plumbing does not invalidate every generated translation TU. */
+extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
+
 static uint64_t sx32(uint32_t v)
 {
     return (uint64_t)(int64_t)(int32_t)v;
@@ -795,6 +799,29 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  * interpreting at the nested return target.
                  */
                 if (target == outer_ra) {
+                    IrixGuestAddr return_gp =
+                        irix_guest_gp_for_address(target);
+
+                    /*
+                     * This interpreter invocation is crossing back into its
+                     * translated caller. Original MIPS PIC callees are free to
+                     * leave their own $gp live; translated callers, however,
+                     * resume at an interior C label and do not execute a MIPS
+                     * call-site GP restore instruction themselves.
+                     *
+                     * Re-establish the GP domain that owns the return PC before
+                     * handing control back. This fixes Xt -> ViewKit returns
+                     * such as 0x0f62cb5c -> 0x0d6352c0, which otherwise leave
+                     * libXt's GP active inside ViewKit.
+                     */
+                    if (return_gp) {
+                        if ((uint32_t)cpu->gpr[28] != return_gp)
+                            fprintf(stderr,
+                                    "IRIX MIPS interp return GP: target=%08x gp %08x -> %08x\n",
+                                    target, (uint32_t)cpu->gpr[28], return_gp);
+                        cpu->gpr[28] =
+                            (uint64_t)(int64_t)(int32_t)return_gp;
+                    }
                     cpu->pc = target;
                     rt->current_pc = target;
                     cpu->gpr[0] = 0;
