@@ -2375,11 +2375,35 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 trace_left = 64u;
             if (trace_left) {
                 fprintf(stderr,
-                        "IRIX call trace: caller_pc=0x%08x callee=0x%08x:%s ra=0x%08x sp=0x%08x a0-a3=%08x,%08x,%08x,%08x\n",
+                        "IRIX call trace: caller_pc=0x%08x callee=0x%08x:%s "
+                        "ra=0x%08x sp=0x%08x gp=0x%08x at=0x%08x t9=0x%08x "
+                        "a0-a3=%08x,%08x,%08x,%08x "
+                        "s0-s3=%08x,%08x,%08x,%08x\n",
                         caller_pc, address, entry->name ? entry->name : "?",
                         (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[29],
+                        (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[1],
+                        (uint32_t)cpu->gpr[25],
                         (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                        (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7]);
+                        (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                        (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                        (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19]);
+                if (trace_from && caller_pc == trace_from) {
+                    IrixGuestAddr s0 = (IrixGuestAddr)(uint32_t)cpu->gpr[16];
+                    if (s0 && irix_guest_ptr(rt, s0, 32u)) {
+                        fprintf(stderr,
+                                "IRIX call trace s0@%08x: "
+                                "%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                                s0,
+                                irix_guest_read32be(rt, s0 + 0u),
+                                irix_guest_read32be(rt, s0 + 4u),
+                                irix_guest_read32be(rt, s0 + 8u),
+                                irix_guest_read32be(rt, s0 + 12u),
+                                irix_guest_read32be(rt, s0 + 16u),
+                                irix_guest_read32be(rt, s0 + 20u),
+                                irix_guest_read32be(rt, s0 + 24u),
+                                irix_guest_read32be(rt, s0 + 28u));
+                    }
+                }
                 --trace_left;
             }
         }
