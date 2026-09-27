@@ -2564,6 +2564,27 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
     irix_guest_profile_hit(rt, caller, address, entry);
+
+    /*
+     * An interior PC is not interchangeable with the containing translated
+     * function's entry. Generated C functions begin at their own entry label
+     * and do not reconstruct execution from cpu->pc. SGI libraries frequently
+     * materialize hidden callback/leaf entry points inside a larger nominal
+     * ELF symbol (Xt qsort comparators are one concrete case).
+     *
+     * When a function pointer names such an interior PC, execute the mapped
+     * original MIPS at that exact address. This preserves the real callback
+     * entry semantics instead of silently rewinding execution to the enclosing
+     * translated function's start.
+     */
+    if (entry && entry->address != address &&
+        !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) {
+        fprintf(stderr,
+                "IRIX interior guest call: target=0x%08x containing=0x%08x:%s -> interpreter\n",
+                address, entry->address, entry->name ? entry->name : "?");
+        return irix_mips_interp_call(rt, cpu, address);
+    }
+
     if (irix_mips_jit_requested() &&
         (!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_mips_jit_call(rt, cpu, address);
