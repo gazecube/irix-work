@@ -52,8 +52,11 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
     long file_size_long;
     size_t file_size;
     uint32_t phoff;
+    uint32_t shoff;
     uint16_t phentsize;
     uint16_t phnum;
+    uint16_t shentsize;
+    uint16_t shnum;
     uint16_t machine;
     uint16_t i;
     IrixGuestElfInfo info;
@@ -102,11 +105,19 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
 
     info.entry = read_be32(file_data + 24);
     phoff = read_be32(file_data + 28);
+    shoff = read_be32(file_data + 32);
     phentsize = read_be16(file_data + 42);
     phnum = read_be16(file_data + 44);
+    shentsize = read_be16(file_data + 46);
+    shnum = read_be16(file_data + 48);
     info.phent = phentsize;
     info.phnum = phnum;
     if ((uint64_t)phoff + (uint64_t)phentsize * phnum > file_size) {
+        free(file_data);
+        return -1;
+    }
+    if (shoff && shentsize && shnum &&
+        (uint64_t)shoff + (uint64_t)shentsize * shnum > file_size) {
         free(file_data);
         return -1;
     }
@@ -170,6 +181,43 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
             return -1;
         }
         memcpy(dst, file_data + offset, filesz);
+    }
+
+    /*
+     * Some SGI N32 DSOs expose GP metadata only through sections rather than
+     * PT_MIPS_REGINFO/PT_MIPS_OPTIONS. Recover the same information from:
+     *
+     *   SHT_MIPS_REGINFO = 0x70000006
+     *   SHT_MIPS_OPTIONS = 0x7000000d
+     *
+     * Prefer program-header metadata when present, but use section metadata as
+     * a fallback so every mapped DSO can participate in GP ownership.
+     */
+    if (!info.gp_value && shoff && shentsize >= 40u && shnum) {
+        for (i = 0; i < shnum; ++i) {
+            const unsigned char *sh =
+                file_data + shoff + (size_t)i * shentsize;
+            uint32_t type = read_be32(sh + 4u);
+            uint32_t offset = read_be32(sh + 16u);
+            uint32_t size = read_be32(sh + 20u);
+
+            if ((uint64_t)offset + size > file_size)
+                continue;
+
+            if (type == 0x70000006u && size >= 24u) {
+                info.gp_value = read_be32(file_data + offset + 20u);
+                if (info.gp_value)
+                    break;
+            }
+            if (type == 0x7000000du && size >= 8u) {
+                uint32_t gp =
+                    read_mips_options_gp(file_data + offset, (size_t)size);
+                if (gp) {
+                    info.gp_value = gp;
+                    break;
+                }
+            }
+        }
     }
 
     if (info_out)
