@@ -50,7 +50,7 @@ void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
     r->gp = gp;
 }
 
-static IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address)
+IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address)
 {
     size_t i;
     static int warned_vk_fallback;
