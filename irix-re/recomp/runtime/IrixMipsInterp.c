@@ -719,6 +719,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address)
 {
     IrixGuestAddr pc = address;
+    IrixGuestAddr outer_ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
     uint64_t steps = 0;
     const uint64_t max_steps = UINT64_C(100000000);
 
@@ -783,10 +784,27 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
             if (rs == 31u) {
-                cpu->pc = target;
-                rt->current_pc = target;
+                /*
+                 * jr $ra is not necessarily a return from this interpreter
+                 * invocation. A function being interpreted may call another
+                 * local/static helper, which overwrites $ra; that helper then
+                 * returns to an interior PC of the outer function.
+                 *
+                 * Only leave irix_mips_interp_call when the jump target is the
+                 * return address that was live on entry. Otherwise continue
+                 * interpreting at the nested return target.
+                 */
+                if (target == outer_ra) {
+                    cpu->pc = target;
+                    rt->current_pc = target;
+                    cpu->gpr[0] = 0;
+                    return 0;
+                }
+                pc = target;
+                cpu->pc = pc;
+                rt->current_pc = pc;
                 cpu->gpr[0] = 0;
-                return 0;
+                continue;
             }
             if (rs == 25u) {
                 cpu->pc = pc;
