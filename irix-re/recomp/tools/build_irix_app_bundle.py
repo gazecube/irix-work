@@ -584,6 +584,18 @@ def main():
         h.update(str(a.cc).encode('utf-8'))
         return h.hexdigest()
 
+    def object_source_key(src):
+        # Local build objects may legitimately be O0 (bring-up) or an older
+        # matching O2 object installed from the shared cache. Reuse either,
+        # but only when the generated C and ABI inputs are exactly current.
+        h = hashlib.sha256()
+        h.update(b'irix-app-object-source-v1\0')
+        h.update(src.read_bytes())
+        h.update(header_digest)
+        h.update(b'-std=c11 -march=native -mtune=native -pipe -fPIC\0')
+        h.update(str(a.cc).encode('utf-8'))
+        return h.hexdigest()
+
     def install_cached(cache_obj, dst):
         dst.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -596,9 +608,15 @@ def main():
     def compile_one(src):
         rel = src.relative_to(gen)
         dst = obj / (str(rel).replace('/', '__') + '.o')
-        newest_input = max(src.stat().st_mtime_ns, header.stat().st_mtime_ns, flags_stamp.stat().st_mtime_ns)
-        if dst.is_file() and dst.stat().st_mtime_ns >= newest_input:
-            return src, dst, None
+        dst_key = Path(str(dst) + '.source-key')
+        expected_source_key = object_source_key(src)
+
+        if dst.is_file() and dst_key.is_file():
+            try:
+                if dst_key.read_text().strip() == expected_source_key:
+                    return src, dst, None
+            except OSError:
+                pass
 
         key = cache_key(src)
         cache_obj = object_cache / (key + '.o')
@@ -611,19 +629,21 @@ def main():
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             if cache_obj.is_file():
                 install_cached(cache_obj, dst)
+                dst_key.write_text(expected_source_key + '\n')
                 return src, dst, None
 
-            # Bring-up policy: preserve every already-built/cached O2
-            # object, but do not spend minutes optimizing the handful of
-            # generated translation units that are still missing after an
-            # interrupted/failed build. Compile those at O0. Deliberately do
-            # not publish an O0 object under the O2 content-cache key; the
-            # per-build dst remains reusable by timestamp on subsequent runs.
+            # Bring-up policy: preserve every matching cached O2 object, but
+            # compile genuinely missing generated translation units at O0.
+            # O0 objects are intentionally not published under the O2 cache
+            # key, but their exact source identity is stamped beside the
+            # destination object so they can be reused safely.
             cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native', '-pipe',
                    '-Wall', '-Wextra', '-Werror',
                    '-Wno-error=unused-label', '-Wno-error=unused-but-set-variable',
                    '-fPIC', '-I', str(inc), '-c', str(src), '-o', str(dst)]
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if p.returncode == 0:
+                dst_key.write_text(expected_source_key + '\n')
             return src, dst, p
 
     objects = []
