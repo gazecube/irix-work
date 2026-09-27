@@ -330,6 +330,21 @@ static int load_core_image(IrixGuestRuntime *rt)
     if (load_blob(rt, path, 0x50000000u) != 0) return -1;
     snprintf(path, sizeof(path), "%s/small.bin", IRIX_CORE_IMAGE_DIR);
     if (load_blob(rt, path, 0x60000000u) != 0) return -1;
+
+    /*
+     * link_stack_n32 relocates the complete archive core against one shared
+     * N32 small-data/GOT window:
+     *
+     *   main image  = 0x50000000...
+     *   small image = 0x60000000...
+     *   $gp         = 0x60008000
+     *
+     * Give synthetic-core callable addresses explicit GP ownership just like
+     * mapped DSOs. These intentionally broad reservations match the linker
+     * layout windows and cannot overlap the original IRIX DSO address space.
+     */
+    irix_guest_register_gp_range(0x50000000u, 0x10000000u, 0x60008000u);
+    irix_guest_register_gp_range(0x60000000u, 0x00010000u, 0x60008000u);
     return 0;
 }
 
