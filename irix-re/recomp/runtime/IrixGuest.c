@@ -15,11 +15,6 @@
 #include <fcntl.h>
 #include <limits.h>
 
-/* Private runtime query used by the narrow _XmBuildResources ABI repair
-   below. Keep this out of IrixGuest.h so the compatibility tweak does not
-   invalidate every generated translation unit. */
-extern uint32_t irix_libc_guest_allocation_size(IrixGuestAddr addr);
-
 #define IRIX_NSIG 128u
 #define IRIX_SIGACTION_N32_SIZE 32u
 
@@ -2362,81 +2357,6 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             (address == 0x0f62caa8u &&
              (uint32_t)cpu->gpr[6] == 0x0b3f0890u);
         unsigned saved_i;
-
-        /*
-         * SGI Motif _XmBuildResources ABI repair.
-         *
-         * OpenMotif's routine allocates:
-         *
-         *   sizeof(XmSyntheticResource) *
-         *       (wc_num_resources + sc_num_resources)
-         *
-         * followed by memcpy(..., sc_num_resources * sizeof(...)).
-         *
-         * The IRIX N32 object uses a 20-byte XmSyntheticResource. At the
-         * observed producer 0x0b2a9588, s2 is wc_num_resources (7) but s1,
-         * which the original machine code uses as sc_num_resources, has been
-         * polluted with the superclass resource-array pointer (for example
-         * 0x3000acf0). That produces malloc(0xc00d834c) and would poison the
-         * following memcpy length as well.
-         *
-         * The producer calls the original XtMalloc MIPS wrapper at
-         * 0x0f614498. XtMalloc then calls the native libc malloc bridge with
-         * ra=0x0f6144b8 while its own saved caller RA (0x0b2a9590) sits at
-         * sp+0x10. Therefore the dispatcher-visible boundary is malloc, not
-         * XtMalloc. Repair here, before caller_saved[] snapshots s1, so the
-         * corrected count survives the malloc return into _XmBuildResources.
-         */
-        if ((uint32_t)cpu->gpr[31] == 0x0f6144b8u) {
-            IrixGuestAddr sp =
-                (IrixGuestAddr)(uint32_t)cpu->gpr[29];
-            IrixGuestAddr xt_caller_ra = 0u;
-
-            if (sp && irix_guest_ptr(rt, sp + 0x10u, 8u))
-                xt_caller_ra = (IrixGuestAddr)(uint32_t)
-                    irix_guest_read64be(rt, sp + 0x10u);
-
-            if (xt_caller_ra == 0x0b2a9590u) {
-                IrixGuestAddr sc_resources =
-                    (IrixGuestAddr)(uint32_t)cpu->gpr[17];
-                uint32_t wc_num = (uint32_t)cpu->gpr[18];
-                uint32_t bytes =
-                    irix_libc_guest_allocation_size(sc_resources);
-
-                if (sc_resources >= 0x30000000u &&
-                    sc_resources < 0x34000000u &&
-                    bytes >= 20u && (bytes % 20u) == 0u) {
-                    uint32_t sc_num = bytes / 20u;
-                    uint64_t total =
-                        (uint64_t)(wc_num + sc_num) * 20u;
-
-                    if (sc_num < 4096u && wc_num < 4096u &&
-                        total <= 0x00100000u) {
-                        fprintf(stderr,
-                                "IRIX XmBuildResources repair: "
-                                "sc_resources=%08x bytes=%u -> sc_num=%u "
-                                "wc_num=%u malloc=%u\n",
-                                sc_resources, bytes, sc_num, wc_num,
-                                (uint32_t)total);
-                        cpu->gpr[17] =
-                            (uint64_t)(int64_t)(int32_t)sc_num;
-                        cpu->gpr[4] =
-                            (uint64_t)(int64_t)(int32_t)(uint32_t)total;
-                    } else {
-                        fprintf(stderr,
-                                "IRIX XmBuildResources repair rejected: "
-                                "sc_resources=%08x bytes=%u sc_num=%u "
-                                "wc_num=%u\n",
-                                sc_resources, bytes, sc_num, wc_num);
-                    }
-                } else {
-                    fprintf(stderr,
-                            "IRIX XmBuildResources repair unresolved: "
-                            "sc_resources=%08x allocation_bytes=%u\n",
-                            sc_resources, bytes);
-                }
-            }
-        }
 
         /*
          * Emergency XtGetValues/_XtCopyToArg guard.
