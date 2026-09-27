@@ -25,6 +25,12 @@
 
 extern char **environ;
 
+/* Runtime-private GP ownership registration. Kept out of IrixGuest.h so
+   generated translation objects do not rebuild when this loader plumbing
+   changes. */
+void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
+                                  IrixGuestAddr gp);
+
 #ifdef IRIX_HAVE_FAST_QUARKS
 #include "irix_fast_quarks.inc"
 #endif
@@ -336,6 +342,7 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
     char alias[4096];
     const char *selected = path;
     IrixGuestElfInfo info;
+    size_t segment_count_before;
 
     snprintf(path, sizeof(path), "%s/%s", root, rel);
 
@@ -365,9 +372,18 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
     if (selected != path)
         fprintf(stderr, "IRIX ELF path alias: /%s -> %s\n", rel, selected);
 
+    segment_count_before = rt->memory.count;
     if (irix_guest_load_elf32be_info(rt, selected, &info) != 0) {
         fprintf(stderr, "failed to load guest ELF: %s\n", selected);
         return -1;
+    }
+    if (info.gp_value) {
+        size_t i;
+        for (i = segment_count_before; i < rt->memory.count; ++i) {
+            IrixGuestSegment *seg = &rt->memory.segments[i];
+            irix_guest_register_gp_range(seg->guest_base, seg->size,
+                                         info.gp_value);
+        }
     }
     if (info_out)
         *info_out = info;
