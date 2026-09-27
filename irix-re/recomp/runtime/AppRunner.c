@@ -826,19 +826,19 @@ int main(int argc, char **argv)
                  */
 #ifdef IRIX_DIRECT_MAIN
                 /*
-                 * Direct translated execution bypasses IRIX rld, but translated
-                 * DSO code still performs ordinary GP-relative accesses into
-                 * each DSO's original .data/.bss/.got image. Therefore every
-                 * ordinary component in the resolved closure must have its
-                 * guest PT_LOAD image mapped even though its code executes as
-                 * host-native translated C.
+                 * Direct translated execution bypasses the IRIX loader's
+                 * control flow, not its memory images. Every component whose
+                 * translated code can execute still needs its original guest
+                 * PT_LOAD image for .data/.bss/.got and GP-relative globals.
                  *
-                 * Keep only PT_INTERP/rld out of the direct-main address space.
-                 * Existing prebound data/GOT patching below then repairs the
-                 * mapped images before guest execution begins.
+                 * This includes PT_INTERP: on IRIX N32 /usr/lib32/libc.so.1
+                 * is both the ELF interpreter and libc, so ordinary translated
+                 * libc routines such as _stat/_cerror access writable state in
+                 * that image even though direct-main never jumps to its entry.
+                 *
+                 * Map all resolved component images here. We still bypass
+                 * PT_INTERP/rld execution by selecting main explicitly below.
                  */
-                if (component->role != 0)
-                    continue;
 #else
                 if (i != 0u && component->role == 0)
                     continue;
