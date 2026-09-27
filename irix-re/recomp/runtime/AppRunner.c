@@ -766,6 +766,10 @@ int main(int argc, char **argv)
     int have_app_elf = 0;
     int have_interp_elf = 0;
     int have_rld_elf = 0;
+    char **guest_argv = argv;
+#ifdef IRIX_DIRECT_MAIN
+    char **direct_guest_argv = 0;
+#endif
 
     memset(&app_elf, 0, sizeof(app_elf));
     memset(&interp_elf, 0, sizeof(interp_elf));
@@ -1016,12 +1020,47 @@ int main(int argc, char **argv)
             "registries and native DSO overrides disabled\n");
 #endif
 
-    if (setup_process_stack(&rt, &cpu, argc, argv,
+#ifdef IRIX_DIRECT_MAIN
+    /*
+     * Keep the host harness name out of the guest process. The real IRIX
+     * session bootstrap is /usr/sbin/desktop and Xt/resource/session logic
+     * is allowed to derive application identity from argv[0].
+     *
+     * Preserve every caller-supplied argument after argv[0].
+     */
+    if (argc > 0) {
+        const char *guest_name = strrchr(IRIX_APP_PATH, '/');
+        size_t i;
+        guest_name = guest_name ? guest_name + 1 : IRIX_APP_PATH;
+        direct_guest_argv =
+            (char **)calloc((size_t)argc + 1u, sizeof(*direct_guest_argv));
+        if (!direct_guest_argv) {
+            fprintf(stderr, "failed to allocate direct guest argv\n");
+            return 1;
+        }
+        direct_guest_argv[0] = (char *)guest_name;
+        for (i = 1u; i < (size_t)argc; ++i)
+            direct_guest_argv[i] = argv[i];
+        guest_argv = direct_guest_argv;
+        fprintf(stderr,
+                "IRIX direct guest identity: host argv0=%s guest argv0=%s\n",
+                argv[0] ? argv[0] : "(null)", guest_name);
+    }
+#endif
+
+    if (setup_process_stack(&rt, &cpu, argc, guest_argv,
                             have_app_elf ? &app_elf : 0,
                             have_interp_elf ? &interp_elf : 0) != 0) {
+#ifdef IRIX_DIRECT_MAIN
+        free(direct_guest_argv);
+#endif
         fprintf(stderr, "failed to construct IRIX N32 process stack\n");
         return 1;
     }
+#ifdef IRIX_DIRECT_MAIN
+    free(direct_guest_argv);
+    direct_guest_argv = 0;
+#endif
 
     /*
      * For an ELF executable with PT_INTERP, the kernel transfers control to
