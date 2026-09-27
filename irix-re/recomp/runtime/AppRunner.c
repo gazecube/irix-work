@@ -1074,6 +1074,7 @@ int main(int argc, char **argv)
                 (uint32_t)cpu.pc,
                 caller && caller->name ? caller->name : "?");
         report_trap_context(&rt, &cpu);
+        irix_guest_runtime_destroy(&rt);
         return 2;
     }
 
