@@ -479,13 +479,18 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
             (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
             (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
-    if (ra >= 8u && irix_guest_ptr(rt, ra - 8u, 16u)) {
+    if (ra >= 40u && irix_guest_ptr(rt, ra - 40u, 52u)) {
+        IrixGuestAddr q;
+        fprintf(stderr, "  caller-insn:");
+        for (q = ra - 40u; q <= ra + 8u; q += 4u)
+            fprintf(stderr, " [%08x]=%08x", q, irix_guest_read32be(rt, q));
+        fputc('\n', stderr);
         fprintf(stderr,
-                "  caller-insn: [%08x]=%08x [%08x]=%08x [%08x]=%08x [%08x]=%08x\n",
-                ra - 8u, irix_guest_read32be(rt, ra - 8u),
-                ra - 4u, irix_guest_read32be(rt, ra - 4u),
-                ra,      irix_guest_read32be(rt, ra),
-                ra + 4u, irix_guest_read32be(rt, ra + 4u));
+                "  caller-regs: at=%08x t9=%08x s0=%08x s1=%08x s2=%08x s3=%08x gp=%08x\n",
+                (uint32_t)cpu->gpr[1], (uint32_t)cpu->gpr[25],
+                (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                (uint32_t)cpu->gpr[28]);
     }
     report_guest_words(rt, "v0", (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
     report_guest_words(rt, "a0", (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
