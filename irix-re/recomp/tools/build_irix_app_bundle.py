@@ -470,9 +470,35 @@ def main():
         os.replace(bundle_tmp, bundle)
         json.loads(bundle.read_text())
 
+    def installed_translation_is_current(dst, prefix, binary):
+        bundle = dst / 'bundle.json'
+        if not bundle.is_file():
+            return False
+        try:
+            meta = json.loads(bundle.read_text())
+            if meta.get('prefix') != prefix:
+                return False
+            if Path(meta.get('path', '')).resolve() != binary.resolve():
+                return False
+            stamp = bundle.stat().st_mtime_ns
+            for input_path in [binary, *translator_sources]:
+                if input_path.stat().st_mtime_ns > stamp:
+                    return False
+            for fn in meta.get('functions', []):
+                if not Path(fn['source']).is_file():
+                    return False
+            if not (dst / 'registry.c').is_file():
+                return False
+        except (OSError, ValueError, KeyError, json.JSONDecodeError):
+            return False
+        return True
+
     bundles = []
     for prefix, binary in components:
         dst = gen / prefix
+        if installed_translation_is_current(dst, prefix, binary):
+            bundles.append(dst / 'bundle.json')
+            continue
         key = translation_key(prefix, binary)
         cache_dir = translation_cache / key
         lock_path = translation_cache / (key + '.lock')
