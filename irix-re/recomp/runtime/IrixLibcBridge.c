@@ -179,6 +179,63 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     uint32_t size = (uint32_t)cpu->gpr[4];
 
     /*
+     * SGI Motif _XmBuildResources ABI repair.
+     *
+     * The translated routine at 0x0b2a95xx reaches the original XtMalloc
+     * wrapper with s2=wc_num_resources but s1 polluted with sc_resources
+     * itself. XtMalloc then calls this native malloc bridge:
+     *
+     *   ra             = 0x0f6144b8
+     *   saved Xt caller= 0x0b2a9590 at sp+0x10
+     *
+     * The original code computes both its malloc and following memcpy sizes
+     * from s1, so repair the register here as well as the immediate malloc
+     * request. The superclass synthetic-resource array is a guest allocation;
+     * each IRIX N32 XmSyntheticResource is 20 bytes.
+     */
+    if (size > 0x04000000u &&
+        (uint32_t)cpu->gpr[31] == 0x0f6144b8u) {
+        IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+        IrixGuestAddr xt_caller_ra = 0u;
+
+        if (sp && irix_guest_ptr(rt, sp + 0x10u, 8u))
+            xt_caller_ra = (IrixGuestAddr)(uint32_t)
+                irix_guest_read64be(rt, sp + 0x10u);
+
+        if (xt_caller_ra == 0x0b2a9590u) {
+            IrixGuestAddr sc_resources =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+            uint32_t wc_num = (uint32_t)cpu->gpr[18];
+            IrixGuestAllocation *a = find_alloc(sc_resources);
+
+            if (a && a->size >= 20u && (a->size % 20u) == 0u &&
+                wc_num < 4096u) {
+                uint32_t sc_num = a->size / 20u;
+                uint64_t total = (uint64_t)(wc_num + sc_num) * 20u;
+
+                if (sc_num < 4096u && total <= 0x00100000u) {
+                    fprintf(stderr,
+                            "IRIX XmBuildResources malloc repair: "
+                            "sc_resources=%08x bytes=%u -> sc_num=%u "
+                            "wc_num=%u size %08x -> %u\n",
+                            sc_resources, a->size, sc_num, wc_num,
+                            size, (uint32_t)total);
+                    cpu->gpr[17] =
+                        (uint64_t)(int64_t)(int32_t)sc_num;
+                    cpu->gpr[4] =
+                        (uint64_t)(int64_t)(int32_t)(uint32_t)total;
+                    size = (uint32_t)total;
+                }
+            } else {
+                fprintf(stderr,
+                        "IRIX XmBuildResources malloc repair unresolved: "
+                        "sc_resources=%08x alloc_size=%u wc_num=%u\n",
+                        sc_resources, a ? a->size : 0u, wc_num);
+            }
+        }
+    }
+
+    /*
      * A normal desktop startup allocation should never be remotely close to
      * the guest address-space limit.  When an absurd request appears, dump
      * the architectural callsite before returning NULL so we can distinguish
