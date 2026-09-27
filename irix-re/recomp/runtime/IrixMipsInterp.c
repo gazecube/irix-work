@@ -788,6 +788,41 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
             if (rs == 31u) {
+                IrixGuestAddr return_gp =
+                    irix_guest_gp_for_address(target);
+
+                /*
+                 * Every jr $ra is an ABI return boundary, even when it is only
+                 * a nested helper return inside this interpreter invocation.
+                 *
+                 * In the hybrid translated/interpreted runtime the caller may
+                 * live in a different ELF/GP domain. Do not wait for
+                 * target == outer_ra before repairing $gp: a nested
+                 * irix_mips_interp_call can legitimately return from libXt
+                 * directly into an interior ViewKit continuation such as:
+                 *
+                 *   0x0f62cb5c -> 0x0d6352c0
+                 *
+                 * That transition must switch libXt's 0x0f69eef0 GP back to
+                 * ViewKit's 0x0d6cf058 before ANY instruction at the target
+                 * executes, regardless of which interpreter frame considers
+                 * the target its outer return address.
+                 */
+                if (!return_gp &&
+                    target >= 0x0d600000u && target < 0x0d700000u)
+                    return_gp = 0x0d6cf058u;
+
+                if (return_gp &&
+                    (uint32_t)cpu->gpr[28] != return_gp) {
+                    fprintf(stderr,
+                            "IRIX MIPS interp JR GP domain: pc=%08x target=%08x "
+                            "gp %08x -> %08x outer_ra=%08x\n",
+                            pc, target, (uint32_t)cpu->gpr[28],
+                            return_gp, outer_ra);
+                    cpu->gpr[28] =
+                        (uint64_t)(int64_t)(int32_t)return_gp;
+                }
+
                 /*
                  * jr $ra is not necessarily a return from this interpreter
                  * invocation. A function being interpreted may call another
@@ -796,37 +831,19 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  *
                  * Only leave irix_mips_interp_call when the jump target is the
                  * return address that was live on entry. Otherwise continue
-                 * interpreting at the nested return target.
+                 * interpreting at the now-correct GP domain.
                  */
                 if (target == outer_ra) {
-                    IrixGuestAddr return_gp =
-                        irix_guest_gp_for_address(target);
-
-                    /*
-                     * Hard bring-up fallback for the original ViewKit/libvk
-                     * continuation range. The generic GP owner lookup should
-                     * already return this value, but keep the interpreter
-                     * return boundary self-sufficient so an Xt -> ViewKit
-                     * return can never leak libXt's GP into 0x0d6xxxxx code.
-                     */
-                    if (!return_gp &&
-                        target >= 0x0d600000u && target < 0x0d700000u)
-                        return_gp = 0x0d6cf058u;
-
                     fprintf(stderr,
                             "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
                             "gp=%08x owner_gp=%08x\n",
                             pc, target, (uint32_t)cpu->gpr[28], return_gp);
-
-                    if (return_gp)
-                        cpu->gpr[28] =
-                            (uint64_t)(int64_t)(int32_t)return_gp;
-
                     cpu->pc = target;
                     rt->current_pc = target;
                     cpu->gpr[0] = 0;
                     return 0;
                 }
+
                 pc = target;
                 cpu->pc = pc;
                 rt->current_pc = pc;
