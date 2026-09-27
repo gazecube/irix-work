@@ -2157,15 +2157,19 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
-     * SGI Xt TMparse internal entry reached from 0x0f625074 via BAL.
+     * SGI Xt translation-manager internal entries reached via BAL.
      *
-     * The public-name fallback below is not sufficient because this parser
-     * path enters through a stripped/static helper. The failing translated
-     * path eventually treats XrmValue.size (0x1a) as a String pointer and
-     * faults at 0x0f628410. Execute the internal parser entry as original
-     * MIPS so its stack/XrmValue state stays exactly as SGI compiled it.
+     * The public-name fallback below is not sufficient because several TM
+     * paths enter stripped/static helpers directly. Keep those internal
+     * helper flows in original MIPS so their private frame/register contracts
+     * are not split across generated C and recovered function boundaries.
+     *
+     * 0x0f623fcc: parser helper reached from 0x0f625074.
+     * 0x0f622e2c: merge/override helper reached from XtOverrideTranslations;
+     *             translated execution was observed entering it with s7
+     *             becoming ASCII string bytes and faulting at 0x0f622e8c.
      */
-    if (address == 0x0f623fccu) {
+    if (address == 0x0f623fccu || address == 0x0f622e2cu) {
         uint64_t saved_gp = cpu->gpr[28];
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
         int rc;
@@ -2187,15 +2191,18 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * The translated converter path has repeatedly exposed malformed XrmValue
      * state (including {size=0,addr=1} for the cursor converter and now a
      * translation parser source becoming the scalar size 0x1a). Run the
-     * public translation/accelerator conversion entry points as original MIPS
-     * for now. This keeps the rest of Xt statically translated while making
-     * TMparse use SGI's exact structure accesses and internal helper flow.
+     * public translation/accelerator conversion and merge entry points as
+     * original MIPS for now. This keeps the rest of Xt statically translated
+     * while making parsing, override/augment, and their hidden helpers use
+     * SGI's exact structure/register conventions end-to-end.
      */
     if (entry && entry->name &&
         (!strcmp(entry->name, "XtCvtStringToTranslationTable") ||
          !strcmp(entry->name, "XtCvtStringToAcceleratorTable") ||
          !strcmp(entry->name, "XtParseTranslationTable") ||
-         !strcmp(entry->name, "XtParseAcceleratorTable"))) {
+         !strcmp(entry->name, "XtParseAcceleratorTable") ||
+         !strcmp(entry->name, "XtOverrideTranslations") ||
+         !strcmp(entry->name, "XtAugmentTranslations"))) {
         uint64_t saved_gp = cpu->gpr[28];
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
         int rc;
