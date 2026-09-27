@@ -803,25 +803,25 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         irix_guest_gp_for_address(target);
 
                     /*
-                     * This interpreter invocation is crossing back into its
-                     * translated caller. Original MIPS PIC callees are free to
-                     * leave their own $gp live; translated callers, however,
-                     * resume at an interior C label and do not execute a MIPS
-                     * call-site GP restore instruction themselves.
-                     *
-                     * Re-establish the GP domain that owns the return PC before
-                     * handing control back. This fixes Xt -> ViewKit returns
-                     * such as 0x0f62cb5c -> 0x0d6352c0, which otherwise leave
-                     * libXt's GP active inside ViewKit.
+                     * Hard bring-up fallback for the original ViewKit/libvk
+                     * continuation range. The generic GP owner lookup should
+                     * already return this value, but keep the interpreter
+                     * return boundary self-sufficient so an Xt -> ViewKit
+                     * return can never leak libXt's GP into 0x0d6xxxxx code.
                      */
-                    if (return_gp) {
-                        if ((uint32_t)cpu->gpr[28] != return_gp)
-                            fprintf(stderr,
-                                    "IRIX MIPS interp return GP: target=%08x gp %08x -> %08x\n",
-                                    target, (uint32_t)cpu->gpr[28], return_gp);
+                    if (!return_gp &&
+                        target >= 0x0d600000u && target < 0x0d700000u)
+                        return_gp = 0x0d6cf058u;
+
+                    fprintf(stderr,
+                            "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
+                            "gp=%08x owner_gp=%08x\n",
+                            pc, target, (uint32_t)cpu->gpr[28], return_gp);
+
+                    if (return_gp)
                         cpu->gpr[28] =
                             (uint64_t)(int64_t)(int32_t)return_gp;
-                    }
+
                     cpu->pc = target;
                     rt->current_pc = target;
                     cpu->gpr[0] = 0;
