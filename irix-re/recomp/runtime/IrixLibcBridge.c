@@ -105,6 +105,12 @@ static int guest_compare(IrixGuestRuntime *rt, const IrixGuestCpu *caller,
     IrixGuestAddr saved_pc = rt->current_pc;
     cb.gpr[4] = (uint64_t)(int64_t)(int32_t)a;
     cb.gpr[5] = (uint64_t)(int64_t)(int32_t)b;
+    /*
+     * Host qsort/bsearch is standing in for an N32 indirect callback call.
+     * A real SGI caller would place the function pointer in $t9 before
+     * jalr $t9 so a PIC callback can establish its own $gp.
+     */
+    cb.gpr[25] = (uint64_t)(int64_t)(int32_t)fn;
     if (irix_guest_call(rt, &cb, fn) != 0) {
         rt->current_pc = saved_pc;
         return 0;
