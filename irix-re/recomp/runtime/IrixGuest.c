@@ -2234,6 +2234,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr sg_drop_class[16];
     static IrixGuestAddr sg_drop_state[16];
     static IrixGuestFunctionEntry *xm_build_resources_entry;
+    static IrixGuestFunctionEntry *xm_save_core_translations_entry;
 
     /*
      * Replace SGI Motif _XmBuildResources wholesale for bring-up.
@@ -2248,6 +2249,10 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         xm_build_resources_entry =
             irix_guest_find_function(rt, 0x0b2a9588u);
 
+    if (!xm_save_core_translations_entry)
+        xm_save_core_translations_entry =
+            irix_guest_find_function(rt, 0x0b2c1adcu);
+
     if (entry && xm_build_resources_entry &&
         entry == xm_build_resources_entry &&
         address == entry->address) {
@@ -2256,6 +2261,36 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 "entry=%08x interior=0b2a9588\n",
                 entry->address);
         return irix_native_xm_build_resources(rt, cpu);
+    }
+
+    /*
+     * _XmSaveCoreClassTranslations(widget) ultimately reads
+     * widget->core.widget_class->core_class.tm_table. During one recovered
+     * InitializePrehook path the widget exists but widget_class is still NULL,
+     * so the original helper dereferences class+0x64 and faults at 0x64.
+     *
+     * Keep the original Motif helper for valid widgets. For only the malformed
+     * transient case, treat the save as empty; there is no class translation
+     * table to preserve yet, so this is equivalent to saving nothing.
+     */
+    if (entry && xm_save_core_translations_entry &&
+        entry == xm_save_core_translations_entry &&
+        address == entry->address) {
+        IrixGuestAddr widget = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr widget_class = 0u;
+
+        if (widget && irix_guest_ptr(rt, widget, 8u))
+            widget_class = irix_guest_read32be(rt, widget + 4u);
+
+        if (!widget_class || !irix_guest_ptr(rt, widget_class, 0x68u)) {
+            fprintf(stderr,
+                    "IRIX _XmSaveCoreClassTranslations repair: "
+                    "widget=%08x class=%08x -> skip empty save\n",
+                    widget, widget_class);
+            cpu->gpr[2] = 0u;
+            cpu->gpr[0] = 0u;
+            return 0;
+        }
     }
 
     /*
