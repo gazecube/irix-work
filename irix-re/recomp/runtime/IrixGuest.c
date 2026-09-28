@@ -2225,6 +2225,19 @@ static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
     return rt->trapped ? -1 : 0;
 }
 
+static int irix_guest_looks_like_widget(IrixGuestRuntime *rt,
+                                        IrixGuestAddr widget)
+{
+    IrixGuestAddr cls;
+
+    if (!widget || !irix_guest_ptr(rt, widget, 12u))
+        return 0;
+    cls = irix_guest_read32be(rt, widget + 4u);
+    if (!cls || !irix_guest_ptr(rt, cls, 0x74u))
+        return 0;
+    return 1;
+}
+
 static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                                       IrixGuestAddr address,
                                       IrixGuestFunctionEntry *entry)
@@ -2235,6 +2248,34 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr sg_drop_state[16];
     static IrixGuestFunctionEntry *xm_build_resources_entry;
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
+
+    /*
+     * Motif InitializePrehook ABI repair.
+     *
+     * The recovered prehook at 0x0b2e54f0 has the normal XtInitProc
+     * signature (req, new_w, args, num_args). Its delay slot at 0x0b2e5518
+     * copies a1 into s0 and the following instructions immediately use
+     * s0 as new_w. In the failing hybrid path a1 is a stack scratch address
+     * while the caller-preserved s1 still holds the real new_w.
+     *
+     * Repair only this demonstrated malformed case, and only when s1 has the
+     * shape of a live Xt widget while a1 does not.
+     */
+    if (address == 0x0b2e54f0u) {
+        IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr saved_new_w =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+
+        if (!irix_guest_looks_like_widget(rt, new_w) &&
+            irix_guest_looks_like_widget(rt, saved_new_w)) {
+            fprintf(stderr,
+                    "IRIX Motif InitializePrehook ABI repair: "
+                    "a1=%08x -> s1=%08x\n",
+                    new_w, saved_new_w);
+            cpu->gpr[5] =
+                (uint64_t)(int64_t)(int32_t)saved_new_w;
+        }
+    }
 
     /*
      * Replace SGI Motif _XmBuildResources wholesale for bring-up.
