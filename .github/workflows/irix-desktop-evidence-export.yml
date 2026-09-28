@@ -1,0 +1,44 @@
+name: Export IRIX desktop evidence
+
+on:
+  push:
+    paths:
+      - '.github/workflows/irix-desktop-evidence-export.yml'
+      - 'irix-re/evidence/desktop_eoe(1).tar'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Extract desktop_eoe evidence
+        shell: bash
+        run: |
+          set -euxo pipefail
+          archive='irix-re/evidence/desktop_eoe(1).tar'
+          test -f "$archive"
+          mkdir -p /tmp/desktop-eoe
+          tar -tvf "$archive" | tee /tmp/desktop-eoe/TAR-LISTING.txt
+          tar -xf "$archive" -C /tmp/desktop-eoe
+          echo '--- extracted files ---'
+          find /tmp/desktop-eoe -type f -print | sort
+          echo '--- target binaries ---'
+          find /tmp/desktop-eoe -type f \( \
+            -iname 'desktop' -o -iname 'desktop.Z' -o \
+            -iname 'fm' -o -iname 'fm.Z' -o \
+            -iname '4Dwm' -o -iname '4Dwm.Z' -o \
+            -iname 'toolchest' -o -iname 'toolchest.Z' -o \
+            -iname 'xwsh' -o -iname 'xwsh.Z' \
+          \) -print -exec file {} \; | tee /tmp/desktop-eoe/TARGETS.txt || true
+
+      - name: Upload complete extracted evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: irix-desktop-evidence-extracted
+          path: /tmp/desktop-eoe/
+          if-no-files-found: error
+          retention-days: 7
