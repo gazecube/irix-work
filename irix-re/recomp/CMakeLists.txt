@@ -197,12 +197,15 @@ if(IRIX_DEV_TREE)
             set(IRIX_FAST_QUARK_INC "${IRIX_ECOSYSTEM_DIR}/irix_fast_quarks.inc")
             set(IRIX_X11_GUEST_LIB "")
             foreach(_x11_candidate
-                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.1"
-                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.3"
-                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so"
+                    # Prefer the ABI/development libX11: recovered runtime
+                    # libX11 builds can omit the private SGI quark table
+                    # consumed by extract_fast_quarks.py.
                     "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so.3"
                     "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so.1"
-                    "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so")
+                    "${IRIX_DEV_TREE}/usr/lib/abi/libX11.so"
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.1"
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so.3"
+                    "${IRIX_RUNTIME_TREE}/usr/lib32/libX11.so")
                 if(EXISTS "${_x11_candidate}" AND NOT IRIX_X11_GUEST_LIB)
                     set(IRIX_X11_GUEST_LIB "${_x11_candidate}")
                 endif()
