@@ -70,6 +70,11 @@ uint32_t irix_libc_guest_allocation_size(IrixGuestAddr addr)
     return a ? a->size : 0u;
 }
 
+IrixGuestAddr irix_libc_guest_malloc(uint32_t size)
+{
+    return alloc_guest(size, 16u);
+}
+
 static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
 {
     IrixGuestAddr addr;
