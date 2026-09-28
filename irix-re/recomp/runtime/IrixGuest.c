@@ -426,6 +426,33 @@ static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t s
     return out;
 }
 
+static void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
+                                                 IrixGuestAddr screen)
+{
+    IrixGuestAddr priv;
+
+    /*
+     * SGI Motif XmScreen carries a private pointer at +0x104. The original
+     * instance-initialize path allocates an 8-byte zeroed block there.
+     * Recovered/interpreted continuation entries can bypass the dispatcher
+     * hook that used to repair only the public XmGetXmScreen entry.
+     */
+    if (!screen || !irix_guest_ptr(rt, screen, 0x108u) ||
+        irix_guest_read32be(rt, screen + 0x104u) != 0u)
+        return;
+
+    priv = irix_guest_xt_compat_alloc(rt, 8u);
+    if (!priv || !irix_guest_ptr(rt, priv, 8u))
+        return;
+
+    irix_guest_write32be(rt, priv + 0u, 0u);
+    irix_guest_write32be(rt, priv + 4u, 0u);
+    irix_guest_write32be(rt, screen + 0x104u, priv);
+    fprintf(stderr,
+            "IRIX XmScreen repair: screen=%08x private=%08x\n",
+            screen, priv);
+}
+
 static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
                                                  IrixGuestAddr resources,
                                                  uint32_t num_resources)
@@ -2806,33 +2833,12 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
 
         /*
-         * SGI Motif XmScreen private-state repair.
-         *
-         * XmGetXmScreen() returns an XmScreen instance whose private pointer
-         * at +0x104 is normally initialized by the XmScreen instance init
-         * path.  The original SGI code allocates exactly 8 bytes there and
-         * initializes word +0 and byte +4 to zero.  Some translated startup
-         * paths miss that side effect, and _XmGetPixmap later dereferences
-         * +0x104 unconditionally.
-         *
-         * Recreate the exact zeroed private block when XmGetXmScreen returns
-         * an otherwise-valid screen object with that field still NULL.
+         * Repair the public XmGetXmScreen return as before. Interior entries
+         * in the same machine function are handled in irix_guest_call().
          */
-        if (!rt->trapped && address == 0x0b2a80acu) {
-            IrixGuestAddr screen = (IrixGuestAddr)(uint32_t)cpu->gpr[2];
-            if (screen && irix_guest_ptr(rt, screen, 0x108u) &&
-                irix_guest_read32be(rt, screen + 0x104u) == 0u) {
-                IrixGuestAddr priv = irix_guest_xt_compat_alloc(rt, 8u);
-                if (priv && irix_guest_ptr(rt, priv, 8u)) {
-                    irix_guest_write32be(rt, priv + 0u, 0u);
-                    irix_guest_write32be(rt, priv + 4u, 0u);
-                    irix_guest_write32be(rt, screen + 0x104u, priv);
-                    fprintf(stderr,
-                            "IRIX XmScreen repair: screen=%08x private=%08x\n",
-                            screen, priv);
-                }
-            }
-        }
+        if (!rt->trapped && address == 0x0b2a80acu)
+            irix_guest_repair_xm_screen_private(
+                rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
 
         if (xm_display_shell_call) {
             if (xm_display_shell_depth)
@@ -2950,6 +2956,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         rc = irix_mips_interp_call(rt, cpu, address);
         if (!rt->trapped) {
+            /*
+             * XmGetXmScreen spans 0x0b2a80ac..0x0b2a8388 in this recovered
+             * SGI libXm image. Calls can legitimately target an interior
+             * continuation (observed: 0x0b2a8300), so apply the same return
+             * repair that the exact public entry receives.
+             */
+            if (entry->address == 0x0b2a80acu ||
+                (entry->name && strcmp(entry->name, "XmGetXmScreen") == 0))
+                irix_guest_repair_xm_screen_private(
+                    rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
+
             for (saved_i = 0; saved_i < 8u; ++saved_i)
                 cpu->gpr[16u + saved_i] = saved_s[saved_i];
             cpu->gpr[28] = saved_gp;
