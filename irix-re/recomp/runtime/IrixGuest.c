@@ -426,8 +426,8 @@ static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t s
     return out;
 }
 
-static void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
-                                                 IrixGuestAddr screen)
+void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
+                                         IrixGuestAddr screen)
 {
     IrixGuestAddr priv;
 
