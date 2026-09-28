@@ -1,0 +1,31 @@
+name: Export IRIX reimplementation source
+
+on:
+  push:
+    paths:
+      - '.github/workflows/irix-source-export.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Inventory source tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+          du -sh irix-re
+          find irix-re -maxdepth 2 -type f | sort | sed -n '1,400p'
+
+      - name: Upload irix-re source
+        uses: actions/upload-artifact@v4
+        with:
+          name: irix-re-source-tree
+          path: irix-re/
+          if-no-files-found: error
+          retention-days: 7
