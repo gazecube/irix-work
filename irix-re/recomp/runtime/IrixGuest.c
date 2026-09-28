@@ -15,6 +15,11 @@
 #include <fcntl.h>
 #include <limits.h>
 
+/* Runtime-private guest-libc helpers used by narrow native compatibility
+   implementations. Keep them out of IrixGuest.h to avoid rebuilding every
+   generated translation unit. */
+extern IrixGuestAddr irix_libc_guest_malloc(uint32_t size);
+
 #define IRIX_NSIG 128u
 #define IRIX_SIGACTION_N32_SIZE 32u
 
@@ -2069,6 +2074,130 @@ static int trace_dialog_call(const char *name)
            strstr(name, "waitForDialog__15VkDialogManager") != 0;
 }
 
+static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
+                                          IrixGuestCpu *cpu)
+{
+    const uint32_t rec_size = 20u;
+    IrixGuestAddr wc_ptrp = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr wc_nump = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr sc = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    uint32_t sc_num = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr wc;
+    uint32_t wc_num;
+    IrixGuestAddr merged;
+    uint32_t new_num;
+    uint32_t i, j;
+    uint64_t total_bytes;
+
+    if (!wc_ptrp || !wc_nump ||
+        !irix_guest_ptr(rt, wc_ptrp, 4u) ||
+        !irix_guest_ptr(rt, wc_nump, 4u)) {
+        fprintf(stderr,
+                "IRIX native _XmBuildResources: invalid output pointers "
+                "wc_ptrp=%08x wc_nump=%08x\n",
+                wc_ptrp, wc_nump);
+        return -1;
+    }
+
+    wc = irix_guest_read32be(rt, wc_ptrp);
+    wc_num = irix_guest_read32be(rt, wc_nump);
+
+    fprintf(stderr,
+            "IRIX native _XmBuildResources: wc=%08x wc_num=%u "
+            "sc=%08x sc_num=%u\n",
+            wc, wc_num, sc, sc_num);
+
+    if (wc_num == 0u) {
+        irix_guest_write32be(rt, wc_ptrp, sc);
+        irix_guest_write32be(rt, wc_nump, sc_num);
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return rt->trapped ? -1 : 0;
+    }
+
+    if (wc_num > 4096u || sc_num > 4096u) {
+        fprintf(stderr,
+                "IRIX native _XmBuildResources: absurd counts "
+                "wc_num=%u sc_num=%u\n",
+                wc_num, sc_num);
+        return -1;
+    }
+
+    if ((wc_num && (!wc || !irix_guest_ptr(rt, wc, wc_num * rec_size))) ||
+        (sc_num && (!sc || !irix_guest_ptr(rt, sc, sc_num * rec_size)))) {
+        fprintf(stderr,
+                "IRIX native _XmBuildResources: invalid resource arrays "
+                "wc=%08x/%u sc=%08x/%u\n",
+                wc, wc_num, sc, sc_num);
+        return -1;
+    }
+
+    total_bytes = (uint64_t)(wc_num + sc_num) * rec_size;
+    if (!total_bytes || total_bytes > UINT32_MAX)
+        return -1;
+
+    merged = irix_libc_guest_malloc((uint32_t)total_bytes);
+    if (!merged || !irix_guest_ptr(rt, merged, (uint32_t)total_bytes)) {
+        fprintf(stderr,
+                "IRIX native _XmBuildResources: allocation failed bytes=%u\n",
+                (uint32_t)total_bytes);
+        return -1;
+    }
+
+    if (sc_num) {
+        void *dst = irix_guest_ptr(rt, merged, sc_num * rec_size);
+        void *src = irix_guest_ptr(rt, sc, sc_num * rec_size);
+        if (!dst || !src)
+            return -1;
+        memcpy(dst, src, sc_num * rec_size);
+    }
+
+    new_num = sc_num;
+    for (i = 0; i < wc_num; ++i) {
+        IrixGuestAddr wr = wc + i * rec_size;
+        uint32_t name = irix_guest_read32be(rt, wr + 0u);
+        int override = 0;
+
+        for (j = 0; j < sc_num; ++j) {
+            IrixGuestAddr nr = merged + j * rec_size;
+            if (irix_guest_read32be(rt, nr + 0u) == name) {
+                /*
+                 * Motif override semantics preserve the superclass record
+                 * except for export_proc and import_proc.
+                 */
+                irix_guest_write32be(
+                    rt, nr + 12u, irix_guest_read32be(rt, wr + 12u));
+                irix_guest_write32be(
+                    rt, nr + 16u, irix_guest_read32be(rt, wr + 16u));
+                override = 1;
+                break;
+            }
+        }
+
+        if (!override) {
+            IrixGuestAddr nr = merged + new_num * rec_size;
+            void *dst = irix_guest_ptr(rt, nr, rec_size);
+            void *src = irix_guest_ptr(rt, wr, rec_size);
+            if (!dst || !src)
+                return -1;
+            memcpy(dst, src, rec_size);
+            ++new_num;
+        }
+    }
+
+    irix_guest_write32be(rt, wc_ptrp, merged);
+    irix_guest_write32be(rt, wc_nump, new_num);
+
+    fprintf(stderr,
+            "IRIX native _XmBuildResources: merged=%08x count=%u "
+            "capacity=%u\n",
+            merged, new_num, wc_num + sc_num);
+
+    cpu->gpr[2] = 0u;
+    cpu->gpr[0] = 0u;
+    return rt->trapped ? -1 : 0;
+}
+
 static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                                       IrixGuestAddr address,
                                       IrixGuestFunctionEntry *entry)
@@ -2077,6 +2206,30 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr xm_display_bootstrap_widget;
     static IrixGuestAddr sg_drop_class[16];
     static IrixGuestAddr sg_drop_state[16];
+    static IrixGuestFunctionEntry *xm_build_resources_entry;
+
+    /*
+     * Replace SGI Motif _XmBuildResources wholesale for bring-up.
+     *
+     * We know 0x0b2a9588 is its XtMalloc callsite from the original MIPS
+     * instruction stream. Resolve whichever recovered function contains that
+     * PC instead of hard-coding a guessed symbol boundary; then execute the
+     * source-equivalent native implementation above whenever that recovered
+     * entry is called.
+     */
+    if (!xm_build_resources_entry)
+        xm_build_resources_entry =
+            irix_guest_find_function(rt, 0x0b2a9588u);
+
+    if (entry && xm_build_resources_entry &&
+        entry == xm_build_resources_entry &&
+        address == entry->address) {
+        fprintf(stderr,
+                "IRIX native override: _XmBuildResources "
+                "entry=%08x interior=0b2a9588\n",
+                entry->address);
+        return irix_native_xm_build_resources(rt, cpu);
+    }
 
     /*
      * Motif _XmSortResourceList always expects XrmResourceList[]: an array
