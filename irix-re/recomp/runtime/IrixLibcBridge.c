@@ -54,6 +54,8 @@ static IrixGuestAddr align_addr(IrixGuestAddr value, uint32_t align)
     return (value + mask) & ~mask;
 }
 
+static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align);
+
 static IrixGuestAllocation *find_alloc(IrixGuestAddr addr)
 {
     size_t i;
