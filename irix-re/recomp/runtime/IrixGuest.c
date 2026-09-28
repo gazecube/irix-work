@@ -2962,7 +2962,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
              * continuation (observed: 0x0b2a8300), so apply the same return
              * repair that the exact public entry receives.
              */
-            if (entry->address == 0x0b2a80acu ||
+            if ((address >= 0x0b2a80acu && address < 0x0b2a8388u) ||
+                entry->address == 0x0b2a80acu ||
                 (entry->name && strcmp(entry->name, "XmGetXmScreen") == 0))
                 irix_guest_repair_xm_screen_private(
                     rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
