@@ -333,6 +333,11 @@ if(IRIX_DEV_TREE)
                     ${CMAKE_DL_LIBS}
                     m
                 )
+                # irix_recomp_runtime has a narrow reverse callback into the
+                # statically linked libc bridge for native compatibility
+                # helpers. Export runner symbols so the dynamic loader can
+                # resolve those callbacks from the main executable.
+                set_target_properties(${_app_runner_target} PROPERTIES ENABLE_EXPORTS ON)
                 add_dependencies(irix_ecosystem ${_app_runner_target})
 
                 # Desktop bring-up shortcut: use the normal AppRunner/runtime
@@ -382,6 +387,7 @@ if(IRIX_DEV_TREE)
                         ${CMAKE_DL_LIBS}
                         m
                     )
+                    set_target_properties(irix_desktop_quick_runner PROPERTIES ENABLE_EXPORTS ON)
                 endif()
 
                 # Fast bring-up path: run the original IRIX MIPS executable
@@ -417,6 +423,7 @@ if(IRIX_DEV_TREE)
                     ${CMAKE_DL_LIBS}
                     m
                 )
+                set_target_properties(${_jit_runner_target} PROPERTIES ENABLE_EXPORTS ON)
                 add_dependencies(irix_ecosystem_jit ${_jit_runner_target})
             endforeach()
         endif()
