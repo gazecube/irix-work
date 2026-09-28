@@ -1,5 +1,9 @@
 #include "IrixMipsInterp.h"
 
+/* Runtime-private compatibility hook implemented in IrixGuest.c. */
+extern void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
+                                                IrixGuestAddr screen);
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -878,6 +882,17 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     cpu->gpr[28] =
                         (uint64_t)(int64_t)(int32_t)return_gp;
                 }
+
+                /*
+                 * XmGetXmScreen can be re-entered at recovered interior
+                 * continuations while one larger interpreter invocation is
+                 * still active.  The dispatcher never observes that edge.
+                 * Repair the returned XmScreen private block at the actual
+                 * jr $ra boundary before _XmGetPixmap executes.
+                 */
+                if (target >= 0x0b2a80acu && target < 0x0b2a8388u)
+                    irix_guest_repair_xm_screen_private(
+                        rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
 
                 /*
                  * jr $ra is not necessarily a return from this interpreter
