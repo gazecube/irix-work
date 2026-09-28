@@ -2923,17 +2923,39 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
      */
     if (entry && entry->address != address &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) {
+        uint64_t saved_s[9];
         uint64_t saved_gp = cpu->gpr[28];
+        uint64_t saved_sp = cpu->gpr[29];
+        unsigned saved_i;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
         int rc;
+
+        /*
+         * Interior callback/leaf entries are still entered through a real
+         * N32 call boundary. The interpreter may use s0-s7 and s8/fp
+         * internally, but those registers (plus sp/gp) belong to the caller
+         * when control returns. Preserving only gp here leaked interpreter
+         * state back into translated Motif callers; one observed consequence
+         * was _XmBuildResources receiving stack addresses in s1/s2 and
+         * turning them into a 0xc00d834c malloc.
+         */
+        for (saved_i = 0; saved_i < 8u; ++saved_i)
+            saved_s[saved_i] = cpu->gpr[16u + saved_i];
+        saved_s[8] = cpu->gpr[30];
+
         fprintf(stderr,
                 "IRIX interior guest call: target=0x%08x containing=0x%08x:%s -> interpreter\n",
                 address, entry->address, entry->name ? entry->name : "?");
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         rc = irix_mips_interp_call(rt, cpu, address);
-        if (!rt->trapped)
+        if (!rt->trapped) {
+            for (saved_i = 0; saved_i < 8u; ++saved_i)
+                cpu->gpr[16u + saved_i] = saved_s[saved_i];
             cpu->gpr[28] = saved_gp;
+            cpu->gpr[29] = saved_sp;
+            cpu->gpr[30] = saved_s[8];
+        }
         return rc;
     }
 
