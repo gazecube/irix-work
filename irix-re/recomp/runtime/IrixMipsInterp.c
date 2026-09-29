@@ -1170,6 +1170,44 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  * interpreting at the now-correct GP domain.
                  */
                 if (target == outer_ra) {
+                    /*
+                     * Bring-up shortcut for the Xt class/resource initializer
+                     * at 0x0f62b47c.  The hybrid call path loses its output
+                     * record pointer, but the original SGI routine's attempted
+                     * writes have shown the complete 0x14-byte record shape.
+                     * If it returns NULL, synthesize that record now and hand
+                     * the caller a valid pointer so Xt initialization can keep
+                     * moving toward the event loop.
+                     */
+                    if (address == 0x0f62b47cu &&
+                        (uint32_t)cpu->gpr[2] == 0u) {
+                        IrixGuestAddr out =
+                            irix_guest_xt_compat_alloc(rt, 0x20u);
+                        if (out && irix_guest_ptr(rt, out, 0x20u)) {
+                            unsigned i;
+                            for (i = 0; i < 0x20u; i += 4u)
+                                irix_guest_write32be(rt, out + i, 0u);
+
+                            irix_guest_write32be(rt, out + 0x00u, 0u);
+                            irix_guest_write32be(rt, out + 0x04u,
+                                (uint32_t)cpu->gpr[20]);
+                            irix_guest_write32be(rt, out + 0x08u,
+                                (uint32_t)cpu->gpr[16]);
+                            irix_guest_write32be(rt, out + 0x0cu, 0x000004c7u);
+                            irix_guest_write8(rt, out + 0x10u, 0u);
+
+                            cpu->gpr[2] =
+                                (uint64_t)(int64_t)(int32_t)out;
+                            fprintf(stderr,
+                                    "IRIX Xt bring-up return shim: "
+                                    "pc=%08x -> v0=%08x "
+                                    "[+4=%08x +8=%08x +c=000004c7]\n",
+                                    pc, out,
+                                    (uint32_t)cpu->gpr[20],
+                                    (uint32_t)cpu->gpr[16]);
+                        }
+                    }
+
                     fprintf(stderr,
                             "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
                             "gp=%08x owner_gp=%08x\n",
