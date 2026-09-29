@@ -724,14 +724,30 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
         if (existing) {
             uint32_t count = 0u;
             uint64_t bytes = 0u;
+            int valid = 0;
 
             if (irix_guest_ptr(rt, existing, 4u)) {
+                uint32_t k;
                 count = irix_guest_read32be(rt, existing);
                 bytes = ((uint64_t)count + 1u) * 4u;
-                if (count <= 4096u && bytes <= (uint64_t)SIZE_MAX &&
-                    irix_guest_ptr(rt, existing, (size_t)bytes))
-                    return;
+                if (count <= 4096u &&
+                    irix_guest_ptr(rt, existing, (size_t)bytes)) {
+                    valid = 1;
+                    for (k = 0; k < count; ++k) {
+                        IrixGuestAddr res =
+                            irix_guest_read32be(rt,
+                                existing + (k + 1u) * 4u);
+                        if (!res ||
+                            !irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE)) {
+                            valid = 0;
+                            break;
+                        }
+                    }
+                }
             }
+
+            if (valid)
+                return;
 
             fprintf(stderr,
                     "IRIX Xt callback_private repair: "
