@@ -400,11 +400,13 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * observed hybrid path that output pointer is NULL.  Treat the
              * write as an empty optional result rather than faulting.
              */
-            if (pc == 0x0f62b5d4u && a == 0u) {
+            if (pc >= 0x0f62b5d4u && pc < 0x0f62b620u &&
+                (uint32_t)cpu->gpr[rs] == 0u &&
+                a < 0x00000100u) {
                 fprintf(stderr,
                         "IRIX Xt NULL output-store repair HIT: "
-                        "pc=%08x value=%08x -> skip\n",
-                        pc, (uint32_t)cpu->gpr[rtno]);
+                        "pc=%08x rs=%u addr=%08x value=%08x -> skip\n",
+                        pc, rs, a, (uint32_t)cpu->gpr[rtno]);
                 break;
             }
 
