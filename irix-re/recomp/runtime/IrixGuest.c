@@ -417,7 +417,7 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 static IrixGuestAddr g_xt_alloc_widget_class_hint;
 static IrixGuestAddr g_xt_alloc_widget_hint;
 
-static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
+IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
 {
     IrixGuestAddr out;
     uint32_t n = (size + 7u) & ~7u;
