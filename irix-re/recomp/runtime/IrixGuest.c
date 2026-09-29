@@ -2366,38 +2366,41 @@ int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
                                            IrixGuestAddr pc)
 {
     IrixGuestAddr ext;
-    IrixGuestAddr parent;
-    uint8_t ext_type;
+    IrixGuestAddr parent = 0u;
+    IrixGuestAddr logical_parent = 0u;
 
     if (!rt || !cpu || pc != 0x0b314ffcu ||
         (uint32_t)cpu->gpr[4] != 0u)
         return 0;
 
+    /*
+     * This is the exact SGI VendorExtInitialize dereference demonstrated by
+     * the trace.  Do not require a guessed XmExtPart extensionType offset
+     * here: on this IRIX Motif build that layout assumption rejected the
+     * live object and the repair never fired.
+     *
+     * Prefer a plausible logicalParent from the secondary object when the
+     * conventional +0x1c slot contains one.  Otherwise use the live shell
+     * Widget created by Xt's allocation path.  We intentionally do not write
+     * the guessed +0x1c field in the fallback case; only repair a0 so the
+     * original SGI instruction stream can continue without corrupting an
+     * uncertain private-object layout.
+     */
     ext = (IrixGuestAddr)(uint32_t)cpu->gpr[16];
-    if (!ext || !irix_guest_ptr(rt, ext, 0x21u))
-        return 0;
+    if (ext && irix_guest_ptr(rt, ext, 0x20u))
+        logical_parent = irix_guest_read32be(rt, ext + 0x1cu);
 
-    ext_type = irix_guest_read8(rt, ext + 0x20u);
-    if (ext_type != 3u)
-        return 0;
-
-    parent = irix_guest_read32be(rt, ext + 0x1cu);
-    if (!irix_guest_looks_like_widget(rt, parent)) {
-        if (!irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
-            return 0;
-
+    if (irix_guest_looks_like_widget(rt, logical_parent))
+        parent = logical_parent;
+    else if (irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
         parent = g_xt_alloc_widget_hint;
-        irix_guest_write32be(rt, ext + 0x1cu, parent);
-        fprintf(stderr,
-                "IRIX VendorExt logicalParent repair: "
-                "ext=%08x type=%u parent=%08x\n",
-                ext, (unsigned)ext_type, parent);
-    } else {
-        fprintf(stderr,
-                "IRIX VendorExt extParent register repair: "
-                "ext=%08x type=%u parent=%08x\n",
-                ext, (unsigned)ext_type, parent);
-    }
+    else
+        return 0;
+
+    fprintf(stderr,
+            "IRIX VendorExt extParent repair: "
+            "ext=%08x logical=%08x shell=%08x -> a0=%08x\n",
+            ext, logical_parent, g_xt_alloc_widget_hint, parent);
 
     cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)parent;
     cpu->gpr[0] = 0;
