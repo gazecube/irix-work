@@ -41,12 +41,22 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      * Any load through those values would fault in low unmapped memory.
      *
      * Keep this intentionally fenced to the observed Xt resource-processing
-     * text window, small nonzero bases, and genuinely unmapped addresses.
-     * Returning zero matches the existing "missing/empty" handling that
-     * follows these loads and avoids one-PC-at-a-time whack-a-mole.
+     * text window.  The same SGI resource flag byte (+0x14) is also consumed
+     * by libXm default/resource helpers, so accept that exact LBU shape across
+     * libXm as well.  Small nonzero bases and genuinely unmapped addresses are
+     * still required.  Returning zero matches the existing missing/empty
+     * handling and avoids one-PC-at-a-time whack-a-mole.
      */
-    if (pc < 0x0f6154e8u || pc >= 0x0f616820u)
-        return 0;
+    {
+        int in_xt_resource_window =
+            (pc >= 0x0f6154e8u && pc < 0x0f616820u);
+        int in_xm_resource_flag_path =
+            (pc >= 0x0b260000u && pc < 0x0b400000u &&
+             op == 0x24u && (uint32_t)(addr - base) == 0x14u);
+
+        if (!in_xt_resource_window && !in_xm_resource_flag_path)
+            return 0;
+    }
     if (!base || base >= 0x00010000u)
         return 0;
     if (irix_guest_ptr(rt, addr, 1u))
