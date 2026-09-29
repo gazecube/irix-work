@@ -42,31 +42,6 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     rt->current_pc = pc;
     cpu->pc = pc;
 
-    /*
-     * SGI libSgm list/table walk compatibility repair.
-     *
-     * This instruction can execute through exec_delay(), not only through
-     * the interpreter's main loop.  Keep the repair here so both paths see
-     * it.  At 0x0b208148 the original stream is:
-     *
-     *   lw  a2,0(a0)
-     *   beq a2,zero,...
-     *
-     * and the demonstrated hybrid state has a0 == NULL.  The immediately
-     * following branch already defines NULL/empty as a valid termination
-     * case, so synthesize that load result rather than faulting at address 0.
-     */
-    if (pc == 0x0b208148u && (uint32_t)cpu->gpr[4] == 0u) {
-        fprintf(stderr,
-                "IRIX libSgm NULL table repair: "
-                "pc=%08x a0=%08x a3=%08x -> a2=00000000\n",
-                pc, (uint32_t)cpu->gpr[4],
-                (uint32_t)cpu->gpr[7]);
-        cpu->gpr[6] = 0u;
-        cpu->gpr[0] = 0u;
-        return 0;
-    }
-
     if (insn == 0u)
         return 0;
 
@@ -307,6 +282,26 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x23:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+
+            /*
+             * Exact SGI libSgm empty-table load observed at 0x0b208148.
+             * Put the compatibility case at the actual LW execution point,
+             * after effective-address calculation.  This makes it impossible
+             * for a main-loop/delay-slot dispatch distinction to bypass it.
+             *
+             * The following instruction branches on the loaded value being
+             * zero, so a NULL effective address represents the empty/end case
+             * that this routine already knows how to handle.
+             */
+            if (pc == 0x0b208148u && a == 0u && rtno == 6u) {
+                fprintf(stderr,
+                        "IRIX libSgm NULL LW repair HIT: "
+                        "pc=%08x rs=%u rt=%u imm=%d a=%08x -> a2=00000000\n",
+                        pc, rs, rtno, (int)imm, a);
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
+
             cpu->gpr[rtno] = sx32(irix_guest_read32be(rt, a));
             break;
         case 0x24:
