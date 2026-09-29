@@ -53,7 +53,7 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
         int in_xt_resource_window =
             (pc >= 0x0f614000u && pc < 0x0f619300u);
         int in_xm_resource_flag_path =
-            (pc >= 0x0b260000u && pc < 0x0b400000u &&
+            (pc >= 0x0b1b0000u && pc < 0x0b400000u &&
              op == 0x24u && (uint32_t)(addr - base) == 0x14u);
 
         if (!in_xt_resource_window && !in_xm_resource_flag_path)
@@ -929,98 +929,20 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 int irix_mips_interp_should_force(IrixGuestAddr address)
 {
     /*
-     * SGI libSgm helper containing 0x0b208148 currently translates into a
-     * native path that faults before the interpreter's exact NULL-LW repair
-     * can run.  Force only this demonstrated helper through original MIPS so
-     * the repair at the real LW execution point applies.
+     * Desktop bring-up policy for SGI resource processing.
+     *
+     * The same malformed small resource tokens have now appeared across a
+     * chain of adjacent Xt, libXm and libSgm helpers.  The original MIPS
+     * interpreter already has bounded compatibility for these loads, while
+     * translated helpers fault before that layer can see them.  Force the
+     * demonstrated resource-processing regions as regions rather than adding
+     * one function entry after another.
      */
-    if (address == 0x0b208098u)
-        return 1;
-
-    /*
-     * libSgm helper at 0x0b2082f4 contains the same malformed resource flag
-     * access pattern at 0x0b208310 (LBU +0x14 from small token 0x4ac).
-     * Force this exact helper through original MIPS so the generalized
-     * resource-load repair can service it.
-     */
-    if (address == 0x0b2082f4u)
-        return 1;
-
-    /*
-     * Xt _XtGetResources currently traps in translated code at 0x0f6166b4
-     * with its return-address/base register state corrupted.  Keep the exact
-     * SGI function on original MIPS while bring-up continues; this also lets
-     * us distinguish a translator ABI bug from bad Xt data.
-     */
-    if (address == 0x0f616598u)
-        return 1;
-
-    /*
-     * libXm resource/default helper containing the failing +0x14 resource
-     * flag load at 0x0b28d60c.  Keep this machine function on original MIPS
-     * so the malformed-resource compatibility layer in exec_simple() can
-     * actually see and repair the access.
-     */
-    if (address == 0x0b28d4ccu)
-        return 1;
-
-    /*
-     * libXm helper at 0x0b2becac contains the same malformed resource flag
-     * access at 0x0b2becc0 (LBU +0x14 from the small token 0x4ac).  Force
-     * this exact helper through original MIPS so the existing generalized
-     * libXm resource-flag repair can service it.
-     */
-    if (address == 0x0b2becacu)
-        return 1;
-
-    /*
-     * _XmPrimitiveTopShadowPixmapDefault contains the same malformed
-     * resource-flag load shape at 0x0b28d1ec (base 0x000004ac, +0x14).
-     * Force this exact default proc through original MIPS so the existing
-     * malformed-resource repair can zero that flag instead of faulting.
-     */
-    if (address == 0x0b28d1b4u)
-        return 1;
-
-    /*
-     * XtWidgetToApplicationContext / XtFree-adjacent helper containing the
-     * same malformed +0x14 resource-flag load at 0x0f614400.  Force this
-     * exact function through original MIPS so the generalized Xt resource
-     * compatibility layer can service it too.
-     */
-    if (address == 0x0f6143ecu)
-        return 1;
-
-    /*
-     * _XtConvert contains another consumer of the same malformed resource
-     * flag byte at 0x0f618a9c.  Keep the exact function on original MIPS so
-     * the generalized low-pointer repair can service conversion-time reads.
-     */
-    if (address == 0x0f618754u)
-        return 1;
-
-    /*
-     * Xt class/resource initializer containing the transient NULL output
-     * store at 0x0f62b5d4.  Keep this exact function on original MIPS so
-     * bring-up compatibility can skip that demonstrated empty-output write.
-     */
-    if (address == 0x0f62b47cu)
-        return 1;
-
-    /*
-     * Adjacent Xt class/resource merge helper containing the malformed
-     * low-pointer dereference at 0x0f62b6a8.  Force it through original MIPS
-     * so the bounded low-pointer LW compatibility repair can service it.
-     */
-    if (address == 0x0f62b67cu)
-        return 1;
-
-    /*
-     * Neighboring Xt resource helper containing the direct low-token
-     * dereference at 0x0f62b230 (observed s0=0x4ac).  Force it through
-     * original MIPS so the bounded low-pointer LW repair can service it.
-     */
-    if (address == 0x0f62b1f0u)
+    if ((address >= 0x0f614000u && address < 0x0f619300u) ||
+        (address >= 0x0f62b1f0u && address < 0x0f62b758u) ||
+        (address >= 0x0b208000u && address < 0x0b208600u) ||
+        (address >= 0x0b28d000u && address < 0x0b28d700u) ||
+        (address >= 0x0b2bec00u && address < 0x0b2bee00u))
         return 1;
 
     static int init;
