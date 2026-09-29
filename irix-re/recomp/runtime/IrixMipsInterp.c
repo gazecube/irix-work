@@ -849,6 +849,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
     if (address == 0x0f616598u)
         return 1;
 
+    /*
+     * libXm resource/default helper containing the failing +0x14 resource
+     * flag load at 0x0b28d60c.  Keep this machine function on original MIPS
+     * so the malformed-resource compatibility layer in exec_simple() can
+     * actually see and repair the access.
+     */
+    if (address == 0x0b28d4ccu)
+        return 1;
+
     static int init;
     static IrixGuestAddr addr[64];
     static size_t count;
