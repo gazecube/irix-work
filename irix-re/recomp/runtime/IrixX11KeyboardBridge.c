@@ -221,7 +221,7 @@ static void bridge_XKeysymToString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XStringToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *s = (const char *)irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], 1);
+    const char *s = irix_guest_cstr(rt, (uint32_t)cpu->gpr[4], 65536u);
     cpu->gpr[2] = s ? (uint32_t)XStringToKeysym(s) : 0;
 }
 
