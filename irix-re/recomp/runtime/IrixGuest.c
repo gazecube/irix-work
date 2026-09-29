@@ -405,6 +405,17 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 #define IRIX_XT_COMPAT_SIZE 0x00100000u
 #define IRIX_XT_RESOURCE_SIZE 28u
 
+/*
+ * Current Xt shell/widget allocation class hint.
+ *
+ * SGI Motif's allocation proc is recovered as an interior entry.  By the time
+ * that interior range is dispatched, its incoming a0 is not always the
+ * original WidgetClass argument anymore.  XtAppCreateShell still gives us the
+ * authoritative class in a2, so retain it for the duration of the shell
+ * construction and use it only as a narrowly-scoped allocation fallback.
+ */
+static IrixGuestAddr g_xt_alloc_widget_class_hint;
+
 static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
 {
     IrixGuestAddr out;
@@ -2238,6 +2249,17 @@ static int irix_guest_looks_like_widget(IrixGuestRuntime *rt,
     return 1;
 }
 
+static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
+                                              IrixGuestAddr widget_class)
+{
+    uint32_t wsize;
+
+    if (!widget_class || !irix_guest_ptr(rt, widget_class, 12u))
+        return 0;
+    wsize = irix_guest_read32be(rt, widget_class + 0x08u);
+    return wsize != 0u && wsize <= 0x01000000u;
+}
+
 static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
                                              IrixGuestCpu *cpu,
                                              IrixGuestAddr caller_sp,
@@ -2959,6 +2981,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             IrixGuestAddr trace_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             if (xm_display_shell_depth++ == 0u)
                 xm_display_bootstrap_widget = 0u;
+            g_xt_alloc_widget_class_hint =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[6];
             fprintf(stderr,
                     "IRIX XmDisplay shell bootstrap begin depth=%u "
                     "pc=%08x sp=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
@@ -3021,8 +3045,10 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     irix_guest_read32be(rt, trace_sp + 0x20u),
                     irix_guest_read32be(rt, trace_sp + 0x24u),
                     irix_guest_read32be(rt, trace_sp + 0x28u));
-            if (!xm_display_shell_depth)
+            if (!xm_display_shell_depth) {
                 xm_display_bootstrap_widget = 0u;
+                g_xt_alloc_widget_class_hint = 0u;
+            }
         }
 
         /*
@@ -3107,6 +3133,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t saved_s[9];
         uint64_t saved_gp = cpu->gpr[28];
         uint64_t saved_sp = cpu->gpr[29];
+        uint64_t saved_ra = cpu->gpr[31];
         IrixGuestAddr saved_a0 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         unsigned saved_i;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
@@ -3141,10 +3168,24 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
              * 0x0b3f0890, causing the fallback's widget-size guard to reject
              * the repair and leaving sp+0x20 NULL.
              */
-            if ((uint32_t)cpu->gpr[31] == 0x0f62b578u)
+            if ((uint32_t)saved_ra == 0x0f62b578u ||
+                (uint32_t)cpu->gpr[31] == 0x0f62b578u) {
+                IrixGuestAddr alloc_class = saved_a0;
+
+                if (!irix_guest_looks_like_widget_class(rt, alloc_class) &&
+                    irix_guest_looks_like_widget_class(
+                        rt, g_xt_alloc_widget_class_hint)) {
+                    fprintf(stderr,
+                            "IRIX xtWidgetAlloc class repair: "
+                            "a0=%08x -> shell-class=%08x\n",
+                            alloc_class, g_xt_alloc_widget_class_hint);
+                    alloc_class = g_xt_alloc_widget_class_hint;
+                }
+
                 (void)irix_guest_repair_xt_widget_alloc(
                     rt, cpu, (IrixGuestAddr)(uint32_t)saved_sp,
-                    saved_a0);
+                    alloc_class);
+            }
 
             /*
              * XmGetXmScreen spans 0x0b2a80ac..0x0b2a8388 in this recovered
