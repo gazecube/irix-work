@@ -395,6 +395,20 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
+             * Xt class/resource bring-up: this path loads a caller scratch
+             * output pointer from sp+0x20 and then stores through it.  In the
+             * observed hybrid path that output pointer is NULL.  Treat the
+             * write as an empty optional result rather than faulting.
+             */
+            if (pc == 0x0f62b5d4u && a == 0u) {
+                fprintf(stderr,
+                        "IRIX Xt NULL output-store repair HIT: "
+                        "pc=%08x value=%08x -> skip\n",
+                        pc, (uint32_t)cpu->gpr[rtno]);
+                break;
+            }
+
+            /*
              * Exact SGI libSgm empty-table return-store observed after the
              * 0x0b208148 NULL table walk is handled.  The helper returns via:
              *
@@ -846,6 +860,14 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
      * the generalized low-pointer repair can service conversion-time reads.
      */
     if (address == 0x0f618754u)
+        return 1;
+
+    /*
+     * Xt class/resource initializer containing the transient NULL output
+     * store at 0x0f62b5d4.  Keep this exact function on original MIPS so
+     * bring-up compatibility can skip that demonstrated empty-output write.
+     */
+    if (address == 0x0f62b47cu)
         return 1;
 
     static int init;
