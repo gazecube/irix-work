@@ -26,6 +26,39 @@ static int16_t sx16(uint16_t v)
     return (int16_t)v;
 }
 
+static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
+                                         IrixGuestAddr pc,
+                                         IrixGuestAddr base,
+                                         IrixGuestAddr addr,
+                                         unsigned op,
+                                         unsigned rtno)
+{
+    /*
+     * Bring-up compatibility for malformed SGI Xt resource entries.
+     *
+     * The failing resource machinery repeatedly propagates small integer
+     * values (for example 0x000004ac) where an XtResource pointer is expected.
+     * Any load through those values would fault in low unmapped memory.
+     *
+     * Keep this intentionally fenced to the observed Xt resource-processing
+     * text window, small nonzero bases, and genuinely unmapped addresses.
+     * Returning zero matches the existing "missing/empty" handling that
+     * follows these loads and avoids one-PC-at-a-time whack-a-mole.
+     */
+    if (pc < 0x0f6154e8u || pc >= 0x0f616820u)
+        return 0;
+    if (!base || base >= 0x00010000u)
+        return 0;
+    if (irix_guest_ptr(rt, addr, 1u))
+        return 0;
+
+    fprintf(stderr,
+            "IRIX Xt malformed resource load repair HIT: "
+            "pc=%08x op=%02x rt=%u base=%08x addr=%08x -> zero\n",
+            pc, op, rtno, base, addr);
+    return 1;
+}
+
 static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                        IrixGuestAddr pc, uint32_t insn)
 {
@@ -274,11 +307,19 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x20:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            cpu->gpr[rtno] = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, a);
             break;
         case 0x21:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            cpu->gpr[rtno] = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, a);
             break;
         case 0x23:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -302,7 +343,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 break;
             }
 
-            cpu->gpr[rtno] = sx32(irix_guest_read32be(rt, a));
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = sx32(irix_guest_read32be(rt, a));
             break;
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -341,11 +386,19 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x25:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            cpu->gpr[rtno] = irix_guest_read16be(rt, a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = irix_guest_read16be(rt, a);
             break;
         case 0x27:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            cpu->gpr[rtno] = irix_guest_read32be(rt, a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = irix_guest_read32be(rt, a);
             break;
         case 0x28:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -384,7 +437,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x37:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            cpu->gpr[rtno] = irix_guest_read64be(rt, a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
+                cpu->gpr[rtno] = 0u;
+            else
+                cpu->gpr[rtno] = irix_guest_read64be(rt, a);
             break;
         case 0x3f:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
