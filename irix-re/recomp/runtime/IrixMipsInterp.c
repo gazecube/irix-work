@@ -1203,40 +1203,65 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  */
                 if (target == outer_ra) {
                     /*
-                     * Bring-up shortcut for the Xt class/resource initializer
-                     * at 0x0f62b47c.  The hybrid call path loses its output
-                     * record pointer, but the original SGI routine's attempted
-                     * writes have shown the complete 0x14-byte record shape.
-                     * If it returns NULL, synthesize that record now and hand
-                     * the caller a valid pointer so Xt initialization can keep
-                     * moving toward the event loop.
+                     * Bring-up repair for the Xt widget/class initializer at
+                     * 0x0f62b47c.
+                     *
+                     * The generated caller at 0x0f62b7f4 treats v0 as a
+                     * Widget immediately: it reads v0+4 as WidgetClass and
+                     * later passes v0 to _XtGetResources/default procedures.
+                     * The hybrid path can return either NULL OR a non-NULL
+                     * caller-stack scratch/resource record here.  The latter
+                     * used to evade the NULL-only shim and produced the
+                     * repeated 0x4ac faults: 0x7fdfdf90+4 contained the Xrm
+                     * token 0x4ac, which Motif then tried to use as a
+                     * WidgetClass pointer.
+                     *
+                     * Validate the returned object structurally.  A real
+                     * Widget must be mapped and its +4 WidgetClass pointer
+                     * must itself be mapped far enough for the CoreClassPart
+                     * fields consumed immediately downstream.  Synthesize
+                     * the already-observed SGI record for any invalid return.
                      */
-                    if (address == 0x0f62b47cu &&
-                        (uint32_t)cpu->gpr[2] == 0u) {
-                        IrixGuestAddr out =
-                            irix_guest_xt_compat_alloc(rt, 0x20u);
-                        if (out && irix_guest_ptr(rt, out, 0x20u)) {
-                            unsigned i;
-                            for (i = 0; i < 0x20u; i += 4u)
-                                irix_guest_write32be(rt, out + i, 0u);
+                    if (address == 0x0f62b47cu) {
+                        IrixGuestAddr ret =
+                            (IrixGuestAddr)(uint32_t)cpu->gpr[2];
+                        IrixGuestAddr cls = 0u;
+                        int valid_widget = 0;
 
-                            irix_guest_write32be(rt, out + 0x00u, 0u);
-                            irix_guest_write32be(rt, out + 0x04u,
-                                (uint32_t)cpu->gpr[20]);
-                            irix_guest_write32be(rt, out + 0x08u,
-                                (uint32_t)cpu->gpr[16]);
-                            irix_guest_write32be(rt, out + 0x0cu, 0x000004c7u);
-                            irix_guest_write8(rt, out + 0x10u, 0u);
+                        if (ret && irix_guest_ptr(rt, ret, 12u)) {
+                            cls = irix_guest_read32be(rt, ret + 4u);
+                            if (cls && irix_guest_ptr(rt, cls, 0x74u))
+                                valid_widget = 1;
+                        }
 
-                            cpu->gpr[2] =
-                                (uint64_t)(int64_t)(int32_t)out;
-                            fprintf(stderr,
-                                    "IRIX Xt bring-up return shim: "
-                                    "pc=%08x -> v0=%08x "
-                                    "[+4=%08x +8=%08x +c=000004c7]\n",
-                                    pc, out,
-                                    (uint32_t)cpu->gpr[20],
+                        if (!valid_widget) {
+                            IrixGuestAddr out =
+                                irix_guest_xt_compat_alloc(rt, 0x20u);
+                            if (out && irix_guest_ptr(rt, out, 0x20u)) {
+                                unsigned i;
+                                for (i = 0; i < 0x20u; i += 4u)
+                                    irix_guest_write32be(rt, out + i, 0u);
+
+                                irix_guest_write32be(rt, out + 0x00u, 0u);
+                                irix_guest_write32be(rt, out + 0x04u,
+                                    (uint32_t)cpu->gpr[20]);
+                                irix_guest_write32be(rt, out + 0x08u,
                                     (uint32_t)cpu->gpr[16]);
+                                irix_guest_write32be(rt, out + 0x0cu,
+                                    0x000004c7u);
+                                irix_guest_write8(rt, out + 0x10u, 0u);
+
+                                cpu->gpr[2] =
+                                    (uint64_t)(int64_t)(int32_t)out;
+                                fprintf(stderr,
+                                        "IRIX Xt bring-up return shim: "
+                                        "pc=%08x bad_v0=%08x bad_cls=%08x "
+                                        "-> v0=%08x "
+                                        "[+4=%08x +8=%08x +c=000004c7]\n",
+                                        pc, ret, cls, out,
+                                        (uint32_t)cpu->gpr[20],
+                                        (uint32_t)cpu->gpr[16]);
+                            }
                         }
                     }
 
