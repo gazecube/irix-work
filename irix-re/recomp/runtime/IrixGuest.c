@@ -442,15 +442,23 @@ void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
                                          IrixGuestAddr screen)
 {
     IrixGuestAddr priv;
+    IrixGuestAddr old_priv;
 
     /*
      * SGI Motif XmScreen carries a private pointer at +0x104. The original
      * instance-initialize path allocates an 8-byte zeroed block there.
      * Recovered/interpreted continuation entries can bypass the dispatcher
      * hook that used to repair only the public XmGetXmScreen entry.
+     *
+     * Do not treat merely-nonzero as initialized. Hybrid ABI damage can leave
+     * a stack token or stale scalar in pointer fields. Accept an existing
+     * private block only when all 8 bytes are actually guest-mapped.
      */
-    if (!screen || !irix_guest_ptr(rt, screen, 0x108u) ||
-        irix_guest_read32be(rt, screen + 0x104u) != 0u)
+    if (!screen || !irix_guest_ptr(rt, screen, 0x108u))
+        return;
+
+    old_priv = irix_guest_read32be(rt, screen + 0x104u);
+    if (old_priv && irix_guest_ptr(rt, old_priv, 8u))
         return;
 
     priv = irix_guest_xt_compat_alloc(rt, 8u);
@@ -461,8 +469,8 @@ void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
     irix_guest_write32be(rt, priv + 4u, 0u);
     irix_guest_write32be(rt, screen + 0x104u, priv);
     fprintf(stderr,
-            "IRIX XmScreen repair: screen=%08x private=%08x\n",
-            screen, priv);
+            "IRIX XmScreen repair: screen=%08x old_private=%08x private=%08x\n",
+            screen, old_priv, priv);
 }
 
 static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
@@ -710,8 +718,28 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
      * callbacks...].  If the resource list was already repaired by an earlier
      * invocation, leave an existing callback table alone.
      */
-    if (irix_guest_read32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE))
-        return;
+    {
+        IrixGuestAddr existing =
+            irix_guest_read32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE);
+        if (existing) {
+            uint32_t count = 0u;
+            uint64_t bytes = 0u;
+
+            if (irix_guest_ptr(rt, existing, 4u)) {
+                count = irix_guest_read32be(rt, existing);
+                bytes = ((uint64_t)count + 1u) * 4u;
+                if (count <= 4096u && bytes <= (uint64_t)SIZE_MAX &&
+                    irix_guest_ptr(rt, existing, (size_t)bytes))
+                    return;
+            }
+
+            fprintf(stderr,
+                    "IRIX Xt callback_private repair: "
+                    "class=%08x invalid=%08x count=%u -> rebuild\n",
+                    wc, existing, count);
+            irix_guest_write32be(rt, wc + IRIX_XT_CALLBACK_PRIVATE, 0u);
+        }
+    }
 
     /*
      * If resources is already an XrmResourceList[], it is the merged class
