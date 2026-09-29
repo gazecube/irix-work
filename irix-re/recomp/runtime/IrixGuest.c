@@ -2956,11 +2956,28 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
 
         if (xm_display_shell_call) {
+            IrixGuestAddr trace_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             if (xm_display_shell_depth++ == 0u)
                 xm_display_bootstrap_widget = 0u;
             fprintf(stderr,
-                    "IRIX XmDisplay shell bootstrap begin depth=%u\n",
-                    xm_display_shell_depth);
+                    "IRIX XmDisplay shell bootstrap begin depth=%u "
+                    "pc=%08x sp=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+                    "s0-s3=%08x,%08x,%08x,%08x "
+                    "stk10-28=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    xm_display_shell_depth, caller_pc, trace_sp,
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    irix_guest_read32be(rt, trace_sp + 0x10u),
+                    irix_guest_read32be(rt, trace_sp + 0x14u),
+                    irix_guest_read32be(rt, trace_sp + 0x18u),
+                    irix_guest_read32be(rt, trace_sp + 0x1cu),
+                    irix_guest_read32be(rt, trace_sp + 0x20u),
+                    irix_guest_read32be(rt, trace_sp + 0x24u),
+                    irix_guest_read32be(rt, trace_sp + 0x28u));
         }
 
         entry->function(rt, cpu);
@@ -2982,11 +2999,28 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
 
         if (xm_display_shell_call) {
+            IrixGuestAddr trace_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             if (xm_display_shell_depth)
                 --xm_display_shell_depth;
             fprintf(stderr,
-                    "IRIX XmDisplay shell bootstrap end depth=%u widget=%08x\n",
-                    xm_display_shell_depth, xm_display_bootstrap_widget);
+                    "IRIX XmDisplay shell bootstrap end depth=%u widget=%08x "
+                    "v0=%08x pc=%08x sp=%08x "
+                    "a0-a3=%08x,%08x,%08x,%08x "
+                    "s0-s3=%08x,%08x,%08x,%08x "
+                    "stk10-28=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    xm_display_shell_depth, xm_display_bootstrap_widget,
+                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->pc, trace_sp,
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    irix_guest_read32be(rt, trace_sp + 0x10u),
+                    irix_guest_read32be(rt, trace_sp + 0x14u),
+                    irix_guest_read32be(rt, trace_sp + 0x18u),
+                    irix_guest_read32be(rt, trace_sp + 0x1cu),
+                    irix_guest_read32be(rt, trace_sp + 0x20u),
+                    irix_guest_read32be(rt, trace_sp + 0x24u),
+                    irix_guest_read32be(rt, trace_sp + 0x28u));
             if (!xm_display_shell_depth)
                 xm_display_bootstrap_widget = 0u;
         }
