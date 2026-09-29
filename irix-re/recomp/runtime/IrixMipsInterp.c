@@ -710,6 +710,15 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
 int irix_mips_interp_should_force(IrixGuestAddr address)
 {
+    /*
+     * SGI libSgm helper containing 0x0b208148 currently translates into a
+     * native path that faults before the interpreter's exact NULL-LW repair
+     * can run.  Force only this demonstrated helper through original MIPS so
+     * the repair at the real LW execution point applies.
+     */
+    if (address == 0x0b208098u)
+        return 1;
+
     static int init;
     static IrixGuestAddr addr[64];
     static size_t count;
