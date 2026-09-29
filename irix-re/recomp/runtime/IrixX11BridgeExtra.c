@@ -180,8 +180,19 @@ static void sync_gc_shadow(size_t i)
     a = IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
     wr32(g_x11.rt, a + 0u, 0u);
     wr32(g_x11.rt, a + 4u, (uint32_t)gc->gid);
-    wr32(g_x11.rt, a + 8u, (uint32_t)gc->rects);
-    wr32(g_x11.rt, a + 12u, (uint32_t)gc->dashes);
+
+    /*
+     * Xlib's private GC contains host pointers (rects/dashes).  Never expose
+     * those addresses through the 32-bit IRIX GC shadow: truncating a host
+     * pointer creates a plausible-looking but unmapped guest pointer, and SGI
+     * Xlib/Motif code is allowed to inspect the private GC prefix.
+     *
+     * We do not currently mirror host-side rectangle/dash backing stores into
+     * guest memory, so advertise them as absent.  The public GC values below
+     * remain synchronized through their scalar/XID representation.
+     */
+    wr32(g_x11.rt, a + 8u, 0u);
+    wr32(g_x11.rt, a + 12u, 0u);
     wr32(g_x11.rt, a + 16u, (uint32_t)gc->dirty);
     write_xgcvalues(g_x11.rt, a + 20u, &gc->values);
 }
