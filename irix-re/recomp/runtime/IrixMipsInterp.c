@@ -400,7 +400,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * observed hybrid path that output pointer is NULL.  Treat the
              * write as an empty optional result rather than faulting.
              */
-            if (pc >= 0x0f62b5d4u && pc < 0x0f62b620u &&
+            if (pc >= 0x0f62b5d4u && pc < 0x0f62b67cu &&
                 (uint32_t)cpu->gpr[rs] == 0u &&
                 a < 0x00000100u) {
                 fprintf(stderr,
