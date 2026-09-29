@@ -306,6 +306,31 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+
+            /*
+             * SGI Xt _XtGetResources compatibility repair.
+             *
+             * The original MIPS path itself reaches 0x0f6166b4 with r31
+             * holding a small malformed resource-table value (observed
+             * 0x000004ac), then executes:
+             *
+             *   lbu r31,0x14(r31)
+             *
+             * which faults at 0x000004c0.  This is therefore guest resource
+             * state damage, not translated-register corruption.  For this one
+             * proven load, treat an unmapped resource pointer as an empty/zero
+             * byte and let Xt continue through its own normal logic.
+             */
+            if (pc == 0x0f6166b4u && rtno == 31u &&
+                !irix_guest_ptr(rt, a, 1u)) {
+                fprintf(stderr,
+                        "IRIX XtGetResources bad resource-byte repair HIT: "
+                        "pc=%08x base=%08x addr=%08x -> ra=00000000\n",
+                        pc, (uint32_t)cpu->gpr[rs], a);
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
+
             cpu->gpr[rtno] = irix_guest_read8(rt, a);
             break;
         case 0x25:
