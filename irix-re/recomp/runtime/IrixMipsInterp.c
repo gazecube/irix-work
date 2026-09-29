@@ -49,7 +49,7 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      */
     {
         int in_xt_resource_window =
-            (pc >= 0x0f6154e8u && pc < 0x0f616820u);
+            (pc >= 0x0f614000u && pc < 0x0f616820u);
         int in_xm_resource_flag_path =
             (pc >= 0x0b260000u && pc < 0x0b400000u &&
              op == 0x24u && (uint32_t)(addr - base) == 0x14u);
@@ -829,6 +829,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
      * actually see and repair the access.
      */
     if (address == 0x0b28d4ccu)
+        return 1;
+
+    /*
+     * XtWidgetToApplicationContext / XtFree-adjacent helper containing the
+     * same malformed +0x14 resource-flag load at 0x0f614400.  Force this
+     * exact function through original MIPS so the generalized Xt resource
+     * compatibility layer can service it too.
+     */
+    if (address == 0x0f6143ecu)
         return 1;
 
     static int init;
