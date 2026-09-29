@@ -356,6 +356,27 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
+             * Xt bring-up: the class/resource merge path can propagate small
+             * integer tokens where a resource/class pointer is expected.
+             * We already repair the +0x14 flag loads; this later initializer
+             * path dereferences +0x60 from the same kind of tiny value
+             * (observed a2=0x1f -> fault 0x7f at 0x0f62b6a8).
+             * Treat low, unmapped bases in this tight Xt window as an empty
+             * pointer/result and return zero for the load.
+             */
+            if (pc >= 0x0f62b67cu && pc < 0x0f62b758u &&
+                (uint32_t)cpu->gpr[rs] != 0u &&
+                (uint32_t)cpu->gpr[rs] < 0x00010000u &&
+                !irix_guest_ptr(rt, a, 4u)) {
+                fprintf(stderr,
+                        "IRIX Xt malformed low-pointer LW repair HIT: "
+                        "pc=%08x rs=%u base=%08x addr=%08x -> zero\n",
+                        pc, rs, (uint32_t)cpu->gpr[rs], a);
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
+
+            /*
              * Motif VendorExtInitialize reaches 0x0b314ffc through recovered
              * interior/delay-slot control flow, which can bypass the outer
              * interpreter-loop repair hook.  Apply the existing extParent
