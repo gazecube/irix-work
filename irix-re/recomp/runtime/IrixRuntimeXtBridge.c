@@ -8,27 +8,7 @@ static IrixGuestRuntime *g_rt;
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    const char *s;
-    size_t i;
-
-    if (!addr)
-        return NULL;
-    s = (const char *)irix_guest_ptr(rt, addr, 1u);
-    if (!s)
-        return NULL;
-
-    /*
-     * Do not hand an unterminated guest mapping to host Xt.
-     * A 64K ceiling is far beyond any sane Xt diagnostic string.
-     */
-    for (i = 0; i < 65536u; ++i) {
-        const char *p = (const char *)irix_guest_ptr(rt, addr + (IrixGuestAddr)i, 1u);
-        if (!p)
-            return NULL;
-        if (*p == '\0')
-            return s;
-    }
-    return NULL;
+    return irix_guest_cstr(rt, addr, 65536u);
 }
 
 static void bridge_XtToolkitInitialize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
