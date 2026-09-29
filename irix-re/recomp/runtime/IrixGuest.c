@@ -2394,8 +2394,48 @@ int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
         parent = logical_parent;
     else if (irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
         parent = g_xt_alloc_widget_hint;
-    else
-        return 0;
+    else {
+        /*
+         * Bring-up fallback for recovered VendorExtInitialize interiors.
+         * The canonical shell hint can be cleared before this late Motif path
+         * is revisited.  Prefer live widget-shaped saved registers from the
+         * surrounding SGI frame rather than dying on extParent == NULL.
+         */
+        static const unsigned saved_candidates[] = { 23u, 22u, 20u, 19u, 18u };
+        size_t i;
+
+        for (i = 0; i < sizeof(saved_candidates) / sizeof(saved_candidates[0]); ++i) {
+            IrixGuestAddr candidate =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[saved_candidates[i]];
+            if (irix_guest_looks_like_widget(rt, candidate)) {
+                parent = candidate;
+                fprintf(stderr,
+                        "IRIX VendorExt bring-up fallback: "
+                        "using r%u=%08x as extParent\n",
+                        saved_candidates[i], candidate);
+                break;
+            }
+        }
+
+        if (!parent) {
+            IrixGuestAddr a3 =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+            if (a3 && irix_guest_ptr(rt, a3, 0x18u)) {
+                IrixGuestAddr candidate =
+                    irix_guest_read32be(rt, a3 + 0x10u);
+                if (irix_guest_looks_like_widget(rt, candidate)) {
+                    parent = candidate;
+                    fprintf(stderr,
+                            "IRIX VendorExt bring-up fallback: "
+                            "using a3+0x10=%08x as extParent\n",
+                            candidate);
+                }
+            }
+        }
+
+        if (!parent)
+            return 0;
+    }
 
     fprintf(stderr,
             "IRIX VendorExt extParent repair: "
