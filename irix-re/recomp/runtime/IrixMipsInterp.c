@@ -42,6 +42,31 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     rt->current_pc = pc;
     cpu->pc = pc;
 
+    /*
+     * SGI libSgm list/table walk compatibility repair.
+     *
+     * This instruction can execute through exec_delay(), not only through
+     * the interpreter's main loop.  Keep the repair here so both paths see
+     * it.  At 0x0b208148 the original stream is:
+     *
+     *   lw  a2,0(a0)
+     *   beq a2,zero,...
+     *
+     * and the demonstrated hybrid state has a0 == NULL.  The immediately
+     * following branch already defines NULL/empty as a valid termination
+     * case, so synthesize that load result rather than faulting at address 0.
+     */
+    if (pc == 0x0b208148u && (uint32_t)cpu->gpr[4] == 0u) {
+        fprintf(stderr,
+                "IRIX libSgm NULL table repair: "
+                "pc=%08x a0=%08x a3=%08x -> a2=00000000\n",
+                pc, (uint32_t)cpu->gpr[4],
+                (uint32_t)cpu->gpr[7]);
+        cpu->gpr[6] = 0u;
+        cpu->gpr[0] = 0u;
+        return 0;
+    }
+
     if (insn == 0u)
         return 0;
 
@@ -820,34 +845,6 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          */
         if (pc == 0x0b314ffcu)
             (void)irix_guest_repair_xm_vendor_ext_parent(rt, cpu, pc);
-
-        /*
-         * SGI libSgm list/table walk compatibility repair.
-         *
-         * After Motif VendorExt initialization succeeds, libSgm reaches
-         * 0x0b208148 as:
-         *
-         *   0b208144  addu a0,a0,a3
-         *   0b208148  lw   a2,0(a0)
-         *   0b20814c  beq  a2,zero,...
-         *
-         * The demonstrated hybrid path has a0==0 and a3==0 here.  The very
-         * next instruction treats a zero loaded entry as the end/empty case,
-         * so emulate exactly that result instead of faulting on address zero.
-         * Keep this repair pinned to the one proven instruction and only the
-         * NULL-base case; non-NULL accesses still execute the original MIPS.
-         */
-        if (pc == 0x0b208148u && (uint32_t)cpu->gpr[4] == 0u) {
-            fprintf(stderr,
-                    "IRIX libSgm NULL table repair: "
-                    "pc=%08x a0=%08x a3=%08x -> a2=00000000\n",
-                    pc, (uint32_t)cpu->gpr[4],
-                    (uint32_t)cpu->gpr[7]);
-            cpu->gpr[6] = 0u;
-            cpu->gpr[0] = 0u;
-            pc += 4u;
-            continue;
-        }
 
         if (!is_control(insn)) {
             int rc = exec_simple(rt, cpu, pc, insn);
