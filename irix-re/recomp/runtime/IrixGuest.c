@@ -2263,9 +2263,23 @@ static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
 static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
                                              IrixGuestCpu *cpu,
                                              IrixGuestAddr caller_sp,
-                                             IrixGuestAddr widget_class)
+                                             IrixGuestAddr widget_class,
+                                             IrixGuestAddr csize_ptr,
+                                             IrixGuestAddr out_slot)
 {
-    IrixGuestAddr out_slot = caller_sp + 0x20u;
+    /*
+     * The recovered Motif allocate callback can be entered at an interior PC
+     * after it has made its own stack frame.  Therefore caller_sp is NOT a
+     * reliable way to recover Xt's &csize / &widget argument locations.
+     *
+     * N32 gives XtAllocateProc eight register arguments:
+     *   a1 = &csize
+     *   a7 = &widget
+     * Preserve and use those pointers directly.  Keep caller_sp only as a
+     * guarded compatibility fallback for older call sites.
+     */
+    if (!out_slot || !irix_guest_ptr(rt, out_slot, 4u))
+        out_slot = caller_sp + 0x20u;
     IrixGuestAddr widget;
     IrixGuestAddr constraints = 0u;
     uint32_t csize;
@@ -2293,7 +2307,10 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
     if (irix_guest_read32be(rt, out_slot) != 0u)
         return 0;
 
-    csize = irix_guest_read32be(rt, caller_sp + 0x10u);
+    if (csize_ptr && irix_guest_ptr(rt, csize_ptr, 4u))
+        csize = irix_guest_read32be(rt, csize_ptr);
+    else
+        csize = irix_guest_read32be(rt, caller_sp + 0x10u);
     wsize = irix_guest_read32be(rt, widget_class + 0x08u);
     if (!wsize || wsize > 0x01000000u || csize > 0x01000000u)
         return 0;
@@ -2319,8 +2336,9 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
 
     fprintf(stderr,
             "IRIX xtWidgetAlloc fallback: class=%08x wsize=%u csize=%u "
-            "widget=%08x constraints=%08x\\n",
-            widget_class, wsize, csize, widget, constraints);
+            "widget=%08x constraints=%08x csize_ptr=%08x out_slot=%08x\\n",
+            widget_class, wsize, csize, widget, constraints,
+            csize_ptr, out_slot);
     cpu->gpr[2] = widget;
     return rt->trapped ? -1 : 1;
 }
@@ -3135,6 +3153,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t saved_sp = cpu->gpr[29];
         uint64_t saved_ra = cpu->gpr[31];
         IrixGuestAddr saved_a0 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr saved_a1 = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr saved_a7 = (IrixGuestAddr)(uint32_t)cpu->gpr[11];
         unsigned saved_i;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
         int rc;
@@ -3184,7 +3204,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 
                 (void)irix_guest_repair_xt_widget_alloc(
                     rt, cpu, (IrixGuestAddr)(uint32_t)saved_sp,
-                    alloc_class);
+                    alloc_class, saved_a1, saved_a7);
             }
 
             /*
