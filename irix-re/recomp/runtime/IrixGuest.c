@@ -644,6 +644,13 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
     sc = irix_guest_read32be(rt, wc + 0u);
     resources = irix_guest_read32be(rt, wc + 44u);
     class_num = irix_guest_read32be(rt, wc + 48u);
+    if (class_num > 4096u) {
+        fprintf(stderr,
+                "IRIX Xt class-resource repair: class=%08x "
+                "invalid resource count=%u\n",
+                wc, class_num);
+        return;
+    }
     resources_indirect =
         irix_guest_xt_resources_are_indirect(rt, resources, class_num);
     if (rt->xrm_quarkify_encoded)
@@ -651,16 +658,46 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
             rt->xrm_quarkify_encoded(rt, irix_xt_r_callback);
 
     if (sc) {
+        if (!irix_guest_ptr(rt, sc, 100u)) {
+            fprintf(stderr,
+                    "IRIX Xt class-resource repair: class=%08x "
+                    "invalid superclass=%08x\n",
+                    wc, sc);
+            return;
+        }
+
+        super_widget_size = irix_guest_read32be(rt, sc + 8u);
+        if (!super_widget_size || super_widget_size > 0x01000000u) {
+            fprintf(stderr,
+                    "IRIX Xt class-resource repair: class=%08x "
+                    "bad superclass=%08x widget_size=%u\n",
+                    wc, sc, super_widget_size);
+            return;
+        }
+
         irix_guest_xt_repair_class_resources_inner(rt, sc, depth + 1u);
-        if (irix_guest_ptr(rt, sc, 100u)) {
-            super_widget_size = irix_guest_read32be(rt, sc + 8u);
-            super_resources = irix_guest_read32be(rt, sc + 44u);
-            super_num = irix_guest_read32be(rt, sc + 48u);
-            super_callbacks =
-                irix_guest_read32be(rt, sc + IRIX_XT_CALLBACK_PRIVATE);
-            if (super_callbacks && irix_guest_ptr(rt, super_callbacks, 4u))
-                super_callback_num =
-                    irix_guest_read32be(rt, super_callbacks);
+
+        super_resources = irix_guest_read32be(rt, sc + 44u);
+        super_num = irix_guest_read32be(rt, sc + 48u);
+        if (super_num > 4096u ||
+            (super_num &&
+             !irix_guest_xt_resources_are_indirect(
+                 rt, super_resources, super_num))) {
+            fprintf(stderr,
+                    "IRIX Xt class-resource repair: class=%08x "
+                    "superclass=%08x invalid resources=%08x count=%u\n",
+                    wc, sc, super_resources, super_num);
+            return;
+        }
+
+        super_callbacks =
+            irix_guest_read32be(rt, sc + IRIX_XT_CALLBACK_PRIVATE);
+        if (super_callbacks && irix_guest_ptr(rt, super_callbacks, 4u)) {
+            uint32_t n = irix_guest_read32be(rt, super_callbacks);
+            uint64_t bytes = ((uint64_t)n + 1u) * 4u;
+            if (n <= 4096u &&
+                irix_guest_ptr(rt, super_callbacks, (size_t)bytes))
+                super_callback_num = n;
         }
     }
 
@@ -683,8 +720,12 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
                 irix_guest_write32be(rt, res + 16u, ~off);
         }
 
-        table = irix_guest_xt_compat_alloc(rt,
-                                           (super_num + class_num) * 4u);
+        {
+            uint64_t count = (uint64_t)super_num + (uint64_t)class_num;
+            if (count > 4096u)
+                return;
+            table = irix_guest_xt_compat_alloc(rt, (uint32_t)count * 4u);
+        }
         if (!table)
             return;
 
