@@ -477,18 +477,35 @@ static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
                                                  IrixGuestAddr resources,
                                                  uint32_t num_resources)
 {
-    IrixGuestAddr first;
-    uint32_t size;
+    uint32_t i;
 
-    if (!resources || !num_resources)
+    /*
+     * Do not classify an XtResource[] as XrmResourceList[] from the first
+     * word alone.  In a raw XtResource that word is resource_name (a String
+     * pointer), so a mapped string followed by coincidentally-small data can
+     * satisfy a one-record pointer heuristic and make the class-resource
+     * repair reinterpret the raw structure as a pointer table.
+     *
+     * An actual XrmResourceList[] must be a mapped array of pointers and every
+     * element must point at a complete, plausibly-sized compiled resource.
+     */
+    if (!resources || !num_resources || num_resources > 4096u)
         return 0;
-    if (!irix_guest_ptr(rt, resources, 4u))
+    if (!irix_guest_ptr(rt, resources, (size_t)num_resources * 4u))
         return 0;
-    first = irix_guest_read32be(rt, resources);
-    if (!first || !irix_guest_ptr(rt, first, IRIX_XT_RESOURCE_SIZE))
-        return 0;
-    size = irix_guest_read32be(rt, first + 12u);
-    return size > 0u && size <= 0x10000u;
+
+    for (i = 0; i < num_resources; ++i) {
+        IrixGuestAddr res =
+            irix_guest_read32be(rt, resources + i * 4u);
+        uint32_t size;
+
+        if (!res || !irix_guest_ptr(rt, res, IRIX_XT_RESOURCE_SIZE))
+            return 0;
+        size = irix_guest_read32be(rt, res + 12u);
+        if (!size || size > 0x10000u)
+            return 0;
+    }
+    return 1;
 }
 
 int irix_guest_xt_normalize_resource(IrixGuestRuntime *rt,
