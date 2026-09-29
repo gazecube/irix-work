@@ -874,6 +874,30 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fn = insn & 63u;
 
         /*
+         * Focused trace for the real SGI _XtGetResources failure.  Running
+         * this function through original MIPS reproduced the crash, so the
+         * remaining problem is guest data/state, not translated register
+         * allocation.  Capture the short window leading into 0x0f6166b4 so
+         * we can see exactly where r31 changes from the call return address
+         * into the bogus 0x000004ac resource/quark-like value.
+         */
+        if (pc >= 0x0f616660u && pc <= 0x0f6166b8u) {
+            fprintf(stderr,
+                    "IRIX XtGetResources trace: pc=%08x insn=%08x "
+                    "v0=%08x v1=%08x a0=%08x a1=%08x a2=%08x a3=%08x "
+                    "s0=%08x s1=%08x s2=%08x s3=%08x "
+                    "t8=%08x t9=%08x gp=%08x ra=%08x\n",
+                    pc, insn,
+                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    (uint32_t)cpu->gpr[24], (uint32_t)cpu->gpr[25],
+                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);
+        }
+
+        /*
          * Narrow SGI Motif repair while executing original MIPS inside
          * VendorExtInitialize.  Do this before the faulting load so the
          * original instruction stream continues normally with its required
