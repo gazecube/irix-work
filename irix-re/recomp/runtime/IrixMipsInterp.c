@@ -941,8 +941,14 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
     if ((address >= 0x0f614000u && address < 0x0f619300u) ||
         (address >= 0x0f62b1f0u && address < 0x0f62b758u) ||
         (address >= 0x0b208000u && address < 0x0b208600u) ||
-        (address >= 0x0b28d000u && address < 0x0b28d700u) ||
-        (address >= 0x0b2bec00u && address < 0x0b2bee00u))
+        /*
+         * libXm resource/default processing is spread across a much wider
+         * cluster than the first few observed helpers.  The same malformed
+         * small XtResource token has now reached 0x0b28dxxx, 0x0b2a80xx and
+         * 0x0b2becxx.  Keep this whole demonstrated libXm resource band on
+         * original MIPS so the generalized +0x14 repair applies uniformly.
+         */
+        (address >= 0x0b28d000u && address < 0x0b2bee00u))
         return 1;
 
     static int init;
