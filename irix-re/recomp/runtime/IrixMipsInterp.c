@@ -69,6 +69,25 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
     return 1;
 }
 
+static int irix_xt_null_output_store(IrixGuestCpu *cpu,
+                                     IrixGuestAddr pc,
+                                     unsigned rs,
+                                     IrixGuestAddr addr,
+                                     uint32_t value,
+                                     unsigned bits)
+{
+    if (pc < 0x0f62b5d4u || pc >= 0x0f62b67cu)
+        return 0;
+    if ((uint32_t)cpu->gpr[rs] != 0u || addr >= 0x00000100u)
+        return 0;
+
+    fprintf(stderr,
+            "IRIX Xt NULL output-store repair HIT: "
+            "pc=%08x bits=%u rs=%u addr=%08x value=%08x -> skip\n",
+            pc, bits, rs, addr, value);
+    return 1;
+}
+
 static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                        IrixGuestAddr pc, uint32_t insn)
 {
@@ -385,11 +404,15 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x28:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            irix_guest_write8(rt, a, (uint8_t)cpu->gpr[rtno]);
+            if (!irix_xt_null_output_store(cpu, pc, rs, a,
+                    (uint32_t)cpu->gpr[rtno], 8u))
+                irix_guest_write8(rt, a, (uint8_t)cpu->gpr[rtno]);
             break;
         case 0x29:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            irix_guest_write16be(rt, a, (uint16_t)cpu->gpr[rtno]);
+            if (!irix_xt_null_output_store(cpu, pc, rs, a,
+                    (uint32_t)cpu->gpr[rtno], 16u))
+                irix_guest_write16be(rt, a, (uint16_t)cpu->gpr[rtno]);
             break;
         case 0x2b:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -400,15 +423,9 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * observed hybrid path that output pointer is NULL.  Treat the
              * write as an empty optional result rather than faulting.
              */
-            if (pc >= 0x0f62b5d4u && pc < 0x0f62b67cu &&
-                (uint32_t)cpu->gpr[rs] == 0u &&
-                a < 0x00000100u) {
-                fprintf(stderr,
-                        "IRIX Xt NULL output-store repair HIT: "
-                        "pc=%08x rs=%u addr=%08x value=%08x -> skip\n",
-                        pc, rs, a, (uint32_t)cpu->gpr[rtno]);
+            if (irix_xt_null_output_store(cpu, pc, rs, a,
+                    (uint32_t)cpu->gpr[rtno], 32u))
                 break;
-            }
 
             /*
              * Exact SGI libSgm empty-table return-store observed after the
@@ -444,7 +461,9 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x3f:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            irix_guest_write64be(rt, a, cpu->gpr[rtno]);
+            if (!irix_xt_null_output_store(cpu, pc, rs, a,
+                    (uint32_t)cpu->gpr[rtno], 64u))
+                irix_guest_write64be(rt, a, cpu->gpr[rtno]);
             break;
         case 0x22: {
             uint32_t oldv, w;
