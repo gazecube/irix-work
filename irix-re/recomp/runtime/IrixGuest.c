@@ -415,6 +415,7 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
  * construction and use it only as a narrowly-scoped allocation fallback.
  */
 static IrixGuestAddr g_xt_alloc_widget_class_hint;
+static IrixGuestAddr g_xt_alloc_widget_hint;
 
 static IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
 {
@@ -2334,6 +2335,9 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
     irix_guest_write32be(rt, widget + 0x18u, constraints);
     irix_guest_write32be(rt, out_slot, widget);
 
+    if (widget_class == g_xt_alloc_widget_class_hint)
+        g_xt_alloc_widget_hint = widget;
+
     fprintf(stderr,
             "IRIX xtWidgetAlloc fallback: class=%08x wsize=%u csize=%u "
             "widget=%08x constraints=%08x csize_ptr=%08x out_slot=%08x\\n",
@@ -2341,6 +2345,63 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
             csize_ptr, out_slot);
     cpu->gpr[2] = widget;
     return rt->trapped ? -1 : 1;
+}
+
+/*
+ * SGI Motif VendorExtInitialize compatibility repair.
+ *
+ * The current XmDisplay bring-up reaches VendorExtInitialize with a valid
+ * VendorShellExt object in s0, but at 0x0b314ffc the extParent value in a0 is
+ * NULL immediately before code dereferences extParent+8.  SGI's XmExtPart is
+ * layout-stable here: logicalParent is +0x1c and extensionType is +0x20.
+ *
+ * Only repair this exact demonstrated instruction, and only when s0 really
+ * looks like an XmSHELL_EXTENSION object (extensionType == 3).  Prefer the
+ * object's own logicalParent.  If that field is missing, use the in-progress
+ * XmDisplay widget captured from Xt's allocation path and repair the object as
+ * well, matching SecondaryObjectCreate's required invariant.
+ */
+int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
+                                           IrixGuestCpu *cpu,
+                                           IrixGuestAddr pc)
+{
+    IrixGuestAddr ext;
+    IrixGuestAddr parent;
+    uint8_t ext_type;
+
+    if (!rt || !cpu || pc != 0x0b314ffcu ||
+        (uint32_t)cpu->gpr[4] != 0u)
+        return 0;
+
+    ext = (IrixGuestAddr)(uint32_t)cpu->gpr[16];
+    if (!ext || !irix_guest_ptr(rt, ext, 0x21u))
+        return 0;
+
+    ext_type = irix_guest_read8(rt, ext + 0x20u);
+    if (ext_type != 3u)
+        return 0;
+
+    parent = irix_guest_read32be(rt, ext + 0x1cu);
+    if (!irix_guest_looks_like_widget(rt, parent)) {
+        if (!irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
+            return 0;
+
+        parent = g_xt_alloc_widget_hint;
+        irix_guest_write32be(rt, ext + 0x1cu, parent);
+        fprintf(stderr,
+                "IRIX VendorExt logicalParent repair: "
+                "ext=%08x type=%u parent=%08x\n",
+                ext, (unsigned)ext_type, parent);
+    } else {
+        fprintf(stderr,
+                "IRIX VendorExt extParent register repair: "
+                "ext=%08x type=%u parent=%08x\n",
+                ext, (unsigned)ext_type, parent);
+    }
+
+    cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)parent;
+    cpu->gpr[0] = 0;
+    return 1;
 }
 
 static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
@@ -3066,6 +3127,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (!xm_display_shell_depth) {
                 xm_display_bootstrap_widget = 0u;
                 g_xt_alloc_widget_class_hint = 0u;
+                g_xt_alloc_widget_hint = 0u;
             }
         }
 
