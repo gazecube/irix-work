@@ -956,6 +956,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
         return 1;
 
     /*
+     * libXm helper at 0x0b2becac contains the same malformed resource flag
+     * access at 0x0b2becc0 (LBU +0x14 from the small token 0x4ac).  Force
+     * this exact helper through original MIPS so the existing generalized
+     * libXm resource-flag repair can service it.
+     */
+    if (address == 0x0b2becacu)
+        return 1;
+
+    /*
      * _XmPrimitiveTopShadowPixmapDefault contains the same malformed
      * resource-flag load shape at 0x0b28d1ec (base 0x000004ac, +0x14).
      * Force this exact default proc through original MIPS so the existing
