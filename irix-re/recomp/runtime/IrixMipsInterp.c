@@ -742,6 +742,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
     if (address == 0x0b208098u)
         return 1;
 
+    /*
+     * Xt _XtGetResources currently traps in translated code at 0x0f6166b4
+     * with its return-address/base register state corrupted.  Keep the exact
+     * SGI function on original MIPS while bring-up continues; this also lets
+     * us distinguish a translator ABI bug from bad Xt data.
+     */
+    if (address == 0x0f616598u)
+        return 1;
+
     static int init;
     static IrixGuestAddr addr[64];
     static size_t count;
