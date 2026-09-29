@@ -1128,8 +1128,42 @@ static int irix_guest_register_function_range_flags(
     IrixGuestFunction function, const char *name, uint32_t flags)
 {
     IrixGuestFunctionEntry *entry;
+    size_t prior_i;
+
     if (!function || rt->function_count >= IRIX_GUEST_MAX_FUNCTIONS)
         return -1;
+
+    /*
+     * Recovered anonymous entries (__link/__boundary/__ptr and similar)
+     * can begin strictly inside a broader translated FDE/function range.
+     * They are execution continuations, not fresh N32 ABI call boundaries.
+     *
+     * The generated registries historically registered them as ordinary
+     * exact callable entries.  Exact lookup then defeated irix_guest_call()'s
+     * interior-PC interpreter fallback and entered generated C with a fresh
+     * function contract even though the code depended on the outer frame.
+     * This produced the recurring Xt/Motif startup state corruption.
+     *
+     * Mark only anonymous nested recompiled ranges.  Named symbols remain
+     * callable even when debug-frame recovery gives them overlapping coverage.
+     */
+    if ((flags & IRIX_GUEST_FUNCTION_RECOMPILED) && !name && size) {
+        for (prior_i = 0; prior_i < rt->function_count; ++prior_i) {
+            IrixGuestFunctionEntry *prior = &rt->functions[prior_i];
+            uint64_t prior_end;
+
+            if (!(prior->flags & IRIX_GUEST_FUNCTION_RECOMPILED) ||
+                !prior->size)
+                continue;
+            prior_end = (uint64_t)prior->address + (uint64_t)prior->size;
+            if (address > prior->address &&
+                (uint64_t)address < prior_end) {
+                flags |= IRIX_GUEST_FUNCTION_INTERIOR;
+                break;
+            }
+        }
+    }
+
     entry = &rt->functions[rt->function_count++];
     entry->address = address;
     entry->size = size;
@@ -3376,8 +3410,15 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
      * original MIPS at that exact address. This preserves the real callback
      * entry semantics instead of silently rewinding execution to the enclosing
      * translated function's start.
+     *
+     * Anonymous exact entries tagged IRIX_GUEST_FUNCTION_INTERIOR take the
+     * same path. They are recovered continuation labels whose exact registry
+     * entries would otherwise hide the fact that they lie inside a larger
+     * translated machine-function range.
      */
-    if (entry && entry->address != address &&
+    if (entry &&
+        (entry->address != address ||
+         (entry->flags & IRIX_GUEST_FUNCTION_INTERIOR)) &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) {
         uint64_t saved_s[9];
         uint64_t saved_gp = cpu->gpr[28];
