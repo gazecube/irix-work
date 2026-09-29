@@ -2238,6 +2238,71 @@ static int irix_guest_looks_like_widget(IrixGuestRuntime *rt,
     return 1;
 }
 
+static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
+                                             IrixGuestCpu *cpu,
+                                             IrixGuestAddr caller_sp,
+                                             IrixGuestAddr widget_class)
+{
+    IrixGuestAddr out_slot = caller_sp + 0x20u;
+    IrixGuestAddr widget;
+    IrixGuestAddr constraints = 0u;
+    uint32_t csize;
+    uint32_t wsize;
+    uint32_t aligned_wsize;
+    uint64_t total;
+    void *p;
+
+    /*
+     * SGI Xt xtWidgetAlloc extension-allocation fallback.
+     *
+     * ObjectClassExtension.allocate receives &widget as its eighth N32
+     * argument (sp+0x20). Some recovered Motif allocation callbacks return
+     * without filling that output. The next original Xt instructions
+     * unconditionally execute widget->core.self = widget and fault at NULL.
+     *
+     * Mirror xtWidgetAlloc's ordinary no-extension path: allocate a zeroed
+     * widget plus constraint tail, install CorePart.constraints, then let the
+     * original Xt code fill self/parent/class/xrm_name/being_destroyed.
+     */
+    if (!caller_sp || !widget_class ||
+        !irix_guest_ptr(rt, out_slot, 4u) ||
+        !irix_guest_ptr(rt, widget_class, 12u))
+        return 0;
+    if (irix_guest_read32be(rt, out_slot) != 0u)
+        return 0;
+
+    csize = irix_guest_read32be(rt, caller_sp + 0x10u);
+    wsize = irix_guest_read32be(rt, widget_class + 0x08u);
+    if (!wsize || wsize > 0x01000000u || csize > 0x01000000u)
+        return 0;
+
+    aligned_wsize = wsize;
+    if (csize && (csize & 7u) == 0u)
+        aligned_wsize = (wsize + 7u) & ~7u;
+
+    total = (uint64_t)aligned_wsize + (uint64_t)csize;
+    if (!total || total > UINT32_MAX)
+        return 0;
+
+    widget = irix_libc_guest_malloc((uint32_t)total);
+    p = widget ? irix_guest_ptr(rt, widget, (size_t)total) : NULL;
+    if (!widget || !p)
+        return 0;
+    memset(p, 0, (size_t)total);
+
+    if (csize)
+        constraints = widget + aligned_wsize;
+    irix_guest_write32be(rt, widget + 0x18u, constraints);
+    irix_guest_write32be(rt, out_slot, widget);
+
+    fprintf(stderr,
+            "IRIX xtWidgetAlloc fallback: class=%08x wsize=%u csize=%u "
+            "widget=%08x constraints=%08x\\n",
+            widget_class, wsize, csize, widget, constraints);
+    cpu->gpr[2] = widget;
+    return rt->trapped ? -1 : 1;
+}
+
 static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                                       IrixGuestAddr address,
                                       IrixGuestFunctionEntry *entry)
@@ -3032,6 +3097,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         rc = irix_mips_interp_call(rt, cpu, address);
         if (!rt->trapped) {
+            /*
+             * xtWidgetAlloc's extension allocator returns to 0x0f62b578.
+             * If the recovered callback left its Widget out-parameter NULL,
+             * reproduce Xt's normal allocation path before translated Xt
+             * resumes at its unconditional CorePart initialization stores.
+             */
+            if ((uint32_t)cpu->gpr[31] == 0x0f62b578u)
+                (void)irix_guest_repair_xt_widget_alloc(
+                    rt, cpu, (IrixGuestAddr)(uint32_t)saved_sp,
+                    (IrixGuestAddr)(uint32_t)saved_s[0]);
+
             /*
              * XmGetXmScreen spans 0x0b2a80ac..0x0b2a8388 in this recovered
              * SGI libXm image. Calls can legitimately target an interior
