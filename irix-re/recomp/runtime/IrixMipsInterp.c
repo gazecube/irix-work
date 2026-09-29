@@ -331,6 +331,23 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 break;
             }
 
+            /*
+             * Same malformed Xt resource entry, second consumer.
+             * 0x0f6157e0 first loads the bad resource pointer (observed
+             * 0x000004ac) and 0x0f6157e4 immediately reads byte +0x14 from
+             * it.  Keep this exact site on the same compatibility behavior:
+             * unmapped entry means an empty/zero resource flag.
+             */
+            if (pc == 0x0f6157e4u && rtno == 1u &&
+                !irix_guest_ptr(rt, a, 1u)) {
+                fprintf(stderr,
+                        "IRIX Xt resource-byte repair HIT: "
+                        "pc=%08x base=%08x addr=%08x -> at=00000000\n",
+                        pc, (uint32_t)cpu->gpr[rs], a);
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
+
             cpu->gpr[rtno] = irix_guest_read8(rt, a);
             break;
         case 0x25:
