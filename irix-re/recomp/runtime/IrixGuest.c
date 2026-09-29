@@ -3107,6 +3107,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         uint64_t saved_s[9];
         uint64_t saved_gp = cpu->gpr[28];
         uint64_t saved_sp = cpu->gpr[29];
+        IrixGuestAddr saved_a0 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         unsigned saved_i;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
         int rc;
@@ -3133,14 +3134,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         if (!rt->trapped) {
             /*
              * xtWidgetAlloc's extension allocator returns to 0x0f62b578.
-             * If the recovered callback left its Widget out-parameter NULL,
-             * reproduce Xt's normal allocation path before translated Xt
-             * resumes at its unconditional CorePart initialization stores.
+             * XtAllocateProc's first argument is the WidgetClass itself.
+             * Preserve that incoming a0 across the interpreted callback and
+             * use it for the fallback; s0 belongs to the Motif allocator and
+             * was observed holding 0x0b3e4ad8 rather than the actual class
+             * 0x0b3f0890, causing the fallback's widget-size guard to reject
+             * the repair and leaving sp+0x20 NULL.
              */
             if ((uint32_t)cpu->gpr[31] == 0x0f62b578u)
                 (void)irix_guest_repair_xt_widget_alloc(
                     rt, cpu, (IrixGuestAddr)(uint32_t)saved_sp,
-                    (IrixGuestAddr)(uint32_t)saved_s[0]);
+                    saved_a0);
 
             /*
              * XmGetXmScreen spans 0x0b2a80ac..0x0b2a8388 in this recovered
