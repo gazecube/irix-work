@@ -326,6 +326,29 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x2b:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+
+            /*
+             * Exact SGI libSgm empty-table return-store observed after the
+             * 0x0b208148 NULL table walk is handled.  The helper returns via:
+             *
+             *   0b2081bc  jr  ra
+             *   0b2081c0  sw  a1,0(v1)    # delay slot
+             *
+             * In the empty-table path v1 is NULL.  Treat that one proven
+             * return-store as an absent destination rather than faulting at
+             * address zero.  Keep every non-NULL store and every other PC on
+             * the normal path.
+             */
+            if (pc == 0x0b2081c0u && a == 0u &&
+                rs == 3u && rtno == 5u) {
+                fprintf(stderr,
+                        "IRIX libSgm NULL return-store repair HIT: "
+                        "pc=%08x v1=%08x a1=%08x -> skip store\n",
+                        pc, (uint32_t)cpu->gpr[3],
+                        (uint32_t)cpu->gpr[5]);
+                break;
+            }
+
             irix_guest_write32be(rt, a, (uint32_t)cpu->gpr[rtno]);
             break;
         case 0x37:
