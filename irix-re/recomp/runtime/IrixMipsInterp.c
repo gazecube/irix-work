@@ -363,6 +363,33 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              */
             if (pc == 0x0b314ffcu) {
                 (void)irix_guest_repair_xm_vendor_ext_parent(rt, cpu, pc);
+
+                /*
+                 * Desktop bring-up fallback: this recovered VendorExt path can
+                 * arrive after the normal widget hints have been cleared.
+                 * The live caller frame supplies the parent candidate through
+                 * a3+0x10.  If a0 is still NULL after the structured repair,
+                 * use that mapped guest pointer directly so the original
+                 * extParent+8 load can proceed.
+                 */
+                if ((uint32_t)cpu->gpr[4] == 0u) {
+                    IrixGuestAddr a3 =
+                        (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+                    IrixGuestAddr parent = 0u;
+
+                    if (a3 && irix_guest_ptr(rt, a3, 0x14u))
+                        parent = irix_guest_read32be(rt, a3 + 0x10u);
+
+                    if (parent && irix_guest_ptr(rt, parent, 0x0cu)) {
+                        cpu->gpr[4] =
+                            (uint64_t)(int64_t)(int32_t)parent;
+                        fprintf(stderr,
+                                "IRIX VendorExt hard bring-up repair: "
+                                "a3=%08x a3+10=%08x -> a0=%08x\n",
+                                a3, parent, parent);
+                    }
+                }
+
                 a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] +
                                     (uint32_t)imm);
             }
