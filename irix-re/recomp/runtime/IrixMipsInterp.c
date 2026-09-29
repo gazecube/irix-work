@@ -934,6 +934,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
         return 1;
 
     /*
+     * _XmPrimitiveTopShadowPixmapDefault contains the same malformed
+     * resource-flag load shape at 0x0b28d1ec (base 0x000004ac, +0x14).
+     * Force this exact default proc through original MIPS so the existing
+     * malformed-resource repair can zero that flag instead of faulting.
+     */
+    if (address == 0x0b28d1b4u)
+        return 1;
+
+    /*
      * XtWidgetToApplicationContext / XtFree-adjacent helper containing the
      * same malformed +0x14 resource-flag load at 0x0f614400.  Force this
      * exact function through original MIPS so the generalized Xt resource
