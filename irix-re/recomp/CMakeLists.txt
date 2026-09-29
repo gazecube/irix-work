@@ -350,9 +350,19 @@ if(IRIX_DEV_TREE)
                     set_target_properties(irix_desktop_quick_runner PROPERTIES
                         OUTPUT_NAME "desktop-quick"
                         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/quick"
-                        BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}"
+                        # Keep the bring-up runner pinned to the runtime built
+                        # beside this tree.  Using an origin-relative DT_RPATH
+                        # avoids accidentally loading an older installed
+                        # libirixre.so from LD_LIBRARY_PATH while iterating on
+                        # interpreter fixes.
+                        BUILD_RPATH "$ORIGIN/.."
                     )
+                    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+                        target_link_options(irix_desktop_quick_runner PRIVATE
+                            "-Wl,--disable-new-dtags")
+                    endif()
                     add_dependencies(irix_desktop_quick_runner
+                        irix_recomp_runtime
                         irix_recompiled_core
                         ${_app_build_target}
                     )
