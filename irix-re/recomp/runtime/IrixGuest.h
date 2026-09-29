@@ -96,6 +96,7 @@ void irix_guest_runtime_init(IrixGuestRuntime *rt);
 void irix_guest_runtime_destroy(IrixGuestRuntime *rt);
 int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsigned flags);
 void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size);
+const char *irix_guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t max_len);
 
 uint8_t irix_guest_read8(IrixGuestRuntime *rt, IrixGuestAddr addr);
 uint16_t irix_guest_read16be(IrixGuestRuntime *rt, IrixGuestAddr addr);
