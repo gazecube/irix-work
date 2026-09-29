@@ -49,7 +49,7 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      */
     {
         int in_xt_resource_window =
-            (pc >= 0x0f614000u && pc < 0x0f616820u);
+            (pc >= 0x0f614000u && pc < 0x0f619300u);
         int in_xm_resource_flag_path =
             (pc >= 0x0b260000u && pc < 0x0b400000u &&
              op == 0x24u && (uint32_t)(addr - base) == 0x14u);
@@ -838,6 +838,14 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
      * compatibility layer can service it too.
      */
     if (address == 0x0f6143ecu)
+        return 1;
+
+    /*
+     * _XtConvert contains another consumer of the same malformed resource
+     * flag byte at 0x0f618a9c.  Keep the exact function on original MIPS so
+     * the generalized low-pointer repair can service conversion-time reads.
+     */
+    if (address == 0x0f618754u)
         return 1;
 
     static int init;
