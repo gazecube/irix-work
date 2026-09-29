@@ -361,38 +361,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-
-            /*
-             * SGI Xt resource-list compatibility repair.
-             *
-             * Multiple original-MIPS paths in the Xt resource machinery are
-             * consuming the same malformed small resource entry (observed
-             * 0x000004ac) and then reading byte +0x14 from it.  Instead of
-             * whack-a-moling each instruction address, handle this narrowly
-             * across the demonstrated Xt resource-processing region:
-             *
-             *   - only LBU with offset +0x14
-             *   - only while executing 0x0f6154e8..0x0f616820
-             *   - only for a small nonzero base below 64K
-             *   - only when the effective address is actually unmapped
-             *
-             * Treat that malformed/absent resource flag as zero and let Xt
-             * continue through its own normal branches.
-             */
-            if (pc >= 0x0f6154e8u && pc < 0x0f616820u &&
-                imm == 0x14 &&
-                (uint32_t)cpu->gpr[rs] != 0u &&
-                (uint32_t)cpu->gpr[rs] < 0x00010000u &&
-                !irix_guest_ptr(rt, a, 1u)) {
-                fprintf(stderr,
-                        "IRIX Xt malformed resource-byte repair HIT: "
-                        "pc=%08x rs=%u rt=%u base=%08x addr=%08x -> zero\n",
-                        pc, rs, rtno, (uint32_t)cpu->gpr[rs], a);
+            if (irix_xt_resource_missing_load(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
                 cpu->gpr[rtno] = 0u;
-                break;
-            }
-
-            cpu->gpr[rtno] = irix_guest_read8(rt, a);
+            else
+                cpu->gpr[rtno] = irix_guest_read8(rt, a);
             break;
         case 0x25:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
