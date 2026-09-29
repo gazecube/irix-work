@@ -308,42 +308,31 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
-             * SGI Xt _XtGetResources compatibility repair.
+             * SGI Xt resource-list compatibility repair.
              *
-             * The original MIPS path itself reaches 0x0f6166b4 with r31
-             * holding a small malformed resource-table value (observed
-             * 0x000004ac), then executes:
+             * Multiple original-MIPS paths in the Xt resource machinery are
+             * consuming the same malformed small resource entry (observed
+             * 0x000004ac) and then reading byte +0x14 from it.  Instead of
+             * whack-a-moling each instruction address, handle this narrowly
+             * across the demonstrated Xt resource-processing region:
              *
-             *   lbu r31,0x14(r31)
+             *   - only LBU with offset +0x14
+             *   - only while executing 0x0f6154e8..0x0f616820
+             *   - only for a small nonzero base below 64K
+             *   - only when the effective address is actually unmapped
              *
-             * which faults at 0x000004c0.  This is therefore guest resource
-             * state damage, not translated-register corruption.  For this one
-             * proven load, treat an unmapped resource pointer as an empty/zero
-             * byte and let Xt continue through its own normal logic.
+             * Treat that malformed/absent resource flag as zero and let Xt
+             * continue through its own normal branches.
              */
-            if (pc == 0x0f6166b4u && rtno == 31u &&
+            if (pc >= 0x0f6154e8u && pc < 0x0f616820u &&
+                imm == 0x14 &&
+                (uint32_t)cpu->gpr[rs] != 0u &&
+                (uint32_t)cpu->gpr[rs] < 0x00010000u &&
                 !irix_guest_ptr(rt, a, 1u)) {
                 fprintf(stderr,
-                        "IRIX XtGetResources bad resource-byte repair HIT: "
-                        "pc=%08x base=%08x addr=%08x -> ra=00000000\n",
-                        pc, (uint32_t)cpu->gpr[rs], a);
-                cpu->gpr[rtno] = 0u;
-                break;
-            }
-
-            /*
-             * Same malformed Xt resource entry, second consumer.
-             * 0x0f6157e0 first loads the bad resource pointer (observed
-             * 0x000004ac) and 0x0f6157e4 immediately reads byte +0x14 from
-             * it.  Keep this exact site on the same compatibility behavior:
-             * unmapped entry means an empty/zero resource flag.
-             */
-            if (pc == 0x0f6157e4u && rtno == 1u &&
-                !irix_guest_ptr(rt, a, 1u)) {
-                fprintf(stderr,
-                        "IRIX Xt resource-byte repair HIT: "
-                        "pc=%08x base=%08x addr=%08x -> at=00000000\n",
-                        pc, (uint32_t)cpu->gpr[rs], a);
+                        "IRIX Xt malformed resource-byte repair HIT: "
+                        "pc=%08x rs=%u rt=%u base=%08x addr=%08x -> zero\n",
+                        pc, rs, rtno, (uint32_t)cpu->gpr[rs], a);
                 cpu->gpr[rtno] = 0u;
                 break;
             }
