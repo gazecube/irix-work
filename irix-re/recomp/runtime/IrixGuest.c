@@ -2376,12 +2376,19 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
      */
     widget = irix_guest_read32be(rt, out_slot);
     if (widget) {
-        if (irix_guest_ptr(rt, widget, (size_t)total))
+        uint32_t sp = (uint32_t)caller_sp;
+        uint32_t w = (uint32_t)widget;
+        int stack_alias =
+            (w >= sp - 0x00010000u && w <= sp + 0x00010000u);
+
+        if (!stack_alias && irix_guest_ptr(rt, widget, (size_t)total))
             return 0;
         fprintf(stderr,
                 "IRIX xtWidgetAlloc invalid output repair: "
-                "class=%08x widget=%08x total=%u -> replace\n",
-                widget_class, widget, (uint32_t)total);
+                "class=%08x widget=%08x total=%u stack_alias=%d "
+                "caller_sp=%08x -> replace\n",
+                widget_class, widget, (uint32_t)total,
+                stack_alias, caller_sp);
         irix_guest_write32be(rt, out_slot, 0u);
     }
 
