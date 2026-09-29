@@ -3,6 +3,9 @@
 /* Runtime-private compatibility hook implemented in IrixGuest.c. */
 extern void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
                                                 IrixGuestAddr screen);
+extern int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
+                                                   IrixGuestCpu *cpu,
+                                                   IrixGuestAddr pc);
 
 #include <math.h>
 #include <stdio.h>
@@ -808,6 +811,15 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         rtno = (insn >> 16) & 31u;
         rd = (insn >> 11) & 31u;
         fn = insn & 63u;
+
+        /*
+         * Narrow SGI Motif repair while executing original MIPS inside
+         * VendorExtInitialize.  Do this before the faulting load so the
+         * original instruction stream continues normally with its required
+         * extParent invariant restored.
+         */
+        if (pc == 0x0b314ffcu)
+            (void)irix_guest_repair_xm_vendor_ext_parent(rt, cpu, pc);
 
         if (!is_control(insn)) {
             int rc = exec_simple(rt, cpu, pc, insn);
