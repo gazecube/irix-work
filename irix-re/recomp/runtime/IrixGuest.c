@@ -2349,13 +2349,13 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
         !irix_guest_ptr(rt, out_slot, 4u) ||
         !irix_guest_ptr(rt, widget_class, 12u))
         return 0;
-    if (irix_guest_read32be(rt, out_slot) != 0u)
-        return 0;
 
     if (csize_ptr && irix_guest_ptr(rt, csize_ptr, 4u))
         csize = irix_guest_read32be(rt, csize_ptr);
-    else
+    else if (irix_guest_ptr(rt, caller_sp + 0x10u, 4u))
         csize = irix_guest_read32be(rt, caller_sp + 0x10u);
+    else
+        return 0;
     wsize = irix_guest_read32be(rt, widget_class + 0x08u);
     if (!wsize || wsize > 0x01000000u || csize > 0x01000000u)
         return 0;
@@ -2367,6 +2367,23 @@ static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
     total = (uint64_t)aligned_wsize + (uint64_t)csize;
     if (!total || total > UINT32_MAX)
         return 0;
+
+    /*
+     * An extension allocator may have filled &widget already.  Accept that
+     * result only if the complete object/tail range is actually guest-mapped.
+     * A nonzero scalar or unmapped stale pointer must not suppress the normal
+     * allocation fallback and then explode on Xt's first widget store.
+     */
+    widget = irix_guest_read32be(rt, out_slot);
+    if (widget) {
+        if (irix_guest_ptr(rt, widget, (size_t)total))
+            return 0;
+        fprintf(stderr,
+                "IRIX xtWidgetAlloc invalid output repair: "
+                "class=%08x widget=%08x total=%u -> replace\n",
+                widget_class, widget, (uint32_t)total);
+        irix_guest_write32be(rt, out_slot, 0u);
+    }
 
     widget = irix_libc_guest_malloc((uint32_t)total);
     p = widget ? irix_guest_ptr(rt, widget, (size_t)total) : NULL;
