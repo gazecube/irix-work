@@ -988,6 +988,14 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
     if (address == 0x0f62b47cu)
         return 1;
 
+    /*
+     * Adjacent Xt class/resource merge helper containing the malformed
+     * low-pointer dereference at 0x0f62b6a8.  Force it through original MIPS
+     * so the bounded low-pointer LW compatibility repair can service it.
+     */
+    if (address == 0x0f62b67cu)
+        return 1;
+
     static int init;
     static IrixGuestAddr addr[64];
     static size_t count;
