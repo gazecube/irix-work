@@ -15,6 +15,8 @@ extern int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
 /* Runtime-private ownership lookup; kept out of IrixGuest.h so changing this
    interpreter plumbing does not invalidate every generated translation TU. */
 extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
+extern IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt,
+                                                     uint32_t size);
 
 static uint64_t sx32(uint32_t v)
 {
@@ -941,6 +943,38 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
     fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
             address, (uint32_t)cpu->gpr[31]);
+
+    /*
+     * Xt class/resource initializer at 0x0f62b47c builds a small result
+     * record through a pointer stored at sp+0x20, then returns that pointer
+     * in v0.  In the hybrid path the caller's slot is NULL, which caused the
+     * observed sequence of low-memory stores and guaranteed a NULL v0 return.
+     *
+     * Supply the missing result record up front so the original SGI code can
+     * populate and return it normally instead of suppressing each write.
+     */
+    if (address == 0x0f62b47cu) {
+        IrixGuestAddr slot =
+            (IrixGuestAddr)((uint32_t)cpu->gpr[29] + 0x20u);
+        IrixGuestAddr out = 0u;
+
+        if (irix_guest_ptr(rt, slot, 4u))
+            out = irix_guest_read32be(rt, slot);
+
+        if (!out) {
+            unsigned i;
+            out = irix_guest_xt_compat_alloc(rt, 0x20u);
+            if (out && irix_guest_ptr(rt, out, 0x20u)) {
+                for (i = 0; i < 0x20u; i += 4u)
+                    irix_guest_write32be(rt, out + i, 0u);
+                irix_guest_write32be(rt, slot, out);
+                fprintf(stderr,
+                        "IRIX Xt class output ABI repair: "
+                        "sp=%08x slot=%08x -> out=%08x\n",
+                        (uint32_t)cpu->gpr[29], slot, out);
+            }
+        }
+    }
 
     while (!rt->trapped && steps++ < max_steps) {
         /*
