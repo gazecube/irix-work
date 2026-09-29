@@ -356,6 +356,32 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
+             * Xt class/resource initializer output record.
+             *
+             * 0x0f62b5d0 is executed as a delay-slot instruction, so repairs
+             * placed in the outer interpreter loop never see it.  Repair at
+             * the actual LW execution point.  The routine loads sp+0x20 here,
+             * populates that record, then reloads sp+0x20 into v0 at
+             * 0x0f62b640 before returning to the caller.
+             */
+            if (pc == 0x0f62b5d0u && a &&
+                irix_guest_ptr(rt, a, 4u) &&
+                irix_guest_read32be(rt, a) == 0u) {
+                IrixGuestAddr out =
+                    irix_guest_xt_compat_alloc(rt, 0x20u);
+                if (out && irix_guest_ptr(rt, out, 0x20u)) {
+                    unsigned i;
+                    for (i = 0; i < 0x20u; i += 4u)
+                        irix_guest_write32be(rt, out + i, 0u);
+                    irix_guest_write32be(rt, a, out);
+                    fprintf(stderr,
+                            "IRIX Xt class output ABI repair HIT: "
+                            "pc=%08x slot=%08x -> out=%08x\n",
+                            pc, a, out);
+                }
+            }
+
+            /*
              * Exact SGI libSgm empty-table load observed at 0x0b208148.
              * Put the compatibility case at the actual LW execution point,
              * after effective-address calculation.  This makes it impossible
@@ -1003,38 +1029,6 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         uint32_t insn, op, rs, rtno, rd, fn;
         int taken = 0, likely = 0, link = 0;
         IrixGuestAddr target = 0, next = pc + 8u;
-
-        /*
-         * Xt class/resource initializer 0x0f62b47c makes its own stack frame
-         * before using sp+0x20 as the output-record pointer.  Repair at the
-         * first load of that post-prologue slot, not at function entry.
-         *
-         * The original routine later reloads the same slot into v0 at
-         * 0x0f62b640, so supplying it here lets all original stores execute
-         * normally and gives the caller the real non-NULL result pointer.
-         */
-        if (pc == 0x0f62b5d0u) {
-            IrixGuestAddr slot =
-                (IrixGuestAddr)((uint32_t)cpu->gpr[29] + 0x20u);
-            IrixGuestAddr out = 0u;
-
-            if (irix_guest_ptr(rt, slot, 4u))
-                out = irix_guest_read32be(rt, slot);
-
-            if (!out) {
-                unsigned i;
-                out = irix_guest_xt_compat_alloc(rt, 0x20u);
-                if (out && irix_guest_ptr(rt, out, 0x20u)) {
-                    for (i = 0; i < 0x20u; i += 4u)
-                        irix_guest_write32be(rt, out + i, 0u);
-                    irix_guest_write32be(rt, slot, out);
-                    fprintf(stderr,
-                            "IRIX Xt class output ABI repair: "
-                            "pc=%08x sp=%08x slot=%08x -> out=%08x\n",
-                            pc, (uint32_t)cpu->gpr[29], slot, out);
-                }
-            }
-        }
 
         if (!mapped_exec(rt, pc))
             break;
