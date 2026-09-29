@@ -356,6 +356,18 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
+             * Motif VendorExtInitialize reaches 0x0b314ffc through recovered
+             * interior/delay-slot control flow, which can bypass the outer
+             * interpreter-loop repair hook.  Apply the existing extParent
+             * repair at the actual LW execution point before dereferencing a0.
+             */
+            if (pc == 0x0b314ffcu) {
+                (void)irix_guest_repair_xm_vendor_ext_parent(rt, cpu, pc);
+                a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] +
+                                    (uint32_t)imm);
+            }
+
+            /*
              * Xt class/resource initializer output record.
              *
              * 0x0f62b5d0 is executed as a delay-slot instruction, so repairs
