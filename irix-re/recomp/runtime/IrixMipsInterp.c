@@ -364,7 +364,8 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * Treat low, unmapped bases in this tight Xt window as an empty
              * pointer/result and return zero for the load.
              */
-            if (pc >= 0x0f62b67cu && pc < 0x0f62b758u &&
+            if (((pc >= 0x0f62b1f0u && pc < 0x0f62b368u) ||
+                 (pc >= 0x0f62b67cu && pc < 0x0f62b758u)) &&
                 (uint32_t)cpu->gpr[rs] != 0u &&
                 (uint32_t)cpu->gpr[rs] < 0x00010000u &&
                 !irix_guest_ptr(rt, a, 4u)) {
@@ -994,6 +995,14 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
      * so the bounded low-pointer LW compatibility repair can service it.
      */
     if (address == 0x0f62b67cu)
+        return 1;
+
+    /*
+     * Neighboring Xt resource helper containing the direct low-token
+     * dereference at 0x0f62b230 (observed s0=0x4ac).  Force it through
+     * original MIPS so the bounded low-pointer LW repair can service it.
+     */
+    if (address == 0x0f62b1f0u)
         return 1;
 
     static int init;
