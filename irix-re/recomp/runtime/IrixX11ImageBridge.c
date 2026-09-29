@@ -162,7 +162,14 @@ static XImage *sync_image_from_guest(IrixGuestRuntime *rt, IrixGuestAddr guest)
     im->green_mask = (unsigned long)irix_guest_read32be(rt, guest + 52u);
     im->blue_mask = (unsigned long)irix_guest_read32be(rt, guest + 56u);
     if (rt->trapped) return 0;
-    im->data = data ? (char *)irix_guest_ptr(rt, data, 1u) : 0;
+    if (data) {
+        uint64_t n = image_data_size(im);
+        if (!n || n > SIZE_MAX || !irix_guest_ptr(rt, data, (size_t)n))
+            return 0;
+        im->data = (char *)irix_guest_ptr(rt, data, (size_t)n);
+    } else {
+        im->data = 0;
+    }
     return rt->trapped ? 0 : im;
 }
 
@@ -282,13 +289,31 @@ static void bridge_XCreateImage(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     unsigned int height = (uint32_t)cpu->gpr[11];
     int bitmap_pad = (int32_t)n32_stack_arg32(rt, cpu, 0u);
     int bytes_per_line = (int32_t)n32_stack_arg32(rt, cpu, 1u);
-    char *data = guest_data ? (char *)irix_guest_ptr(rt, guest_data, 1u) : 0;
+    char *data = 0;
     XImage *im;
 
     register_callbacks(rt);
     if (!dpy || !visual || rt->trapped) { cpu->gpr[2] = 0; return; }
-    im = XCreateImage(dpy, visual, depth, format, offset, data, width, height,
+
+    /*
+     * Xlib keeps and later dereferences the supplied image data pointer.
+     * Never hand it a host pointer obtained by validating only the first guest
+     * byte.  Build the XImage first so Xlib computes bytes_per_line, then
+     * require the complete backing range before exposing guest storage.
+     */
+    im = XCreateImage(dpy, visual, depth, format, offset, 0, width, height,
                       bitmap_pad, bytes_per_line);
+    if (im && guest_data) {
+        uint64_t n = image_data_size(im);
+        if (!n || n > SIZE_MAX ||
+            !(data = (char *)irix_guest_ptr(rt, guest_data, (size_t)n))) {
+            im->data = 0;
+            XDestroyImage(im);
+            cpu->gpr[2] = 0;
+            return;
+        }
+        im->data = data;
+    }
     cpu->gpr[2] = register_image(rt, im, guest_data);
     if (im && !cpu->gpr[2]) {
         im->data = 0;
