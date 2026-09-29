@@ -401,6 +401,26 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
     return seg->host_base + (uint32_t)(addr - seg->guest_base);
 }
 
+const char *irix_guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t max_len)
+{
+    IrixGuestSegment *seg;
+    size_t off;
+    size_t avail;
+    size_t n;
+    const char *s;
+
+    if (!rt || !addr || !max_len)
+        return 0;
+    seg = find_segment(rt, addr, 1u);
+    if (!seg)
+        return 0;
+    off = (size_t)(addr - seg->guest_base);
+    avail = (size_t)seg->size - off;
+    n = avail < max_len ? avail : max_len;
+    s = (const char *)seg->host_base + off;
+    return memchr(s, '\\0', n) ? s : 0;
+}
+
 #define IRIX_XT_COMPAT_BASE 0x74400000u
 #define IRIX_XT_COMPAT_SIZE 0x00100000u
 #define IRIX_XT_RESOURCE_SIZE 28u
