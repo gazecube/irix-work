@@ -938,6 +938,15 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
         return 1;
 
     /*
+     * libSgm helper at 0x0b2082f4 contains the same malformed resource flag
+     * access pattern at 0x0b208310 (LBU +0x14 from small token 0x4ac).
+     * Force this exact helper through original MIPS so the generalized
+     * resource-load repair can service it.
+     */
+    if (address == 0x0b2082f4u)
+        return 1;
+
+    /*
      * Xt _XtGetResources currently traps in translated code at 0x0f6166b4
      * with its return-address/base register state corrupted.  Keep the exact
      * SGI function on original MIPS while bring-up continues; this also lets
