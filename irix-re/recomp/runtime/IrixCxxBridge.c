@@ -119,7 +119,7 @@ static void bridge_ostream_insert_cstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
     IrixGuestAddr string_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
     IrixOstrstreamState *st = ostrstream_find(object);
-    const char *s = (const char *)irix_guest_ptr(rt, string_addr, 1);
+    const char *s = irix_guest_cstr(rt, string_addr, 65536u);
     size_t n;
 
     if (!s) {
