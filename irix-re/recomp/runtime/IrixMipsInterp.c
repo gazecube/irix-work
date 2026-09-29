@@ -929,6 +929,16 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 int irix_mips_interp_should_force(IrixGuestAddr address)
 {
     /*
+     * XtGetValues/XtVaGetValues are N32 ABI-sensitive pointer-output paths.
+     * The startup trace has repeatedly reached _XtCopyToArg with impossible
+     * guest destinations while these functions were translated.  Keep both
+     * on original MIPS during bring-up so any surviving bad Arg.value is
+     * proven to originate in the caller/bridge rather than static codegen.
+     */
+    if (address == 0x0f61c5acu || address == 0x0f65ed94u)
+        return 1;
+
+    /*
      * Desktop bring-up policy for SGI resource processing.
      *
      * The same malformed small resource tokens have now appeared across a
