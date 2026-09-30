@@ -42,12 +42,11 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      * values (for example 0x000004ac) where an XtResource pointer is expected.
      * Any load through those values would fault in low unmapped memory.
      *
-     * Keep this intentionally fenced to the observed Xt resource-processing
-     * text window.  The same SGI resource flag byte (+0x14) is also consumed
-     * by libXm default/resource helpers, so accept that exact LBU shape across
-     * libXm as well.  Xm navigation startup has also exposed the same tiny
-     * token pattern inside _XmGetFocusData; keep that one function on the
-     * same missing-private-data policy.  Missing resource entries have now been observed as
+     * Stability mode now applies this missing-private-data policy across the
+     * loaded SGI libXt/libXm text ranges.  The same corruption has appeared in
+     * resource tables, focus/navigation records, class extensions and hidden
+     * initializer helpers, so per-PC fencing only moves the crash.  Missing
+     * private entries have now been observed as
      * NULL, small positive integers (for example 0x4ac), and sign-extended
      * small negatives (for example 0xffffffdd / -35).  None is a valid N32
      * user pointer in this resource-walk context.  A genuinely unmapped
@@ -56,18 +55,24 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      * time whack-a-mole.
      */
     {
-        int in_xt_resource_window =
-            (pc >= 0x0f614000u && pc < 0x0f619300u) ||
-            (pc >= 0x0f62c1a4u && pc < 0x0f62c4f0u);
-        int in_xm_resource_flag_path =
-            (pc >= 0x0b1b0000u && pc < 0x0b400000u &&
-             op == 0x24u && (uint32_t)(addr - base) == 0x14u);
-        int in_xm_focus_data_path =
-            (pc >= 0x0b299310u && pc < 0x0b299470u);
+        /*
+         * Stability mode for SGI Xt/Motif private data.
+         *
+         * We now run these libraries as original MIPS, but malformed hybrid
+         * class/resource initialization can still leave NULL or tiny scalar
+         * tokens in private pointer slots.  Any dereference through such a
+         * value is invalid in the N32 user address space.  If the effective
+         * address is also unmapped, treat the private record as absent.
+         *
+         * Keep this fenced to the actual loaded libXt/libXm text ranges.
+         * Real mapped pointers are never changed.
+         */
+        int in_xt_text =
+            (pc >= 0x0f600000u && pc < 0x0f6a0000u);
+        int in_xm_text =
+            (pc >= 0x0b260000u && pc < 0x0b400000u);
 
-        if (!in_xt_resource_window &&
-            !in_xm_resource_flag_path &&
-            !in_xm_focus_data_path)
+        if (!in_xt_text && !in_xm_text)
             return 0;
     }
     {
