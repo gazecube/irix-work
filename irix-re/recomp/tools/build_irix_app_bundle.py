@@ -27,6 +27,33 @@ def write_if_changed(path, text):
     return True
 
 
+def hash_file_into(h, path):
+    with Path(path).open('rb') as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+
+
+def install_cached_file(src, dst):
+    src = Path(src)
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.parent / ('.' + dst.name + '.tmp.%d' % os.getpid())
+    try:
+        if tmp.exists():
+            tmp.unlink()
+        try:
+            os.link(src, tmp)
+        except OSError:
+            shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def load_manifest(path):
     data = json.loads(Path(path).read_text())
     if not isinstance(data.get('apps'), list):
@@ -721,8 +748,17 @@ def main():
         dso_rows.append((row, bundle, binary, soname, dso))
         dso_by_soname[soname] = dso
 
+    # Final translated DSOs are also content-addressed across the entire
+    # ecosystem. Generated C and objects were already shared; without this
+    # layer every app closure still relinked libXt/libXm/ViewKit/etc. into the
+    # same reconstructed-root path. Cache the native ELF once and install it
+    # by hardlink/copy for every consumer.
+    dso_cache = out.parent / '.irix-dso-cache'
+    dso_cache.mkdir(parents=True, exist_ok=True)
+
     shared_outputs = []
     linked_sonames = set()
+    linked_dso_keys = {}
     pending_dso_rows = list(dso_rows)
     while pending_dso_rows:
         progressed = False
@@ -758,30 +794,81 @@ def main():
                 rp = '$ORIGIN' if rel == '.' else '$ORIGIN/' + rel
                 if rp not in runpaths:
                     runpaths.append(rp)
-            link_cmd = [a.cc, '-shared', f'-Wl,-soname,{soname}', '-Wl,-z,defs',
-                        '-Wl,--no-as-needed',
-                        '-Wl,-rpath,' + ':'.join(runpaths),
-                        '-o', dso, *component_objects]
+            # Build a stable cache key from everything that can affect the
+            # resulting native DSO. Dependency keys are included rather than
+            # app names, so identical closures from different executables
+            # converge on exactly one linked artifact.
+            dso_hash = hashlib.sha256()
+            dso_hash.update(b'irix-native-dso-cache-v1\0')
+            dso_hash.update(str(a.cc).encode('utf-8') + b'\0')
+            dso_hash.update(soname.encode('utf-8') + b'\0')
+            dso_hash.update((':'.join(runpaths)).encode('utf-8') + b'\0')
+            hash_file_into(dso_hash, binary)
+            for component_object in component_objects:
+                hash_file_into(dso_hash, component_object)
             if runtime_lib is not None:
-                link_cmd.append(str(runtime_lib))
-
-            # Preserve every original IRIX DT_NEEDED edge whose provider is
-            # part of this translated closure. Providers are linked first so
-            # passing their output paths to ld never races a not-yet-created
-            # DSO merely because closure discovery found a consumer first.
+                hash_file_into(dso_hash, runtime_lib)
             for needed in elf_needed(binary):
                 dep = dso_by_soname.get(needed)
                 if dep is not None and dep != dso:
-                    link_cmd.append(str(dep))
+                    dep_key = linked_dso_keys.get(needed)
+                    if dep_key is None:
+                        raise SystemExit(
+                            f'missing translated DSO cache key for dependency '
+                            f'{needed} required by {soname}')
+                    dso_hash.update(needed.encode('utf-8') + b'\0')
+                    dso_hash.update(dep_key.encode('ascii') + b'\0')
                 elif needed not in dso_by_soname:
                     print(f'warning: native DSO {soname}: translated provider for '
                           f'DT_NEEDED {needed} is not in this closure',
                           file=sys.stderr)
 
-            link_cmd.append('-lm')
-            run(link_cmd)
+            dso_key = dso_hash.hexdigest()
+            cache_dso = dso_cache / (dso_key + '.so')
+            cache_lock = dso_cache / (dso_key + '.lock')
+
+            with cache_lock.open('a+b') as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                if cache_dso.is_file():
+                    print(f'IRIX DSO cache hit: {soname} -> {cache_dso}',
+                          flush=True)
+                else:
+                    cache_tmp = dso_cache / (
+                        dso_key + '.tmp.%d.so' % os.getpid())
+                    if cache_tmp.exists():
+                        cache_tmp.unlink()
+
+                    link_cmd = [
+                        a.cc, '-shared', f'-Wl,-soname,{soname}',
+                        '-Wl,-z,defs', '-Wl,--no-as-needed',
+                        '-Wl,-rpath,' + ':'.join(runpaths),
+                        '-o', cache_tmp, *component_objects
+                    ]
+                    if runtime_lib is not None:
+                        link_cmd.append(str(runtime_lib))
+
+                    # Providers are already installed in rootfs in dependency
+                    # order. They are used only as link inputs; the cache key
+                    # above records their content identity transitively.
+                    for needed in elf_needed(binary):
+                        dep = dso_by_soname.get(needed)
+                        if dep is not None and dep != dso:
+                            link_cmd.append(str(dep))
+
+                    link_cmd.append('-lm')
+                    try:
+                        run(link_cmd)
+                        os.replace(cache_tmp, cache_dso)
+                    finally:
+                        if cache_tmp.exists():
+                            cache_tmp.unlink()
+                    print(f'IRIX DSO cache store: {soname} -> {cache_dso}',
+                          flush=True)
+
+            install_cached_file(cache_dso, dso)
             shared_outputs.append(dso)
             linked_sonames.add(soname)
+            linked_dso_keys[soname] = dso_key
             pending_dso_rows.remove(item)
             progressed = True
 
