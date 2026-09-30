@@ -2778,6 +2778,35 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * Hidden Motif initialization callback at 0x0b2fcc64.
+     *
+     * Its first instructions load new_w->core.widget_class and then the
+     * class tm_table (+0x64), so a1 must be a live Widget.  In the hybrid
+     * Xt allocation/initialization path returning to 0x0f62b578, a1 has
+     * been observed as a caller-stack scratch address while s1 still carries
+     * the live widget.  This is the same ABI damage pattern as
+     * InitializePrehook below.
+     *
+     * Repair only the demonstrated callback and only when the structural
+     * checks prove that a1 is not a Widget and s1 is.
+     */
+    if (address == 0x0b2fcc64u) {
+        IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr saved_new_w =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+
+        if (!irix_guest_looks_like_widget(rt, new_w) &&
+            irix_guest_looks_like_widget(rt, saved_new_w)) {
+            fprintf(stderr,
+                    "IRIX Motif hidden init ABI repair: "
+                    "pc=0b2fcc64 a1=%08x -> s1=%08x\n",
+                    new_w, saved_new_w);
+            cpu->gpr[5] =
+                (uint64_t)(int64_t)(int32_t)saved_new_w;
+        }
+    }
+
+    /*
      * Motif InitializePrehook ABI repair.
      *
      * The recovered prehook at 0x0b2e54f0 has the normal XtInitProc
