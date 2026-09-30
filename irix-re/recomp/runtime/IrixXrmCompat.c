@@ -27,7 +27,7 @@ static IrixXrmCompatState g_xrm;
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+    return irix_guest_cstr(rt, addr, 65536u);
 }
 
 static uint32_t rd32(IrixGuestRuntime *rt, IrixGuestAddr addr)
