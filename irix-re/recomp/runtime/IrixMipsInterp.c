@@ -55,7 +55,8 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      */
     {
         int in_xt_resource_window =
-            (pc >= 0x0f614000u && pc < 0x0f619300u);
+            (pc >= 0x0f614000u && pc < 0x0f619300u) ||
+            (pc >= 0x0f62c1a4u && pc < 0x0f62c4f0u);
         int in_xm_resource_flag_path =
             (pc >= 0x0b1b0000u && pc < 0x0b400000u &&
              op == 0x24u && (uint32_t)(addr - base) == 0x14u);
@@ -962,6 +963,7 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
      */
     if ((address >= 0x0f614000u && address < 0x0f619300u) ||
         (address >= 0x0f62b1f0u && address < 0x0f62b758u) ||
+        address == 0x0f62c1a4u ||
         (address >= 0x0b208000u && address < 0x0b208600u) ||
         /*
          * libXm resource/default processing is spread across a much wider
