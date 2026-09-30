@@ -2050,7 +2050,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case SYS_access: { /* access */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         int mode = (int)(int32_t)cpu->gpr[5];
-        const char *path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        const char *path = irix_guest_cstr(rt, path_addr, 65536u);
         if (!path) {
             errno = EFAULT;
             syscall_result(cpu, -1);
