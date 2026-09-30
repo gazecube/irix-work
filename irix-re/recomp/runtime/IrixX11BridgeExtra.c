@@ -45,7 +45,7 @@ static IrixGuestAddr gc_to_guest(GC gc);
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+    return irix_guest_cstr(rt, addr, 65536u);
 }
 
 static void wr32(IrixGuestRuntime *rt, IrixGuestAddr p, uint32_t v)
