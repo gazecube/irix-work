@@ -294,7 +294,7 @@ static void bridge_guest_mktemp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     static const char alphabet[] =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
-    char *tmpl = addr ? (char *)irix_guest_ptr(rt, addr, 1u) : 0;
+    char *tmpl = (char *)irix_guest_cstr(rt, addr, 65536u);
     size_t len, xcount, attempt;
 
     if (!tmpl) {
