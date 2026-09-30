@@ -407,6 +407,55 @@ static void write_char_struct(IrixGuestRuntime *rt, IrixGuestAddr a, const XChar
     irix_guest_write16be(rt, a + 10u, c->attributes);
 }
 
+IrixGuestAddr irix_x11_primary_create_gc(IrixGuestRuntime *rt,
+                                         IrixGuestAddr display_addr,
+                                         uint32_t drawable,
+                                         uint32_t mask,
+                                         IrixGuestAddr values_addr)
+{
+    Display *d = display_from_guest(display_addr);
+    XGCValues values;
+    XGCValues *values_ptr = NULL;
+    GC gc;
+
+    if (!d || !drawable)
+        return 0;
+    if (mask) {
+        if (!read_xgcvalues(rt, values_addr, &values))
+            return 0;
+        values_ptr = &values;
+    }
+    gc = XCreateGC(d, (Drawable)drawable, (unsigned long)mask, values_ptr);
+    return gc_to_guest(gc);
+}
+
+int irix_x11_primary_free_gc(IrixGuestRuntime *rt,
+                             IrixGuestAddr display_addr,
+                             IrixGuestAddr guest_gc)
+{
+    Display *d = display_from_guest(display_addr);
+    GC gc = gc_from_guest(guest_gc);
+    uint32_t off, i;
+    int rc;
+
+    if (!d || !gc)
+        return 0;
+    rc = XFreeGC(d, gc);
+    if (guest_gc >= IRIX_X11_GC_BASE &&
+        guest_gc < IRIX_X11_GC_BASE + IRIX_X11_GC_SHADOW_SIZE) {
+        off = guest_gc - IRIX_X11_GC_BASE;
+        if ((off % IRIX_X11_GC_STRIDE) == 0u) {
+            i = off / IRIX_X11_GC_STRIDE;
+            if (i < g_x11.gc_count) {
+                g_x11.gcs[i] = 0;
+                if (irix_guest_ptr(rt, guest_gc, 112u))
+                    memset(irix_guest_ptr(rt, guest_gc, 112u), 0, 112u);
+            }
+        }
+    }
+    return rc;
+}
+
 static IrixGuestAddr font_to_guest(IrixGuestRuntime *rt, XFontStruct *f)
 {
     IrixGuestAddr out, props = 0, per = 0;
