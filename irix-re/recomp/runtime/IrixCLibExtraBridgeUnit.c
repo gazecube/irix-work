@@ -483,20 +483,26 @@ static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int old = g_guest_oserror;
     int value = (int)(int32_t)cpu->gpr[4];
-    (void)rt;
+    IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
+    IrixGuestFunctionEntry *caller = irix_guest_find_function(rt, ra);
     fprintf(stderr,
-            "IRIX setoserror trace: old=%d new=%d caller_pc=%08x ra=%08x\n",
-            old, value, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
+            "IRIX setoserror trace: old=%d new=%d caller_pc=%08x "
+            "ra=%08x caller=%s\n",
+            old, value, (uint32_t)cpu->pc, ra,
+            caller && caller->name ? caller->name : "?");
     g_guest_oserror = value;
     cpu->gpr[2] = (uint64_t)(int64_t)old;
 }
 
 static void bridge_guest_oserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    (void)rt;
+    IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
+    IrixGuestFunctionEntry *caller = irix_guest_find_function(rt, ra);
     fprintf(stderr,
-            "IRIX oserror trace: value=%d caller_pc=%08x ra=%08x\n",
-            g_guest_oserror, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
+            "IRIX oserror trace: value=%d caller_pc=%08x "
+            "ra=%08x caller=%s\n",
+            g_guest_oserror, (uint32_t)cpu->pc, ra,
+            caller && caller->name ? caller->name : "?");
     cpu->gpr[2] = (uint64_t)(int64_t)g_guest_oserror;
 }
 
