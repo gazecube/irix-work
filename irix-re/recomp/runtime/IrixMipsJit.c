@@ -1026,6 +1026,33 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 fprintf(stderr,
                         "IRIX JIT: RI recovery pc=%08x word=%08x -> interpreter\n",
                         ipc, word);
+
+                /*
+                 * The normal JIT path repairs a bogus jr $ra from the shadow
+                 * call stack in shadow_return_hook().  Once RI hands execution
+                 * to the interpreter that hook will never run, so carry the
+                 * same repair across the backend boundary here.  This matters
+                 * for rld/libc startup: Unicorn can expose RA==0 after its RI
+                 * exception plumbing even though we have a live architectural
+                 * caller on the shadow stack.
+                 */
+                if (!synthetic_return &&
+                    !jit_guest_exec_mapped(s, (IrixGuestAddr)(uint32_t)cpu->gpr[31]) &&
+                    s->shadow_ra_depth) {
+                    IrixGuestAddr expected =
+                        s->shadow_ra[s->shadow_ra_depth - 1u];
+                    if (jit_guest_exec_mapped(s, expected)) {
+                        fprintf(stderr,
+                                "IRIX JIT: RI fallback repairing ra=%08x -> %08x "
+                                "shadow_depth=%zu\n",
+                                (uint32_t)cpu->gpr[31], expected,
+                                s->shadow_ra_depth);
+                        cpu->gpr[31] =
+                            (uint64_t)(int64_t)(int32_t)expected;
+                        --s->shadow_ra_depth;
+                    }
+                }
+
                 if (synthetic_return)
                     cpu->gpr[31] = original_ra;
                 return irix_mips_interp_call(rt, cpu, ipc);
