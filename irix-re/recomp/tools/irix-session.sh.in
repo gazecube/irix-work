@@ -8,12 +8,14 @@ display="${DISPLAY:-:1}"
 
 mkdir -p "$logdir"
 
+makeicons="$root/usr/lib/desktop/makeIconVisuals"
+prealloc="$root/usr/lib/desktop/preallocColors"
 wm="$root/usr/bin/X11/4Dwm"
 waitwm="$root/usr/bin/X11/wait4wm"
 toolchest="$root/usr/bin/X11/toolchest"
 fm="$root/usr/sbin/fm"
 
-for p in "$wm" "$waitwm" "$toolchest" "$fm"; do
+for p in "$makeicons" "$prealloc" "$wm" "$waitwm" "$toolchest" "$fm"; do
     if [ ! -x "$p" ]; then
         echo "IRIX session: missing executable: $p" >&2
         exit 1
@@ -30,6 +32,22 @@ cleanup()
     [ -n "${wm_pid:-}" ] && kill "$wm_pid" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
+
+echo "IRIX session: preparing icon visuals"
+"$makeicons" >"$logdir/makeIconVisuals.log" 2>&1 || {
+    status=$?
+    echo "IRIX session: makeIconVisuals failed: $status" >&2
+    tail -80 "$logdir/makeIconVisuals.log" >&2 2>/dev/null || true
+    exit "$status"
+}
+
+echo "IRIX session: preallocating colors"
+"$prealloc" >"$logdir/preallocColors.log" 2>&1 || {
+    status=$?
+    echo "IRIX session: preallocColors failed: $status" >&2
+    tail -80 "$logdir/preallocColors.log" >&2 2>/dev/null || true
+    exit "$status"
+}
 
 echo "IRIX session: starting 4Dwm on $DISPLAY"
 "$wm" -launch -xrm '*SG_UseBackgrounds: True' >"$logdir/4Dwm.log" 2>&1 &
