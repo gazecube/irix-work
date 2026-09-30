@@ -2494,12 +2494,13 @@ static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
  * SGI/N32 CompositeClassPart compatibility.
  *
  * Xt's _XtCreateWidget uses XtGetClassExtension(parent_class, 0x84,
- * NULLQUARK, 1, 0) before allowing a non-Core child.  Motif Manager
- * descendants are specifically designed to contain RectObj/Gadget children,
- * so they must expose a CompositeClassExtension with accepts_objects == True.
+ * NULLQUARK, 1, 0) before allowing a non-Core child.  Any Composite-derived
+ * class may intentionally accept RectObj/Object children; Motif Manager is
+ * only one such family.  The IRIX desktop's "desktop" parent is another.
  *
  * Hybrid class initialization can lose that extension or leave its Boolean
- * cleared.  Repair only classes whose superclass chain names XmManager.
+ * cleared.  Repair Composite-derived parents structurally rather than keying
+ * the policy to the XmManager class name.
  */
 static int irix_guest_class_derives_from_named(IrixGuestRuntime *rt,
                                                IrixGuestAddr cls,
@@ -2565,7 +2566,9 @@ static void irix_guest_repair_motif_accepts_objects(IrixGuestRuntime *rt,
     if (!parent || !irix_guest_ptr(rt, parent, 8u))
         return;
     cls = irix_guest_read32be(rt, parent + 0x04u);
-    if (!irix_guest_class_derives_from_named(rt, cls, "XmManager"))
+    if (!irix_guest_class_derives_from_named(rt, cls, "Composite") &&
+        !irix_guest_class_derives_from_named(rt, cls, "Constraint") &&
+        !irix_guest_class_derives_from_named(rt, cls, "XmManager"))
         return;
 
     ext = irix_guest_find_composite_extension(rt, cls);
@@ -2596,14 +2599,20 @@ static void irix_guest_repair_motif_accepts_objects(IrixGuestRuntime *rt,
         super = irix_guest_read32be(rt, super + 0x00u);
     }
 
-    if (!inherited)
-        return;
-
-    record_size = irix_guest_read32be(rt, inherited + 0x0cu);
-    if (record_size < 0x14u || record_size > 0x100u)
-        record_size = 0x14u;
-    if (irix_guest_ptr(rt, inherited, 0x12u))
-        allows_change = irix_guest_read8(rt, inherited + 0x11u);
+    /*
+     * A missing inherited extension is itself one of the hybrid-init failure
+     * modes.  The CompositeClassExtension header is fixed-size enough for the
+     * fields Xt consults here: next, record_type, version, record_size,
+     * accepts_objects and allows_change_managed_set.  Build the minimal valid
+     * record even when no superclass copy survived initialization.
+     */
+    if (inherited) {
+        record_size = irix_guest_read32be(rt, inherited + 0x0cu);
+        if (record_size < 0x14u || record_size > 0x100u)
+            record_size = 0x14u;
+        if (irix_guest_ptr(rt, inherited, 0x12u))
+            allows_change = irix_guest_read8(rt, inherited + 0x11u);
+    }
 
     fresh = irix_guest_xt_compat_alloc(rt, record_size);
     if (!fresh || !irix_guest_ptr(rt, fresh, record_size))
