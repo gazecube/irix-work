@@ -45,10 +45,11 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      * Keep this intentionally fenced to the observed Xt resource-processing
      * text window.  The same SGI resource flag byte (+0x14) is also consumed
      * by libXm default/resource helpers, so accept that exact LBU shape across
-     * libXm as well.  Resource tokens may appear either as small positive
-     * integers (for example 0x4ac) or as sign-extended small negatives
-     * (observed 0xffffffdd / -35).  Neither form is a valid N32 user pointer.
-     * A genuinely unmapped effective address is still required.  Returning
+     * libXm as well.  Missing resource entries have now been observed as
+     * NULL, small positive integers (for example 0x4ac), and sign-extended
+     * small negatives (for example 0xffffffdd / -35).  None is a valid N32
+     * user pointer in this resource-walk context.  A genuinely unmapped
+     * effective address is still required.  Returning
      * zero matches the existing missing/empty handling and avoids one-PC-at-a-
      * time whack-a-mole.
      */
@@ -64,12 +65,12 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
     }
     {
         int32_t signed_base = (int32_t)base;
-        int small_token =
-            (base != 0u &&
-             (base < 0x00010000u ||
-              (signed_base < 0 && signed_base >= -65536)));
+        int missing_token =
+            (base == 0u ||
+             base < 0x00010000u ||
+             (signed_base < 0 && signed_base >= -65536));
 
-        if (!small_token)
+        if (!missing_token)
             return 0;
     }
     if (irix_guest_ptr(rt, addr, 1u))
