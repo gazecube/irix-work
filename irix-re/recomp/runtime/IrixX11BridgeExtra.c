@@ -1033,11 +1033,11 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     /*
      * Desktop stability mode.
      *
-     * Pointer motion/crossing currently reaches an unstable SGI Xt/Motif
-     * dispatch path after otherwise-successful desktop realization.  Keep
-     * button/key events flowing so the desktop remains interactable, but
-     * discard high-frequency motion and enter/leave events until that private
-     * translation path is repaired.  This is deliberately done at the host
+     * Pointer crossing currently reaches an unstable SGI Xt/Motif dispatch
+     * path when the pointer enters/leaves the startup popup.  Motion itself is
+     * not the demonstrated trigger, so keep MotionNotify/button/key events
+     * flowing and discard only EnterNotify/LeaveNotify for bring-up.  This is
+     * deliberately done at the host
      * event bridge so the guest never sees a half-consumed pointer event.
      */
     for (;;) {
@@ -1046,11 +1046,9 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
 
-        if (e.type == MotionNotify ||
-            e.type == EnterNotify ||
-            e.type == LeaveNotify) {
+        if (e.type == EnterNotify || e.type == LeaveNotify) {
             fprintf(stderr,
-                    "IRIX X11 stability: drop pointer event type=%d "
+                    "IRIX X11 stability: drop crossing event type=%d "
                     "window=%08x\n",
                     e.type, (uint32_t)e.xany.window);
             continue;
