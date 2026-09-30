@@ -1122,12 +1122,38 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                             cpu->gpr[31] = original_ra;
                         return -1;
                     }
-                    fprintf(stderr,
-                            "IRIX JIT: RI interpreter returned to %08x "
-                            "(live_ra=%08x return_pc=%08x)\n",
-                            (uint32_t)cpu->pc, live_ra, return_pc);
+                    {
+                        uint32_t rw0 = 0, rw1 = 0, rw2 = 0, rw3 = 0;
+                        if (irix_guest_ptr(rt, cpu->pc, 16u)) {
+                            rw0 = irix_guest_read32be(rt, cpu->pc + 0u);
+                            rw1 = irix_guest_read32be(rt, cpu->pc + 4u);
+                            rw2 = irix_guest_read32be(rt, cpu->pc + 8u);
+                            rw3 = irix_guest_read32be(rt, cpu->pc + 12u);
+                        }
+                        fprintf(stderr,
+                                "IRIX JIT: RI interpreter returned to %08x "
+                                "(live_ra=%08x return_pc=%08x) "
+                                "resume_words=%08x,%08x,%08x,%08x "
+                                "a0-a3=%08x,%08x,%08x,%08x\n",
+                                (uint32_t)cpu->pc, live_ra, return_pc,
+                                rw0, rw1, rw2, rw3,
+                                (uint32_t)cpu->gpr[4],
+                                (uint32_t)cpu->gpr[5],
+                                (uint32_t)cpu->gpr[6],
+                                (uint32_t)cpu->gpr[7]);
+                    }
                     if (cpu->pc == return_pc)
                         break;
+#if UC_API_MAJOR >= 2
+                    /*
+                     * An RI in Unicorn's MIPS delay-slot machinery can leave
+                     * translated-block state associated with the pre-fallback
+                     * path.  We just executed the faulting callee to completion
+                     * in the architectural interpreter; discard Unicorn's
+                     * cached blocks before resuming at the returned PC.
+                     */
+                    (void)uc_ctl_flush_tb(s->uc);
+#endif
                     continue;
                 }
             }
