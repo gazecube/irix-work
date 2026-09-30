@@ -1010,15 +1010,25 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         target0, target1, target2, target3);
             }
             if (s->interrupt_no == 20u) { /* EXCP_RI */
+                /*
+                 * Do not single-step an RI instruction and then immediately
+                 * re-enter Unicorn.  MIPS delay-slot/branch exception state is
+                 * internal to Unicorn and is not cleared by writing the guest
+                 * PC back after an interpreter step.  In particular, a valid
+                 * branch immediately following a syscall can otherwise loop:
+                 * Unicorn repeatedly reports the old branch PC even though the
+                 * interpreter advanced cpu->pc.
+                 *
+                 * RI is already an exceptional slow path.  Hand the remainder
+                 * of this guest call to the interpreter so execution resumes
+                 * from a clean architectural state.
+                 */
                 fprintf(stderr,
-                        "IRIX JIT: single-step RI recovery pc=%08x word=%08x\n",
+                        "IRIX JIT: RI recovery pc=%08x word=%08x -> interpreter\n",
                         ipc, word);
-                if (irix_mips_interp_step(rt, cpu, ipc) == 0 &&
-                    !rt->trapped) {
-                    if (cpu->pc == return_pc)
-                        break;
-                    continue;
-                }
+                if (synthetic_return)
+                    cpu->gpr[31] = original_ra;
+                return irix_mips_interp_call(rt, cpu, ipc);
             }
 
             if (synthetic_return)
