@@ -54,12 +54,32 @@ echo "IRIX session: starting 4Dwm on $DISPLAY"
 wm_pid=$!
 
 echo "IRIX session: waiting for 4Dwm"
-"$waitwm" >"$logdir/wait4wm.log" 2>&1
-wait_status=$?
+wait_status=1
+attempt=0
+while [ "$attempt" -lt 40 ]; do
+    if ! kill -0 "$wm_pid" 2>/dev/null; then
+        wait "$wm_pid"
+        wm_status=$?
+        echo "IRIX session: 4Dwm exited during startup: $wm_status" >&2
+        tail -120 "$logdir/4Dwm.log" >&2 2>/dev/null || true
+        exit "$wm_status"
+    fi
+
+    "$waitwm" >"$logdir/wait4wm.log" 2>&1
+    wait_status=$?
+    if [ "$wait_status" -eq 0 ]; then
+        break
+    fi
+
+    attempt=$((attempt + 1))
+    echo "IRIX session: 4Dwm not ready yet ($attempt/40)"
+    sleep 0.5
+done
+
 if [ "$wait_status" -ne 0 ]; then
-    echo "IRIX session: wait4wm failed: $wait_status" >&2
-    tail -80 "$logdir/4Dwm.log" >&2 2>/dev/null || true
-    tail -80 "$logdir/wait4wm.log" >&2 2>/dev/null || true
+    echo "IRIX session: wait4wm timed out: $wait_status" >&2
+    tail -120 "$logdir/4Dwm.log" >&2 2>/dev/null || true
+    tail -120 "$logdir/wait4wm.log" >&2 2>/dev/null || true
     exit "$wait_status"
 fi
 
