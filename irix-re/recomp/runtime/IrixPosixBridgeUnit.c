@@ -745,6 +745,28 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out_addr;
 }
 
+static int guest_exec_host_path(const char *guest_path,
+                                char *host_path,
+                                size_t host_path_size)
+{
+    const char *root;
+    int n;
+
+    if (!guest_path || guest_path[0] != '/' ||
+        !host_path || host_path_size == 0u)
+        return 0;
+
+    root = getenv("IRIX_RECOMP_ROOT");
+    if (!root || !*root)
+        return 0;
+
+    n = snprintf(host_path, host_path_size, "%s%s", root, guest_path);
+    if (n < 0 || (size_t)n >= host_path_size)
+        return 0;
+
+    return access(host_path, X_OK) == 0;
+}
+
 static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *file = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -806,6 +828,17 @@ static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     fprintf(stderr, "IRIX execvp: file=%s argc=%zu arg0=%s\n",
             file, argc, argc ? argv[0] : "(null)");
+
+    if (file[0] == '/') {
+        char host_path[PATH_MAX];
+        if (guest_exec_host_path(file, host_path, sizeof(host_path))) {
+            fprintf(stderr,
+                    "IRIX guest exec redirect: %s -> %s\n",
+                    file, host_path);
+            execv(host_path, argv);
+        }
+    }
+
     execvp(file, argv);
 
     saved_errno = errno;
@@ -818,18 +851,37 @@ static void bridge_execl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     const char *arg0 = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
-    const char *arg1 = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+    const char *arg1 = (uint32_t)cpu->gpr[6]
+        ? guest_cstr(rt, (uint32_t)cpu->gpr[6]) : NULL;
+    char host_path[PATH_MAX];
+    char *argv[3];
 
-    /*
-     * Guest IRIX executables cannot be handed to the Linux kernel.
-     * Until guest exec replacement is wired to translated app bundles,
-     * fail exactly as an exec of an unsupported binary would.
-     */
-    fprintf(stderr, "IRIX execl: guest exec unavailable: path=%s arg0=%s arg1=%s\n",
-            path ? path : "(invalid)",
-            arg0 ? arg0 : "(null)",
-            arg1 ? arg1 : "(null)");
-    errno = path ? ENOEXEC : EFAULT;
+    if (!path || !arg0) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    argv[0] = (char *)arg0;
+    argv[1] = (char *)arg1;
+    argv[2] = NULL;
+
+    if (guest_exec_host_path(path, host_path, sizeof(host_path))) {
+        fprintf(stderr,
+                "IRIX guest execl redirect: %s -> %s arg0=%s arg1=%s\n",
+                path, host_path, arg0, arg1 ? arg1 : "(null)");
+        execv(host_path, argv);
+        fprintf(stderr,
+                "IRIX guest execl redirect failed: %s errno=%d\n",
+                host_path, errno);
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    fprintf(stderr,
+            "IRIX execl: no translated runner for path=%s arg0=%s arg1=%s\n",
+            path, arg0, arg1 ? arg1 : "(null)");
+    errno = ENOEXEC;
     ret_i32(cpu, -1);
 }
 
