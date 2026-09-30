@@ -251,6 +251,31 @@ if(IRIX_DEV_TREE)
                 VERBATIM
             )
 
+            # Minimal Interactive Desktop session bring-up.
+            #
+            # This follows /var/X11/xdm/Xsession.dt ordering for the core
+            # visible session:
+            #   4Dwm -launch -> wait4wm -> toolchest -> fm -b
+            #
+            # The full Xsession.dt also performs first-login, soundscheme,
+            # bgicons, sysadmin, and power-management setup. Those are
+            # intentionally deferred until the core desktop stack is stable.
+            configure_file(
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/irix-session.sh.in"
+                "${CMAKE_CURRENT_BINARY_DIR}/quick/irix-session"
+                @ONLY
+            )
+            file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/quick/irix-session"
+                 PERMISSIONS
+                    OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE)
+
+            add_custom_target(irix_session
+                DEPENDS irix_ecosystem
+                COMMENT "Interactive Desktop core session is ready at recomp/quick/irix-session"
+            )
+
             foreach(_app_line IN LISTS IRIX_ECOSYSTEM_APPS)
                 if(_app_line STREQUAL "")
                     continue()
