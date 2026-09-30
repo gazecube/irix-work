@@ -803,6 +803,15 @@ int main(int argc, char **argv)
      */
     if (getenv("IRIX_PROFILE_DIR") && !getenv("IRIX_PROFILE_NAME"))
         setenv("IRIX_PROFILE_NAME", IRIX_APP_NAME, 0);
+
+    /*
+     * Child-process exec compatibility needs to resolve absolute IRIX paths
+     * such as /usr/bin/X11/4Dwm to the translated runners emitted under the
+     * reconstructed root.  Publish the compile-time root without overriding
+     * an explicit developer setting.
+     */
+    if (IRIX_RECOMP_ROOT[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
+        setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT, 0);
 #ifdef IRIX_DIRECT_MAIN
     /* Direct translated bring-up deliberately bypasses PT_INTERP/rld. */
     setenv("IRIX_EXEC_BACKEND", "static", 1);
