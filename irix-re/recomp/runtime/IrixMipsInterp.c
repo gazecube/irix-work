@@ -45,7 +45,9 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
      * Keep this intentionally fenced to the observed Xt resource-processing
      * text window.  The same SGI resource flag byte (+0x14) is also consumed
      * by libXm default/resource helpers, so accept that exact LBU shape across
-     * libXm as well.  Missing resource entries have now been observed as
+     * libXm as well.  Xm navigation startup has also exposed the same tiny
+     * token pattern inside _XmGetFocusData; keep that one function on the
+     * same missing-private-data policy.  Missing resource entries have now been observed as
      * NULL, small positive integers (for example 0x4ac), and sign-extended
      * small negatives (for example 0xffffffdd / -35).  None is a valid N32
      * user pointer in this resource-walk context.  A genuinely unmapped
@@ -60,8 +62,12 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
         int in_xm_resource_flag_path =
             (pc >= 0x0b1b0000u && pc < 0x0b400000u &&
              op == 0x24u && (uint32_t)(addr - base) == 0x14u);
+        int in_xm_focus_data_path =
+            (pc >= 0x0b299310u && pc < 0x0b299470u);
 
-        if (!in_xt_resource_window && !in_xm_resource_flag_path)
+        if (!in_xt_resource_window &&
+            !in_xm_resource_flag_path &&
+            !in_xm_focus_data_path)
             return 0;
     }
     {
