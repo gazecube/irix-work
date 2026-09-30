@@ -418,7 +418,7 @@ const char *irix_guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t max
     avail = (size_t)seg->size - off;
     n = avail < max_len ? avail : max_len;
     s = (const char *)seg->host_base + off;
-    return memchr(s, '\\0', n) ? s : 0;
+    return memchr(s, '\0', n) ? s : 0;
 }
 
 #define IRIX_XT_COMPAT_BASE 0x74400000u
