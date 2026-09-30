@@ -1154,35 +1154,25 @@ static int irix_guest_register_function_range_flags(
         return -1;
 
     /*
-     * Recovered anonymous entries (__link/__boundary/__ptr and similar)
-     * can begin strictly inside a broader translated FDE/function range.
-     * They are execution continuations, not fresh N32 ABI call boundaries.
+     * Anonymous recovered entries (__debug_frame/__pdr/__ptr/__link/
+     * __boundary and similar) are translation coverage, not authoritative
+     * N32 function boundaries.
      *
-     * The generated registries historically registered them as ordinary
-     * exact callable entries.  Exact lookup then defeated irix_guest_call()'s
-     * interior-PC interpreter fallback and entered generated C with a fresh
-     * function contract even though the code depended on the outer frame.
-     * This produced the recurring Xt/Motif startup state corruption.
+     * They may be nested inside another recovered range, but they may also be
+     * adjacent fragments of one real machine function.  One concrete libXm
+     * case is 0x0b37f660: code-link recovery emitted only the first two
+     * instructions, while a debug-frame range beginning at 0x0b37f668 owns
+     * the continuation.  Treating the 8-byte fragment as a complete function
+     * returned stale v0 and later turned ordinary pointer arithmetic into an
+     * unmapped store.
      *
-     * Mark only anonymous nested recompiled ranges.  Named symbols remain
-     * callable even when debug-frame recovery gives them overlapping coverage.
+     * Therefore every anonymous recompiled range is interpreter-only when
+     * reached as a guest call.  Named ELF symbols remain normal recompiled
+     * ABI entry points.  Generated code may still use anonymous ranges as
+     * local coverage labels inside its own recovered CFG.
      */
-    if ((flags & IRIX_GUEST_FUNCTION_RECOMPILED) && !name && size) {
-        for (prior_i = 0; prior_i < rt->function_count; ++prior_i) {
-            IrixGuestFunctionEntry *prior = &rt->functions[prior_i];
-            uint64_t prior_end;
-
-            if (!(prior->flags & IRIX_GUEST_FUNCTION_RECOMPILED) ||
-                !prior->size)
-                continue;
-            prior_end = (uint64_t)prior->address + (uint64_t)prior->size;
-            if (address > prior->address &&
-                (uint64_t)address < prior_end) {
-                flags |= IRIX_GUEST_FUNCTION_INTERIOR;
-                break;
-            }
-        }
-    }
+    if ((flags & IRIX_GUEST_FUNCTION_RECOMPILED) && !name && size)
+        flags |= IRIX_GUEST_FUNCTION_INTERIOR;
 
     entry = &rt->functions[rt->function_count++];
     entry->address = address;
@@ -3552,7 +3542,9 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address, IrixGuestFunctionEntry *entry)
 {
     IrixGuestAddr caller;
-    if (!entry || entry->address != address)
+    if (!entry || entry->address != address ||
+        ((entry->flags & IRIX_GUEST_FUNCTION_INTERIOR) &&
+         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_guest_call(rt, cpu, address);
     caller = rt->current_pc;
     irix_guest_profile_hit(rt, caller, address, entry);
