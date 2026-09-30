@@ -73,6 +73,41 @@ def validate_component(row, label):
         raise SystemExit(f"{label} has invalid C prefix {row['prefix']!r}")
 
 
+def stage_runtime_payloads(manifest, runtime_tree, rootfs):
+    payloads = manifest.get('runtime_payloads', [])
+    if not payloads:
+        return
+
+    lock_path = rootfs.parent / '.irix-runtime-payload.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open('a+b') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        for rel_text in payloads:
+            rel = Path(rel_text)
+            if rel.is_absolute() or '..' in rel.parts:
+                raise SystemExit(
+                    f'invalid runtime payload path {rel_text!r}')
+            src = runtime_tree / rel
+            dst = rootfs / rel
+            if not src.exists():
+                print(f'IRIX runtime payload: skip missing {src}',
+                      file=sys.stderr)
+                continue
+
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src, dst, dirs_exist_ok=True,
+                                copy_function=shutil.copy2,
+                                symlinks=True)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst, follow_symlinks=False)
+
+            print(f'IRIX runtime payload: {src} -> {dst}',
+                  file=sys.stderr)
+
+
 def find_app(manifest, name):
     matches = [a for a in manifest['apps'] if a.get('name') == name]
     if len(matches) != 1:
@@ -340,6 +375,11 @@ def main():
     rootfs = a.rootfs.resolve() if a.rootfs else (out / 'root').resolve()
     gen.mkdir(parents=True, exist_ok=True)
     rootfs.mkdir(parents=True, exist_ok=True)
+
+    # Install non-binary IRIX desktop resources alongside the translated
+    # executables/DSOs. The shared root is used by the entire ecosystem, so
+    # this is locked and incremental when app targets build in parallel.
+    stage_runtime_payloads(manifest, a.runtime_tree, rootfs)
 
     shared_components = app.get('shared_components', manifest['shared_components'])
     for i, row in enumerate(shared_components):
