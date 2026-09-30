@@ -1671,7 +1671,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     case SYS_open: { /* open */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-        const char *guest_path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
         char host_path[PATH_MAX];
         const char *path;
         uint32_t flags = (uint32_t)cpu->gpr[5];
@@ -1934,13 +1934,13 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     case SYS_chdir: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)chdir(path));
         return;
     }
     case SYS_chmod: {
-        const char *guest_path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *guest_path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         char host_path[PATH_MAX];
         const char *path;
         if (!guest_path) { errno = EFAULT; syscall_result(cpu, -1); return; }
@@ -1950,7 +1950,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     case SYS_chown: {
-        const char *guest_path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *guest_path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         char host_path[PATH_MAX];
         const char *path;
         if (!guest_path) { errno = EFAULT; syscall_result(cpu, -1); return; }
@@ -1975,33 +1975,33 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, (int64_t)umask((mode_t)(uint32_t)cpu->gpr[4]));
         return;
     case SYS_rmdir: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)rmdir(path));
         return;
     }
     case SYS_mkdir: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)mkdir(path, (mode_t)(uint32_t)cpu->gpr[5]));
         return;
     }
     case SYS_rename: {
-        const char *oldp = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
-        const char *newp = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 1u);
+        const char *oldp = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
+        const char *newp = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 65536u);
         if (!oldp || !newp) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)rename(oldp, newp));
         return;
     }
     case SYS_symlink: {
-        const char *target = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
-        const char *linkpath = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 1u);
+        const char *target = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
+        const char *linkpath = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 65536u);
         if (!target || !linkpath) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)symlink(target, linkpath));
         return;
     }
     case SYS_readlink: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         IrixGuestAddr buf_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
         void *buf = irix_guest_ptr(rt, buf_addr, count);
@@ -2010,7 +2010,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     case SYS_truncate: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)truncate(path, (off_t)(int32_t)cpu->gpr[5]));
         return;
@@ -2035,7 +2035,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                                             (mode_t)(uint32_t)cpu->gpr[5]));
         return;
     case SYS_lchown: {
-        const char *path = (const char *)irix_guest_ptr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 1u);
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)lchown(path, (uid_t)(uint32_t)cpu->gpr[5],
                                             (gid_t)(uint32_t)cpu->gpr[6]));
@@ -2102,7 +2102,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
-        const char *guest_path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
         char host_path[PATH_MAX];
         const char *path;
         struct stat st;
@@ -2126,7 +2126,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
-        const char *guest_path = (const char *)irix_guest_ptr(rt, path_addr, 1u);
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
         char host_path[PATH_MAX];
         const char *path;
         struct stat st;
