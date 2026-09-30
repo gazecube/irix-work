@@ -40,7 +40,7 @@ static IrixGuestAddr guest_tokenize(IrixGuestRuntime *rt, IrixGuestAddr start_ad
     if (start_addr) *state = start_addr;
     if (!*state) return 0;
 
-    s = (char *)irix_guest_ptr(rt, *state, 1);
+    s = (char *)irix_guest_cstr(rt, *state, 65536u);
     if (!s) return 0;
 
     skip = strspn(s, delim);
