@@ -482,14 +482,21 @@ static void bridge_guest_munmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int old = g_guest_oserror;
+    int value = (int)(int32_t)cpu->gpr[4];
     (void)rt;
-    g_guest_oserror = (int)(int32_t)cpu->gpr[4];
+    fprintf(stderr,
+            "IRIX setoserror trace: old=%d new=%d caller_pc=%08x ra=%08x\n",
+            old, value, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
+    g_guest_oserror = value;
     cpu->gpr[2] = (uint64_t)(int64_t)old;
 }
 
 static void bridge_guest_oserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
+    fprintf(stderr,
+            "IRIX oserror trace: value=%d caller_pc=%08x ra=%08x\n",
+            g_guest_oserror, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
     cpu->gpr[2] = (uint64_t)(int64_t)g_guest_oserror;
 }
 
