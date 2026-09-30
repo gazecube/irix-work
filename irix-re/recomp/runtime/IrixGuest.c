@@ -3043,6 +3043,50 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * SGI Motif hover/focus inheritance compatibility.
+     *
+     * The realized desktop reaches _XtInherit from the Motif focus/crossing
+     * path with return address 0x0b2998cc when the pointer enters the startup
+     * popup. _XtInherit is Xt's fatal sentinel for a class method that should
+     * have been resolved during class initialization; calling it is never a
+     * valid steady-state operation.
+     *
+     * Keep this exact callsite alive for bring-up by treating the missing
+     * inherited hook as an absent/void superclass method. This is deliberately
+     * narrower than dropping EnterNotify/LeaveNotify at the X11 bridge and
+     * allows the rest of Motif's crossing/focus dispatch to execute.
+     */
+    if (address == 0x0f6588b8u &&
+        (uint32_t)cpu->gpr[31] == 0x0b2998ccu) {
+        fprintf(stderr,
+                "IRIX Xt inheritance compatibility: "
+                "_XtInherit caller=0b2998cc -> no-op inherited hook\n");
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return 0;
+    }
+
+    /*
+     * Log every other unresolved inheritance sentinel before the broad
+     * Xt/Motif stability-mode interpreter fallback consumes it.
+     */
+    if (address == 0x0f6588b8u) {
+        fprintf(stderr,
+                "IRIX _XtInherit unresolved: caller_pc=%08x ra=%08x "
+                "sp=%08x gp=%08x t9=%08x "
+                "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                (uint32_t)cpu->pc,
+                (uint32_t)cpu->gpr[31],
+                (uint32_t)cpu->gpr[29],
+                (uint32_t)cpu->gpr[28],
+                (uint32_t)cpu->gpr[25],
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    }
+
+    /*
      * GUI stability mode.
      *
      * For bring-up, keep the SGI Xt/Motif ABI internally coherent by running
@@ -3146,20 +3190,6 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
-    }
-
-    if (address == 0x0f6588b8u) {
-        fprintf(stderr,
-                "IRIX _XtInherit called: caller_pc=%08x ra=%08x sp=%08x gp=%08x t9=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
-                (uint32_t)cpu->pc,
-                (uint32_t)cpu->gpr[31],
-                (uint32_t)cpu->gpr[29],
-                (uint32_t)cpu->gpr[28],
-                (uint32_t)cpu->gpr[25],
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
     }
 
     if (!entry) {
