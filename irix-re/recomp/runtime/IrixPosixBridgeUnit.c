@@ -887,9 +887,20 @@ static void bridge_execl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    int status = (int)(int32_t)cpu->gpr[4];
-    (void)rt;
-    exit(status);
+    uint32_t status = (uint32_t)cpu->gpr[4] & 0xffu;
+
+    /*
+     * Do not terminate the host runner directly. Match the SYS_exit path so
+     * AppRunner can report the guest exit cleanly and preserve diagnostics
+     * around the final IRIX control-flow decision.
+     */
+    fprintf(stderr,
+            "IRIX libc exit: status=%u caller_pc=%08x ra=%08x\n",
+            status, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
+    cpu->gpr[2] = status;
+    cpu->gpr[7] = 0;
+    rt->fault_addr = status;
+    irix_guest_trap(rt, cpu, 0xeeee23ffu);
 }
 
 static int host_socket_domain_from_irix(int domain)
