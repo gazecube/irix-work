@@ -2403,8 +2403,14 @@ static int irix_native_xt_gc_alloc(IrixGuestRuntime *rt,
     if (!screen || !irix_guest_ptr(rt, screen, 8u))
         return -1;
 
-    display = irix_guest_read32be(rt, screen + 0x00u);
-    drawable = irix_guest_read32be(rt, screen + 0x04u);
+    /*
+     * IRIX/N32 Screen prefix mirrored by IrixX11BridgeExtra:
+     *   +0x00 ext_data/private
+     *   +0x04 Display *
+     *   +0x08 root Window
+     */
+    display = irix_guest_read32be(rt, screen + 0x04u);
+    drawable = irix_guest_read32be(rt, screen + 0x08u);
 
     /*
      * XtGetGC(widget, value_mask, values)
