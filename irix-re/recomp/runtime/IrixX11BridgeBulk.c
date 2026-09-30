@@ -33,7 +33,7 @@ static IrixGuestAddr bulk_alloc(uint32_t n)
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr a)
 {
-    return a ? (const char *)irix_guest_ptr(rt, a, 1) : 0;
+    return irix_guest_cstr(rt, a, 65536u);
 }
 
 static IrixGuestAddr copy_string(IrixGuestRuntime *rt, const char *s)
