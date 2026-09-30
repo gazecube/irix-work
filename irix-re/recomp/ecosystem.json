@@ -49,6 +49,18 @@
       "path": "usr/bin/X11/userenv"
     },
     {
+      "name": "makeiconvisuals",
+      "prefix": "makeIconVisuals",
+      "kind": "runtime",
+      "path": "usr/lib/desktop/makeIconVisuals"
+    },
+    {
+      "name": "prealloccolors",
+      "prefix": "preallocColors",
+      "kind": "runtime",
+      "path": "usr/lib/desktop/preallocColors"
+    },
+    {
       "name": "xwsh",
       "prefix": "xwsh",
       "kind": "runtime",
