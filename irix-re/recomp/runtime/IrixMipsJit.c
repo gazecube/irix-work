@@ -235,6 +235,34 @@ static void shadow_return_hook(uc_engine *uc, uint64_t address,
         return;
     }
 
+    /*
+     * PIC startup/rld code also uses the REGIMM branch-and-link forms as
+     * calls (most commonly BGEZAL $zero, target, i.e. BAL).  The shadow
+     * return stack used to ignore these completely, so an RI raised inside a
+     * callee could expose RA==0 with no shadow return available to repair it.
+     * Record only taken branches; the likely forms share the same link
+     * semantics but annul the delay slot when not taken.
+     */
+    if (op == 0x01u) {
+        unsigned rtno = (insn >> 16) & 31u;
+        int is_link = (rtno == 0x10u || rtno == 0x11u ||
+                       rtno == 0x12u || rtno == 0x13u);
+        if (is_link) {
+            uint64_t rsv64 = 0;
+            int take = 0;
+            if (uc_reg_read(uc, gpr_regs[rs], &rsv64) == UC_ERR_OK) {
+                int64_t rsv = (int64_t)(int32_t)(uint32_t)rsv64;
+                if (rtno == 0x10u || rtno == 0x12u) /* BLTZAL[/L] */
+                    take = rsv < 0;
+                else                                  /* BGEZAL[/L] */
+                    take = rsv >= 0;
+                if (take && s->shadow_ra_depth < 4096u)
+                    s->shadow_ra[s->shadow_ra_depth++] = pc + 8u;
+            }
+            return;
+        }
+    }
+
     if (!(op == 0u && fn == 0x08u && rs == 31u))
         return;
 
