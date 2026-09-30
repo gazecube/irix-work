@@ -34,7 +34,7 @@ cleanup()
 trap cleanup INT TERM EXIT
 
 echo "IRIX session: preparing icon visuals"
-"$makeicons" >"$logdir/makeIconVisuals.log" 2>&1 || {
+IRIX_EXEC_BACKEND=interp "$makeicons" >"$logdir/makeIconVisuals.log" 2>&1 || {
     status=$?
     echo "IRIX session: makeIconVisuals failed: $status" >&2
     tail -80 "$logdir/makeIconVisuals.log" >&2 2>/dev/null || true
@@ -42,7 +42,7 @@ echo "IRIX session: preparing icon visuals"
 }
 
 echo "IRIX session: preallocating colors"
-"$prealloc" >"$logdir/preallocColors.log" 2>&1 || {
+IRIX_EXEC_BACKEND=interp "$prealloc" >"$logdir/preallocColors.log" 2>&1 || {
     status=$?
     echo "IRIX session: preallocColors failed: $status" >&2
     tail -80 "$logdir/preallocColors.log" >&2 2>/dev/null || true
