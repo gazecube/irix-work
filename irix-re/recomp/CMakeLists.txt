@@ -232,6 +232,25 @@ if(IRIX_DEV_TREE)
             add_custom_target(irix_ecosystem)
             add_custom_target(irix_ecosystem_jit)
 
+            # Explicit host-install step for the reconstructed IRIX desktop
+            # resource/configuration payload. Normal builds remain confined to
+            # the build tree; this target deliberately installs the staged
+            # payload at its original IRIX absolute paths on the host.
+            add_custom_target(irix_install_runtime_payloads
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${IRIX_RECOMP_ROOT}/usr/lib/X11"
+                        "/usr/lib/X11"
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${IRIX_RECOMP_ROOT}/usr/lib32/X11"
+                        "/usr/lib32/X11"
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${IRIX_RECOMP_ROOT}/usr/share/X11"
+                        "/usr/share/X11"
+                DEPENDS irix_ecosystem
+                COMMENT "Installing IRIX desktop runtime resources to host IRIX paths"
+                VERBATIM
+            )
+
             foreach(_app_line IN LISTS IRIX_ECOSYSTEM_APPS)
                 if(_app_line STREQUAL "")
                     continue()
