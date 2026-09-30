@@ -1144,16 +1144,59 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     }
                     if (cpu->pc == return_pc)
                         break;
-#if UC_API_MAJOR >= 2
                     /*
-                     * An RI in Unicorn's MIPS delay-slot machinery can leave
-                     * translated-block state associated with the pre-fallback
-                     * path.  We just executed the faulting callee to completion
-                     * in the architectural interpreter; discard Unicorn's
-                     * cached blocks before resuming at the returned PC.
+                     * Flushing TBs is not enough here.  Unicorn's MIPS backend
+                     * keeps delay-slot/exception state outside the translated
+                     * block cache, and the next uc_emu_start() can replay the
+                     * pre-RI path even when PC has been moved to live_ra.
+                     *
+                     * Recreate the Unicorn CPU after the interpreter has
+                     * completed the faulting callee.  Guest memory lives in
+                     * the runtime and is remapped into the new engine on the
+                     * next loop iteration, so this resets only Unicorn's
+                     * hidden CPU/TB state.  Preserve our shadow call stack
+                     * across the reset.
                      */
-                    (void)uc_ctl_flush_tb(s->uc);
-#endif
+                    {
+                        size_t saved_depth = s->shadow_ra_depth;
+                        IrixGuestAddr *saved_shadow = 0;
+                        if (saved_depth) {
+                            saved_shadow = (IrixGuestAddr *)malloc(
+                                saved_depth * sizeof(*saved_shadow));
+                            if (!saved_shadow) {
+                                if (synthetic_return)
+                                    cpu->gpr[31] = original_ra;
+                                return -1;
+                            }
+                            memcpy(saved_shadow, s->shadow_ra,
+                                   saved_depth * sizeof(*saved_shadow));
+                        }
+
+                        fprintf(stderr,
+                                "IRIX JIT: recreating Unicorn after RI "
+                                "recovery at pc=%08x shadow_depth=%zu\n",
+                                (uint32_t)cpu->pc, saved_depth);
+
+                        if (s->uc)
+                            (void)uc_close(s->uc);
+                        rt->jit_state = 0;
+                        free(s);
+
+                        s = jit_state(rt);
+                        if (!s) {
+                            free(saved_shadow);
+                            if (synthetic_return)
+                                cpu->gpr[31] = original_ra;
+                            return irix_mips_interp_call(rt, cpu, cpu->pc);
+                        }
+                        s->cpu = cpu;
+                        if (saved_depth) {
+                            memcpy(s->shadow_ra, saved_shadow,
+                                   saved_depth * sizeof(*saved_shadow));
+                            s->shadow_ra_depth = saved_depth;
+                            free(saved_shadow);
+                        }
+                    }
                     continue;
                 }
             }
