@@ -1051,9 +1051,29 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  * of this guest call to the interpreter so execution resumes
                  * from a clean architectural state.
                  */
-                fprintf(stderr,
-                        "IRIX JIT: RI recovery pc=%08x word=%08x -> interpreter\n",
-                        ipc, word);
+                {
+                    uint32_t w2 = 0, w3 = 0;
+                    IrixGuestAddr shadow_top =
+                        s->shadow_ra_depth ?
+                        s->shadow_ra[s->shadow_ra_depth - 1u] : 0u;
+                    if (irix_guest_ptr(rt, ipc + 8u, 4u))
+                        w2 = irix_guest_read32be(rt, ipc + 8u);
+                    if (irix_guest_ptr(rt, ipc + 12u, 4u))
+                        w3 = irix_guest_read32be(rt, ipc + 12u);
+                    fprintf(stderr,
+                            "IRIX JIT: RI recovery pc=%08x word=%08x "
+                            "a3=%08x ra=%08x v0=%08x gp=%08x sp=%08x "
+                            "next2=%08x,%08x shadow_depth=%zu shadow_top=%08x "
+                            "-> interpreter\n",
+                            ipc, word,
+                            (uint32_t)cpu->gpr[7],
+                            (uint32_t)cpu->gpr[31],
+                            (uint32_t)cpu->gpr[2],
+                            (uint32_t)cpu->gpr[28],
+                            (uint32_t)cpu->gpr[29],
+                            w2, w3,
+                            s->shadow_ra_depth, shadow_top);
+                }
 
                 /*
                  * The normal JIT path repairs a bogus jr $ra from the shadow
