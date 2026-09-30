@@ -1144,6 +1144,23 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     }
                     if (cpu->pc == return_pc)
                         break;
+
+                    /*
+                     * The interpreter just executed the callee's jr $ra on
+                     * our behalf. shadow_return_hook() therefore never saw
+                     * that return and could not pop the matching JIT shadow
+                     * frame. Leaving it behind is fatal: a later legitimate
+                     * top-level jr $ra with architectural RA==0 is "repaired"
+                     * back to this stale continuation, creating a loop.
+                     */
+                    if (cpu->pc == live_ra && s->shadow_ra_depth &&
+                        s->shadow_ra[s->shadow_ra_depth - 1u] == live_ra) {
+                        --s->shadow_ra_depth;
+                        fprintf(stderr,
+                                "IRIX JIT: RI fallback consumed shadow return "
+                                "%08x depth=%zu\n",
+                                live_ra, s->shadow_ra_depth);
+                    }
                     /*
                      * Flushing TBs is not enough here.  Unicorn's MIPS backend
                      * keeps delay-slot/exception state outside the translated
