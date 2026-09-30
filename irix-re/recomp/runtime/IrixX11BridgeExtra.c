@@ -1024,10 +1024,49 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
     IrixGuestAddr out = (uint32_t)cpu->gpr[5];
     XEvent e;
-    if (!d || !out || XNextEvent(d, &e) != 0 || !write_xevent(rt, out, &e)) {
+
+    if (!d || !out) {
         cpu->gpr[2] = 0;
         return;
     }
+
+    /*
+     * Desktop stability mode.
+     *
+     * Pointer motion/crossing currently reaches an unstable SGI Xt/Motif
+     * dispatch path after otherwise-successful desktop realization.  Keep
+     * button/key events flowing so the desktop remains interactable, but
+     * discard high-frequency motion and enter/leave events until that private
+     * translation path is repaired.  This is deliberately done at the host
+     * event bridge so the guest never sees a half-consumed pointer event.
+     */
+    for (;;) {
+        if (XNextEvent(d, &e) != 0) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+
+        if (e.type == MotionNotify ||
+            e.type == EnterNotify ||
+            e.type == LeaveNotify) {
+            fprintf(stderr,
+                    "IRIX X11 stability: drop pointer event type=%d "
+                    "window=%08x\n",
+                    e.type, (uint32_t)e.xany.window);
+            continue;
+        }
+
+        break;
+    }
+
+    if (!write_xevent(rt, out, &e)) {
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    fprintf(stderr,
+            "IRIX XNextEvent: type=%d window=%08x -> guest=%08x\n",
+            e.type, (uint32_t)e.xany.window, out);
     cpu->gpr[2] = 0;
 }
 
