@@ -3517,14 +3517,20 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
         }
         if (trace_dialog_call(entry->name)) {
+            const char *dialog_key = NULL;
+            if (entry->name && strstr(entry->name, "postBlocked") != NULL)
+                dialog_key = irix_guest_cstr(
+                    rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 256u);
             fprintf(stderr,
-                    "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                    "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x%s%s\n",
                     address, entry->name ? entry->name : "?", caller_pc,
                     (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[4],
                     (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
                     (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
                     (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
-                    (uint32_t)cpu->gpr[11]);
+                    (uint32_t)cpu->gpr[11],
+                    dialog_key ? " key=" : "",
+                    dialog_key ? dialog_key : "");
         }
 
         /*
