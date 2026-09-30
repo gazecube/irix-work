@@ -365,6 +365,7 @@ if(IRIX_DEV_TREE)
                         irix_recomp_runtime
                         irix_recompiled_core
                         ${_app_build_target}
+                        irix_ecosystem
                     )
                     if(TARGET irix_fast_quarks)
                         add_dependencies(irix_desktop_quick_runner irix_fast_quarks)
