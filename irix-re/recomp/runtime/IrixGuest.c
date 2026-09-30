@@ -3,6 +3,7 @@
 #include "IrixMipsJit.h"
 #include "IrixCompat.h"
 #include "IrixSyscallNumbers.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -2383,6 +2384,58 @@ static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
     return rt->trapped ? -1 : 0;
 }
 
+static int irix_native_xt_gc_alloc(IrixGuestRuntime *rt,
+                                   IrixGuestCpu *cpu,
+                                   int allocate_form)
+{
+    IrixGuestAddr widget = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr screen;
+    IrixGuestAddr display;
+    uint32_t drawable;
+    uint32_t mask;
+    IrixGuestAddr values;
+    IrixGuestAddr gc;
+
+    if (!widget || !irix_guest_ptr(rt, widget, 0x5cu))
+        return -1;
+
+    screen = irix_guest_read32be(rt, widget + 0x58u);
+    if (!screen || !irix_guest_ptr(rt, screen, 8u))
+        return -1;
+
+    display = irix_guest_read32be(rt, screen + 0x00u);
+    drawable = irix_guest_read32be(rt, screen + 0x04u);
+
+    /*
+     * XtGetGC(widget, value_mask, values)
+     * XtAllocateGC(widget, depth, value_mask, values,
+     *              dynamic_mask, unused_mask)
+     *
+     * The dynamic/unused masks control Xt's private cache behavior.  The
+     * direct compatibility path deliberately does not cache, so only the
+     * actual XGCValues mask is relevant to XCreateGC.
+     */
+    if (allocate_form) {
+        mask = (uint32_t)cpu->gpr[6];
+        values = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+    } else {
+        mask = (uint32_t)cpu->gpr[5];
+        values = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    }
+
+    gc = irix_x11_primary_create_gc(rt, display, drawable, mask, values);
+    fprintf(stderr,
+            "IRIX Xt direct GC compatibility: %s widget=%08x "
+            "screen=%08x display=%08x drawable=%08x mask=%08x values=%08x "
+            "-> gc=%08x\n",
+            allocate_form ? "XtAllocateGC" : "XtGetGC",
+            widget, screen, display, drawable, mask, values, gc);
+
+    cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)gc;
+    cpu->gpr[0] = 0;
+    return gc ? 0 : -1;
+}
+
 static int irix_guest_looks_like_widget(IrixGuestRuntime *rt,
                                         IrixGuestAddr widget)
 {
@@ -2763,6 +2816,23 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr sg_drop_state[16];
     static IrixGuestFunctionEntry *xm_build_resources_entry;
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
+
+    /*
+     * Stability-first Xt GC cache bypass.
+     *
+     * SGI Xt's private GC-cache list is corrupted in the hybrid runtime
+     * before first desktop realization.  The cache is an optimization, not a
+     * drawing requirement.  Create a real host Xlib GC directly and return
+     * the existing guest GC handle, avoiding the broken private linked list.
+     */
+    if (address == 0x0f61cd84u) { /* XtGetGC */
+        fprintf(stderr, "IRIX Xt GC cache bypass: XtGetGC\n");
+        return irix_native_xt_gc_alloc(rt, cpu, 0);
+    }
+    if (address == 0x0f61cdccu) { /* XtAllocateGC */
+        fprintf(stderr, "IRIX Xt GC cache bypass: XtAllocateGC\n");
+        return irix_native_xt_gc_alloc(rt, cpu, 1);
+    }
 
     /*
      * Xt object-child compatibility.
