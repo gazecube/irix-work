@@ -95,6 +95,36 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
     return 1;
 }
 
+static int irix_xt_xm_missing_store(IrixGuestRuntime *rt,
+                                    IrixGuestAddr pc,
+                                    IrixGuestAddr base,
+                                    IrixGuestAddr addr,
+                                    unsigned bits,
+                                    uint64_t value)
+{
+    int in_xt_text =
+        (pc >= 0x0f600000u && pc < 0x0f6a0000u);
+    int in_xm_text =
+        (pc >= 0x0b260000u && pc < 0x0b400000u);
+    int32_t signed_base = (int32_t)base;
+    int missing_token =
+        (base == 0u ||
+         base < 0x00010000u ||
+         (signed_base < 0 && signed_base >= -65536));
+    size_t nbytes = bits / 8u;
+
+    if ((!in_xt_text && !in_xm_text) || !missing_token || !nbytes)
+        return 0;
+    if (irix_guest_ptr(rt, addr, nbytes))
+        return 0;
+
+    fprintf(stderr,
+            "IRIX Xt/Xm missing private store repair HIT: "
+            "pc=%08x bits=%u base=%08x addr=%08x value=%08x -> skip\n",
+            pc, bits, base, addr, (uint32_t)value);
+    return 1;
+}
+
 static int irix_xt_null_output_store(IrixGuestCpu *cpu,
                                      IrixGuestAddr pc,
                                      unsigned rs,
@@ -517,18 +547,31 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x28:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            if (irix_xt_xm_missing_store(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 8u,
+                    cpu->gpr[rtno]))
+                break;
             if (!irix_xt_null_output_store(cpu, pc, rs, a,
                     (uint32_t)cpu->gpr[rtno], 8u))
                 irix_guest_write8(rt, a, (uint8_t)cpu->gpr[rtno]);
             break;
         case 0x29:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            if (irix_xt_xm_missing_store(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 16u,
+                    cpu->gpr[rtno]))
+                break;
             if (!irix_xt_null_output_store(cpu, pc, rs, a,
                     (uint32_t)cpu->gpr[rtno], 16u))
                 irix_guest_write16be(rt, a, (uint16_t)cpu->gpr[rtno]);
             break;
         case 0x2b:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+
+            if (irix_xt_xm_missing_store(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 32u,
+                    cpu->gpr[rtno]))
+                break;
 
             /*
              * Xt class/resource bring-up: this path loads a caller scratch
@@ -574,6 +617,10 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x3f:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            if (irix_xt_xm_missing_store(rt, pc,
+                    (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 64u,
+                    cpu->gpr[rtno]))
+                break;
             if (!irix_xt_null_output_store(cpu, pc, rs, a,
                     (uint32_t)cpu->gpr[rtno], 64u))
                 irix_guest_write64be(rt, a, cpu->gpr[rtno]);
