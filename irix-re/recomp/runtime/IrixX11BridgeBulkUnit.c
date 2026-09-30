@@ -17,7 +17,7 @@ static uint32_t common_stack32(IrixGuestRuntime *rt, IrixGuestCpu *cpu, unsigned
 
 static const char *common_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    return addr ? (const char *)irix_guest_ptr(rt, addr, 1u) : 0;
+    return irix_guest_cstr(rt, addr, 65536u);
 }
 
 static IrixGuestAddr common_copy_string(IrixGuestRuntime *rt, const char *s)
