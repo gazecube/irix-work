@@ -32,7 +32,7 @@ static IrixX11BridgeState g_bridge;
 
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
-    return addr ? (const char *)irix_guest_ptr(rt, addr, 1) : 0;
+    return irix_guest_cstr(rt, addr, 65536u);
 }
 
 static const char *guest_quark_string(IrixGuestRuntime *rt, uint32_t encoded)
