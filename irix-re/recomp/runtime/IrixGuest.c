@@ -2417,6 +2417,142 @@ static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
     return wsize != 0u && wsize <= 0x01000000u;
 }
 
+/*
+ * SGI/N32 CompositeClassPart compatibility.
+ *
+ * Xt's _XtCreateWidget uses XtGetClassExtension(parent_class, 0x84,
+ * NULLQUARK, 1, 0) before allowing a non-Core child.  Motif Manager
+ * descendants are specifically designed to contain RectObj/Gadget children,
+ * so they must expose a CompositeClassExtension with accepts_objects == True.
+ *
+ * Hybrid class initialization can lose that extension or leave its Boolean
+ * cleared.  Repair only classes whose superclass chain names XmManager.
+ */
+static int irix_guest_class_derives_from_named(IrixGuestRuntime *rt,
+                                               IrixGuestAddr cls,
+                                               const char *wanted)
+{
+    unsigned depth;
+
+    for (depth = 0; cls && depth < 64u; ++depth) {
+        IrixGuestAddr name_addr;
+        const char *name;
+
+        if (!irix_guest_ptr(rt, cls, 0x88u))
+            return 0;
+        name_addr = irix_guest_read32be(rt, cls + 0x04u);
+        name = irix_guest_cstr(rt, name_addr, 256u);
+        if (name && strcmp(name, wanted) == 0)
+            return 1;
+        cls = irix_guest_read32be(rt, cls + 0x00u);
+    }
+    return 0;
+}
+
+static IrixGuestAddr irix_guest_find_composite_extension(
+    IrixGuestRuntime *rt, IrixGuestAddr cls)
+{
+    IrixGuestAddr ext;
+    unsigned depth;
+
+    if (!cls || !irix_guest_ptr(rt, cls, 0x88u))
+        return 0;
+
+    ext = irix_guest_read32be(rt, cls + 0x84u);
+    for (depth = 0; ext && depth < 64u; ++depth) {
+        uint32_t record_type;
+        uint32_t version;
+        uint32_t record_size;
+
+        if (!irix_guest_ptr(rt, ext, 0x14u))
+            return 0;
+        record_type = irix_guest_read32be(rt, ext + 0x04u);
+        version = irix_guest_read32be(rt, ext + 0x08u);
+        record_size = irix_guest_read32be(rt, ext + 0x0cu);
+        if (record_type == 0u && version >= 1u && record_size >= 0x14u)
+            return ext;
+        ext = irix_guest_read32be(rt, ext + 0x00u);
+    }
+    return 0;
+}
+
+static void irix_guest_repair_motif_accepts_objects(IrixGuestRuntime *rt,
+                                                    IrixGuestAddr parent)
+{
+    IrixGuestAddr cls;
+    IrixGuestAddr ext;
+    IrixGuestAddr old_head;
+    IrixGuestAddr inherited = 0u;
+    IrixGuestAddr super;
+    IrixGuestAddr fresh;
+    uint32_t record_size = 0x14u;
+    uint8_t allows_change = 0u;
+    unsigned depth;
+
+    if (!parent || !irix_guest_ptr(rt, parent, 8u))
+        return;
+    cls = irix_guest_read32be(rt, parent + 0x04u);
+    if (!irix_guest_class_derives_from_named(rt, cls, "XmManager"))
+        return;
+
+    ext = irix_guest_find_composite_extension(rt, cls);
+    if (ext) {
+        if (irix_guest_read8(rt, ext + 0x10u) == 0u) {
+            irix_guest_write8(rt, ext + 0x10u, 1u);
+            fprintf(stderr,
+                    "IRIX Xt Composite accepts_objects repair: "
+                    "parent=%08x class=%08x ext=%08x false->true\n",
+                    parent, cls, ext);
+        }
+        return;
+    }
+
+    /*
+     * Prefer the nearest superclass's valid CompositeClassExtension as the
+     * shape/source for the compatibility record.  Preserve this class's
+     * existing extension list by prepending rather than overwriting it.
+     */
+    super = irix_guest_read32be(rt, cls + 0x00u);
+    for (depth = 0; super && depth < 64u; ++depth) {
+        inherited = irix_guest_find_composite_extension(rt, super);
+        if (inherited && irix_guest_read8(rt, inherited + 0x10u))
+            break;
+        inherited = 0u;
+        if (!irix_guest_ptr(rt, super, 4u))
+            break;
+        super = irix_guest_read32be(rt, super + 0x00u);
+    }
+
+    if (!inherited)
+        return;
+
+    record_size = irix_guest_read32be(rt, inherited + 0x0cu);
+    if (record_size < 0x14u || record_size > 0x100u)
+        record_size = 0x14u;
+    if (irix_guest_ptr(rt, inherited, 0x12u))
+        allows_change = irix_guest_read8(rt, inherited + 0x11u);
+
+    fresh = irix_guest_xt_compat_alloc(rt, record_size);
+    if (!fresh || !irix_guest_ptr(rt, fresh, record_size))
+        return;
+
+    memset(irix_guest_ptr(rt, fresh, record_size), 0, record_size);
+    old_head = irix_guest_read32be(rt, cls + 0x84u);
+    irix_guest_write32be(rt, fresh + 0x00u, old_head);
+    irix_guest_write32be(rt, fresh + 0x04u, 0u);
+    irix_guest_write32be(rt, fresh + 0x08u, 1u);
+    irix_guest_write32be(rt, fresh + 0x0cu, record_size);
+    irix_guest_write8(rt, fresh + 0x10u, 1u);
+    irix_guest_write8(rt, fresh + 0x11u, allows_change);
+    irix_guest_write32be(rt, cls + 0x84u, fresh);
+
+    fprintf(stderr,
+            "IRIX Xt Composite extension repair: "
+            "parent=%08x class=%08x old=%08x inherited=%08x -> ext=%08x "
+            "accepts_objects=1\n",
+            parent, cls, old_head, inherited, fresh);
+}
+
 static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
                                              IrixGuestCpu *cpu,
                                              IrixGuestAddr caller_sp,
@@ -2637,6 +2773,19 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr sg_drop_state[16];
     static IrixGuestFunctionEntry *xm_build_resources_entry;
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
+
+    /*
+     * Xt object-child compatibility.
+     *
+     * _XtCreateWidget receives (name, object_class, parent, ...).  Repair the
+     * parent CompositeClassExtension before Xt checks whether a RectObj/Gadget
+     * child is legal.  The helper is a no-op for non-Motif-manager parents.
+     */
+    if (entry && entry->name &&
+        strcmp(entry->name, "_XtCreateWidget") == 0) {
+        irix_guest_repair_motif_accepts_objects(
+            rt, (IrixGuestAddr)(uint32_t)cpu->gpr[6]);
+    }
 
     /*
      * Motif InitializePrehook ABI repair.
