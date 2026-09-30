@@ -2302,6 +2302,30 @@ static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
     }
 
     if (wc_num > 4096u || sc_num > 4096u) {
+        /*
+         * Stability policy: a malformed superclass side must not leave the
+         * current class half-initialized.  The original routine only replaces
+         * *wc_ptrp/*wc_nump after it has built a complete merged table, so if
+         * the current widget-class table is already sane, preserving it and
+         * dropping the impossible superclass merge is the safest equivalent
+         * failure mode.
+         *
+         * One repeatedly observed corruption is sc_num carrying a heap
+         * pointer (for example 0x3000ad00) instead of a count.  Returning an
+         * error without repairing anything allowed later Xm private fields to
+         * inherit tiny scalar poison such as 0x37a/0x37c/0x37e.
+         */
+        if (wc_num <= 4096u &&
+            (!wc_num || (wc && irix_guest_ptr(rt, wc, wc_num * rec_size)))) {
+            fprintf(stderr,
+                    "IRIX native _XmBuildResources: malformed superclass "
+                    "merge dropped wc=%08x/%u sc=%08x/%u\n",
+                    wc, wc_num, sc, sc_num);
+            cpu->gpr[2] = 0u;
+            cpu->gpr[0] = 0u;
+            return rt->trapped ? -1 : 0;
+        }
+
         fprintf(stderr,
                 "IRIX native _XmBuildResources: absurd counts "
                 "wc_num=%u sc_num=%u\n",
@@ -3007,6 +3031,43 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     "IRIX Xt inheritance repair: XmDialogShell core extension hook _XtInherit -> NULL\n");
             irix_guest_write32be(rt, ext + 0x10u, 0u);
         }
+    }
+
+    /*
+     * GUI stability mode.
+     *
+     * For bring-up, keep the SGI Xt/Motif ABI internally coherent by running
+     * every named non-native Xt/Xm function as original MIPS.  Anonymous
+     * recovered entries already take the interpreter path.  Host-specific
+     * native replacements (X11 bridges and the narrow compatibility shims
+     * above) remain native because IRIX_GUEST_FUNCTION_NATIVE excludes them.
+     *
+     * This deliberately trades static-recomp speed for session stability.
+     * Once the desktop is reliably usable, individual libraries/functions can
+     * be moved back to generated C with regression tests around each boundary.
+     */
+    if (entry && entry->name &&
+        !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
+        (!strncmp(entry->name, "Xt", 2) ||
+         !strncmp(entry->name, "_Xt", 3) ||
+         !strncmp(entry->name, "Xm", 2) ||
+         !strncmp(entry->name, "_Xm", 3))) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
+
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+
+        fprintf(stderr,
+                "IRIX GUI stability mode: %s @ %08x -> original MIPS\n",
+                entry->name, address);
+
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
     }
 
     if (irix_mips_interp_should_force(address)) {
