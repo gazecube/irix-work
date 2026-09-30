@@ -121,5 +121,10 @@
       "kind": "internal",
       "path": "usr/lib32/internal/libimdFtrIcon.so"
     }
+  ],
+  "runtime_payloads": [
+    "usr/lib/X11",
+    "usr/lib32/X11",
+    "usr/share/X11"
   ]
 }
