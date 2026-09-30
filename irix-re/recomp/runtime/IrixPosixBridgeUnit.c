@@ -1147,7 +1147,7 @@ static void bridge_updwtmpx(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_putenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    char *s = (char *)irix_guest_ptr(rt, (uint32_t)cpu->gpr[4], 1u);
+    char *s = (char *)irix_guest_cstr(rt, (uint32_t)cpu->gpr[4], 65536u);
     (void)rt;
     ret_i32(cpu, s ? putenv(s) : (errno = EFAULT, -1));
 }
