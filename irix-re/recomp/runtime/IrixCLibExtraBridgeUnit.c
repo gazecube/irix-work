@@ -485,11 +485,34 @@ static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int value = (int)(int32_t)cpu->gpr[4];
     IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
     IrixGuestFunctionEntry *caller = irix_guest_find_function(rt, ra);
+    const char *caller_name =
+        caller && caller->name ? caller->name : "?";
+
+    /*
+     * Bring-up containment for the desktop feature database.
+     *
+     * PanelComponent constructs the "Directory" ImdFtrIconX during startup.
+     * libimdFtrDB::_imdFtrGetType currently reports EUCLEAN (135), which
+     * causes desktop to post noOtrErrorMessage and terminate the session.
+     *
+     * Suppress only this exact feature-lookup error so the desktop can
+     * continue far enough to expose the next real dependency/state failure.
+     * Do not globally mask EUCLEAN or other IRIX error state.
+     */
+    if (value == 135 &&
+        caller_name &&
+        !strcmp(caller_name, "_imdFtrGetType")) {
+        fprintf(stderr,
+                "IRIX desktop bring-up: suppress "
+                "_imdFtrGetType EUCLEAN(135) ra=%08x\n",
+                ra);
+        value = 0;
+    }
+
     fprintf(stderr,
             "IRIX setoserror trace: old=%d new=%d caller_pc=%08x "
             "ra=%08x caller=%s\n",
-            old, value, (uint32_t)cpu->pc, ra,
-            caller && caller->name ? caller->name : "?");
+            old, value, (uint32_t)cpu->pc, ra, caller_name);
     g_guest_oserror = value;
     cpu->gpr[2] = (uint64_t)(int64_t)old;
 }
