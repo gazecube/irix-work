@@ -1101,9 +1101,35 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     }
                 }
 
-                if (synthetic_return)
-                    cpu->gpr[31] = original_ra;
-                return irix_mips_interp_call(rt, cpu, ipc);
+                /*
+                 * Keep the live architectural RA.  For top-level JIT calls we
+                 * installed a synthetic sentinel only at entry; restoring the
+                 * original (often zero) RA here destroys the real rld/libc
+                 * caller that was established after startup began.
+                 *
+                 * Interpret only until the current callee returns to that live
+                 * RA, then resume the JIT from the returned PC.  This avoids
+                 * re-entering Unicorn at the RI branch itself (which is what
+                 * caused the stale RI loop) without unwinding the whole guest
+                 * process back to AppRunner.
+                 */
+                {
+                    IrixGuestAddr live_ra =
+                        (IrixGuestAddr)(uint32_t)cpu->gpr[31];
+                    if (irix_mips_interp_call(rt, cpu, ipc) != 0 ||
+                        rt->trapped) {
+                        if (synthetic_return)
+                            cpu->gpr[31] = original_ra;
+                        return -1;
+                    }
+                    fprintf(stderr,
+                            "IRIX JIT: RI interpreter returned to %08x "
+                            "(live_ra=%08x return_pc=%08x)\n",
+                            (uint32_t)cpu->pc, live_ra, return_pc);
+                    if (cpu->pc == return_pc)
+                        break;
+                    continue;
+                }
             }
 
             if (synthetic_return)
