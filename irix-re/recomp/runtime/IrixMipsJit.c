@@ -1161,7 +1161,7 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                      * caller path, including its frame teardown, before
                      * returning to live_ra.
                      */
-                    if (ipc == 0x0fb833f8u &&
+                    if ((ipc == 0x0fb833f8u || ipc == 0u) &&
                         s->last_block >= 0x0fb70e80u &&
                         s->last_block <= 0x0fb70f20u &&
                         jit_guest_exec_mapped(s, s->last_block)) {
