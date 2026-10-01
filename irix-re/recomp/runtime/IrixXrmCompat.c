@@ -30,6 +30,19 @@ static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
     return irix_guest_cstr(rt, addr, 65536u);
 }
 
+static const char *xrm_host_path(IrixGuestRuntime *rt, const char *path,
+                                 char *buf, size_t bufsz)
+{
+    int n;
+    if (!path) return 0;
+    if (path[0] == '/' && rt && rt->rootfs && rt->rootfs[0]) {
+        n = snprintf(buf, bufsz, "%s%s", rt->rootfs, path);
+        if (n > 0 && (size_t)n < bufsz)
+            return buf;
+    }
+    return path;
+}
+
 static uint32_t rd32(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return irix_guest_read32be(rt, addr);
@@ -164,8 +177,15 @@ static void bridge_XrmSetDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XrmGetFileDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = db_to_guest(path ? XrmGetFileDatabase(path) : 0);
+    const char *guest_path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char host_path[4096];
+    const char *path = xrm_host_path(rt, guest_path, host_path, sizeof(host_path));
+    XrmDatabase db = path ? XrmGetFileDatabase(path) : 0;
+    fprintf(stderr, "IRIX XrmGetFileDatabase: %s -> %s %s\n",
+            guest_path ? guest_path : "<invalid>",
+            path ? path : "<invalid>",
+            db ? "OK" : "MISS");
+    cpu->gpr[2] = db_to_guest(db);
 }
 
 static void bridge_XrmGetStringDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -207,10 +227,16 @@ static void bridge_XrmCombineDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XrmCombineFileDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *guest_path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char host_path[4096];
+    const char *path = xrm_host_path(rt, guest_path, host_path, sizeof(host_path));
     IrixGuestAddr dstp = (uint32_t)cpu->gpr[5];
     XrmDatabase dst = db_from_guest(rd32(rt, dstp));
     Bool ok = path ? XrmCombineFileDatabase(path, &dst, (Bool)cpu->gpr[6]) : False;
+    fprintf(stderr, "IRIX XrmCombineFileDatabase: %s -> %s %s\n",
+            guest_path ? guest_path : "<invalid>",
+            path ? path : "<invalid>",
+            ok ? "OK" : "MISS");
     wr32(rt, dstp, db_to_guest(dst));
     cpu->gpr[2] = ok ? 1u : 0u;
 }
