@@ -418,10 +418,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              */
             if (((pc == 0x10034c00u || pc == 0x10034c10u ||
                   pc == 0x10034c14u || pc == 0x10034d5cu) ||
-                 pc == 0x1003640cu) &&
+                 pc == 0x1003640cu || pc == 0x10036578u ||
+                 pc == 0x10036580u) &&
                 (uint32_t)cpu->gpr[rs] == 0u) {
                 fprintf(stderr,
-                        "IRIX 4Dwm ProcessScreenResources interp repair: "
+                        "IRIX 4Dwm null-resource interp repair: "
                         "pc=%08x null base -> zero\n", pc);
                 cpu->gpr[rtno] = 0u;
                 break;
