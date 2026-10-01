@@ -3919,6 +3919,24 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         saved_s[8] = cpu->gpr[30];
 
         /*
+         * Emergency imdFtrChooseVisual null-candidate guard.
+         *
+         * The hidden helper at 0x0980c8b4 returns a boolean byte to
+         * imdFtrChooseVisual.  In 4Dwm bring-up it is called with a1 == NULL
+         * and immediately dereferences a1+0x28.  A NULL candidate cannot
+         * match a visual, so return false instead of faulting.
+         */
+        if (address == 0x0980c8b4u &&
+            (uint32_t)cpu->gpr[5] == 0u) {
+            fprintf(stderr,
+                    "IRIX imdFtrChooseVisual compatibility: "
+                    "null candidate -> false\n");
+            cpu->gpr[2] = 0u;
+            cpu->gpr[0] = 0u;
+            return 0;
+        }
+
+        /*
          * Hidden Motif XtAllocateProc continuation at 0x0b2fcc64.
          *
          * This exact entry begins by dereferencing a1 as a Widget
