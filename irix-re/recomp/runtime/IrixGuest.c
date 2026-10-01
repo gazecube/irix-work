@@ -2967,6 +2967,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
     static int motif_converters_forced;
     static IrixGuestAddr last_xt_convert_widget;
+    static IrixGuestAddr last_xt_display;
 
     /*
      * Stability-first Xt GC cache bypass.
@@ -3244,6 +3245,42 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                 (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
                 (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    }
+
+    /*
+     * Xt per-display continuity repair.
+     *
+     * The real SGI Xt per-display record is created successfully by
+     * _XtDisplayInitialize for the Xlib shadow returned by XOpenDisplay.
+     * Later malformed object/resource paths can call _XtGetPerDisplay with a
+     * NULL or non-Display value, which makes Xt report "Couldn't find per
+     * display information" even though the registered record is still alive.
+     *
+     * Remember only bridge-owned Display shadows (0x72400000, 0x1000 stride,
+     * up to 16 displays).  If a later lookup loses the Display argument,
+     * restore the last real shadow rather than manufacturing a new Xt record.
+     */
+    if (entry && entry->name && strcmp(entry->name, "_XtGetPerDisplay") == 0) {
+        IrixGuestAddr d = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        int valid_display =
+            d >= 0x72400000u && d < 0x72410000u &&
+            ((d - 0x72400000u) & 0xfffu) == 0u &&
+            irix_guest_ptr(rt, d, 176u);
+
+        if (valid_display) {
+            last_xt_display = d;
+        } else if (last_xt_display &&
+                   irix_guest_ptr(rt, last_xt_display, 176u)) {
+            fprintf(stderr,
+                    "IRIX Xt per-display argument repair: _XtGetPerDisplay "
+                    "display=%08x -> %08x\\n",
+                    d, last_xt_display);
+            cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)last_xt_display;
+        } else {
+            fprintf(stderr,
+                    "IRIX Xt per-display lookup without known Display: "
+                    "a0=%08x\\n", d);
+        }
     }
 
     /*
@@ -4224,7 +4261,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
             (uint32_t)cpu->gpr[5] == 0u) {
             fprintf(stderr,
                     "IRIX imdFtrChooseVisual compatibility: "
-                    "null candidate -> false\n");
+                    "null candidate -> false; "
+                    "a0-a3=%08x,%08x,%08x,%08x "
+                    "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+                    "sp=%08x ra=%08x\n",
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
+                    (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23],
+                    (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[31]);
             cpu->gpr[2] = 0u;
             cpu->gpr[0] = 0u;
             return 0;
