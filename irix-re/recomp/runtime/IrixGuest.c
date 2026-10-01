@@ -2874,6 +2874,25 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * Emergency bring-up: XtRealizeWidget(NULL) is a no-op.
+     *
+     * 4Dwm reaches XtRealizeWidget with a NULL optional widget after class
+     * initialization.  Stock Xt turns this into the fatal
+     * "Object (null) does not have windowed ancestor" path.  There is no
+     * object to realize, so skipping only the NULL case is safe and lets the
+     * WM continue bringing up its remaining shells.
+     */
+    if (address == 0x0f62d5f4u &&
+        (uint32_t)cpu->gpr[4] == 0u) {
+        fprintf(stderr,
+                "IRIX Xt bring-up compatibility: "
+                "XtRealizeWidget(NULL) -> no-op\n");
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return 0;
+    }
+
+    /*
      * Xt object-child compatibility.
      *
      * _XtCreateWidget receives (name, object_class, parent, ...).  Repair the
