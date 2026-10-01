@@ -264,7 +264,40 @@ static void bridge_common_XTextPropertyToStringList(IrixGuestRuntime *rt,IrixGue
 static void bridge_common_XmbTextListToTextProperty(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);int n=(int32_t)cpu->gpr[6];char**list=common_read_string_list(rt,(uint32_t)cpu->gpr[5],n);XTextProperty p;int rc=-1;memset(&p,0,sizeof(p));if(d&&(n==0||list))rc=XmbTextListToTextProperty(d,list,n,(XICCEncodingStyle)(int32_t)cpu->gpr[7],&p);if(rc>=0)common_write_text_property(rt,(uint32_t)cpu->gpr[8],&p);if(p.value)XFree(p.value);free(list);cpu->gpr[2]=(uint64_t)(int64_t)rc;}
 static void bridge_common_XmbTextPropertyToTextList(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XTextProperty p;char**list=0;int n=0,rc=-1;if(d&&common_read_text_property(rt,(uint32_t)cpu->gpr[5],&p))rc=XmbTextPropertyToTextList(d,&p,&list,&n);IrixGuestAddr out=rc>=0?common_copy_string_list(rt,list,n):0;if(list)XFreeStringList(list);if((uint32_t)cpu->gpr[6])irix_guest_write32be(rt,(uint32_t)cpu->gpr[6],out);if((uint32_t)cpu->gpr[7])irix_guest_write32be(rt,(uint32_t)cpu->gpr[7],(uint32_t)n);cpu->gpr[2]=(uint64_t)(int64_t)rc;}
 
-static void bridge_common_XMatchVisualInfo(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XVisualInfo v;Status ok=0;IrixGuestAddr out=(uint32_t)cpu->gpr[8];memset(&v,0,sizeof(v));if(d)ok=XMatchVisualInfo(d,(int)cpu->gpr[5],(int)cpu->gpr[6],(int)cpu->gpr[7],&v);if(ok&&out){IrixGuestAddr gv=bulk_alloc(32u);if(gv)write_visual_shadow(rt,gv,v.visual);irix_guest_write32be(rt,out+0u,gv);irix_guest_write32be(rt,out+4u,(uint32_t)v.visualid);irix_guest_write32be(rt,out+8u,(uint32_t)v.screen);irix_guest_write32be(rt,out+12u,(uint32_t)v.depth);irix_guest_write32be(rt,out+16u,(uint32_t)v.class);irix_guest_write32be(rt,out+20u,(uint32_t)v.red_mask);irix_guest_write32be(rt,out+24u,(uint32_t)v.green_mask);irix_guest_write32be(rt,out+28u,(uint32_t)v.blue_mask);irix_guest_write32be(rt,out+32u,(uint32_t)v.colormap_size);irix_guest_write32be(rt,out+36u,(uint32_t)v.bits_per_rgb);}cpu->gpr[2]=(uint32_t)ok;}
+static void bridge_common_XMatchVisualInfo(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_display=(uint32_t)cpu->gpr[4];
+    int screen=(int32_t)cpu->gpr[5];
+    int depth=(int32_t)cpu->gpr[6];
+    int visual_class=(int32_t)cpu->gpr[7];
+    Display*d=irix_x11_primary_display_from_guest(guest_display);
+    XVisualInfo v;
+    Status ok=0;
+    IrixGuestAddr out=(uint32_t)cpu->gpr[8];
+
+    memset(&v,0,sizeof(v));
+    if(d)ok=XMatchVisualInfo(d,screen,depth,visual_class,&v);
+    if(ok&&out){
+        IrixGuestAddr gv=bulk_alloc(32u);
+        if(gv)write_visual_shadow(rt,gv,v.visual);
+        irix_guest_write32be(rt,out+0u,gv);
+        irix_guest_write32be(rt,out+4u,(uint32_t)v.visualid);
+        irix_guest_write32be(rt,out+8u,(uint32_t)v.screen);
+        irix_guest_write32be(rt,out+12u,(uint32_t)v.depth);
+        irix_guest_write32be(rt,out+16u,(uint32_t)v.class);
+        irix_guest_write32be(rt,out+20u,(uint32_t)v.red_mask);
+        irix_guest_write32be(rt,out+24u,(uint32_t)v.green_mask);
+        irix_guest_write32be(rt,out+28u,(uint32_t)v.blue_mask);
+        irix_guest_write32be(rt,out+32u,(uint32_t)v.colormap_size);
+        irix_guest_write32be(rt,out+36u,(uint32_t)v.bits_per_rgb);
+    }
+    fprintf(stderr,
+            "IRIX XMatchVisualInfo: guest_display=%08x screen=%d depth=%d "
+            "class=%d ok=%d out=%08x visualid=%08lx\\n",
+            guest_display,screen,depth,visual_class,(int)ok,out,
+            (unsigned long)(ok?v.visualid:0));
+    cpu->gpr[2]=(uint32_t)ok;
+}
 
 static void bridge_common_XListDepths(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);int n=0,i;int*list=d?XListDepths(d,(int)cpu->gpr[5],&n):0;IrixGuestAddr out=0;if(list&&n>0){out=bulk_alloc((uint32_t)n*4u);if(out)for(i=0;i<n;++i)irix_guest_write32be(rt,out+(IrixGuestAddr)i*4u,(uint32_t)list[i]);}if(list)XFree(list);if((uint32_t)cpu->gpr[6])irix_guest_write32be(rt,(uint32_t)cpu->gpr[6],(uint32_t)n);cpu->gpr[2]=out;}
 static void bridge_common_XLoadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);Font f=0;if(d){if(!s||!*s)s="fixed";f=XLoadFont(d,s);if(!f&&strcmp(s,"fixed"))f=XLoadFont(d,"fixed");}fprintf(stderr,"IRIX XLoadFont: name=%s result=%08lx\n",s?s:"<NULL>",(unsigned long)f);cpu->gpr[2]=(uint32_t)f;}
