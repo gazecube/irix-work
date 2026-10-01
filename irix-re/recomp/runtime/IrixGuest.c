@@ -2887,6 +2887,33 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * Direct-main VendorShell InitializePrehook escape hatch.
+     *
+     * The synthetic linked callback at 0x501c00d4 is the same Motif
+     * InitializePrehook whose original SGI implementation begins at
+     * 0x0b2e54f0.  Exact-name aliasing cannot catch it because the original
+     * recovered entry is anonymous/interior.  Enter the original function
+     * directly so Xt class initialization uses the real Motif data universe.
+     */
+    if (address == 0x501c00d4u) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target = 0x0b2e54f0u;
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(target);
+        int rc;
+
+        fprintf(stderr,
+                "IRIX direct-main Motif prehook alias: "
+                "501c00d4 -> 0b2e54f0\n");
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)target;
+        rc = irix_mips_interp_call(rt, cpu, target);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
+    }
+
+    /*
      * Motif InitializePrehook ABI repair.
      *
      * The recovered prehook at 0x0b2e54f0 has the normal XtInitProc
