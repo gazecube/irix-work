@@ -1,4 +1,5 @@
 #include "IrixX11WmBridge.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -27,8 +28,14 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     size_t i;
     IrixGuestAddr name_addr;
     const char *name = 0;
+    Display *primary;
 
     if (!guest) return 0;
+
+    primary = irix_x11_primary_display_from_guest(guest);
+    if (primary)
+        return primary;
+
     for (i = 0; i < g_wm.display_count; ++i)
         if (g_wm.guest_display[i] == guest)
             return g_wm.host_display[i];
@@ -41,6 +48,9 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_wm.display_count++;
     g_wm.guest_display[i] = guest;
     g_wm.host_display[i] = XOpenDisplay(name);
+    fprintf(stderr,
+            "IRIX X11 WM fallback: opened secondary host Display for unknown guest=%08x\n",
+            guest);
     return g_wm.host_display[i];
 }
 
