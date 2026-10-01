@@ -330,8 +330,62 @@ static void write_display_shadow(size_t i, Display *dpy)
         Screen *hs = ScreenOfDisplay(dpy, s);
         Visual *hv = DefaultVisual(dpy, s);
         IrixGuestAddr gs = screens + (IrixGuestAddr)(s * 80u);
-        IrixGuestAddr gv = visuals + (IrixGuestAddr)(s * 32u);
-        write_visual_shadow(rt, gv, hv);
+        IrixGuestAddr fallback_gv = visuals + (IrixGuestAddr)(s * 32u);
+        IrixGuestAddr gv = 0u;
+        IrixGuestAddr gdepths = 0u;
+        int di;
+
+        /*
+         * Screen.depths is public Xlib ABI, not an opaque implementation
+         * detail.  Motif/4Dwm walks this list when resolving visualType.
+         * Advertising ndepths while leaving depths == NULL produced a
+         * structurally impossible Screen and eventually a NULL visual
+         * candidate.  Mirror the complete N32 Depth/Visual hierarchy.
+         *
+         * N32 Depth is { int depth; int nvisuals; Visual *visuals; } = 12
+         * bytes and N32 Visual is 32 bytes.
+         */
+        if (hs->ndepths > 0 && hs->depths)
+            gdepths = tmp_alloc((uint32_t)hs->ndepths * 12u);
+
+        if (gdepths) {
+            for (di = 0; di < hs->ndepths; ++di) {
+                Depth *hd = &hs->depths[di];
+                IrixGuestAddr gd = gdepths + (IrixGuestAddr)di * 12u;
+                IrixGuestAddr gvis = 0u;
+                int vi;
+
+                if (hd->nvisuals > 0 && hd->visuals)
+                    gvis = tmp_alloc((uint32_t)hd->nvisuals * 32u);
+
+                wr32(rt, gd + 0u, (uint32_t)hd->depth);
+                wr32(rt, gd + 4u, gvis ? (uint32_t)hd->nvisuals : 0u);
+                wr32(rt, gd + 8u, gvis);
+
+                if (!gvis)
+                    continue;
+
+                for (vi = 0; vi < hd->nvisuals; ++vi) {
+                    Visual *v = &hd->visuals[vi];
+                    IrixGuestAddr gvi = gvis + (IrixGuestAddr)vi * 32u;
+                    write_visual_shadow(rt, gvi, v);
+                    if (hv && !gv &&
+                        (v == hv || v->visualid == hv->visualid))
+                        gv = gvi;
+                }
+            }
+        }
+
+        /*
+         * Keep a valid default visual even if the complete list could not be
+         * allocated.  Normally gv points into Screen.depths so pointer
+         * identity agrees with visual enumeration.
+         */
+        if (!gv) {
+            gv = fallback_gv;
+            write_visual_shadow(rt, gv, hv);
+        }
+
         wr32(rt, gs + 0, 0);
         wr32(rt, gs + 4, d);
         wr32(rt, gs + 8, (uint32_t)hs->root);
@@ -339,8 +393,8 @@ static void write_display_shadow(size_t i, Display *dpy)
         wr32(rt, gs + 16, (uint32_t)hs->height);
         wr32(rt, gs + 20, (uint32_t)hs->mwidth);
         wr32(rt, gs + 24, (uint32_t)hs->mheight);
-        wr32(rt, gs + 28, (uint32_t)hs->ndepths);
-        wr32(rt, gs + 32, 0);
+        wr32(rt, gs + 28, gdepths ? (uint32_t)hs->ndepths : 0u);
+        wr32(rt, gs + 32, gdepths);
         wr32(rt, gs + 36, (uint32_t)hs->root_depth);
         wr32(rt, gs + 40, gv);
         wr32(rt, gs + 44, gc_to_guest(hs->default_gc));
@@ -352,6 +406,12 @@ static void write_display_shadow(size_t i, Display *dpy)
         wr32(rt, gs + 68, (uint32_t)hs->backing_store);
         wr32(rt, gs + 72, (uint32_t)hs->save_unders);
         wr32(rt, gs + 76, (uint32_t)hs->root_input_mask);
+
+        fprintf(stderr,
+                "IRIX Screen visual shadow: screen=%d depths=%d depth_list=%08x "
+                "default_visual=%08x visualid=%08lx\\n",
+                s, gdepths ? hs->ndepths : 0, gdepths, gv,
+                (unsigned long)(hv ? hv->visualid : 0));
     }
 }
 
