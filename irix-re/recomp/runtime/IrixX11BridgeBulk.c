@@ -123,6 +123,62 @@ static void write_visual_shadow(IrixGuestRuntime *rt, IrixGuestAddr out, Visual 
     wr32(rt,out+28u,(uint32_t)v->map_entries);
 }
 
+/*
+ * Return the canonical guest Visual shadow mirrored in Screen.depths.
+ * Keeping XGetVisualInfo/XMatchVisualInfo/default_visual on the same guest
+ * Visual pointer matters to old Xt/Motif code that compares Visual * values,
+ * not just visual IDs.
+ */
+static IrixGuestAddr guest_visual_by_id(IrixGuestRuntime *rt,
+                                        IrixGuestAddr dpy,
+                                        int screen,
+                                        VisualID visualid)
+{
+    IrixGuestAddr gs = guest_screen(rt, dpy, screen);
+    IrixGuestAddr depths;
+    uint32_t ndepths;
+    uint32_t di;
+
+    if (!gs)
+        return 0;
+
+    ndepths = irix_guest_read32be(rt, gs + 28u);
+    depths = irix_guest_read32be(rt, gs + 32u);
+    if (rt->trapped)
+        return 0;
+
+    if (depths && ndepths <= 256u) {
+        for (di = 0; di < ndepths; ++di) {
+            IrixGuestAddr gd = depths + (IrixGuestAddr)di * 12u;
+            uint32_t nvisuals = irix_guest_read32be(rt, gd + 4u);
+            IrixGuestAddr visuals = irix_guest_read32be(rt, gd + 8u);
+            uint32_t vi;
+
+            if (rt->trapped)
+                return 0;
+            if (!visuals || nvisuals > 4096u)
+                continue;
+
+            for (vi = 0; vi < nvisuals; ++vi) {
+                IrixGuestAddr gv = visuals + (IrixGuestAddr)vi * 32u;
+                if (irix_guest_read32be(rt, gv + 4u) == (uint32_t)visualid)
+                    return rt->trapped ? 0 : gv;
+                if (rt->trapped)
+                    return 0;
+            }
+        }
+    }
+
+    /* Allocation-failure fallback: Screen.root_visual is still valid. */
+    {
+        IrixGuestAddr gv = irix_guest_read32be(rt, gs + 40u);
+        if (!rt->trapped && gv &&
+            irix_guest_read32be(rt, gv + 4u) == (uint32_t)visualid)
+            return rt->trapped ? 0 : gv;
+    }
+    return 0;
+}
+
 static uint32_t n32_stack_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu, unsigned index)
 {
     IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
@@ -367,8 +423,12 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         if(out) {
             for(i=0;i<n;++i) {
                 IrixGuestAddr row=out+(IrixGuestAddr)i*40u;
-                IrixGuestAddr gv=bulk_alloc(32u);
-                if(gv) write_visual_shadow(rt,gv,list[i].visual);
+                IrixGuestAddr gv=guest_visual_by_id(
+                    rt,(uint32_t)cpu->gpr[4],list[i].screen,list[i].visualid);
+                if(!gv) {
+                    gv=bulk_alloc(32u);
+                    if(gv) write_visual_shadow(rt,gv,list[i].visual);
+                }
                 wr32(rt,row+0u,gv);
                 wr32(rt,row+4u,(uint32_t)list[i].visualid);
                 wr32(rt,row+8u,(uint32_t)list[i].screen);
