@@ -3386,6 +3386,27 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         return rc;
     }
 
+    /*
+     * Deadline bring-up: keep 4Dwm dynamic-default lookup in original MIPS
+     * so narrow compatibility fixes can be made in the interpreter/runtime
+     * without regenerating the translated 4Dwm bundle.
+     */
+    if (entry && entry->name &&
+        strcmp(entry->name, "_WmGetDynamicDefault") == 0) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        fprintf(stderr,
+                "IRIX 4Dwm fast bring-up: _WmGetDynamicDefault -> original MIPS\n");
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
+    }
+
     if (irix_mips_interp_should_force(address)) {
         fprintf(stderr,
                 "IRIX dispatcher: forced interpreter target=%08x\n",
