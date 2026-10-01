@@ -278,8 +278,11 @@ static void bridge_common_XMatchVisualInfo(IrixGuestRuntime *rt,IrixGuestCpu *cp
     memset(&v,0,sizeof(v));
     if(d)ok=XMatchVisualInfo(d,screen,depth,visual_class,&v);
     if(ok&&out){
-        IrixGuestAddr gv=bulk_alloc(32u);
-        if(gv)write_visual_shadow(rt,gv,v.visual);
+        IrixGuestAddr gv=guest_visual_by_id(rt,guest_display,v.screen,v.visualid);
+        if(!gv){
+            gv=bulk_alloc(32u);
+            if(gv)write_visual_shadow(rt,gv,v.visual);
+        }
         irix_guest_write32be(rt,out+0u,gv);
         irix_guest_write32be(rt,out+4u,(uint32_t)v.visualid);
         irix_guest_write32be(rt,out+8u,(uint32_t)v.screen);
