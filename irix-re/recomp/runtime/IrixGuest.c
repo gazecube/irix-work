@@ -1634,6 +1634,34 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_trap(rt, cpu, 0xeeee23ffu);
         return;
     }
+    case SYS_fork: { /* fork */
+        pid_t pid = fork();
+
+        if (pid < 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+
+        /*
+         * Raw IRIX/MIPS fork follows the usual Unix split:
+         * parent receives child pid, child receives 0.  Because the guest
+         * runtime lives in the host process, host fork() also gives the child
+         * a copy-on-write clone of the complete guest address space and CPU
+         * state, which is exactly what this bring-up path needs.
+         */
+        if (pid == 0) {
+            cpu->gpr[2] = 0u;
+            cpu->gpr[7] = 0u;
+            cpu->gpr[0] = 0u;
+            fprintf(stderr, "IRIX fork: child pid=%ld\n", (long)getpid());
+        } else {
+            cpu->gpr[2] = (uint64_t)(int64_t)pid;
+            cpu->gpr[7] = 0u;
+            cpu->gpr[0] = 0u;
+            fprintf(stderr, "IRIX fork: parent child=%ld\n", (long)pid);
+        }
+        return;
+    }
     case SYS_read: { /* read */
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
