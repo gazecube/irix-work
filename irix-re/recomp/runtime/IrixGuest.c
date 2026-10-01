@@ -2965,6 +2965,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr sg_drop_state[16];
     static IrixGuestFunctionEntry *xm_build_resources_entry;
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
+    static int motif_converters_forced;
 
     /*
      * Stability-first Xt GC cache bypass.
@@ -3242,6 +3243,46 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                 (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
                 (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    }
+
+    /*
+     * 4Dwm bring-up: ensure Motif's String->FontList (and related) converters
+     * are registered before Xt performs resource conversion.  The SGI
+     * app-defaults database is loading correctly, but the hybrid startup path
+     * can reach _XtConvert without having run _XmRegisterConverters, leaving
+     * fontList resources empty and causing 4Dwm's fatal font load failure.
+     *
+     * Run the original IRIX Motif registrar exactly once in the original
+     * Xt/Motif state universe.  Preserve the caller CPU state completely;
+     * only the registrar's process-global Xt converter-table side effects are
+     * wanted here.
+     */
+    if (!motif_converters_forced && entry && entry->name &&
+        strcmp(entry->name, "_XtConvert") == 0 &&
+        irix_guest_ptr(rt, 0x0b2b766cu, 4u)) {
+        IrixGuestCpu saved_cpu = *cpu;
+        IrixGuestAddr registrar = 0x0b2b766cu; /* _XmRegisterConverters */
+        IrixGuestAddr registrar_gp = irix_guest_gp_for_address(registrar);
+        int rrc;
+
+        fprintf(stderr,
+                "IRIX 4Dwm bring-up: forcing _XmRegisterConverters before _XtConvert\\n");
+        if (registrar_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)registrar_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)registrar;
+        rrc = irix_mips_interp_call(rt, cpu, registrar);
+        if (!rt->trapped && rrc == 0) {
+            motif_converters_forced = 1;
+            *cpu = saved_cpu;
+            fprintf(stderr,
+                    "IRIX 4Dwm bring-up: Motif converters registered\\n");
+        } else {
+            fprintf(stderr,
+                    "IRIX 4Dwm bring-up: _XmRegisterConverters failed rc=%d trapped=%d\\n",
+                    rrc, rt->trapped);
+            if (!rt->trapped)
+                *cpu = saved_cpu;
+        }
     }
 
     /*
