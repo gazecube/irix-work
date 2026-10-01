@@ -34,6 +34,22 @@ static void bridge_XtError(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *msg = guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
 
     /*
+     * Deadline bring-up: SGI Xt can reach the fatal windowed-ancestor path
+     * for an absent optional widget while 4Dwm is constructing screen
+     * resources.  We already treat the corresponding NULL realization paths
+     * as empty/optional.  Keep this one exact diagnostic nonfatal so the WM
+     * can continue startup; all other XtError calls still trap normally.
+     */
+    if (msg && strcmp(msg, "Object \"(null)\" does not have windowed ancestor") == 0) {
+        fprintf(stderr,
+                "IRIX Xt bring-up compatibility: suppressed fatal: %s\n",
+                msg);
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return;
+    }
+
+    /*
      * Host XtError normally terminates the process.  Keep the translated
      * runtime in control instead: report the same diagnostic and trap at the
      * guest boundary so we still get useful IRIX state.
