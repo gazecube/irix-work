@@ -1689,6 +1689,27 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         result = (int64_t)close((int)(int32_t)cpu->gpr[4]);
         syscall_result(cpu, result);
         return;
+    case SYS_pipe: { /* pipe */
+        int fds[2];
+
+        /*
+         * IRIX/MIPS returns the two pipe descriptors in v0/v1 from the raw
+         * syscall.  libc's _pipe wrapper stores those registers into the
+         * caller's int[2].  Do not write through a0 here: at the kernel ABI
+         * boundary it is merely the libc wrapper's still-live argument.
+         */
+        if (pipe(fds) != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+
+        cpu->gpr[2] = (uint64_t)(int64_t)fds[0];
+        cpu->gpr[3] = (uint64_t)(int64_t)fds[1];
+        cpu->gpr[7] = 0u;
+        cpu->gpr[0] = 0u;
+        fprintf(stderr, "IRIX pipe: -> %d,%d\n", fds[0], fds[1]);
+        return;
+    }
     case SYS_ioctl: { /* ioctl(fd, cmd, arg) */
         int fd = (int)(int32_t)cpu->gpr[4];
         uint32_t cmd = (uint32_t)cpu->gpr[5];
