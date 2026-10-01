@@ -1710,6 +1710,67 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         fprintf(stderr, "IRIX pipe: -> %d,%d\n", fds[0], fds[1]);
         return;
     }
+    case SYS_fcntl: { /* fcntl(fd, cmd, arg) */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        int cmd = (int)(int32_t)cpu->gpr[5];
+        uint32_t arg = (uint32_t)cpu->gpr[6];
+
+        /*
+         * The basic IRIX fcntl command numbers used by the desktop match the
+         * traditional SysV values: 0..4 are DUPFD/GETFD/SETFD/GETFL/SETFL.
+         * Translate the status flags rather than passing IRIX bit values
+         * directly to the Linux kernel.
+         */
+        switch (cmd) {
+        case 0: /* F_DUPFD */
+            result = (int64_t)fcntl(fd, F_DUPFD, (int)arg);
+            break;
+        case 1: /* F_GETFD */
+            result = (int64_t)fcntl(fd, F_GETFD);
+            break;
+        case 2: /* F_SETFD */
+            result = (int64_t)fcntl(fd, F_SETFD, (int)arg);
+            break;
+        case 3: { /* F_GETFL */
+            int hf = fcntl(fd, F_GETFL);
+            uint32_t gf = 0u;
+            if (hf < 0) {
+                result = -1;
+                break;
+            }
+            switch (hf & O_ACCMODE) {
+            case O_WRONLY: gf |= 1u; break;
+            case O_RDWR:   gf |= 2u; break;
+            default: break;
+            }
+            if (hf & O_NONBLOCK) gf |= 0x0080u;
+            if (hf & O_APPEND)   gf |= 0x0008u;
+#ifdef O_SYNC
+            if (hf & O_SYNC)     gf |= 0x0010u;
+#endif
+#ifdef O_ASYNC
+            if (hf & O_ASYNC)    gf |= 0x0040u;
+#endif
+            result = (int64_t)gf;
+            break;
+        }
+        case 4: /* F_SETFL */
+            result = (int64_t)fcntl(fd, F_SETFL, irix_open_flags(arg));
+            break;
+        default:
+            errno = EINVAL;
+            result = -1;
+            break;
+        }
+
+        fprintf(stderr,
+                "IRIX fcntl: fd=%d cmd=%d arg=0x%x -> %lld%s%s\n",
+                fd, cmd, arg, (long long)result,
+                result < 0 ? " errno=" : "",
+                result < 0 ? strerror(errno) : "");
+        syscall_result(cpu, result);
+        return;
+    }
     case SYS_ioctl: { /* ioctl(fd, cmd, arg) */
         int fd = (int)(int32_t)cpu->gpr[4];
         uint32_t cmd = (uint32_t)cpu->gpr[5];
