@@ -3057,10 +3057,12 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * allows the rest of Motif's crossing/focus dispatch to execute.
      */
     if (address == 0x0f6588b8u &&
-        (uint32_t)cpu->gpr[31] == 0x0b2998ccu) {
+        ((uint32_t)cpu->gpr[31] == 0x0b2998ccu ||
+         (uint32_t)cpu->gpr[31] == 0x0b296a04u)) {
         fprintf(stderr,
                 "IRIX Xt inheritance compatibility: "
-                "_XtInherit caller=0b2998cc -> no-op inherited hook\n");
+                "_XtInherit caller=%08x -> no-op inherited hook\n",
+                (uint32_t)cpu->gpr[31]);
         cpu->gpr[2] = 0u;
         cpu->gpr[0] = 0u;
         return 0;
