@@ -2966,6 +2966,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestFunctionEntry *xm_build_resources_entry;
     static IrixGuestFunctionEntry *xm_save_core_translations_entry;
     static int motif_converters_forced;
+    static IrixGuestAddr last_xt_convert_widget;
 
     /*
      * Stability-first Xt GC cache bypass.
@@ -3243,6 +3244,53 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
                 (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
                 (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+    }
+
+    /*
+     * 4Dwm bring-up: _XtConvert must receive a real Widget so Xt can recover
+     * the correct application context and its converter table.  The failing
+     * resource path reaches _XtConvert with a0 == NULL, after which
+     * XtWidgetToApplicationContext walks address zero and reports missing
+     * String->FontList / String->Pixel converters even though Motif's
+     * converter registrar has run.
+     *
+     * Remember the last valid conversion widget and, for only the malformed
+     * NULL case, recover a live widget from the surrounding saved-register
+     * frame or the in-progress Xt allocation hints.
+     */
+    if (entry && entry->name && strcmp(entry->name, "_XtConvert") == 0) {
+        IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        if (irix_guest_looks_like_widget(rt, w)) {
+            last_xt_convert_widget = w;
+        } else if (!w) {
+            static const unsigned candidates[] = {16u,17u,18u,19u,20u,21u,22u,23u};
+            IrixGuestAddr repair = 0u;
+            size_t wi;
+
+            if (irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
+                repair = g_xt_alloc_widget_hint;
+            else if (irix_guest_looks_like_widget(rt, xm_display_bootstrap_widget))
+                repair = xm_display_bootstrap_widget;
+            else if (irix_guest_looks_like_widget(rt, last_xt_convert_widget))
+                repair = last_xt_convert_widget;
+            else {
+                for (wi = 0; wi < sizeof(candidates)/sizeof(candidates[0]); ++wi) {
+                    IrixGuestAddr cw = (IrixGuestAddr)(uint32_t)cpu->gpr[candidates[wi]];
+                    if (irix_guest_looks_like_widget(rt, cw)) {
+                        repair = cw;
+                        break;
+                    }
+                }
+            }
+
+            if (repair) {
+                fprintf(stderr,
+                        "IRIX Xt convert context repair: _XtConvert widget NULL -> %08x\\n",
+                        repair);
+                cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)repair;
+                last_xt_convert_widget = repair;
+            }
+        }
     }
 
     /*
