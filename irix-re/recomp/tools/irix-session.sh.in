@@ -84,7 +84,7 @@ if [ "$wait_status" -ne 0 ]; then
 fi
 
 echo "IRIX session: 4Dwm ready; starting Toolchest"
-"$toolchest" -name ToolChest >"$logdir/toolchest.log" 2>&1 &
+"$toolchest" >"$logdir/toolchest.log" 2>&1 &
 toolchest_pid=$!
 
 echo "IRIX session: starting desktop File Manager"
