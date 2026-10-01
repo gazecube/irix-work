@@ -248,10 +248,15 @@ def decode(addr, insn):
         a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = (old & 0xffffff00u) | (w >> 24); break;','  case 1: old = (old & 0xffff0000u) | (w >> 16); break;','  case 2: old = (old & 0xff000000u) | (w >> 8); break;','  default: old = w; break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
     if op==0x23:
         a=mem_addr(rs,imm)
-        if addr==0x10034c00:
+        if addr in (0x10034c00, 0x10034c10, 0x10034c14):
+            labels = {
+                0x10034c00: "screen resource",
+                0x10034c10: "screen resource +0x08",
+                0x10034c14: "screen resource +0x58",
+            }
             return ['{ IrixGuestAddr a = %s; uint32_t v = 0;'%a,
                     '  if (a >= 0x100u) v = irix_guest_read32be(rt, a);',
-                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null screen resource -> 0\\n");',
+                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null %s -> 0\\n");'%labels[addr],
                     '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
         if addr==0x098382ac:
             return ['{ IrixGuestAddr a = %s; uint32_t v = irix_guest_read32be(rt, a);'%a,
