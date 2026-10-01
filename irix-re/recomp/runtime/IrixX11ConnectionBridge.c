@@ -1,8 +1,10 @@
 #include "IrixX11ConnectionBridge.h"
+#include "IrixX11BridgeExtraAccess.h"
 #include "IrixLibcBridge.h"
 
 #include <X11/Xlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /*
@@ -61,16 +63,26 @@ static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
     const char *resource_string;
     IrixGuestAddr out = 0;
 
-    /* Use the process DISPLAY directly. The guest Display is a synthetic
-       shadow rather than a real SGI Xlib Display, so dereferencing fields from
-       it here is both unnecessary and brittle. XResourceManagerString is a
-       server property query; opening the same DISPLAY gives the same value
-       without exposing host pointers or depending on shadow layout. */
-    dpy = XOpenDisplay(0);
+    /*
+     * Stay on the same host Xlib connection that backs the guest Display.
+     * Reopening DISPLAY here used to create yet another connection during Xt
+     * resource initialization.  The resource-manager property is server-wide,
+     * but keeping every bridge on the canonical Display avoids split request
+     * serials and extension/visual state.
+     */
+    dpy = irix_x11_primary_display_from_guest((IrixGuestAddr)(uint32_t)cpu->gpr[4]);
     if (dpy) {
         resource_string = XResourceManagerString(dpy);
         out = copy_host_string_to_guest(rt, cpu, resource_string);
-        XCloseDisplay(dpy);
+    } else {
+        dpy = XOpenDisplay(0);
+        if (dpy) {
+            fprintf(stderr,
+                    "IRIX XResourceManagerString: primary Display unavailable; temporary fallback\n");
+            resource_string = XResourceManagerString(dpy);
+            out = copy_host_string_to_guest(rt, cpu, resource_string);
+            XCloseDisplay(dpy);
+        }
     }
     cpu->gpr[2] = out;
 }
