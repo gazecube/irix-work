@@ -3106,18 +3106,51 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          !strncmp(entry->name, "Xm", 2) ||
          !strncmp(entry->name, "_Xm", 3))) {
         uint64_t saved_gp = cpu->gpr[28];
-        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        IrixGuestAddr exec_address = address;
+        IrixGuestAddr target_gp;
         int rc;
 
+        /*
+         * Direct-main links the translated core into the synthetic 0x50000000
+         * image, but also maps the original IRIX Xt/Motif DSOs at their real
+         * addresses.  Executing a synthetic Xt copy and an original Xt copy in
+         * one process splits process-global state (notably the per-display
+         * list), producing "Couldn't find per display information".
+         *
+         * GUI stability mode is already intentionally running Xt/Xm as
+         * original MIPS.  If the selected registry entry is the synthetic
+         * archive copy, redirect by exact symbol name to the original mapped
+         * DSO copy so every Xt/Xm call shares one set of globals.
+         */
+        if (address >= 0x50000000u) {
+            size_t xi;
+            for (xi = 0; xi < rt->function_count; ++xi) {
+                IrixGuestFunctionEntry *xe = &rt->functions[xi];
+                if (xe == entry || !xe->name ||
+                    strcmp(xe->name, entry->name) != 0)
+                    continue;
+                if (xe->address < 0x20000000u &&
+                    !(xe->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
+                    irix_guest_ptr(rt, xe->address, 4u)) {
+                    exec_address = xe->address;
+                    fprintf(stderr,
+                            "IRIX GUI stability alias: %s %08x -> %08x\n",
+                            entry->name, address, exec_address);
+                    break;
+                }
+            }
+        }
+
+        target_gp = irix_guest_gp_for_address(exec_address);
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
-        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)exec_address;
 
         fprintf(stderr,
-                "IRIX GUI stability mode: %s @ %08x -> original MIPS\n",
-                entry->name, address);
+                "IRIX GUI stability mode: %s @ %08x -> original MIPS %08x\n",
+                entry->name, address, exec_address);
 
-        rc = irix_mips_interp_call(rt, cpu, address);
+        rc = irix_mips_interp_call(rt, cpu, exec_address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
