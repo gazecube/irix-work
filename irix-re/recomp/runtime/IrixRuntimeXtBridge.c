@@ -40,7 +40,9 @@ static void bridge_XtError(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
      * as empty/optional.  Keep this one exact diagnostic nonfatal so the WM
      * can continue startup; all other XtError calls still trap normally.
      */
-    if (msg && strcmp(msg, "Object \"(null)\" does not have windowed ancestor") == 0) {
+    if (msg &&
+        (!strcmp(msg, "Object \"(null)\" does not have windowed ancestor") ||
+         !strcmp(msg, "Couldn't find per display information"))) {
         fprintf(stderr,
                 "IRIX Xt bring-up compatibility: suppressed fatal: %s\n",
                 msg);
