@@ -10,10 +10,10 @@ mkdir -p "$logdir"
 
 makeicons="$root/usr/lib/desktop/makeIconVisuals"
 prealloc="$root/usr/lib/desktop/preallocColors"
-wm="$root/usr/bin/X11/4Dwm"
-waitwm="$root/usr/bin/X11/wait4wm"
-toolchest="$root/usr/bin/X11/toolchest"
-fm="$root/usr/sbin/fm"
+wm="@CMAKE_CURRENT_BINARY_DIR@/quick/4Dwm-quick"
+waitwm="@CMAKE_CURRENT_BINARY_DIR@/quick/wait4wm-quick"
+toolchest="@CMAKE_CURRENT_BINARY_DIR@/quick/toolchest-quick"
+fm="@CMAKE_CURRENT_BINARY_DIR@/quick/fm-quick"
 
 for p in "$makeicons" "$prealloc" "$wm" "$waitwm" "$toolchest" "$fm"; do
     if [ ! -x "$p" ]; then
