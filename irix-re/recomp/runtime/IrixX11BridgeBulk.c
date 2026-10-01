@@ -4,6 +4,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #define IRIX_X11_BULK_TMP_BASE 0x72900000u
@@ -384,6 +385,13 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if(list) XFree(list);
     wr32(rt,nitems_return,(uint32_t)n);
     cpu->gpr[2]=out;
+    fprintf(stderr,
+            "IRIX XGetVisualInfo: guest_display=%08x mask=%08lx "
+            "tmpl=%08x visualid=%08lx screen=%d depth=%d class=%d "
+            "n=%d out=%08x\\n",
+            (uint32_t)cpu->gpr[4], (unsigned long)mask, tmpl_addr,
+            (unsigned long)tmpl.visualid, tmpl.screen, tmpl.depth, tmpl.class,
+            n, out);
 }
 
 static void bridge_XSetCloseDownMode(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
