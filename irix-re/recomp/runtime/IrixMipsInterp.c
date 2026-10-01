@@ -418,7 +418,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * therefore reads as zero.
              */
             if (((pc >= 0x100363e8u && pc < 0x10036608u) ||
-                 (pc >= 0x10036cc4u && pc < 0x10036d38u)) &&
+                 (pc >= 0x10036cc4u && pc < 0x10037200u)) &&
                 (uint32_t)cpu->gpr[rs] == 0u && a < 0x00000100u) {
                 fprintf(stderr,
                         "IRIX 4Dwm _WmGetDynamicDefault null-resource LW: "
@@ -561,7 +561,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
             if (((pc >= 0x100363e8u && pc < 0x10036608u) ||
-                 (pc >= 0x10036cc4u && pc < 0x10036d38u)) &&
+                 (pc >= 0x10036cc4u && pc < 0x10037200u)) &&
                 (uint32_t)cpu->gpr[rs] == 0u && a < 0x00000100u) {
                 fprintf(stderr,
                         "IRIX 4Dwm _WmGetDynamicDefault null-resource LBU: "
