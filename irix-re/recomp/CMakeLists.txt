@@ -445,6 +445,67 @@ if(IRIX_DEV_TREE)
                     set_target_properties(irix_desktop_quick_runner PROPERTIES ENABLE_EXPORTS ON)
                 endif()
 
+                # Emergency direct-main runners for the visible core session.
+                # These deliberately bypass PT_INTERP/rld, like desktop-quick,
+                # so the session can come up even while the original rld JIT
+                # path is still being repaired.
+                if(_app_name STREQUAL "4dwm" OR
+                   _app_name STREQUAL "wait4wm" OR
+                   _app_name STREQUAL "toolchest" OR
+                   _app_name STREQUAL "fm")
+                    set(_quick_target "irix_${_app_name}_quick_runner")
+                    add_executable(${_quick_target} EXCLUDE_FROM_ALL
+                        runtime/AppRunner.c)
+                    set_target_properties(${_quick_target} PROPERTIES
+                        OUTPUT_NAME "${_app_elf_name}-quick"
+                        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/quick"
+                        BUILD_RPATH "$ORIGIN/.."
+                    )
+                    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+                        target_link_options(${_quick_target} PRIVATE
+                            "-Wl,--disable-new-dtags")
+                    endif()
+                    add_dependencies(${_quick_target}
+                        irix_recomp_runtime
+                        irix_recompiled_core
+                        ${_app_build_target}
+                        irix_ecosystem
+                    )
+                    if(TARGET irix_fast_quarks)
+                        add_dependencies(${_quick_target} irix_fast_quarks)
+                        target_compile_definitions(${_quick_target} PRIVATE
+                            IRIX_HAVE_FAST_QUARKS=1)
+                    endif()
+                    target_include_directories(${_quick_target} PRIVATE
+                        ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                        ${IRIX_ECOSYSTEM_DIR}
+                    )
+                    target_compile_definitions(${_quick_target} PRIVATE
+                        IRIX_DIRECT_MAIN=1
+                        IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+                        IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                        IRIX_DEV_TREE="${IRIX_DEV_TREE}"
+                        IRIX_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
+                        IRIX_APP_NAME="${_app_name}"
+                        IRIX_APP_PATH="${_app_path}"
+                        IRIX_APP_BUILD_DIR="${_app_dir}"
+                        IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                        IRIX_APP_REGISTER=register_${_app_prefix}
+                    )
+                    target_link_libraries(${_quick_target} PRIVATE
+                        ${_app_bundle_target}
+                        irix_recompiled_stack
+                        irix_recomp_libc_bridge
+                        irix_recomp_x11_bridge
+                        irix_recomp_runtime
+                        X11::X11
+                        ${CMAKE_DL_LIBS}
+                        m
+                    )
+                    set_target_properties(${_quick_target} PROPERTIES ENABLE_EXPORTS ON)
+                    add_dependencies(irix_session ${_quick_target})
+                endif()
+
                 # Fast bring-up path: run the original IRIX MIPS executable
                 # through the Unicorn R4000 JIT without generating or linking
                 # translated C for the app/core stack.
