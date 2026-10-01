@@ -410,6 +410,23 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
+             * 4Dwm ProcessScreenResources optional screen-resource record.
+             * During deadline bring-up the record can be absent; the code
+             * only consumes flag/value fields from it.  Treat the three
+             * demonstrated NULL loads as zero while running this function in
+             * the interpreter, so no translated 4Dwm regeneration is needed.
+             */
+            if ((pc == 0x10034c00u || pc == 0x10034c10u ||
+                 pc == 0x10034c14u) &&
+                (uint32_t)cpu->gpr[rs] == 0u) {
+                fprintf(stderr,
+                        "IRIX 4Dwm ProcessScreenResources interp repair: "
+                        "pc=%08x null base -> zero\n", pc);
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
+
+            /*
              * Xt bring-up: the class/resource merge path can propagate small
              * integer tokens where a resource/class pointer is expected.
              * We already repair the +0x14 flag loads; this later initializer
@@ -523,6 +540,14 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            if (pc == 0x10034c04u &&
+                (uint32_t)cpu->gpr[rs] == 0u) {
+                fprintf(stderr,
+                        "IRIX 4Dwm ProcessScreenResources interp repair: "
+                        "pc=10034c04 null base -> zero\n");
+                cpu->gpr[rtno] = 0u;
+                break;
+            }
             if (irix_xt_resource_missing_load(rt, pc,
                     (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, op, rtno))
                 cpu->gpr[rtno] = 0u;
