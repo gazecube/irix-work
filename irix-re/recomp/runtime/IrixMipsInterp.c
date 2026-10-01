@@ -416,8 +416,9 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * demonstrated NULL loads as zero while running this function in
              * the interpreter, so no translated 4Dwm regeneration is needed.
              */
-            if ((pc == 0x10034c00u || pc == 0x10034c10u ||
-                 pc == 0x10034c14u || pc == 0x10034d5cu) &&
+            if (((pc == 0x10034c00u || pc == 0x10034c10u ||
+                  pc == 0x10034c14u || pc == 0x10034d5cu) ||
+                 pc == 0x1003640cu) &&
                 (uint32_t)cpu->gpr[rs] == 0u) {
                 fprintf(stderr,
                         "IRIX 4Dwm ProcessScreenResources interp repair: "
@@ -540,7 +541,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x24:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
-            if (pc == 0x10034c04u &&
+            if ((pc == 0x10034c04u || pc == 0x10036410u) &&
                 (uint32_t)cpu->gpr[rs] == 0u) {
                 fprintf(stderr,
                         "IRIX 4Dwm ProcessScreenResources interp repair: "
