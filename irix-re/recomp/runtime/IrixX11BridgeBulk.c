@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -57,7 +58,25 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     size_t i;
     const char *name = 0;
     IrixGuestAddr name_addr;
+    Display *primary;
+
     if (!guest) return 0;
+
+    /*
+     * The normal XOpenDisplay bridge already owns the host Display backing
+     * this guest shadow.  Reopening the display here creates a second Xlib
+     * connection and splits visuals, colormaps, extension state and XIDs
+     * across two host Display objects.  That is especially toxic to Motif's
+     * visual selection during 4Dwm startup.
+     *
+     * Reuse the canonical host Display whenever the guest pointer belongs to
+     * the primary bridge.  Keep the old reopen path only for genuinely
+     * foreign display shadows not known to that bridge.
+     */
+    primary = irix_x11_primary_display_from_guest(guest);
+    if (primary)
+        return primary;
+
     for (i = 0; i < g_bulk.display_count; ++i)
         if (g_bulk.guest_display[i] == guest)
             return g_bulk.host_display[i];
@@ -68,6 +87,9 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_bulk.display_count++;
     g_bulk.guest_display[i] = guest;
     g_bulk.host_display[i] = XOpenDisplay(name);
+    fprintf(stderr,
+            "IRIX X11 bulk fallback: opened secondary host Display for unknown guest=%08x\\n",
+            guest);
     return g_bulk.host_display[i];
 }
 
