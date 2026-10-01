@@ -1,4 +1,5 @@
 #include "IrixRuntimeX11Bridge.h"
+#include "IrixX11BridgeExtraAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -88,7 +89,20 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     size_t i;
     IrixGuestAddr name_addr;
     const char *name = 0;
+    Display *primary;
+
     if (!guest) return 0;
+
+    /*
+     * Reuse the host Display already backing the canonical guest shadow.
+     * Opening another Xlib connection for the same 0x7240xxxx guest Display
+     * splits connection-local resources (visual/colormap bookkeeping,
+     * extension state, request serials, etc.) from Xt's registered Display.
+     */
+    primary = irix_x11_primary_display_from_guest(guest);
+    if (primary)
+        return primary;
+
     for (i = 0; i < g_x11.display_count; ++i)
         if (g_x11.guest_display[i] == guest)
             return g_x11.host_display[i];
@@ -99,6 +113,9 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_x11.display_count++;
     g_x11.guest_display[i] = guest;
     g_x11.host_display[i] = XOpenDisplay(name);
+    fprintf(stderr,
+            "IRIX runtime X11 fallback: opened secondary host Display for unknown guest=%08x\n",
+            guest);
     return g_x11.host_display[i];
 }
 
