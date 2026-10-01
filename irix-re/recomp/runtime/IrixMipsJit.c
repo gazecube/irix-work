@@ -1143,7 +1143,37 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 {
                     IrixGuestAddr live_ra =
                         (IrixGuestAddr)(uint32_t)cpu->gpr[31];
-                    if (irix_mips_interp_call(rt, cpu, ipc) != 0 ||
+                    IrixGuestAddr interp_pc = ipc;
+
+                    /*
+                     * Unicorn's MIPS RI report can surface at the syscall
+                     * wrapper even though the last clean block boundary is in
+                     * its rld caller.  Entering the interpreter at the wrapper
+                     * skips the caller's remaining epilogue and returns with
+                     * its 0x20-byte frame still allocated.  That is exactly
+                     * what we observed at 0fb70ec0 -> 0fb833f8: SP arrived at
+                     * 0fb71064 as da30 instead of da50.
+                     *
+                     * Rewind only to the last clean executable block when it
+                     * is in the same rld startup path.  The block begins with
+                     * a branch and has no already-committed side effects, so
+                     * the architectural interpreter can finish the real
+                     * caller path, including its frame teardown, before
+                     * returning to live_ra.
+                     */
+                    if (ipc == 0x0fb833f8u &&
+                        s->last_block >= 0x0fb70e80u &&
+                        s->last_block <= 0x0fb70f20u &&
+                        jit_guest_exec_mapped(s, s->last_block)) {
+                        interp_pc = s->last_block;
+                        fprintf(stderr,
+                                "IRIX JIT: RI recovery rewinding rld caller "
+                                "%08x -> %08x (sp=%08x ra=%08x)\n",
+                                ipc, interp_pc,
+                                (uint32_t)cpu->gpr[29], live_ra);
+                    }
+
+                    if (irix_mips_interp_call(rt, cpu, interp_pc) != 0 ||
                         rt->trapped) {
                         if (synthetic_return)
                             cpu->gpr[31] = original_ra;
