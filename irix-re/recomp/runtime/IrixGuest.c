@@ -3364,6 +3364,28 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         return rc;
     }
 
+    /*
+     * Deadline bring-up: keep 4Dwm ProcessScreenResources in original MIPS.
+     * This avoids regenerating/recompiling the translated 4Dwm bundle for
+     * each narrow compatibility repair; subsequent fixes can live entirely
+     * in the interpreter/runtime and rebuild quickly.
+     */
+    if (entry && entry->name &&
+        strcmp(entry->name, "ProcessScreenResources") == 0) {
+        uint64_t saved_gp = cpu->gpr[28];
+        IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+        int rc;
+        if (target_gp)
+            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+        fprintf(stderr,
+                "IRIX 4Dwm fast bring-up: ProcessScreenResources -> original MIPS\n");
+        rc = irix_mips_interp_call(rt, cpu, address);
+        if (!rt->trapped)
+            cpu->gpr[28] = saved_gp;
+        return rc;
+    }
+
     if (irix_mips_interp_should_force(address)) {
         fprintf(stderr,
                 "IRIX dispatcher: forced interpreter target=%08x\n",
