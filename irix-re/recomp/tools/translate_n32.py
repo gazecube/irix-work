@@ -234,13 +234,25 @@ def decode(addr, insn):
     if op==0x21: return ['%s = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
     if op==0x25: return ['%s = irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
     if op==0x20: return ['%s = (uint64_t)(int64_t)(int8_t)irix_guest_read8(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
-    if op==0x24: return ['%s = irix_guest_read8(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
+    if op==0x24:
+        a=mem_addr(rs,imm)
+        if addr==0x10034c04:
+            return ['{ IrixGuestAddr a = %s; uint8_t v = 0;'%a,
+                    '  if (a >= 0x100u) v = irix_guest_read8(rt, a);',
+                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null screen-class flags -> 0\\n");',
+                    '  %s = v; }'%reg(rt)],None
+        return ['%s = irix_guest_read8(rt, %s);'%(reg(rt),a)],None
     if op==0x22:
         a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = w; break;','  case 1: old = (old & 0x000000ffu) | (w << 8); break;','  case 2: old = (old & 0x0000ffffu) | (w << 16); break;','  default: old = (old & 0x00ffffffu) | (w << 24); break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
     if op==0x26:
         a=mem_addr(rs,imm); return ['{ IrixGuestAddr a = %s; uint32_t old = (uint32_t)%s; uint32_t w = irix_guest_read32be(rt, a & ~3u);'%(a,reg(rt)),'  switch (a & 3u) {','  case 0: old = (old & 0xffffff00u) | (w >> 24); break;','  case 1: old = (old & 0xffff0000u) | (w >> 16); break;','  case 2: old = (old & 0xff000000u) | (w >> 8); break;','  default: old = w; break;','  } %s = %s; }'%(reg(rt),sx32_expr('old'))],None
     if op==0x23:
         a=mem_addr(rs,imm)
+        if addr==0x10034c00:
+            return ['{ IrixGuestAddr a = %s; uint32_t v = 0;'%a,
+                    '  if (a >= 0x100u) v = irix_guest_read32be(rt, a);',
+                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null screen resource -> 0\\n");',
+                    '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
         if addr==0x098382ac:
             return ['{ IrixGuestAddr a = %s; uint32_t v = irix_guest_read32be(rt, a);'%a,
                     '  fprintf(stderr, "IRIX ImdString LW probe: pc=0x098382ac a1=%08x addr=%08x value=%08x\\n", (uint32_t)cpu->gpr[5], a, v);',
