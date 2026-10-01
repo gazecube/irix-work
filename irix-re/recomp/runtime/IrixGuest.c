@@ -3427,6 +3427,32 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         return rc;
     }
 
+    /*
+     * Deadline bring-up: 4Dwm's resource default callbacks share the same
+     * optional screen-resource structures.  Keep the private _Wm*Default
+     * callbacks in original MIPS so NULL-resource compatibility stays in the
+     * interpreter and does not regenerate the translated 4Dwm bundle.
+     */
+    if (entry && entry->name &&
+        strncmp(entry->name, "_Wm", 3) == 0) {
+        size_t n = strlen(entry->name);
+        if (n >= 7 && strcmp(entry->name + n - 7, "Default") == 0) {
+            uint64_t saved_gp = cpu->gpr[28];
+            IrixGuestAddr target_gp = irix_guest_gp_for_address(address);
+            int rc;
+            if (target_gp)
+                cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+            cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
+            fprintf(stderr,
+                    "IRIX 4Dwm fast bring-up: %s -> original MIPS\n",
+                    entry->name);
+            rc = irix_mips_interp_call(rt, cpu, address);
+            if (!rt->trapped)
+                cpu->gpr[28] = saved_gp;
+            return rc;
+        }
+    }
+
     if (irix_mips_interp_should_force(address)) {
         fprintf(stderr,
                 "IRIX dispatcher: forced interpreter target=%08x\n",
