@@ -517,7 +517,27 @@ static void bridge_XLoadQueryFont(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
-    XFontStruct *f = (d && name) ? XLoadQueryFont(d, name) : 0;
+    XFontStruct *f = 0;
+
+    if (d && name && *name)
+        f = XLoadQueryFont(d, name);
+
+    /*
+     * Deadline bring-up: 4Dwm can reach its font loader with an empty or
+     * unavailable SGI font resource while the rest of the X resource stack is
+     * still being reconstructed.  Fall back to the core X "fixed" font so the
+     * WM can finish startup instead of exiting.  Keep the requested name in
+     * the log so the real resource can be restored later.
+     */
+    if (d && !f) {
+        fprintf(stderr,
+                "IRIX XLoadQueryFont fallback: requested=%s%s%s -> fixed\n",
+                name ? "\"" : "",
+                name ? name : "<invalid>",
+                name ? "\"" : "");
+        f = XLoadQueryFont(d, "fixed");
+    }
+
     cpu->gpr[2] = font_to_guest(rt, f);
 }
 
