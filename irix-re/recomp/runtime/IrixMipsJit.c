@@ -227,7 +227,9 @@ static void shadow_return_hook(uc_engine *uc, uint64_t address,
      * restoring RA=0.  Keep it local so we can identify the real failing
      * operation without enabling the global instruction tracer.
      */
-    if (pc >= 0x0fb71040u && pc <= 0x0fb710d8u) {
+    if ((pc >= 0x0fb71040u && pc <= 0x0fb710d8u) ||
+        (pc >= 0x0fb70e80u && pc <= 0x0fb70f20u) ||
+        (pc >= 0x0fb833e0u && pc <= 0x0fb83408u)) {
         uint64_t v0 = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, sp = 0, t9 = 0;
         (void)uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
         (void)uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
@@ -237,7 +239,7 @@ static void shadow_return_hook(uc_engine *uc, uint64_t address,
         (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
         (void)uc_reg_read(uc, UC_MIPS_REG_T9, &t9);
         fprintf(stderr,
-                "IRIX rld 710 trace: pc=%08x insn=%08x "
+                "IRIX rld startup trace: pc=%08x insn=%08x "
                 "v0=%08x a0-a3=%08x,%08x,%08x,%08x "
                 "sp=%08x ra=%08x t9=%08x shadow_depth=%zu\n",
                 pc, insn, (uint32_t)v0,
