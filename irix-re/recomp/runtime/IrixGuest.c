@@ -3260,6 +3260,14 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      */
     if (entry && entry->name && strcmp(entry->name, "_XtConvert") == 0) {
         IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+
+        /*
+         * Do not substitute XmDisplay here.  XtWidgetToApplicationContext
+         * ultimately asks _XtGetPerDisplay for the widget's Display; the
+         * synthetic XmDisplay bootstrap object is not guaranteed to carry
+         * the registered Xt Display record.  Prefer an ordinary application
+         * widget observed on a successful conversion path.
+         */
         if (irix_guest_looks_like_widget(rt, w)) {
             last_xt_convert_widget = w;
         } else if (!w) {
@@ -3267,12 +3275,10 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             IrixGuestAddr repair = 0u;
             size_t wi;
 
-            if (irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
-                repair = g_xt_alloc_widget_hint;
-            else if (irix_guest_looks_like_widget(rt, xm_display_bootstrap_widget))
-                repair = xm_display_bootstrap_widget;
-            else if (irix_guest_looks_like_widget(rt, last_xt_convert_widget))
+            if (irix_guest_looks_like_widget(rt, last_xt_convert_widget))
                 repair = last_xt_convert_widget;
+            else if (irix_guest_looks_like_widget(rt, g_xt_alloc_widget_hint))
+                repair = g_xt_alloc_widget_hint;
             else {
                 for (wi = 0; wi < sizeof(candidates)/sizeof(candidates[0]); ++wi) {
                     IrixGuestAddr cw = (IrixGuestAddr)(uint32_t)cpu->gpr[candidates[wi]];
