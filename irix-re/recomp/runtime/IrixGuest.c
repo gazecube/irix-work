@@ -3089,6 +3089,56 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * Emergency direct-main coherence mode.
+     *
+     * The direct-main runner maps both the synthetic translated archive
+     * (0x50000000+) and the original IRIX executable/DSO images.  Any named
+     * synthetic function that also has an exact-name original mapped function
+     * can otherwise cross between two independent copies of library globals.
+     *
+     * Under IRIX_EXEC_BACKEND=static, prefer the original mapped function for
+     * such duplicates.  This is intentionally broad for bring-up: it keeps one
+     * coherent Xt/Motif/application state universe while retaining native
+     * bridge entries and translated-only helpers.
+     */
+    if (entry && entry->name &&
+        !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
+        address >= 0x50000000u &&
+        getenv("IRIX_EXEC_BACKEND") &&
+        strcmp(getenv("IRIX_EXEC_BACKEND"), "static") == 0) {
+        size_t xi;
+        for (xi = 0; xi < rt->function_count; ++xi) {
+            IrixGuestFunctionEntry *xe = &rt->functions[xi];
+            uint64_t saved_gp;
+            IrixGuestAddr target_gp;
+            int rc;
+
+            if (xe == entry || !xe->name ||
+                strcmp(xe->name, entry->name) != 0)
+                continue;
+            if (xe->address >= 0x20000000u ||
+                (xe->flags & IRIX_GUEST_FUNCTION_NATIVE) ||
+                !irix_guest_ptr(rt, xe->address, 4u))
+                continue;
+
+            saved_gp = cpu->gpr[28];
+            target_gp = irix_guest_gp_for_address(xe->address);
+            if (target_gp)
+                cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+            cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)xe->address;
+
+            fprintf(stderr,
+                    "IRIX direct-main original alias: %s %08x -> %08x\n",
+                    entry->name, address, xe->address);
+
+            rc = irix_mips_interp_call(rt, cpu, xe->address);
+            if (!rt->trapped)
+                cpu->gpr[28] = saved_gp;
+            return rc;
+        }
+    }
+
+    /*
      * GUI stability mode.
      *
      * For bring-up, keep the SGI Xt/Motif ABI internally coherent by running
