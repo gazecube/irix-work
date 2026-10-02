@@ -2719,6 +2719,93 @@ static IrixGuestAddr irix_guest_find_motif_bce(
     }
     return 0u;
 }
+/*
+ * Mirror Motif BaseClassPartInitialize's inheritance folding for the
+ * XmBaseClassExtRec method slots that use _XtInherit as their sentinel.
+ *
+ * All of these XmInherit... macros are casts of the same _XtInherit address.
+ * Resolve the superclass first, then replace only exact sentinel values in
+ * the subclass.  NULL is a legitimate inherited value and must be copied.
+ */
+static unsigned irix_guest_repair_motif_bce_inheritance_depth(
+    IrixGuestRuntime *rt, IrixGuestAddr cls, unsigned depth)
+{
+    const IrixGuestAddr xt_inherit = 0x0f6588b8u;
+    static const uint8_t inherit_offsets[] = {
+        0x10u, /* initializePrehook */
+        0x14u, /* setValuesPrehook */
+        0x18u, /* initializePosthook */
+        0x1cu, /* setValuesPosthook */
+        0x24u, /* secondaryObjectCreate */
+        0x28u, /* getSecResData */
+        0x4cu, /* getValuesPrehook */
+        0x50u, /* getValuesPosthook */
+        0x54u, /* classPartInitPrehook */
+        0x58u, /* classPartInitPosthook */
+        0x6cu, /* widgetNavigable */
+        0x70u  /* focusChange */
+    };
+    IrixGuestAddr super;
+    IrixGuestAddr ext;
+    IrixGuestAddr super_ext;
+    unsigned repaired = 0u;
+    unsigned i;
+
+    if (!cls || depth >= 64u ||
+        !irix_guest_looks_like_widget_class(rt, cls))
+        return 0u;
+
+    (void)irix_guest_repair_synthetic_motif_bce_class(rt, cls);
+    ext = irix_guest_find_motif_bce(rt, cls);
+    super = irix_guest_read32be(rt, cls + 0x00u);
+
+    if (super)
+        repaired += irix_guest_repair_motif_bce_inheritance_depth(
+            rt, super, depth + 1u);
+
+    if (!ext || !super ||
+        !irix_guest_looks_like_widget_class(rt, super))
+        return repaired;
+
+    (void)irix_guest_repair_synthetic_motif_bce_class(rt, super);
+    super_ext = irix_guest_find_motif_bce(rt, super);
+    if (!super_ext)
+        return repaired;
+
+    for (i = 0u; i < sizeof(inherit_offsets); ++i) {
+        uint32_t off = inherit_offsets[i];
+        IrixGuestAddr value =
+            irix_guest_read32be(rt, ext + off);
+
+        if (value == xt_inherit) {
+            IrixGuestAddr inherited =
+                irix_guest_read32be(rt, super_ext + off);
+
+            /*
+             * If the superclass is itself still unresolved, leave this slot
+             * alone.  Otherwise copy its value exactly, including NULL.
+             */
+            if (inherited != xt_inherit) {
+                irix_guest_write32be(rt, ext + off, inherited);
+                ++repaired;
+                fprintf(stderr,
+                        "IRIX Xm BCE inheritance repair: "
+                        "class=%08x ext=%08x off=%02x "
+                        "_XtInherit -> %08x super=%08x super_ext=%08x\n",
+                        cls, ext, off, inherited, super, super_ext);
+            }
+        }
+    }
+
+    return repaired;
+}
+
+static unsigned irix_guest_repair_motif_bce_inheritance(
+    IrixGuestRuntime *rt, IrixGuestAddr cls)
+{
+    return irix_guest_repair_motif_bce_inheritance_depth(rt, cls, 0u);
+}
+
 
 /*
  * Resolve XmBaseClassExt.widgetNavigable inheritance lazily at the exact
@@ -3212,9 +3299,13 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * as well.
      */
     if (entry && entry->name &&
-        strcmp(entry->name, "XtInitializeWidgetClass") == 0)
-        (void)irix_guest_repair_synthetic_motif_bce_class(
-            rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
+        strcmp(entry->name, "XtInitializeWidgetClass") == 0) {
+        IrixGuestAddr init_cls =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+
+        (void)irix_guest_repair_synthetic_motif_bce_class(rt, init_cls);
+        (void)irix_guest_repair_motif_bce_inheritance(rt, init_cls);
+    }
 
     if (entry && entry->name &&
         strcmp(entry->name, "XtGetClassExtension") == 0)
@@ -3683,6 +3774,9 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         uint64_t saved_gp = cpu->gpr[28];
         IrixGuestAddr exec_address = address;
         IrixGuestAddr target_gp;
+        IrixGuestAddr xt_init_class =
+            (strcmp(entry->name, "XtInitializeWidgetClass") == 0)
+                ? (IrixGuestAddr)(uint32_t)cpu->gpr[4] : 0u;
         int rc;
 
         /*
@@ -3726,6 +3820,10 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 entry->name, address, exec_address);
 
         rc = irix_mips_interp_call(rt, cpu, exec_address);
+
+        if (!rt->trapped && xt_init_class)
+            (void)irix_guest_repair_motif_bce_inheritance(
+                rt, xt_init_class);
 
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
