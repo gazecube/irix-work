@@ -4755,6 +4755,44 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                             irix_guest_read32be(rt, w + off + 0x1cu));
                 }
             }
+
+            /*
+             * Enter() stores this gadget into
+             * XtParent(w)->manager.active_child.  On the subsequent Leave()
+             * the failing SGI store is the corresponding NULL clear.  Find
+             * the exact SGI instance offset from live state rather than
+             * assuming an OpenMotif struct layout.
+             */
+            if (parent && w && irix_guest_ptr(rt, parent, 12u)) {
+                IrixGuestAddr pcls = irix_guest_read32be(rt, parent + 4u);
+                uint32_t psz = 0u;
+                unsigned hit_count = 0u;
+
+                if (pcls && irix_guest_ptr(rt, pcls + 8u, 4u))
+                    psz = irix_guest_read32be(rt, pcls + 8u);
+                if (!psz || psz > 0x1000u)
+                    psz = 0x400u;
+
+                fprintf(stderr,
+                        "IRIX Motif gadget parent scan: "
+                        "parent=%08x class=%08x size=%08x child=%08x\n",
+                        parent, pcls, psz, w);
+
+                if (irix_guest_ptr(rt, parent, psz)) {
+                    for (off = 0u; off + 4u <= psz; off += 4u) {
+                        if (irix_guest_read32be(rt, parent + off) == w) {
+                            fprintf(stderr,
+                                    "IRIX Motif gadget parent child-hit: "
+                                    "parent=%08x +%03x = %08x\n",
+                                    parent, off, w);
+                            ++hit_count;
+                        }
+                    }
+                }
+                fprintf(stderr,
+                        "IRIX Motif gadget parent scan done: hits=%u\n",
+                        hit_count);
+            }
         }
 
         /*
