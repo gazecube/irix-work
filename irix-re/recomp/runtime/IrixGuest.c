@@ -460,6 +460,32 @@ IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size)
     return out;
 }
 
+static uint32_t irix_guest_xrm_quark_literal(
+    IrixGuestRuntime *rt, const char *literal)
+{
+    size_t n;
+    IrixGuestAddr guest;
+    char *dst;
+
+    if (!rt || !literal || !rt->xrm_quarkify_encoded)
+        return 0u;
+
+    n = strlen(literal) + 1u;
+    if (n > UINT32_MAX)
+        return 0u;
+
+    guest = irix_guest_xt_compat_alloc(rt, (uint32_t)n);
+    if (!guest)
+        return 0u;
+
+    dst = (char *)irix_guest_ptr(rt, guest, n);
+    if (!dst)
+        return 0u;
+
+    memcpy(dst, literal, n);
+    return rt->xrm_quarkify_encoded(rt, guest);
+}
+
 void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
                                          IrixGuestAddr screen)
 {
@@ -2647,9 +2673,7 @@ static int irix_guest_repair_synthetic_motif_bce_class(
         if (record_type == 0u && version == 2u &&
             record_size == 0x78u) {
             uint32_t motif_q =
-                rt->xrm_quark_from_string
-                    ? rt->xrm_quark_from_string(rt, "OSF_MOTIF")
-                    : 0u;
+                irix_guest_xrm_quark_literal(rt, "OSF_MOTIF");
             if (motif_q) {
                 irix_guest_write32be(rt, ext + 0x04u, motif_q);
                 fprintf(stderr,
@@ -2694,9 +2718,7 @@ static IrixGuestAddr irix_guest_find_motif_bce(
     if (!cls || !irix_guest_ptr(rt, cls + 0x70u, 4u))
         return 0u;
 
-    motif_q = rt->xrm_quark_from_string
-        ? rt->xrm_quark_from_string(rt, "OSF_MOTIF")
-        : 0u;
+    motif_q = irix_guest_xrm_quark_literal(rt, "OSF_MOTIF");
     ext = irix_guest_read32be(rt, cls + 0x70u);
 
     for (depth = 0; ext && depth < 32u; ++depth) {
