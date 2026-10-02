@@ -135,6 +135,12 @@ static uint32_t quarkify_encoded(IrixGuestRuntime *rt, uint32_t encoded)
     return s ? (uint32_t)XrmStringToQuark(s) : 0u;
 }
 
+static uint32_t quark_from_string(IrixGuestRuntime *rt, const char *name)
+{
+    (void)rt;
+    return name ? (uint32_t)XrmStringToQuark(name) : 0u;
+}
+
 static void bridge_XrmStringToQuark(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     cpu->gpr[2] = quarkify_encoded(rt, (uint32_t)cpu->gpr[4]);
@@ -248,6 +254,7 @@ void irix_xrm_quark_bridge_init(IrixGuestRuntime *rt)
     memset(&g_quark, 0, sizeof(g_quark));
     g_quark.rt = rt;
     rt->xrm_quarkify_encoded = quarkify_encoded;
+    rt->xrm_quark_from_string = quark_from_string;
     if (irix_guest_map(rt, IRIX_XRM_QUARK_VALUE_BASE, IRIX_XRM_QUARK_VALUE_SIZE, 3u) == 0 ||
         irix_guest_ptr(rt, IRIX_XRM_QUARK_VALUE_BASE, 1))
         g_quark.value_cur = IRIX_XRM_QUARK_VALUE_BASE;
