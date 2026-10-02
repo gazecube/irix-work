@@ -2668,10 +2668,17 @@ static void irix_guest_repair_synthetic_motif_bce_lookup(
     IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr cls = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-    uint32_t byte_offset = (uint32_t)cpu->gpr[5];
     uint32_t requested_type = (uint32_t)cpu->gpr[6];
 
-    if (byte_offset == 0x70u && requested_type == 0u)
+    /*
+     * NULLQUARK is also the lookup key used by Xt's private class-extension
+     * machinery.  A synthetic Motif BCE left at its compile-time NULLQUARK
+     * can therefore alias *any* such lookup, not only one caller's expected
+     * core-class offset.  The repair helper is already fenced to synthetic
+     * classes and the exact Motif BCE {version=2,size=0x78} shape, so apply it
+     * for every NULLQUARK lookup before Xt walks the extension list.
+     */
+    if (requested_type == 0u)
         (void)irix_guest_repair_synthetic_motif_bce_class(rt, cls);
 }
 
