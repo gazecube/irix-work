@@ -2675,6 +2675,124 @@ static void irix_guest_repair_synthetic_motif_bce_lookup(
         (void)irix_guest_repair_synthetic_motif_bce_class(rt, cls);
 }
 
+static IrixGuestAddr irix_guest_find_motif_bce(
+    IrixGuestRuntime *rt, IrixGuestAddr cls)
+{
+    IrixGuestAddr ext;
+    uint32_t motif_q;
+    unsigned depth;
+
+    if (!cls || !irix_guest_ptr(rt, cls + 0x70u, 4u))
+        return 0u;
+
+    motif_q = irix_xrm_quark_from_string("OSF_MOTIF");
+    ext = irix_guest_read32be(rt, cls + 0x70u);
+
+    for (depth = 0; ext && depth < 32u; ++depth) {
+        IrixGuestAddr next;
+        uint32_t record_type;
+        uint32_t version;
+        uint32_t record_size;
+
+        if (!irix_guest_ptr(rt, ext, 0x78u))
+            return 0u;
+
+        next = irix_guest_read32be(rt, ext + 0x00u);
+        record_type = irix_guest_read32be(rt, ext + 0x04u);
+        version = irix_guest_read32be(rt, ext + 0x08u);
+        record_size = irix_guest_read32be(rt, ext + 0x0cu);
+
+        if (version == 2u && record_size == 0x78u &&
+            (record_type == motif_q ||
+             (record_type == 0u &&
+              cls >= 0x50000000u && cls < 0x70000000u)))
+            return ext;
+
+        ext = next;
+    }
+    return 0u;
+}
+
+/*
+ * Resolve XmBaseClassExt.widgetNavigable inheritance lazily at the exact
+ * point Motif proves class initialization left the sentinel behind.
+ *
+ * SGI/N32 XmBaseClassExtRec is 0x78 bytes and widgetNavigable is +0x6c.
+ * _XmGetNavigability must never call _XtInherit directly: that value means
+ * "copy the superclass method during class-part initialization".
+ */
+static IrixGuestAddr irix_guest_resolve_xm_widget_navigable(
+    IrixGuestRuntime *rt, IrixGuestAddr widget)
+{
+    const IrixGuestAddr xt_inherit = 0x0f6588b8u;
+    IrixGuestAddr cls;
+    IrixGuestAddr ext;
+    IrixGuestAddr method;
+    IrixGuestAddr super;
+    unsigned depth;
+
+    if (!irix_guest_looks_like_widget(rt, widget))
+        return 0u;
+
+    cls = irix_guest_read32be(rt, widget + 0x04u);
+    if (!irix_guest_looks_like_widget_class(rt, cls))
+        return 0u;
+
+    (void)irix_guest_repair_synthetic_motif_bce_class(rt, cls);
+    ext = irix_guest_find_motif_bce(rt, cls);
+    if (!ext)
+        return 0u;
+
+    method = irix_guest_read32be(rt, ext + 0x6cu);
+    if (method && method != xt_inherit)
+        return method;
+    if (method != xt_inherit)
+        return 0u;
+
+    super = irix_guest_read32be(rt, cls + 0x00u);
+    for (depth = 0; super && depth < 64u; ++depth) {
+        IrixGuestAddr super_ext;
+        IrixGuestAddr candidate;
+
+        if (!irix_guest_looks_like_widget_class(rt, super))
+            break;
+
+        (void)irix_guest_repair_synthetic_motif_bce_class(rt, super);
+        super_ext = irix_guest_find_motif_bce(rt, super);
+        if (super_ext) {
+            candidate = irix_guest_read32be(rt, super_ext + 0x6cu);
+            if (candidate && candidate != xt_inherit) {
+                IrixGuestAddr class_name_addr =
+                    irix_guest_read32be(rt, cls + 0x04u);
+                IrixGuestAddr super_name_addr =
+                    irix_guest_read32be(rt, super + 0x04u);
+                const char *class_name =
+                    irix_guest_cstr(rt, class_name_addr, 256u);
+                const char *super_name =
+                    irix_guest_cstr(rt, super_name_addr, 256u);
+
+                irix_guest_write32be(rt, ext + 0x6cu, candidate);
+                fprintf(stderr,
+                        "IRIX Xm widgetNavigable inheritance repair: "
+                        "widget=%08x class=%08x(%s) ext=%08x "
+                        "_XtInherit -> %08x from super=%08x(%s)\n",
+                        widget, cls, class_name ? class_name : "?",
+                        ext, candidate, super,
+                        super_name ? super_name : "?");
+                return candidate;
+            }
+        }
+
+        super = irix_guest_read32be(rt, super + 0x00u);
+    }
+
+    fprintf(stderr,
+            "IRIX Xm widgetNavigable inheritance unresolved: "
+            "widget=%08x class=%08x ext=%08x\n",
+            widget, cls, ext);
+    return 0u;
+}
+
 /*
  * SGI/N32 CompositeClassPart compatibility.
  *
@@ -3324,6 +3442,31 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             fprintf(stderr,
                     "IRIX Xt inheritance repair: XmDialogShell core extension hook _XtInherit -> NULL\n");
             irix_guest_write32be(rt, ext + 0x10u, 0u);
+        }
+    }
+
+    /*
+     * _XmGetNavigability calls the BaseClass extension's widgetNavigable
+     * method.  A live _XtInherit here is not a callable implementation; it is
+     * an unresolved class-part inheritance marker.  Resolve it from the
+     * superclass chain, patch the subclass BCE slot, and dispatch the real
+     * method with the original arguments.
+     */
+    if (address == 0x0f6588b8u &&
+        (uint32_t)cpu->gpr[31] == 0x0b294facu) {
+        IrixGuestAddr widget =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr target =
+            irix_guest_resolve_xm_widget_navigable(rt, widget);
+
+        if (target && target != address) {
+            fprintf(stderr,
+                    "IRIX Xt inheritance dispatch: "
+                    "_XmGetNavigability widget=%08x -> %08x\n",
+                    widget, target);
+            cpu->gpr[25] =
+                (uint64_t)(int64_t)(int32_t)target;
+            return irix_guest_call(rt, cpu, target);
         }
     }
 
