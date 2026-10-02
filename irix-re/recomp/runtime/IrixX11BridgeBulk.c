@@ -332,16 +332,56 @@ static void bridge_XWarpPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XGetWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    D0(); XWindowAttributes a; Status ok=0; IrixGuestAddr out=(uint32_t)cpu->gpr[6];
-    memset(&a,0,sizeof(a)); if(d) ok=XGetWindowAttributes(d,(Window)(uint32_t)cpu->gpr[5],&a);
+    IrixGuestAddr guest_display=(uint32_t)cpu->gpr[4];
+    D0();
+    XWindowAttributes a;
+    Status ok=0;
+    IrixGuestAddr out=(uint32_t)cpu->gpr[6];
+
+    memset(&a,0,sizeof(a));
+    if(d) ok=XGetWindowAttributes(d,(Window)(uint32_t)cpu->gpr[5],&a);
     if(ok && out) {
-        wr32(rt,out+0,(uint32_t)a.x); wr32(rt,out+4,(uint32_t)a.y); wr32(rt,out+8,(uint32_t)a.width); wr32(rt,out+12,(uint32_t)a.height);
-        wr32(rt,out+16,(uint32_t)a.border_width); wr32(rt,out+20,(uint32_t)a.depth); wr32(rt,out+28,(uint32_t)a.root);
-        wr32(rt,out+32,(uint32_t)a.class); wr32(rt,out+36,(uint32_t)a.bit_gravity); wr32(rt,out+40,(uint32_t)a.win_gravity);
-        wr32(rt,out+44,(uint32_t)a.backing_store); wr32(rt,out+48,(uint32_t)a.backing_planes); wr32(rt,out+52,(uint32_t)a.backing_pixel);
-        wr32(rt,out+56,(uint32_t)a.save_under); wr32(rt,out+60,(uint32_t)a.colormap); wr32(rt,out+64,(uint32_t)a.map_installed);
-        wr32(rt,out+68,(uint32_t)a.map_state); wr32(rt,out+72,(uint32_t)a.all_event_masks); wr32(rt,out+76,(uint32_t)a.your_event_mask);
-        wr32(rt,out+80,(uint32_t)a.do_not_propagate_mask); wr32(rt,out+84,(uint32_t)a.override_redirect);
+        int screen_num = a.screen ? XScreenNumberOfScreen(a.screen) : DefaultScreen(d);
+        VisualID vid = a.visual ? XVisualIDFromVisual(a.visual) : 0;
+        IrixGuestAddr gv = vid ? guest_visual_by_id(rt,guest_display,screen_num,vid) : 0;
+        IrixGuestAddr gs = guest_screen(rt,guest_display,screen_num);
+
+        /*
+         * IRIX/N32 XWindowAttributes is 92 bytes.  visual (+24) and screen
+         * (+88) are public pointers and must point at the canonical guest
+         * Screen/Visual shadows.  Leaving those fields zero made otherwise
+         * successful root-window attribute queries look like "no visual" to
+         * Motif's visual-selection code.
+         */
+        wr32(rt,out+0,(uint32_t)a.x);
+        wr32(rt,out+4,(uint32_t)a.y);
+        wr32(rt,out+8,(uint32_t)a.width);
+        wr32(rt,out+12,(uint32_t)a.height);
+        wr32(rt,out+16,(uint32_t)a.border_width);
+        wr32(rt,out+20,(uint32_t)a.depth);
+        wr32(rt,out+24,gv);
+        wr32(rt,out+28,(uint32_t)a.root);
+        wr32(rt,out+32,(uint32_t)a.class);
+        wr32(rt,out+36,(uint32_t)a.bit_gravity);
+        wr32(rt,out+40,(uint32_t)a.win_gravity);
+        wr32(rt,out+44,(uint32_t)a.backing_store);
+        wr32(rt,out+48,(uint32_t)a.backing_planes);
+        wr32(rt,out+52,(uint32_t)a.backing_pixel);
+        wr32(rt,out+56,(uint32_t)a.save_under);
+        wr32(rt,out+60,(uint32_t)a.colormap);
+        wr32(rt,out+64,(uint32_t)a.map_installed);
+        wr32(rt,out+68,(uint32_t)a.map_state);
+        wr32(rt,out+72,(uint32_t)a.all_event_masks);
+        wr32(rt,out+76,(uint32_t)a.your_event_mask);
+        wr32(rt,out+80,(uint32_t)a.do_not_propagate_mask);
+        wr32(rt,out+84,(uint32_t)a.override_redirect);
+        wr32(rt,out+88,gs);
+
+        fprintf(stderr,
+                "IRIX XGetWindowAttributes: window=%08x depth=%d visual=%08x "
+                "visualid=%08lx screen=%d guest_screen=%08x colormap=%08lx\\n",
+                (uint32_t)cpu->gpr[5],a.depth,gv,(unsigned long)vid,
+                screen_num,gs,(unsigned long)a.colormap);
     }
     cpu->gpr[2]=(uint32_t)ok;
 }
