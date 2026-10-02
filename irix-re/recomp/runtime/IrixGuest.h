@@ -55,8 +55,6 @@ struct IrixGuestRuntime;
 typedef void (*IrixGuestFunction)(struct IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 typedef uint32_t (*IrixGuestQuarkifyEncoded)(struct IrixGuestRuntime *rt,
                                              uint32_t encoded);
-typedef uint32_t (*IrixGuestQuarkFromString)(struct IrixGuestRuntime *rt,
-                                             const char *name);
 
 typedef struct IrixGuestFunctionEntry {
     IrixGuestAddr address;
@@ -85,7 +83,6 @@ typedef struct IrixGuestRuntime {
     IrixGuestAddr program_break;
     IrixGuestAddr compat_alloc_cur;
     IrixGuestQuarkifyEncoded xrm_quarkify_encoded;
-    IrixGuestQuarkFromString xrm_quark_from_string;
     IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
     unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
