@@ -3019,158 +3019,94 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
-     * Direct-main VendorShell InitializePrehook escape hatch.
+     * Direct-main Motif XtAllocateProc alias.
      *
-     * The synthetic linked callback at 0x501c00d4 is the same Motif
-     * InitializePrehook whose original SGI implementation begins at
-     * 0x0b2e54f0.  Exact-name aliasing cannot catch it because the original
-     * recovered entry is anonymous/interior.  Enter the original function
-     * directly so Xt class initialization uses the real Motif data universe.
+     * The synthetic callback at 0x501c00d4 is reached from Xt's
+     * ObjectClassExtension.allocate path.  Its original SGI implementation
+     * begins at 0x0b2e54f0.  The XtAllocateProc ABI is:
+     *
+     *   a0 = widget_class
+     *   a1 = &csize
+     *   a2 = &extra
+     *   a3 = args
+     *   a4 = &num_args
+     *   a5 = typed_args
+     *   a6 = &num_typed_args
+     *   a7 = &widget
+     *
+     * Earlier bring-up code misidentified a1 as an XtInitProc new_widget
+     * argument and replaced it with s1.  The trace proves s1 is the parent:
+     * immediately after this callback Xt tries to initialize CorePart with
+     * parent=s1 while its widget base is still NULL.  That bad substitution
+     * also destroyed the real &csize argument.
+     *
+     * Preserve the allocator ABI exactly.  After the original Motif callback
+     * returns, repair only the required output contract: if a7 still points
+     * at a NULL/invalid Widget output, use the existing xtWidgetAlloc fallback
+     * to allocate the correct widget+constraint storage.  Original Xt then
+     * performs its own self/parent/class/xrm_name/being_destroyed stores.
      */
     if (address == 0x501c00d4u) {
         uint64_t saved_gp = cpu->gpr[28];
         IrixGuestAddr target = 0x0b2e54f0u;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(target);
-        IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        IrixGuestAddr saved_new_w =
-            (IrixGuestAddr)(uint32_t)cpu->gpr[17];
-        uint32_t sp = (uint32_t)cpu->gpr[29];
-        uint32_t nw = (uint32_t)new_w;
-        int new_w_is_stack =
-            nw >= sp - 0x00010000u && nw <= sp + 0x00010000u;
-        int saved_new_w_mapped =
-            saved_new_w && irix_guest_ptr(rt, saved_new_w, 0x20u);
+        IrixGuestAddr alloc_class =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr csize_ptr =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr out_slot =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[11];
+        IrixGuestAddr caller_sp =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[29];
         int rc;
 
         fprintf(stderr,
-                "IRIX direct-main Motif prehook alias: "
+                "IRIX direct-main Motif XtAllocateProc alias: "
                 "501c00d4 -> 0b2e54f0 "
-                "a0-a3=%08x,%08x,%08x,%08x "
+                "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
                 "s0-s1=%08x,%08x sp=%08x\n",
                 (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
                 (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], sp);
-
-        /*
-         * This alias calls the original SGI InitializePrehook directly, so
-         * the generic address==0x0b2e54f0 entry repair below is bypassed.
-         * Apply the same narrowly-demonstrated ABI repair here at the actual
-         * call boundary: Xt has already allocated the partial widget in s1,
-         * while a1 can still name the caller's stack scratch copy.
-         */
-        if (!irix_guest_looks_like_widget(rt, new_w) &&
-            saved_new_w_mapped &&
-            (new_w_is_stack || !new_w) &&
-            saved_new_w < 0x70000000u) {
-            IrixGuestAddr req_w =
-                (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-            IrixGuestAddr req_class = 0u;
-            IrixGuestAddr new_class = 0u;
-
-            fprintf(stderr,
-                    "IRIX Motif alias-prehook ABI repair: "
-                    "a1=%08x stack=%d -> s1=%08x (partial widget)\n",
-                    new_w, new_w_is_stack, saved_new_w);
-
-            /*
-             * Xt has allocated the new widget, but this hybrid path can reach
-             * InitializePrehook before core.widget_class (+0x04) has been
-             * copied into it.  The request widget passed in a0 is already the
-             * authoritative sibling object for this initialization pass and
-             * carries the same class.  Repair only the demonstrated zero-class
-             * case and only when the request-side class is a plausible Xt
-             * WidgetClass.
-             */
-            if (irix_guest_ptr(rt, saved_new_w, 8u))
-                new_class = irix_guest_read32be(rt, saved_new_w + 4u);
-            if (req_w && irix_guest_ptr(rt, req_w, 8u))
-                req_class = irix_guest_read32be(rt, req_w + 4u);
-
-            if (!new_class &&
-                irix_guest_looks_like_widget_class(rt, req_class)) {
-                irix_guest_write32be(rt, saved_new_w + 4u, req_class);
-                fprintf(stderr,
-                        "IRIX Motif alias-prehook class repair: "
-                        "new_w=%08x class 00000000 -> req.class=%08x\n",
-                        saved_new_w, req_class);
-            } else if (!new_class) {
-                fprintf(stderr,
-                        "IRIX Motif alias-prehook class unresolved: "
-                        "req=%08x req.class=%08x new_w=%08x\n",
-                        req_w, req_class, saved_new_w);
-            }
-
-            cpu->gpr[5] =
-                (uint64_t)(int64_t)(int32_t)saved_new_w;
-        } else if (!irix_guest_looks_like_widget(rt, new_w)) {
-            fprintf(stderr,
-                    "IRIX Motif alias-prehook unresolved ABI: "
-                    "a1=%08x stack=%d s1=%08x mapped=%d sp=%08x\n",
-                    new_w, new_w_is_stack, saved_new_w,
-                    saved_new_w_mapped, sp);
-        }
+                (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                (uint32_t)cpu->gpr[29]);
 
         if (target_gp)
-            cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
-        cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)target;
+            cpu->gpr[28] =
+                (uint64_t)(int64_t)(int32_t)target_gp;
+        cpu->gpr[25] =
+            (uint64_t)(int64_t)(int32_t)target;
+
         rc = irix_mips_interp_call(rt, cpu, target);
-        if (!rt->trapped)
+
+        if (!rt->trapped) {
+            IrixGuestAddr repair_class = alloc_class;
+
+            if (!irix_guest_looks_like_widget_class(rt, repair_class) &&
+                irix_guest_looks_like_widget_class(
+                    rt, g_xt_alloc_widget_class_hint)) {
+                fprintf(stderr,
+                        "IRIX Motif XtAllocateProc class repair: "
+                        "a0=%08x -> hint=%08x\n",
+                        repair_class, g_xt_alloc_widget_class_hint);
+                repair_class = g_xt_alloc_widget_class_hint;
+            }
+
+            (void)irix_guest_repair_xt_widget_alloc(
+                rt, cpu, caller_sp, repair_class, csize_ptr, out_slot);
+
+            if (out_slot && irix_guest_ptr(rt, out_slot, 4u)) {
+                fprintf(stderr,
+                        "IRIX Motif XtAllocateProc result: "
+                        "out_slot=%08x widget=%08x parent(s1)=%08x\n",
+                        out_slot, irix_guest_read32be(rt, out_slot),
+                        (uint32_t)cpu->gpr[17]);
+            }
+
             cpu->gpr[28] = saved_gp;
-        return rc;
-    }
-
-    /*
-     * Motif InitializePrehook ABI repair.
-     *
-     * The recovered prehook at 0x0b2e54f0 has the normal XtInitProc
-     * signature (req, new_w, args, num_args). Its delay slot at 0x0b2e5518
-     * copies a1 into s0 and the following instructions immediately use
-     * s0 as new_w. In the failing hybrid path a1 is a stack scratch address
-     * while the caller-preserved s1 still holds the real new_w.
-     *
-     * Repair only this demonstrated malformed case, and only when s1 has the
-     * shape of a live Xt widget while a1 does not.
-     */
-    if (address == 0x0b2e54f0u) {
-        IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        IrixGuestAddr saved_new_w =
-            (IrixGuestAddr)(uint32_t)cpu->gpr[17];
-        uint32_t sp = (uint32_t)cpu->gpr[29];
-        uint32_t nw = (uint32_t)new_w;
-        int new_w_is_stack =
-            nw >= sp - 0x00010000u && nw <= sp + 0x00010000u;
-        int saved_new_w_mapped =
-            saved_new_w && irix_guest_ptr(rt, saved_new_w, 0x20u);
-
-        /*
-         * During VendorShell creation the real new widget is still only
-         * partially initialized when this prehook runs, so requiring it to
-         * already pass irix_guest_looks_like_widget() is too strict.  The
-         * failing 4Dwm traces consistently arrive with a1 pointing into the
-         * caller stack while s1 holds the mapped heap widget allocated by Xt.
-         *
-         * Accept that exact ABI shape: malformed/stack a1 plus a mapped,
-         * non-stack s1.  This repairs the prehook at the source instead of
-         * allowing XtCreatePopupShell to return NULL and later papering over
-         * pSD->screenTopLevelW.
-         */
-        if (!irix_guest_looks_like_widget(rt, new_w) &&
-            saved_new_w_mapped &&
-            (new_w_is_stack || !new_w) &&
-            saved_new_w < 0x70000000u) {
-            fprintf(stderr,
-                    "IRIX Motif InitializePrehook ABI repair: "
-                    "a1=%08x stack=%d -> s1=%08x (partial widget)\n",
-                    new_w, new_w_is_stack, saved_new_w);
-            cpu->gpr[5] =
-                (uint64_t)(int64_t)(int32_t)saved_new_w;
-        } else if (!irix_guest_looks_like_widget(rt, new_w)) {
-            fprintf(stderr,
-                    "IRIX Motif InitializePrehook unresolved ABI: "
-                    "a1=%08x stack=%d s1=%08x mapped=%d sp=%08x\n",
-                    new_w, new_w_is_stack, saved_new_w,
-                    saved_new_w_mapped, sp);
         }
+        return rc;
     }
 
     /*
