@@ -622,6 +622,29 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         case 0x2b:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
+            if (pc == 0x0b29090cu) {
+                fprintf(stderr,
+                        "IRIX Motif hover NULL-store state: "
+                        "rs=%u rt=%u base=%08x addr=%08x value=%08x "
+                        "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+                        "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+                        "sp=%08x fp=%08x ra=%08x\n",
+                        rs, rtno,
+                        (uint32_t)cpu->gpr[rs], a,
+                        (uint32_t)cpu->gpr[rtno],
+                        (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                        (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                        (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                        (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                        (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                        (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                        (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
+                        (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23],
+                        (uint32_t)cpu->gpr[29],
+                        (uint32_t)cpu->gpr[30],
+                        (uint32_t)cpu->gpr[31]);
+            }
+
             if (irix_xt_xm_missing_store(rt, pc,
                     (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 32u,
                     cpu->gpr[rtno]))
