@@ -259,6 +259,11 @@ void irix_xrm_quark_bridge_set_fast_table(const char *const *names, size_t count
     g_quark.fast_quark_count = count;
 }
 
+uint32_t irix_xrm_quark_from_string(const char *name)
+{
+    return name ? (uint32_t)XrmStringToQuark(name) : 0u;
+}
+
 IrixGuestFunction irix_xrm_quark_bridge_lookup(const char *name)
 {
     if (!name) return 0;
