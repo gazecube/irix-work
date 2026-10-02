@@ -18,8 +18,6 @@ extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
 extern IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt,
                                                      uint32_t size);
 
-static IrixGuestAddr g_xt_popup_shell_inner_ret;
-
 static uint64_t sx32(uint32_t v)
 {
     return (uint64_t)(int64_t)(int32_t)v;
@@ -1140,9 +1138,6 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
             address, (uint32_t)cpu->gpr[31]);
 
-    if (address == 0x0f62c874u)
-        g_xt_popup_shell_inner_ret = 0u;
-
     while (!rt->trapped && steps++ < max_steps) {
         /*
          * SGI Xt translation-merge bring-up repair.
@@ -1285,64 +1280,6 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
-
-            /*
-             * XtCreatePopupShell has a private _XtCreatePopupShell return at
-             * 0x0f62c7b8 -> 0x0f62c8f8 and a public wrapper return at
-             * 0x0f62c928.  Capture v0 only after the jr delay slot has run,
-             * because the delay slot may be the instruction that places the
-             * function result in v0.
-             *
-             * If the inner return is a structurally-valid Widget and the
-             * public wrapper later reaches its final return with v0 == NULL,
-             * restore that exact inner result.  This is fenced to one original
-             * SGI libXt wrapper invocation; no caller s-registers are used as
-             * guessed return values.
-             */
-            if (address == 0x0f62c720u &&
-                pc == 0x0f62c7b8u &&
-                target == outer_ra) {
-                IrixGuestAddr ret =
-                    (IrixGuestAddr)(uint32_t)cpu->gpr[2];
-                IrixGuestAddr cls = 0u;
-                int valid = 0;
-
-                if (ret && irix_guest_ptr(rt, ret, 12u)) {
-                    cls = irix_guest_read32be(rt, ret + 4u);
-                    if (cls && irix_guest_ptr(rt, cls, 0x74u))
-                        valid = 1;
-                }
-
-                fprintf(stderr,
-                        "IRIX _XtCreatePopupShell inner return: "
-                        "v0=%08x class=%08x valid=%d sp=%08x\n",
-                        ret, cls, valid, (uint32_t)cpu->gpr[29]);
-
-                g_xt_popup_shell_inner_ret = valid ? ret : 0u;
-            }
-
-            if (address == 0x0f62c874u &&
-                pc == 0x0f62c928u &&
-                target == outer_ra) {
-                IrixGuestAddr ret =
-                    (IrixGuestAddr)(uint32_t)cpu->gpr[2];
-
-                fprintf(stderr,
-                        "IRIX XtCreatePopupShell wrapper return: "
-                        "v0=%08x inner=%08x sp=%08x\n",
-                        ret, g_xt_popup_shell_inner_ret,
-                        (uint32_t)cpu->gpr[29]);
-
-                if (!ret && g_xt_popup_shell_inner_ret) {
-                    cpu->gpr[2] =
-                        (uint64_t)(int64_t)(int32_t)
-                        g_xt_popup_shell_inner_ret;
-                    fprintf(stderr,
-                            "IRIX XtCreatePopupShell wrapper return repair: "
-                            "v0=00000000 -> inner=%08x\n",
-                            g_xt_popup_shell_inner_ret);
-                }
-            }
 
             if (rs == 31u) {
                 IrixGuestAddr return_gp =
