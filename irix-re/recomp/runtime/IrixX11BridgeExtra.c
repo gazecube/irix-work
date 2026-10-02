@@ -1719,8 +1719,14 @@ static void bridge_XSetInputFocus(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XCreateFontCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d=display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
-    cpu->gpr[2]=d?(uint32_t)XCreateFontCursor(d,(unsigned)cpu->gpr[5]):0;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    unsigned shape = (unsigned)cpu->gpr[5];
+    Cursor cursor = d ? XCreateFontCursor(d, shape) : None;
+    (void)rt;
+    fprintf(stderr,
+            "IRIX XCreateFontCursor: shape=%u -> cursor=%08lx\n",
+            shape, (unsigned long)cursor);
+    cpu->gpr[2] = (uint32_t)cursor;
 }
 
 static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -1746,8 +1752,33 @@ static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 WINDOW_CALL1(bridge_XFreeCursor, XFreeCursor(d,(Cursor)(uint32_t)cpu->gpr[5]))
-WINDOW_CALL1(bridge_XDefineCursor, XDefineCursor(d,(Window)(uint32_t)cpu->gpr[5],(Cursor)(uint32_t)cpu->gpr[6]))
-WINDOW_CALL1(bridge_XUndefineCursor, XUndefineCursor(d,(Window)(uint32_t)cpu->gpr[5]))
+
+static void bridge_XDefineCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    Cursor cursor = (Cursor)(uint32_t)cpu->gpr[6];
+    int rc = d ? XDefineCursor(d, w, cursor) : 0;
+    (void)rt;
+    fprintf(stderr,
+            "IRIX XDefineCursor: window=%08lx cursor=%08lx -> %d\n",
+            (unsigned long)w, (unsigned long)cursor, rc);
+    if (d) XFlush(d);
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XUndefineCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    int rc = d ? XUndefineCursor(d, w) : 0;
+    (void)rt;
+    fprintf(stderr,
+            "IRIX XUndefineCursor: window=%08lx -> %d\n",
+            (unsigned long)w, rc);
+    if (d) XFlush(d);
+    cpu->gpr[2] = (uint32_t)rc;
+}
 
 static void bridge_XSetSelectionOwner(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
