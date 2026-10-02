@@ -18,6 +18,8 @@ extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
 extern IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt,
                                                      uint32_t size);
 
+static IrixGuestAddr g_xt_popup_shell_inner_ret;
+
 static uint64_t sx32(uint32_t v)
 {
     return (uint64_t)(int64_t)(int32_t)v;
@@ -1130,7 +1132,6 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     IrixGuestAddr outer_ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
     uint64_t steps = 0;
     const uint64_t max_steps = UINT64_C(100000000);
-    IrixGuestAddr xt_popup_shell_inner_ret = 0u;
     static unsigned xt_tm_repair_depth;
 
     if (!mapped_exec(rt, address))
@@ -1138,6 +1139,9 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
     fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
             address, (uint32_t)cpu->gpr[31]);
+
+    if (address == 0x0f62c874u)
+        g_xt_popup_shell_inner_ret = 0u;
 
     while (!rt->trapped && steps++ < max_steps) {
         /*
@@ -1295,9 +1299,9 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * SGI libXt wrapper invocation; no caller s-registers are used as
              * guessed return values.
              */
-            if (address == 0x0f62c874u &&
+            if (address == 0x0f62c720u &&
                 pc == 0x0f62c7b8u &&
-                target == 0x0f62c8f8u) {
+                target == outer_ra) {
                 IrixGuestAddr ret =
                     (IrixGuestAddr)(uint32_t)cpu->gpr[2];
                 IrixGuestAddr cls = 0u;
@@ -1310,11 +1314,11 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 }
 
                 fprintf(stderr,
-                        "IRIX XtCreatePopupShell inner return: "
+                        "IRIX _XtCreatePopupShell inner return: "
                         "v0=%08x class=%08x valid=%d sp=%08x\n",
                         ret, cls, valid, (uint32_t)cpu->gpr[29]);
 
-                xt_popup_shell_inner_ret = valid ? ret : 0u;
+                g_xt_popup_shell_inner_ret = valid ? ret : 0u;
             }
 
             if (address == 0x0f62c874u &&
@@ -1326,17 +1330,17 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 fprintf(stderr,
                         "IRIX XtCreatePopupShell wrapper return: "
                         "v0=%08x inner=%08x sp=%08x\n",
-                        ret, xt_popup_shell_inner_ret,
+                        ret, g_xt_popup_shell_inner_ret,
                         (uint32_t)cpu->gpr[29]);
 
-                if (!ret && xt_popup_shell_inner_ret) {
+                if (!ret && g_xt_popup_shell_inner_ret) {
                     cpu->gpr[2] =
                         (uint64_t)(int64_t)(int32_t)
-                        xt_popup_shell_inner_ret;
+                        g_xt_popup_shell_inner_ret;
                     fprintf(stderr,
                             "IRIX XtCreatePopupShell wrapper return repair: "
                             "v0=00000000 -> inner=%08x\n",
-                            xt_popup_shell_inner_ret);
+                            g_xt_popup_shell_inner_ret);
                 }
             }
 
