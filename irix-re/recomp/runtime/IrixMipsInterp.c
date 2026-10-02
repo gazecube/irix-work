@@ -1233,6 +1233,37 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fn = insn & 63u;
 
         /*
+         * SGI XmPushButtonGadget Enter/Leave hot-path trace.
+         *
+         * The first gadget dispatch returns from _XmGetInDragMode at
+         * 0x0b290588 and succeeds.  The second returns at 0x0b2908e8 and
+         * reaches a NULL-based store at 0x0b29090c with r31 == 0.
+         * Trace only the short machine-code windows around those two paths so
+         * we can see the exact instruction that derives/clobbers r31.
+         */
+        if ((pc >= 0x0b290560u && pc <= 0x0b290620u) ||
+            (pc >= 0x0b2908c0u && pc <= 0x0b290940u)) {
+            fprintf(stderr,
+                    "IRIX Motif PBG hover trace: "
+                    "pc=%08x insn=%08x "
+                    "v0=%08x v1=%08x "
+                    "a0=%08x a1=%08x a2=%08x a3=%08x "
+                    "t0=%08x t1=%08x t2=%08x t3=%08x "
+                    "s0=%08x s1=%08x s2=%08x s3=%08x "
+                    "gp=%08x sp=%08x fp=%08x ra=%08x\n",
+                    pc, insn,
+                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
+                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
+                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[29],
+                    (uint32_t)cpu->gpr[30], (uint32_t)cpu->gpr[31]);
+        }
+
+        /*
          * Focused trace for the real SGI _XtGetResources failure.  Running
          * this function through original MIPS reproduced the crash, so the
          * remaining problem is guest data/state, not translated register
