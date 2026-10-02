@@ -3031,11 +3031,51 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         uint64_t saved_gp = cpu->gpr[28];
         IrixGuestAddr target = 0x0b2e54f0u;
         IrixGuestAddr target_gp = irix_guest_gp_for_address(target);
+        IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr saved_new_w =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+        uint32_t sp = (uint32_t)cpu->gpr[29];
+        uint32_t nw = (uint32_t)new_w;
+        int new_w_is_stack =
+            nw >= sp - 0x00010000u && nw <= sp + 0x00010000u;
+        int saved_new_w_mapped =
+            saved_new_w && irix_guest_ptr(rt, saved_new_w, 0x20u);
         int rc;
 
         fprintf(stderr,
                 "IRIX direct-main Motif prehook alias: "
-                "501c00d4 -> 0b2e54f0\n");
+                "501c00d4 -> 0b2e54f0 "
+                "a0-a3=%08x,%08x,%08x,%08x "
+                "s0-s1=%08x,%08x sp=%08x\n",
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], sp);
+
+        /*
+         * This alias calls the original SGI InitializePrehook directly, so
+         * the generic address==0x0b2e54f0 entry repair below is bypassed.
+         * Apply the same narrowly-demonstrated ABI repair here at the actual
+         * call boundary: Xt has already allocated the partial widget in s1,
+         * while a1 can still name the caller's stack scratch copy.
+         */
+        if (!irix_guest_looks_like_widget(rt, new_w) &&
+            saved_new_w_mapped &&
+            (new_w_is_stack || !new_w) &&
+            saved_new_w < 0x70000000u) {
+            fprintf(stderr,
+                    "IRIX Motif alias-prehook ABI repair: "
+                    "a1=%08x stack=%d -> s1=%08x (partial widget)\n",
+                    new_w, new_w_is_stack, saved_new_w);
+            cpu->gpr[5] =
+                (uint64_t)(int64_t)(int32_t)saved_new_w;
+        } else if (!irix_guest_looks_like_widget(rt, new_w)) {
+            fprintf(stderr,
+                    "IRIX Motif alias-prehook unresolved ABI: "
+                    "a1=%08x stack=%d s1=%08x mapped=%d sp=%08x\n",
+                    new_w, new_w_is_stack, saved_new_w,
+                    saved_new_w_mapped, sp);
+        }
+
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)target;
