@@ -4,6 +4,7 @@
 #include "IrixCompat.h"
 #include "IrixSyscallNumbers.h"
 #include "IrixX11BridgeExtraAccess.h"
+#include "IrixXrmQuarkBridge.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -2601,6 +2602,71 @@ static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
 }
 
 /*
+ * Synthetic-stack Motif BaseClass record-type coherence.
+ *
+ * GUI stability mode redirects synthetic Xt/Motif FUNCTIONS to the original
+ * mapped DSOs, but the synthetic class DATA remains at 0x50000000+.  Thus
+ * _XmInitializeExtensions initializes the DSO Motif state while static
+ * XmBaseClassExtRec instances in the synthetic stack can retain the
+ * NULLQUARK record_type from their compile-time initializer.
+ *
+ * Xt's xtWidgetAlloc asks XtGetClassExtension for a NULLQUARK
+ * ObjectClassExtension.  A Motif BCE with record_type==0, version==2 and
+ * record_size==0x78 then falsely matches, causing its initializePrehook at
+ * +0x10 to be called as XtAllocateProc.
+ *
+ * Repair only that demonstrated SGI/N32 BCE shape at the extension lookup
+ * boundary.  The Xrm bridge supplies the same quark namespace used by guest
+ * Xrm calls.
+ */
+static void irix_guest_repair_synthetic_motif_bce_type(
+    IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr cls = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    uint32_t byte_offset = (uint32_t)cpu->gpr[5];
+    uint32_t requested_type = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr ext;
+    unsigned depth;
+
+    if (cls < 0x50000000u || cls >= 0x70000000u ||
+        byte_offset != 0x70u || requested_type != 0u ||
+        !irix_guest_ptr(rt, cls + byte_offset, 4u))
+        return;
+
+    ext = irix_guest_read32be(rt, cls + byte_offset);
+    for (depth = 0; ext && depth < 16u; ++depth) {
+        IrixGuestAddr next;
+        uint32_t record_type;
+        uint32_t version;
+        uint32_t record_size;
+
+        if (!irix_guest_ptr(rt, ext, 0x10u))
+            break;
+
+        next = irix_guest_read32be(rt, ext + 0x00u);
+        record_type = irix_guest_read32be(rt, ext + 0x04u);
+        version = irix_guest_read32be(rt, ext + 0x08u);
+        record_size = irix_guest_read32be(rt, ext + 0x0cu);
+
+        if (record_type == 0u && version == 2u &&
+            record_size == 0x78u) {
+            uint32_t motif_q =
+                irix_xrm_quark_from_string("OSF_MOTIF");
+            if (motif_q) {
+                irix_guest_write32be(rt, ext + 0x04u, motif_q);
+                fprintf(stderr,
+                        "IRIX Motif BCE record-type repair: "
+                        "class=%08x ext=%08x NULLQUARK -> XmQmotif=%08x\n",
+                        cls, ext, motif_q);
+            }
+            return;
+        }
+
+        ext = next;
+    }
+}
+
+/*
  * SGI/N32 CompositeClassPart compatibility.
  *
  * Xt's _XtCreateWidget uses XtGetClassExtension(parent_class, 0x84,
@@ -3004,6 +3070,15 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         cpu->gpr[0] = 0u;
         return 0;
     }
+
+    /*
+     * Synthetic Motif classes share behavior with the original DSO but not
+     * class storage.  Restore the BCE owner quark before Xt interprets this
+     * chain as an ObjectClassExtension.
+     */
+    if (entry && entry->name &&
+        strcmp(entry->name, "XtGetClassExtension") == 0)
+        irix_guest_repair_synthetic_motif_bce_type(rt, cpu);
 
     /*
      * Xt object-child compatibility.
