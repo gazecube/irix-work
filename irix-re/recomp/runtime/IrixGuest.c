@@ -3371,53 +3371,97 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
-     * Synthetic Motif BCE falsely selected as XtAllocateProc.
+     * Synthetic Motif BCE / direct-main InitializePrehook alias.
      *
-     * 0x501c00d4 is the synthetic class' Motif BaseClass initializePrehook,
-     * not an ObjectClassExtension allocator.  A NULLQUARK record_type on the
-     * synthetic XmBaseClassExtRec lets XtGetClassExtension(..., NULLQUARK, ...)
-     * mistake that BCE for an ObjectClassExtension and call initializePrehook
-     * with the XtAllocateProc ABI.
+     * The synthetic callback at 0x501c00d4 maps to the original SGI Motif
+     * initializePrehook at 0x0b2e54f0, but Xt can also reach that same
+     * synthetic address after mistaking a NULLQUARK Motif BCE for an
+     * ObjectClassExtension allocator.
      *
-     * Do NOT execute the Motif prehook under that ABI.  Repair the synthetic
-     * BCE record type so future lookups stop matching it, then perform the
-     * normal xtWidgetAlloc fallback directly through Xt's real &csize and
-     * &widget arguments.  This is equivalent to the path Xt would have taken
-     * had the bogus ObjectClassExtension lookup returned NULL.
+     * These are distinguishable by ABI:
+     *
+     *   XtAllocateProc:
+     *     a0 = WidgetClass
+     *     a1 = &csize
+     *     ...
+     *     a7 = &widget
+     *
+     *   XtInitProc / initializePrehook:
+     *     a0 = request Widget
+     *     a1 = new Widget
+     *     a2 = ArgList
+     *     a3 = Cardinal *num_args
+     *
+     * Never execute the Motif prehook under the allocator ABI.  Conversely,
+     * never bypass a legitimate InitializePrehook: it owns Motif secondary
+     * object/cache setup that later InitializePosthook code must finalize.
      */
     if (address == 0x501c00d4u) {
-        IrixGuestAddr alloc_class =
+        IrixGuestAddr a0 =
             (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-        IrixGuestAddr csize_ptr =
+        IrixGuestAddr a1 =
             (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        IrixGuestAddr out_slot =
-            (IrixGuestAddr)(uint32_t)cpu->gpr[11];
-        IrixGuestAddr caller_sp =
-            (IrixGuestAddr)(uint32_t)cpu->gpr[29];
-        IrixGuestAddr repair_class = alloc_class;
-        int repaired;
 
-        (void)irix_guest_repair_synthetic_motif_bce_class(
-            rt, alloc_class);
+        if (irix_guest_looks_like_widget_class(rt, a0)) {
+            IrixGuestAddr alloc_class = a0;
+            IrixGuestAddr csize_ptr = a1;
+            IrixGuestAddr out_slot =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[11];
+            IrixGuestAddr caller_sp =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+            IrixGuestAddr repair_class = alloc_class;
+            int repaired;
 
-        if (!irix_guest_looks_like_widget_class(rt, repair_class) &&
-            irix_guest_looks_like_widget_class(
-                rt, g_xt_alloc_widget_class_hint))
-            repair_class = g_xt_alloc_widget_class_hint;
+            (void)irix_guest_repair_synthetic_motif_bce_class(
+                rt, alloc_class);
 
-        repaired = irix_guest_repair_xt_widget_alloc(
-            rt, cpu, caller_sp, repair_class, csize_ptr, out_slot);
+            if (!irix_guest_looks_like_widget_class(rt, repair_class) &&
+                irix_guest_looks_like_widget_class(
+                    rt, g_xt_alloc_widget_class_hint))
+                repair_class = g_xt_alloc_widget_class_hint;
 
-        fprintf(stderr,
-                "IRIX Motif false XtAllocateProc bypass: "
-                "class=%08x repair_class=%08x csize_ptr=%08x "
-                "out_slot=%08x repaired=%d widget=%08x\n",
-                alloc_class, repair_class, csize_ptr, out_slot, repaired,
-                (out_slot && irix_guest_ptr(rt, out_slot, 4u))
-                    ? irix_guest_read32be(rt, out_slot) : 0u);
+            repaired = irix_guest_repair_xt_widget_alloc(
+                rt, cpu, caller_sp, repair_class, csize_ptr, out_slot);
 
-        cpu->gpr[0] = 0u;
-        return rt->trapped ? -1 : 0;
+            fprintf(stderr,
+                    "IRIX Motif false XtAllocateProc bypass: "
+                    "class=%08x repair_class=%08x csize_ptr=%08x "
+                    "out_slot=%08x repaired=%d widget=%08x\n",
+                    alloc_class, repair_class, csize_ptr, out_slot, repaired,
+                    (out_slot && irix_guest_ptr(rt, out_slot, 4u))
+                        ? irix_guest_read32be(rt, out_slot) : 0u);
+
+            cpu->gpr[0] = 0u;
+            return rt->trapped ? -1 : 0;
+        } else {
+            uint64_t saved_gp = cpu->gpr[28];
+            IrixGuestAddr target = 0x0b2e54f0u;
+            IrixGuestAddr target_gp =
+                irix_guest_gp_for_address(target);
+            int rc;
+
+            fprintf(stderr,
+                    "IRIX Motif InitializePrehook alias: "
+                    "501c00d4 -> 0b2e54f0 "
+                    "req=%08x new=%08x args=%08x num_args=%08x "
+                    "sp=%08x\n",
+                    a0, a1,
+                    (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7],
+                    (uint32_t)cpu->gpr[29]);
+
+            if (target_gp)
+                cpu->gpr[28] =
+                    (uint64_t)(int64_t)(int32_t)target_gp;
+            cpu->gpr[25] =
+                (uint64_t)(int64_t)(int32_t)target;
+
+            rc = irix_mips_interp_call(rt, cpu, target);
+
+            if (!rt->trapped)
+                cpu->gpr[28] = saved_gp;
+            return rc;
+        }
     }
 
     /*
