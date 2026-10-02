@@ -3061,15 +3061,41 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         IrixGuestAddr new_w = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr saved_new_w =
             (IrixGuestAddr)(uint32_t)cpu->gpr[17];
+        uint32_t sp = (uint32_t)cpu->gpr[29];
+        uint32_t nw = (uint32_t)new_w;
+        int new_w_is_stack =
+            nw >= sp - 0x00010000u && nw <= sp + 0x00010000u;
+        int saved_new_w_mapped =
+            saved_new_w && irix_guest_ptr(rt, saved_new_w, 0x20u);
 
+        /*
+         * During VendorShell creation the real new widget is still only
+         * partially initialized when this prehook runs, so requiring it to
+         * already pass irix_guest_looks_like_widget() is too strict.  The
+         * failing 4Dwm traces consistently arrive with a1 pointing into the
+         * caller stack while s1 holds the mapped heap widget allocated by Xt.
+         *
+         * Accept that exact ABI shape: malformed/stack a1 plus a mapped,
+         * non-stack s1.  This repairs the prehook at the source instead of
+         * allowing XtCreatePopupShell to return NULL and later papering over
+         * pSD->screenTopLevelW.
+         */
         if (!irix_guest_looks_like_widget(rt, new_w) &&
-            irix_guest_looks_like_widget(rt, saved_new_w)) {
+            saved_new_w_mapped &&
+            (new_w_is_stack || !new_w) &&
+            saved_new_w < 0x70000000u) {
             fprintf(stderr,
                     "IRIX Motif InitializePrehook ABI repair: "
-                    "a1=%08x -> s1=%08x\n",
-                    new_w, saved_new_w);
+                    "a1=%08x stack=%d -> s1=%08x (partial widget)\n",
+                    new_w, new_w_is_stack, saved_new_w);
             cpu->gpr[5] =
                 (uint64_t)(int64_t)(int32_t)saved_new_w;
+        } else if (!irix_guest_looks_like_widget(rt, new_w)) {
+            fprintf(stderr,
+                    "IRIX Motif InitializePrehook unresolved ABI: "
+                    "a1=%08x stack=%d s1=%08x mapped=%d sp=%08x\n",
+                    new_w, new_w_is_stack, saved_new_w,
+                    saved_new_w_mapped, sp);
         }
     }
 
