@@ -443,17 +443,38 @@ static GC gc_from_guest(IrixGuestAddr addr)
 static IrixGuestAddr gc_to_guest(GC gc)
 {
     size_t i;
+    size_t free_slot = IRIX_X11_MAX_GCS;
+
     if (!gc) return 0;
-    for (i = 0; i < g_x11.gc_count; ++i)
+
+    for (i = 0; i < g_x11.gc_count; ++i) {
         if (g_x11.gcs[i] == gc) {
             sync_gc_shadow(i);
-            return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
+            return IRIX_X11_GC_BASE +
+                   (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
         }
-    if (g_x11.gc_count >= IRIX_X11_MAX_GCS) return 0;
-    i = g_x11.gc_count++;
+        if (!g_x11.gcs[i] && free_slot == IRIX_X11_MAX_GCS)
+            free_slot = i;
+    }
+
+    /*
+     * XFreeGC clears g_x11.gcs[i], so recycle that guest shadow slot before
+     * extending the high-water mark.  The old code only ever incremented
+     * gc_count and therefore exhausted all 1024 handles during repeated Motif
+     * redisplay even though many host GCs had already been freed.
+     */
+    if (free_slot != IRIX_X11_MAX_GCS) {
+        i = free_slot;
+    } else {
+        if (g_x11.gc_count >= IRIX_X11_MAX_GCS)
+            return 0;
+        i = g_x11.gc_count++;
+    }
+
     g_x11.gcs[i] = gc;
     sync_gc_shadow(i);
-    return IRIX_X11_GC_BASE + (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
+    return IRIX_X11_GC_BASE +
+           (IrixGuestAddr)(i * IRIX_X11_GC_STRIDE);
 }
 
 static void write_char_struct(IrixGuestRuntime *rt, IrixGuestAddr a, const XCharStruct *c)
