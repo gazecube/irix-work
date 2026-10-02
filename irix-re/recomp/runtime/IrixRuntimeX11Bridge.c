@@ -498,8 +498,14 @@ static void bridge_XFreeColors(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XInstallColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = fallback_display(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = d ? (uint32_t)XInstallColormap(d, (Colormap)(uint32_t)cpu->gpr[5]) : 0;
+    IrixGuestAddr guest_display=(uint32_t)cpu->gpr[4];
+    Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];
+    Display *d = fallback_display(rt, guest_display);
+    int rc=d ? XInstallColormap(d,cmap) : 0;
+    fprintf(stderr,
+            "IRIX XInstallColormap: guest_display=%08x cmap=%08lx rc=%d\n",
+            guest_display,(unsigned long)cmap,rc);
+    cpu->gpr[2]=(uint32_t)rc;
 }
 
 static void bridge_XFreeColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
