@@ -2619,21 +2619,17 @@ static int irix_guest_looks_like_widget_class(IrixGuestRuntime *rt,
  * boundary.  The Xrm bridge supplies the same quark namespace used by guest
  * Xrm calls.
  */
-static void irix_guest_repair_synthetic_motif_bce_type(
-    IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+static int irix_guest_repair_synthetic_motif_bce_class(
+    IrixGuestRuntime *rt, IrixGuestAddr cls)
 {
-    IrixGuestAddr cls = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-    uint32_t byte_offset = (uint32_t)cpu->gpr[5];
-    uint32_t requested_type = (uint32_t)cpu->gpr[6];
     IrixGuestAddr ext;
     unsigned depth;
 
     if (cls < 0x50000000u || cls >= 0x70000000u ||
-        byte_offset != 0x70u || requested_type != 0u ||
-        !irix_guest_ptr(rt, cls + byte_offset, 4u))
-        return;
+        !irix_guest_ptr(rt, cls + 0x70u, 4u))
+        return 0;
 
-    ext = irix_guest_read32be(rt, cls + byte_offset);
+    ext = irix_guest_read32be(rt, cls + 0x70u);
     for (depth = 0; ext && depth < 16u; ++depth) {
         IrixGuestAddr next;
         uint32_t record_type;
@@ -2658,12 +2654,25 @@ static void irix_guest_repair_synthetic_motif_bce_type(
                         "IRIX Motif BCE record-type repair: "
                         "class=%08x ext=%08x NULLQUARK -> XmQmotif=%08x\n",
                         cls, ext, motif_q);
+                return 1;
             }
-            return;
+            return 0;
         }
 
         ext = next;
     }
+    return 0;
+}
+
+static void irix_guest_repair_synthetic_motif_bce_lookup(
+    IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr cls = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    uint32_t byte_offset = (uint32_t)cpu->gpr[5];
+    uint32_t requested_type = (uint32_t)cpu->gpr[6];
+
+    if (byte_offset == 0x70u && requested_type == 0u)
+        (void)irix_guest_repair_synthetic_motif_bce_class(rt, cls);
 }
 
 /*
@@ -3072,13 +3081,19 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
-     * Synthetic Motif classes share behavior with the original DSO but not
-     * class storage.  Restore the BCE owner quark before Xt interprets this
-     * chain as an ObjectClassExtension.
+     * BaseClassPartInitialize must see XmQmotif before it resolves inherited
+     * Motif hooks.  Repair the static BCE before Xt enters class
+     * initialization, then keep the later ObjectClassExtension lookup guarded
+     * as well.
      */
     if (entry && entry->name &&
+        strcmp(entry->name, "XtInitializeWidgetClass") == 0)
+        (void)irix_guest_repair_synthetic_motif_bce_class(
+            rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
+
+    if (entry && entry->name &&
         strcmp(entry->name, "XtGetClassExtension") == 0)
-        irix_guest_repair_synthetic_motif_bce_type(rt, cpu);
+        irix_guest_repair_synthetic_motif_bce_lookup(rt, cpu);
 
     /*
      * Xt object-child compatibility.
