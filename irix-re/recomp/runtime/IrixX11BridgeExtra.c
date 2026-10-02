@@ -992,6 +992,40 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 32u, (uint32_t)e->xexpose.height);
         wr32(rt, a + 36u, (uint32_t)e->xexpose.count);
         break;
+    case CreateNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xcreatewindow.window);
+        wr32(rt, a + 24u, (uint32_t)e->xcreatewindow.x);
+        wr32(rt, a + 28u, (uint32_t)e->xcreatewindow.y);
+        wr32(rt, a + 32u, (uint32_t)e->xcreatewindow.width);
+        wr32(rt, a + 36u, (uint32_t)e->xcreatewindow.height);
+        wr32(rt, a + 40u, (uint32_t)e->xcreatewindow.border_width);
+        wr32(rt, a + 44u, (uint32_t)e->xcreatewindow.override_redirect);
+        break;
+    case DestroyNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xdestroywindow.window);
+        break;
+    case UnmapNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xunmap.window);
+        wr32(rt, a + 24u, (uint32_t)e->xunmap.from_configure);
+        break;
+    case MapNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xmap.window);
+        wr32(rt, a + 24u, (uint32_t)e->xmap.override_redirect);
+        break;
+    case MapRequest:
+        /*
+         * XMapRequestEvent aliases XAnyEvent.window with parent at +16.
+         * The client which must be managed is the following N32 word.
+         */
+        wr32(rt, a + 20u, (uint32_t)e->xmaprequest.window);
+        break;
+    case ReparentNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xreparent.window);
+        wr32(rt, a + 24u, (uint32_t)e->xreparent.parent);
+        wr32(rt, a + 28u, (uint32_t)e->xreparent.x);
+        wr32(rt, a + 32u, (uint32_t)e->xreparent.y);
+        wr32(rt, a + 36u, (uint32_t)e->xreparent.override_redirect);
+        break;
     case ConfigureNotify:
         /*
          * XConfigureEvent differs from XAnyEvent at +16: this slot is
@@ -1008,6 +1042,67 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 40u, (uint32_t)e->xconfigure.border_width);
         wr32(rt, a + 44u, (uint32_t)e->xconfigure.above);
         wr32(rt, a + 48u, (uint32_t)e->xconfigure.override_redirect);
+        break;
+    case GravityNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xgravity.window);
+        wr32(rt, a + 24u, (uint32_t)e->xgravity.x);
+        wr32(rt, a + 28u, (uint32_t)e->xgravity.y);
+        break;
+    case ResizeRequest:
+        wr32(rt, a + 20u, (uint32_t)e->xresizerequest.width);
+        wr32(rt, a + 24u, (uint32_t)e->xresizerequest.height);
+        break;
+    case ConfigureRequest:
+        wr32(rt, a + 20u, (uint32_t)e->xconfigurerequest.window);
+        wr32(rt, a + 24u, (uint32_t)e->xconfigurerequest.x);
+        wr32(rt, a + 28u, (uint32_t)e->xconfigurerequest.y);
+        wr32(rt, a + 32u, (uint32_t)e->xconfigurerequest.width);
+        wr32(rt, a + 36u, (uint32_t)e->xconfigurerequest.height);
+        wr32(rt, a + 40u, (uint32_t)e->xconfigurerequest.border_width);
+        wr32(rt, a + 44u, (uint32_t)e->xconfigurerequest.above);
+        wr32(rt, a + 48u, (uint32_t)e->xconfigurerequest.detail);
+        wr32(rt, a + 52u, (uint32_t)e->xconfigurerequest.value_mask);
+        break;
+    case CirculateNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xcirculate.window);
+        wr32(rt, a + 24u, (uint32_t)e->xcirculate.place);
+        break;
+    case CirculateRequest:
+        wr32(rt, a + 20u, (uint32_t)e->xcirculaterequest.window);
+        wr32(rt, a + 24u, (uint32_t)e->xcirculaterequest.place);
+        break;
+    case PropertyNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xproperty.atom);
+        wr32(rt, a + 24u, (uint32_t)e->xproperty.time);
+        wr32(rt, a + 28u, (uint32_t)e->xproperty.state);
+        break;
+    case ColormapNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xcolormap.colormap);
+        wr32(rt, a + 24u, (uint32_t)e->xcolormap.new);
+        wr32(rt, a + 28u, (uint32_t)e->xcolormap.state);
+        break;
+    case VisibilityNotify:
+        wr32(rt, a + 20u, (uint32_t)e->xvisibility.state);
+        break;
+    case ClientMessage:
+        wr32(rt, a + 20u, (uint32_t)e->xclient.message_type);
+        wr32(rt, a + 24u, (uint32_t)e->xclient.format);
+        if (e->xclient.format == 8) {
+            unsigned i;
+            for (i = 0; i < 20u; ++i)
+                irix_guest_write8(rt, a + 28u + i,
+                                  (uint8_t)e->xclient.data.b[i]);
+        } else if (e->xclient.format == 16) {
+            unsigned i;
+            for (i = 0; i < 10u; ++i)
+                irix_guest_write16be(rt, a + 28u + i * 2u,
+                                     (uint16_t)e->xclient.data.s[i]);
+        } else if (e->xclient.format == 32) {
+            unsigned i;
+            for (i = 0; i < 5u; ++i)
+                wr32(rt, a + 28u + i * 4u,
+                     (uint32_t)e->xclient.data.l[i]);
+        }
         break;
     default:
         break;
@@ -1058,6 +1153,60 @@ static int read_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, XEvent *e)
         e->xfocus.mode = (int32_t)irix_guest_read32be(rt, a + 20u);
         e->xfocus.detail = (int32_t)irix_guest_read32be(rt, a + 24u);
         break;
+    case MapRequest:
+        e->xmaprequest.window =
+            (Window)irix_guest_read32be(rt, a + 20u);
+        break;
+    case ConfigureRequest:
+        e->xconfigurerequest.window =
+            (Window)irix_guest_read32be(rt, a + 20u);
+        e->xconfigurerequest.x =
+            (int32_t)irix_guest_read32be(rt, a + 24u);
+        e->xconfigurerequest.y =
+            (int32_t)irix_guest_read32be(rt, a + 28u);
+        e->xconfigurerequest.width =
+            (int32_t)irix_guest_read32be(rt, a + 32u);
+        e->xconfigurerequest.height =
+            (int32_t)irix_guest_read32be(rt, a + 36u);
+        e->xconfigurerequest.border_width =
+            (int32_t)irix_guest_read32be(rt, a + 40u);
+        e->xconfigurerequest.above =
+            (Window)irix_guest_read32be(rt, a + 44u);
+        e->xconfigurerequest.detail =
+            (int32_t)irix_guest_read32be(rt, a + 48u);
+        e->xconfigurerequest.value_mask =
+            (unsigned long)irix_guest_read32be(rt, a + 52u);
+        break;
+    case PropertyNotify:
+        e->xproperty.atom =
+            (Atom)irix_guest_read32be(rt, a + 20u);
+        e->xproperty.time =
+            (Time)irix_guest_read32be(rt, a + 24u);
+        e->xproperty.state =
+            (int32_t)irix_guest_read32be(rt, a + 28u);
+        break;
+    case ClientMessage: {
+        unsigned i;
+        e->xclient.message_type =
+            (Atom)irix_guest_read32be(rt, a + 20u);
+        e->xclient.format =
+            (int32_t)irix_guest_read32be(rt, a + 24u);
+        if (e->xclient.format == 8) {
+            for (i = 0; i < 20u; ++i)
+                e->xclient.data.b[i] =
+                    (char)irix_guest_read8(rt, a + 28u + i);
+        } else if (e->xclient.format == 16) {
+            for (i = 0; i < 10u; ++i)
+                e->xclient.data.s[i] =
+                    (short)irix_guest_read16be(rt, a + 28u + i * 2u);
+        } else if (e->xclient.format == 32) {
+            for (i = 0; i < 5u; ++i)
+                e->xclient.data.l[i] =
+                    (long)(int32_t)irix_guest_read32be(
+                        rt, a + 28u + i * 4u);
+        }
+        break;
+    }
     default:
         break;
     }
