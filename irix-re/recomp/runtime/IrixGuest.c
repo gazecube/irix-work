@@ -2647,7 +2647,9 @@ static int irix_guest_repair_synthetic_motif_bce_class(
         if (record_type == 0u && version == 2u &&
             record_size == 0x78u) {
             uint32_t motif_q =
-                irix_xrm_quark_from_string("OSF_MOTIF");
+                rt->xrm_quark_from_string
+                    ? rt->xrm_quark_from_string(rt, "OSF_MOTIF")
+                    : 0u;
             if (motif_q) {
                 irix_guest_write32be(rt, ext + 0x04u, motif_q);
                 fprintf(stderr,
@@ -2692,7 +2694,9 @@ static IrixGuestAddr irix_guest_find_motif_bce(
     if (!cls || !irix_guest_ptr(rt, cls + 0x70u, 4u))
         return 0u;
 
-    motif_q = irix_xrm_quark_from_string("OSF_MOTIF");
+    motif_q = rt->xrm_quark_from_string
+        ? rt->xrm_quark_from_string(rt, "OSF_MOTIF")
+        : 0u;
     ext = irix_guest_read32be(rt, cls + 0x70u);
 
     for (depth = 0; ext && depth < 32u; ++depth) {
