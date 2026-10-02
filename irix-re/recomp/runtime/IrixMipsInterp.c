@@ -28,6 +28,26 @@ static int16_t sx16(uint16_t v)
     return (int16_t)v;
 }
 
+static int irix_xt_xm_stability_enabled(void)
+{
+    static int initialized;
+    static int enabled = 1;
+
+    if (!initialized) {
+        const char *value = getenv("IRIX_XT_XM_STABILITY");
+
+        if (value && (!strcmp(value, "0") ||
+                      !strcmp(value, "false") ||
+                      !strcmp(value, "FALSE") ||
+                      !strcmp(value, "no") ||
+                      !strcmp(value, "NO")))
+            enabled = 0;
+        initialized = 1;
+    }
+
+    return enabled;
+}
+
 static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
                                          IrixGuestAddr pc,
                                          IrixGuestAddr base,
@@ -35,6 +55,8 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
                                          unsigned op,
                                          unsigned rtno)
 {
+    if (!irix_xt_xm_stability_enabled())
+        return 0;
     /*
      * Bring-up compatibility for malformed SGI Xt resource entries.
      *
@@ -104,6 +126,9 @@ static int irix_xt_xm_missing_store(IrixGuestRuntime *rt,
 {
     int in_xt_text =
         (pc >= 0x0f600000u && pc < 0x0f6a0000u);
+
+    if (!irix_xt_xm_stability_enabled())
+        return 0;
     int in_xm_text =
         (pc >= 0x0b260000u && pc < 0x0b400000u);
     int32_t signed_base = (int32_t)base;
