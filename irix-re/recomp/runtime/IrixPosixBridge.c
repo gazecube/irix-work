@@ -32,6 +32,12 @@
 static IrixGuestRuntime *g_rt;
 static IrixGuestAddr g_tmp_cur;
 
+/*
+ * IRIX sigset_t is four 32-bit words.  Keep the guest process mask here
+ * instead of applying IRIX signal numbers to the Linux host process.
+ */
+static uint32_t g_irix_sigmask[4];
+
 static IrixGuestAddr tmp_alloc(uint32_t n)
 {
     IrixGuestAddr a;
@@ -464,10 +470,97 @@ static void bridge_strerror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = a;
 }
 
+/*
+ * IRIX sigprocmask(2) ABI:
+ *   sigset_t = { uint32_t sigbits[4] }
+ *   SIG_NOP       = 0
+ *   SIG_BLOCK     = 1
+ *   SIG_UNBLOCK   = 2
+ *   SIG_SETMASK   = 3
+ *   SIG_SETMASK32 = 0x100
+ *
+ * Do not forward this directly to host sigprocmask(): IRIX and Linux signal
+ * numbering/mask ABIs are different, and guest mask changes must not alter the
+ * runtime process' own signal handling.
+ */
+static void bridge_sigprocmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int how = (int)(int32_t)cpu->gpr[4];
+    IrixGuestAddr set_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr old_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    uint32_t incoming[4];
+    unsigned i;
+
+    if (old_addr && !irix_guest_ptr(rt, old_addr, 16u)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (set_addr && !irix_guest_ptr(rt, set_addr, 16u)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    if (old_addr) {
+        for (i = 0; i < 4u; ++i)
+            irix_guest_write32be(rt, old_addr + i * 4u, g_irix_sigmask[i]);
+    }
+
+    /*
+     * As on IRIX/POSIX, a NULL set is a pure query.  In particular 4Dwm's
+     * LaunchAutoApps path calls sigprocmask(SIG_NOP, NULL, &oldmask).
+     */
+    if (!set_addr || how == 0) {
+        fprintf(stderr,
+                "IRIX sigprocmask: how=%d set=%08x old=%08x "
+                "mask=%08x,%08x,%08x,%08x\n",
+                how, set_addr, old_addr,
+                g_irix_sigmask[0], g_irix_sigmask[1],
+                g_irix_sigmask[2], g_irix_sigmask[3]);
+        ret_i32(cpu, 0);
+        return;
+    }
+
+    for (i = 0; i < 4u; ++i)
+        incoming[i] = irix_guest_read32be(rt, set_addr + i * 4u);
+
+    switch (how) {
+    case 1: /* SIG_BLOCK */
+        for (i = 0; i < 4u; ++i)
+            g_irix_sigmask[i] |= incoming[i];
+        break;
+    case 2: /* SIG_UNBLOCK */
+        for (i = 0; i < 4u; ++i)
+            g_irix_sigmask[i] &= ~incoming[i];
+        break;
+    case 3: /* SIG_SETMASK */
+        for (i = 0; i < 4u; ++i)
+            g_irix_sigmask[i] = incoming[i];
+        break;
+    case 0x100: /* SGI SIG_SETMASK32 */
+        g_irix_sigmask[0] = incoming[0];
+        break;
+    default:
+        errno = EINVAL;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    fprintf(stderr,
+            "IRIX sigprocmask: how=%d set=%08x old=%08x "
+            "mask=%08x,%08x,%08x,%08x\n",
+            how, set_addr, old_addr,
+            g_irix_sigmask[0], g_irix_sigmask[1],
+            g_irix_sigmask[2], g_irix_sigmask[3]);
+    ret_i32(cpu, 0);
+}
+
 void irix_posix_bridge_init(IrixGuestRuntime *rt)
 {
     g_rt = rt;
     g_tmp_cur = IRIX_POSIX_TMP_BASE;
+    memset(g_irix_sigmask, 0, sizeof(g_irix_sigmask));
     if (irix_guest_map(rt, IRIX_POSIX_TMP_BASE, IRIX_POSIX_TMP_SIZE, 3u) != 0 &&
         !irix_guest_ptr(rt, IRIX_POSIX_TMP_BASE, 1))
         g_tmp_cur = 0;
@@ -483,6 +576,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     MAP(unlink); MAP(rmdir); MAP(mkdir); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
     MAP(chmod); MAP(chown); MAP(umask); MAP(dup); MAP(dup2); MAP(isatty);
     MAP(sleep); MAP(usleep); MAP(time); MAP(uname); MAP(getpagesize); MAP(sysconf); MAP(getlogin);
+    MAP(sigprocmask);
     MAP(strerror);
 #undef MAP
     return 0;
