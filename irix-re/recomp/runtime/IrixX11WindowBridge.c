@@ -305,7 +305,19 @@ static void bridge_XChangeWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *c
         cpu->gpr[2] = 0;
         return;
     }
+    if (valuemask & CWEventMask) {
+        fprintf(stderr,
+                "IRIX XChangeWindowAttributes event mask: "
+                "window=%08lx root=%08lx events=%08lx%s\n",
+                (unsigned long)w,
+                (unsigned long)DefaultRootWindow(dpy),
+                (unsigned long)attrs.event_mask,
+                (attrs.event_mask & SubstructureRedirectMask)
+                    ? " [SubstructureRedirect]" : "");
+    }
+
     rc = XChangeWindowAttributes(dpy, w, valuemask, &attrs);
+    XFlush(dpy);
     cpu->gpr[2] = (uint32_t)rc;
 }
 
