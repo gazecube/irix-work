@@ -4702,6 +4702,62 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         int rc;
 
         /*
+         * Motif menu hover diagnostic.
+         *
+         * 0x0b28ee30 is the anonymous gadget input-dispatch target reached
+         * from _XmDispatchGadgetInput immediately before the hover-triggered
+         * runaway.  Snapshot the actual child gadget here so we can compare a
+         * successful item with the item whose private/cache state is NULL.
+         * This is intentionally diagnostic only; no guest state is changed.
+         */
+        if (address == 0x0b28ee30u) {
+            IrixGuestAddr w =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            IrixGuestAddr cls = 0u;
+            IrixGuestAddr parent = 0u;
+            IrixGuestAddr name_addr = 0u;
+            const char *name = NULL;
+            unsigned off;
+
+            if (w && irix_guest_ptr(rt, w, 12u)) {
+                cls = irix_guest_read32be(rt, w + 4u);
+                parent = irix_guest_read32be(rt, w + 8u);
+            }
+            if (cls && irix_guest_ptr(rt, cls + 4u, 4u)) {
+                name_addr = irix_guest_read32be(rt, cls + 4u);
+                name = irix_guest_cstr(rt, name_addr, 256u);
+            }
+
+            fprintf(stderr,
+                    "IRIX Motif gadget input snapshot: "
+                    "widget=%08x class=%08x(%s) parent=%08x "
+                    "event=%08x mask=%08x sp=%08x ra=%08x\n",
+                    w, cls, name ? name : "?", parent,
+                    (uint32_t)cpu->gpr[5],
+                    (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[29],
+                    (uint32_t)cpu->gpr[31]);
+
+            if (w && irix_guest_ptr(rt, w, 0x100u)) {
+                for (off = 0u; off < 0x100u; off += 0x20u) {
+                    fprintf(stderr,
+                            "IRIX Motif gadget words +%02x: "
+                            "%08x %08x %08x %08x "
+                            "%08x %08x %08x %08x\n",
+                            off,
+                            irix_guest_read32be(rt, w + off + 0x00u),
+                            irix_guest_read32be(rt, w + off + 0x04u),
+                            irix_guest_read32be(rt, w + off + 0x08u),
+                            irix_guest_read32be(rt, w + off + 0x0cu),
+                            irix_guest_read32be(rt, w + off + 0x10u),
+                            irix_guest_read32be(rt, w + off + 0x14u),
+                            irix_guest_read32be(rt, w + off + 0x18u),
+                            irix_guest_read32be(rt, w + off + 0x1cu));
+                }
+            }
+        }
+
+        /*
          * Interior callback/leaf entries are still entered through a real
          * N32 call boundary. The interpreter may use s0-s7 and s8/fp
          * internally, but those registers (plus sp/gp) belong to the caller
