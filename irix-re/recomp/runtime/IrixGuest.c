@@ -2806,6 +2806,26 @@ static unsigned irix_guest_repair_motif_bce_inheritance(
     return irix_guest_repair_motif_bce_inheritance_depth(rt, cls, 0u);
 }
 
+static IrixGuestAddr irix_guest_resolve_motif_bce_method(
+    IrixGuestRuntime *rt, IrixGuestAddr cls, uint32_t offset)
+{
+    const IrixGuestAddr xt_inherit = 0x0f6588b8u;
+    IrixGuestAddr ext;
+    IrixGuestAddr method;
+
+    if (!irix_guest_looks_like_widget_class(rt, cls))
+        return 0u;
+
+    (void)irix_guest_repair_motif_bce_inheritance(rt, cls);
+    ext = irix_guest_find_motif_bce(rt, cls);
+    if (!ext || offset > 0x74u ||
+        !irix_guest_ptr(rt, ext + offset, 4u))
+        return 0u;
+
+    method = irix_guest_read32be(rt, ext + offset);
+    return method == xt_inherit ? 0u : method;
+}
+
 
 /*
  * Resolve XmBaseClassExt.widgetNavigable inheritance lazily at the exact
@@ -3528,26 +3548,67 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
-     * SGI Motif hover/focus inheritance compatibility.
+     * Resolve the two older BaseClass inheritance sentinels structurally.
      *
-     * The realized desktop reaches _XtInherit from the Motif focus/crossing
-     * path with return address 0x0b2998cc when the pointer enters the startup
-     * popup. _XtInherit is Xt's fatal sentinel for a class method that should
-     * have been resolved during class initialization; calling it is never a
-     * valid steady-state operation.
+     * 0x0b296a04 is ClassPartInitRootWrapper calling
+     * XmBaseClassExt.classPartInitPrehook(wc), whose slot is +0x54.
      *
-     * Keep this exact callsite alive for bring-up by treating the missing
-     * inherited hook as an absent/void superclass method. This is deliberately
-     * narrower than dropping EnterNotify/LeaveNotify at the X11 bridge and
-     * allows the rest of Motif's crossing/focus dispatch to execute.
+     * 0x0b2998cc is the traversal/focus path calling
+     * XmBaseClassExt.focusChange(widget, change), whose slot is +0x70.
+     *
+     * BaseClassPartInitialize is required to fold both from the superclass.
+     * If the inherited value is NULL, the Motif source simply skips the call;
+     * otherwise dispatch the real inherited method with the original ABI.
      */
     if (address == 0x0f6588b8u &&
-        ((uint32_t)cpu->gpr[31] == 0x0b2998ccu ||
-         (uint32_t)cpu->gpr[31] == 0x0b296a04u)) {
+        (uint32_t)cpu->gpr[31] == 0x0b296a04u) {
+        IrixGuestAddr cls =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr target =
+            irix_guest_resolve_motif_bce_method(rt, cls, 0x54u);
+
+        if (target) {
+            fprintf(stderr,
+                    "IRIX Xt inheritance dispatch: "
+                    "classPartInitPrehook class=%08x -> %08x\n",
+                    cls, target);
+            cpu->gpr[25] =
+                (uint64_t)(int64_t)(int32_t)target;
+            return irix_guest_call(rt, cpu, target);
+        }
+
         fprintf(stderr,
-                "IRIX Xt inheritance compatibility: "
-                "_XtInherit caller=%08x -> no-op inherited hook\n",
-                (uint32_t)cpu->gpr[31]);
+                "IRIX Xt inheritance resolved NULL: "
+                "classPartInitPrehook class=%08x\n", cls);
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return 0;
+    }
+
+    if (address == 0x0f6588b8u &&
+        (uint32_t)cpu->gpr[31] == 0x0b2998ccu) {
+        IrixGuestAddr widget =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr cls =
+            irix_guest_looks_like_widget(rt, widget)
+                ? irix_guest_read32be(rt, widget + 0x04u) : 0u;
+        IrixGuestAddr target =
+            irix_guest_resolve_motif_bce_method(rt, cls, 0x70u);
+
+        if (target) {
+            fprintf(stderr,
+                    "IRIX Xt inheritance dispatch: "
+                    "focusChange widget=%08x class=%08x -> %08x\n",
+                    widget, cls, target);
+            cpu->gpr[25] =
+                (uint64_t)(int64_t)(int32_t)target;
+            return irix_guest_call(rt, cpu, target);
+        }
+
+        fprintf(stderr,
+                "IRIX Xt inheritance resolved NULL: "
+                "focusChange widget=%08x class=%08x\n",
+                widget, cls);
         cpu->gpr[2] = 0u;
         cpu->gpr[0] = 0u;
         return 0;
