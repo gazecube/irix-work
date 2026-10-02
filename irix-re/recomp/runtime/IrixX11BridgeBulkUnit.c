@@ -199,9 +199,24 @@ static char **common_read_string_list(IrixGuestRuntime *rt, IrixGuestAddr vec, i
 
 static void bridge_common_XCreateColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
-    Visual *v = d ? common_visual_from_guest(rt, d, (uint32_t)cpu->gpr[6]) : 0;
-    cpu->gpr[2] = (d && v) ? (uint32_t)XCreateColormap(d, (Window)(uint32_t)cpu->gpr[5], v, (int)cpu->gpr[7]) : 0;
+    IrixGuestAddr guest_display=(uint32_t)cpu->gpr[4];
+    IrixGuestAddr guest_visual=(uint32_t)cpu->gpr[6];
+    uint32_t visualid=0u;
+    Display *d = irix_x11_primary_display_from_guest(guest_display);
+    Visual *v = d ? common_visual_from_guest(rt, d, guest_visual) : 0;
+    Colormap cmap=0;
+
+    if (guest_visual && irix_guest_ptr(rt,guest_visual+4u,4u))
+        visualid=irix_guest_read32be(rt,guest_visual+4u);
+    if (d && v)
+        cmap=XCreateColormap(d,(Window)(uint32_t)cpu->gpr[5],v,(int)cpu->gpr[7]);
+
+    fprintf(stderr,
+            "IRIX XCreateColormap: guest_display=%08x window=%08x "
+            "guest_visual=%08x visualid=%08x alloc=%d result=%08lx\\n",
+            guest_display,(uint32_t)cpu->gpr[5],guest_visual,visualid,
+            (int)cpu->gpr[7],(unsigned long)cmap);
+    cpu->gpr[2]=(uint32_t)cmap;
 }
 
 static void bridge_common_XCreatePixmapFromBitmapData(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
