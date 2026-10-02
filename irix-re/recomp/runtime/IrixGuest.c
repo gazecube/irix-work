@@ -3062,10 +3062,44 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             saved_new_w_mapped &&
             (new_w_is_stack || !new_w) &&
             saved_new_w < 0x70000000u) {
+            IrixGuestAddr req_w =
+                (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+            IrixGuestAddr req_class = 0u;
+            IrixGuestAddr new_class = 0u;
+
             fprintf(stderr,
                     "IRIX Motif alias-prehook ABI repair: "
                     "a1=%08x stack=%d -> s1=%08x (partial widget)\n",
                     new_w, new_w_is_stack, saved_new_w);
+
+            /*
+             * Xt has allocated the new widget, but this hybrid path can reach
+             * InitializePrehook before core.widget_class (+0x04) has been
+             * copied into it.  The request widget passed in a0 is already the
+             * authoritative sibling object for this initialization pass and
+             * carries the same class.  Repair only the demonstrated zero-class
+             * case and only when the request-side class is a plausible Xt
+             * WidgetClass.
+             */
+            if (irix_guest_ptr(rt, saved_new_w, 8u))
+                new_class = irix_guest_read32be(rt, saved_new_w + 4u);
+            if (req_w && irix_guest_ptr(rt, req_w, 8u))
+                req_class = irix_guest_read32be(rt, req_w + 4u);
+
+            if (!new_class &&
+                irix_guest_looks_like_widget_class(rt, req_class)) {
+                irix_guest_write32be(rt, saved_new_w + 4u, req_class);
+                fprintf(stderr,
+                        "IRIX Motif alias-prehook class repair: "
+                        "new_w=%08x class 00000000 -> req.class=%08x\n",
+                        saved_new_w, req_class);
+            } else if (!new_class) {
+                fprintf(stderr,
+                        "IRIX Motif alias-prehook class unresolved: "
+                        "req=%08x req.class=%08x new_w=%08x\n",
+                        req_w, req_class, saved_new_w);
+            }
+
             cpu->gpr[5] =
                 (uint64_t)(int64_t)(int32_t)saved_new_w;
         } else if (!irix_guest_looks_like_widget(rt, new_w)) {
