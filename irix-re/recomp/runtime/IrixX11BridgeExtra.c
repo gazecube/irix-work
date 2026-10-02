@@ -1281,30 +1281,18 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     /*
-     * Desktop stability mode.
+     * Deliver the complete host event stream to SGI Xt/Motif.
      *
-     * Pointer crossing currently reaches an unstable SGI Xt/Motif dispatch
-     * path when the pointer enters/leaves the startup popup.  Motion itself is
-     * not the demonstrated trigger, so keep MotionNotify/button/key events
-     * flowing and discard only EnterNotify/LeaveNotify for bring-up.  This is
-     * deliberately done at the host
-     * event bridge so the guest never sees a half-consumed pointer event.
+     * Older bring-up code dropped EnterNotify/LeaveNotify here because those
+     * events reached an unresolved Motif BaseClass inheritance sentinel.
+     * The BaseClass inheritance path is now repaired structurally, and Motif
+     * menu traversal depends on crossing events for its normal popup/grab
+     * state machine.  Suppressing them after that fix breaks real menu
+     * semantics, so pass them through unchanged.
      */
-    for (;;) {
-        if (XNextEvent(d, &e) != 0) {
-            cpu->gpr[2] = 0;
-            return;
-        }
-
-        if (e.type == EnterNotify || e.type == LeaveNotify) {
-            fprintf(stderr,
-                    "IRIX X11 stability: drop crossing event type=%d "
-                    "window=%08x\n",
-                    e.type, (uint32_t)e.xany.window);
-            continue;
-        }
-
-        break;
+    if (XNextEvent(d, &e) != 0) {
+        cpu->gpr[2] = 0;
+        return;
     }
 
     if (!write_xevent(rt, out, &e)) {
