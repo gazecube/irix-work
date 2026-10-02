@@ -3592,39 +3592,6 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
         rc = irix_mips_interp_call(rt, cpu, exec_address);
 
-        /*
-         * XtCreatePopupShell return seam.
-         *
-         * In the failing 4Dwm path the original Xt wrapper reaches its final
-         * return with s0 naming a newly-created mapped widget, but subsequent
-         * 4Dwm/Xt work observes a NULL shell.  Do not guess globally: inspect
-         * only this public Xt API return.  If the official v0 result is NULL
-         * while s0 is already a structurally-valid guest Widget, restore that
-         * demonstrated lost return value.
-         */
-        if (!rt->trapped && entry->name &&
-            strcmp(entry->name, "XtCreatePopupShell") == 0) {
-            IrixGuestAddr ret =
-                (IrixGuestAddr)(uint32_t)cpu->gpr[2];
-            IrixGuestAddr s0 =
-                (IrixGuestAddr)(uint32_t)cpu->gpr[16];
-
-            fprintf(stderr,
-                    "IRIX XtCreatePopupShell return: "
-                    "v0=%08x s0=%08x s1=%08x sp=%08x\n",
-                    ret, s0, (uint32_t)cpu->gpr[17],
-                    (uint32_t)cpu->gpr[29]);
-
-            if (!ret && irix_guest_looks_like_widget(rt, s0)) {
-                cpu->gpr[2] =
-                    (uint64_t)(int64_t)(int32_t)s0;
-                fprintf(stderr,
-                        "IRIX XtCreatePopupShell return repair: "
-                        "v0=00000000 -> s0=%08x\n",
-                        s0);
-            }
-        }
-
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
