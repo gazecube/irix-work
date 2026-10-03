@@ -3454,6 +3454,77 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             (IrixGuestAddr)(uint32_t)cpu->gpr[4];
 
         /*
+         * The first Motif class can reach XtInitializeWidgetClass before
+         * XmQmotif has been assigned.  In that ordering,
+         * irix_guest_restore_sg_motif_root_wrappers() deliberately does
+         * nothing, then Manager/Primitive class-part initialization runs
+         * without SGI's Object root wrappers.  _SG_ClassPartInitialize never
+         * registers the per-class private descriptor and _SG_XtInitialize
+         * consequently has nothing to allocate for instances (XmManager's
+         * +0xe8 and XmPrimitive's corresponding private pointer stay NULL).
+         *
+         * Run SGI's own process-global extension initializer before Xt starts
+         * recursively initializing the first Manager/Primitive-family class.
+         * This is the same initializer Motif's ClassInitialize calls; doing it
+         * here only repairs direct-main's ordering split.  Preserve the
+         * caller's CPU state and keep all state created by libXm itself.
+         */
+        if (irix_guest_ptr(rt, 0x0b3f8a30u, 4u) &&
+            irix_guest_read32be(rt, 0x0b3f8a30u) == 0u &&
+            (irix_guest_class_derives_from_named(rt, init_cls, "XmManager") ||
+             irix_guest_class_derives_from_named(rt, init_cls, "XmPrimitive"))) {
+            IrixGuestFunctionEntry *xe = NULL;
+            size_t xi;
+
+            for (xi = 0; xi < rt->function_count; ++xi) {
+                IrixGuestFunctionEntry *candidate = &rt->functions[xi];
+
+                if (!candidate->name ||
+                    strcmp(candidate->name, "_XmInitializeExtensions") != 0)
+                    continue;
+                if (candidate->address >= 0x20000000u ||
+                    (candidate->flags & IRIX_GUEST_FUNCTION_NATIVE) ||
+                    !irix_guest_ptr(rt, candidate->address, 4u))
+                    continue;
+                xe = candidate;
+                break;
+            }
+
+            if (xe) {
+                IrixGuestCpu saved_cpu = *cpu;
+                IrixGuestAddr target_gp =
+                    irix_guest_gp_for_address(xe->address);
+                int xrc;
+
+                fprintf(stderr,
+                        "IRIX SGI Motif bootstrap: "
+                        "_XmInitializeExtensions @ %08x before class=%08x\n",
+                        xe->address, init_cls);
+                if (target_gp)
+                    cpu->gpr[28] =
+                        (uint64_t)(int64_t)(int32_t)target_gp;
+                cpu->gpr[25] =
+                    (uint64_t)(int64_t)(int32_t)xe->address;
+                xrc = irix_mips_interp_call(rt, cpu, xe->address);
+                if (!rt->trapped && xrc == 0) {
+                    *cpu = saved_cpu;
+                    fprintf(stderr,
+                            "IRIX SGI Motif bootstrap: "
+                            "_XmInitializeExtensions complete "
+                            "XmQmotif=%08x\n",
+                            irix_guest_read32be(rt, 0x0b3f8a30u));
+                } else {
+                    fprintf(stderr,
+                            "IRIX SGI Motif bootstrap: "
+                            "_XmInitializeExtensions failed rc=%d trapped=%d\n",
+                            xrc, rt->trapped);
+                    if (!rt->trapped)
+                        *cpu = saved_cpu;
+                }
+            }
+        }
+
+        /*
          * Do this before Xt recursively runs class_part_initialize.  SGI's
          * Object root wrapper is what registers the per-class Roxy/private
          * descriptors consumed later by _SG_XtInitialize.
