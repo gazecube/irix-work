@@ -2832,6 +2832,98 @@ static unsigned irix_guest_repair_motif_bce_inheritance(
     return irix_guest_repair_motif_bce_inheritance_depth(rt, cls, 0u);
 }
 
+/*
+ * SGI Motif installs four BaseClass root wrappers into Xt's Object class
+ * from _XmInitializeExtensions():
+ *
+ *   class_part_initialize = ClassPartInitRootWrapper
+ *   initialize            = InitializeRootWrapper
+ *   set_values            = SetValuesRootWrapper
+ *   get_values_hook       = GetValuesRootWrapper
+ *
+ * In direct-main the real Xt Object class can later be observed with those
+ * slots back at their original NULL values.  That removes SGI's
+ * _SG_ClassPartInitialize/_SG_XtInitialize lifecycle entirely: class-private
+ * descriptors are never registered and per-instance SGI state (for example
+ * XmManager's final pointer at +0xe8) remains NULL.
+ *
+ * Restore exactly the mutations made by the original SGI
+ * _XmInitializeExtensions, only after XmQmotif has been initialized and only
+ * when a slot has fallen back to NULL.  Never replace another non-NULL owner.
+ */
+static unsigned irix_guest_restore_sg_motif_root_wrappers(
+    IrixGuestRuntime *rt, IrixGuestAddr cls)
+{
+    static const struct {
+        uint32_t offset;
+        IrixGuestAddr wrapper;
+        const char *name;
+    } wrappers[] = {
+        { 0x10u, 0x0b2969b0u, "class_part_initialize" },
+        { 0x18u, 0x0b296b58u, "initialize" },
+        { 0x48u, 0x0b297124u, "set_values" },
+        { 0x54u, 0x0b2975f4u, "get_values_hook" }
+    };
+    IrixGuestAddr root;
+    IrixGuestAddr name_addr;
+    const char *name;
+    uint32_t motif_quark;
+    unsigned depth;
+    unsigned repaired = 0u;
+    unsigned i;
+
+    if (!rt || !cls || !irix_guest_looks_like_widget_class(rt, cls))
+        return 0u;
+
+    /* XmQmotif is assigned by the original _XmInitializeExtensions(). */
+    if (!irix_guest_ptr(rt, 0x0b3f8a30u, 4u))
+        return 0u;
+    motif_quark = irix_guest_read32be(rt, 0x0b3f8a30u);
+    if (!motif_quark)
+        return 0u;
+
+    root = cls;
+    for (depth = 0u; depth < 64u; ++depth) {
+        IrixGuestAddr super;
+
+        if (!irix_guest_looks_like_widget_class(rt, root))
+            return repaired;
+        super = irix_guest_read32be(rt, root + 0x00u);
+        if (!super)
+            break;
+        root = super;
+    }
+    if (depth >= 64u || !irix_guest_ptr(rt, root, 0x58u))
+        return repaired;
+
+    name_addr = irix_guest_read32be(rt, root + 0x04u);
+    name = irix_guest_cstr(rt, name_addr, 64u);
+    if (!name || strcmp(name, "Object") != 0)
+        return repaired;
+
+    for (i = 0u; i < sizeof(wrappers) / sizeof(wrappers[0]); ++i) {
+        IrixGuestAddr slot = root + wrappers[i].offset;
+        IrixGuestAddr old;
+
+        if (!irix_guest_ptr(rt, slot, 4u))
+            continue;
+        old = irix_guest_read32be(rt, slot);
+        if (old != 0u)
+            continue;
+
+        irix_guest_write32be(rt, slot, wrappers[i].wrapper);
+        ++repaired;
+        fprintf(stderr,
+                "IRIX SGI Motif root-wrapper restore: "
+                "Object=%08x slot=+%02x %s NULL -> %08x "
+                "for class=%08x XmQmotif=%08x\n",
+                root, wrappers[i].offset, wrappers[i].name,
+                wrappers[i].wrapper, cls, motif_quark);
+    }
+
+    return repaired;
+}
+
 static IrixGuestAddr irix_guest_resolve_motif_bce_method(
     IrixGuestRuntime *rt, IrixGuestAddr cls, uint32_t offset)
 {
@@ -3349,6 +3441,12 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         IrixGuestAddr init_cls =
             (IrixGuestAddr)(uint32_t)cpu->gpr[4];
 
+        /*
+         * Do this before Xt recursively runs class_part_initialize.  SGI's
+         * Object root wrapper is what registers the per-class Roxy/private
+         * descriptors consumed later by _SG_XtInitialize.
+         */
+        (void)irix_guest_restore_sg_motif_root_wrappers(rt, init_cls);
         (void)irix_guest_repair_synthetic_motif_bce_class(rt, init_cls);
         (void)irix_guest_repair_motif_bce_inheritance(rt, init_cls);
     }
@@ -3366,6 +3464,15 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      */
     if (entry && entry->name &&
         strcmp(entry->name, "_XtCreateWidget") == 0) {
+        IrixGuestAddr create_cls =
+            (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+
+        /*
+         * _XtCreateWidget may receive an already-initialized class and skip
+         * XtInitializeWidgetClass.  Keep the original SGI Object initialize
+         * wrapper alive for CallInitialize in that case as well.
+         */
+        (void)irix_guest_restore_sg_motif_root_wrappers(rt, create_cls);
         irix_guest_repair_motif_accepts_objects(
             rt, (IrixGuestAddr)(uint32_t)cpu->gpr[6]);
     }
