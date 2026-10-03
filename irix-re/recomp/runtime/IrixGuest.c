@@ -2908,17 +2908,29 @@ static unsigned irix_guest_restore_sg_motif_root_wrappers(
         if (!irix_guest_ptr(rt, slot, 4u))
             continue;
         old = irix_guest_read32be(rt, slot);
-        if (old != 0u)
+        if (old == wrappers[i].wrapper)
             continue;
 
+        /*
+         * Once XmQmotif is initialized, SGI Motif owns these four Object
+         * lifecycle slots for the lifetime of the process.  Direct-main can
+         * leave a stale translated/original Xt value here rather than NULL;
+         * treating only NULL as damaged skips InitializeRootWrapper and, in
+         * turn, _SG_XtInitialize.  That leaves SGI's per-instance Manager and
+         * Primitive private records unallocated (for example XmManager +0xe8).
+         *
+         * Restore the exact original libXm wrapper even when the stale slot
+         * is non-NULL.  This is the state established by SGI's own
+         * _XmInitializeExtensions(), not a per-widget substitute.
+         */
         irix_guest_write32be(rt, slot, wrappers[i].wrapper);
         ++repaired;
         fprintf(stderr,
                 "IRIX SGI Motif root-wrapper restore: "
-                "Object=%08x slot=+%02x %s NULL -> %08x "
+                "Object=%08x slot=+%02x %s %08x -> %08x "
                 "for class=%08x XmQmotif=%08x\n",
                 root, wrappers[i].offset, wrappers[i].name,
-                wrappers[i].wrapper, cls, motif_quark);
+                old, wrappers[i].wrapper, cls, motif_quark);
     }
 
     return repaired;
