@@ -113,6 +113,18 @@ static int read_n32_event(IrixGuestRuntime *rt, IrixGuestAddr g, Display *dpy, X
     case KeyPress: case KeyRelease: e->xkey.root=(Window)er32(rt,g+20u);e->xkey.subwindow=(Window)er32(rt,g+24u);e->xkey.time=(Time)er32(rt,g+28u);e->xkey.x=(int32_t)er32(rt,g+32u);e->xkey.y=(int32_t)er32(rt,g+36u);e->xkey.x_root=(int32_t)er32(rt,g+40u);e->xkey.y_root=(int32_t)er32(rt,g+44u);e->xkey.state=er32(rt,g+48u);e->xkey.keycode=er32(rt,g+52u);e->xkey.same_screen=(Bool)(int32_t)er32(rt,g+56u);break;
     case ButtonPress: case ButtonRelease: e->xbutton.root=(Window)er32(rt,g+20u);e->xbutton.subwindow=(Window)er32(rt,g+24u);e->xbutton.time=(Time)er32(rt,g+28u);e->xbutton.x=(int32_t)er32(rt,g+32u);e->xbutton.y=(int32_t)er32(rt,g+36u);e->xbutton.x_root=(int32_t)er32(rt,g+40u);e->xbutton.y_root=(int32_t)er32(rt,g+44u);e->xbutton.state=er32(rt,g+48u);e->xbutton.button=er32(rt,g+52u);e->xbutton.same_screen=(Bool)(int32_t)er32(rt,g+56u);break;
     case MotionNotify:e->xmotion.root=(Window)er32(rt,g+20u);e->xmotion.subwindow=(Window)er32(rt,g+24u);e->xmotion.time=(Time)er32(rt,g+28u);e->xmotion.x=(int32_t)er32(rt,g+32u);e->xmotion.y=(int32_t)er32(rt,g+36u);e->xmotion.x_root=(int32_t)er32(rt,g+40u);e->xmotion.y_root=(int32_t)er32(rt,g+44u);e->xmotion.state=er32(rt,g+48u);e->xmotion.is_hint=(char)irix_guest_read8(rt,g+52u);e->xmotion.same_screen=(Bool)(int32_t)er32(rt,g+56u);break;
+    case ConfigureNotify:
+        /* ConfigureNotify has both event and window before its geometry. */
+        e->xconfigure.event=(Window)er32(rt,g+16u);
+        e->xconfigure.window=(Window)er32(rt,g+20u);
+        e->xconfigure.x=(int32_t)er32(rt,g+24u);
+        e->xconfigure.y=(int32_t)er32(rt,g+28u);
+        e->xconfigure.width=(int32_t)er32(rt,g+32u);
+        e->xconfigure.height=(int32_t)er32(rt,g+36u);
+        e->xconfigure.border_width=(int32_t)er32(rt,g+40u);
+        e->xconfigure.above=(Window)er32(rt,g+44u);
+        e->xconfigure.override_redirect=(Bool)(int32_t)er32(rt,g+48u);
+        break;
     case ClientMessage:{int i;e->xclient.message_type=(Atom)er32(rt,g+20u);e->xclient.format=(int32_t)er32(rt,g+24u);if(e->xclient.format==8){void*p=irix_guest_ptr(rt,g+28u,20u);if(p)memcpy(e->xclient.data.b,p,20u);}else if(e->xclient.format==16)for(i=0;i<10;++i)e->xclient.data.s[i]=(short)irix_guest_read16be(rt,g+28u+(IrixGuestAddr)i*2u);else for(i=0;i<5;++i)e->xclient.data.l[i]=(long)(int32_t)er32(rt,g+28u+(IrixGuestAddr)i*4u);break;}
     case SelectionNotify:e->xselection.requestor=(Window)er32(rt,g+16u);e->xselection.selection=(Atom)er32(rt,g+20u);e->xselection.target=(Atom)er32(rt,g+24u);e->xselection.property=(Atom)er32(rt,g+28u);e->xselection.time=(Time)er32(rt,g+32u);break;
     case SelectionRequest:e->xselectionrequest.owner=(Window)er32(rt,g+16u);e->xselectionrequest.requestor=(Window)er32(rt,g+20u);e->xselectionrequest.selection=(Atom)er32(rt,g+24u);e->xselectionrequest.target=(Atom)er32(rt,g+28u);e->xselectionrequest.property=(Atom)er32(rt,g+32u);e->xselectionrequest.time=(Time)er32(rt,g+36u);break;
@@ -125,6 +137,39 @@ static int read_n32_event(IrixGuestRuntime *rt, IrixGuestAddr g, Display *dpy, X
 
 static void bridge_XPutImage(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Drawable dr=(Drawable)(uint32_t)cpu->gpr[5];GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);XImage*im=sync_image_from_guest(rt,(uint32_t)cpu->gpr[7]);int sx=(int32_t)cpu->gpr[8],sy=(int32_t)cpu->gpr[9],dx=(int32_t)cpu->gpr[10],dy=(int32_t)cpu->gpr[11];unsigned w=n32_stack_arg32(rt,cpu,0u),h=n32_stack_arg32(rt,cpu,1u);cpu->gpr[2]=(d&&gc&&im&&!rt->trapped)?(uint32_t)XPutImage(d,dr,gc,im,sx,sy,dx,dy,w,h):0;}
 static void bridge_XCreateBitmapFromData(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);unsigned w=(uint32_t)cpu->gpr[7],h=(uint32_t)cpu->gpr[8];uint64_t bytes=(((uint64_t)w+7u)>>3)*(uint64_t)h;const char*p=(bytes<=SIZE_MAX)?(const char*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[6],(size_t)bytes):0;cpu->gpr[2]=(d&&p&&!rt->trapped)?(uint32_t)XCreateBitmapFromData(d,(Drawable)(uint32_t)cpu->gpr[5],p,w,h):0;}
+
+static void bridge_XReadBitmapFile(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{
+    Display *display = irix_x11_primary_display_from_guest(
+        (uint32_t)cpu->gpr[4]);
+    const char *guest_path = guest_cstr(rt, (uint32_t)cpu->gpr[6]);
+    char host_path[4096];
+    const char *path = guest_path ? irix_guest_resolve_path(
+        rt, guest_path, host_path, sizeof(host_path),
+        "resource:XReadBitmapFile", 1) : 0;
+    unsigned width = 0, height = 0;
+    Pixmap bitmap = None;
+    int x_hot = -1, y_hot = -1;
+    int status = BitmapOpenFailed;
+
+    if (display && path)
+        status = XReadBitmapFile(display, (Drawable)(uint32_t)cpu->gpr[5],
+                                 path, &width, &height, &bitmap,
+                                 &x_hot, &y_hot);
+    if (status == BitmapSuccess) {
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+        if (out) irix_guest_write32be(rt, out, width);
+        out = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        if (out) irix_guest_write32be(rt, out, height);
+        out = (IrixGuestAddr)(uint32_t)cpu->gpr[9];
+        if (out) irix_guest_write32be(rt, out, (uint32_t)bitmap);
+        out = (IrixGuestAddr)(uint32_t)cpu->gpr[10];
+        if (out) irix_guest_write32be(rt, out, (uint32_t)x_hot);
+        out = (IrixGuestAddr)(uint32_t)cpu->gpr[11];
+        if (out) irix_guest_write32be(rt, out, (uint32_t)y_hot);
+    }
+    cpu->gpr[2] = (uint32_t)status;
+}
 
 static void bridge_XGetImage(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XImage*im=d?XGetImage(d,(Drawable)(uint32_t)cpu->gpr[5],(int)cpu->gpr[6],(int)cpu->gpr[7],(unsigned)cpu->gpr[8],(unsigned)cpu->gpr[9],(unsigned long)(uint32_t)cpu->gpr[10],(int)cpu->gpr[11]):0;IrixGuestAddr gd=0,gi=0;if(im){uint64_t n=image_data_size(im);if(n&&n<=UINT32_MAX){gd=tmp_alloc((uint32_t)n);if(gd&&im->data){void*dst=irix_guest_ptr(rt,gd,(size_t)n);if(dst)memcpy(dst,im->data,(size_t)n);}}if(im->data)XFree(im->data);im->data=gd?(char*)irix_guest_ptr(rt,gd,1u):0;gi=register_image(rt,im,gd);if(!gi){im->data=0;XDestroyImage(im);}}cpu->gpr[2]=gi;}
 static void bridge_XQueryFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XFontStruct*f=d?XQueryFont(d,(XID)(uint32_t)cpu->gpr[5]):0;cpu->gpr[2]=irix_x11_primary_font_to_guest(rt,f);}
@@ -180,7 +225,7 @@ IrixGuestFunction irix_x11_image_bridge_lookup(const char *name)
 {
     if(!name)return irix_x11_image_bridge_lookup_base(name);
 #define MAP(n) if(!strcmp(name,#n))return bridge_##n
-    MAP(XPutImage); MAP(XCreateBitmapFromData); MAP(XGetImage); MAP(XQueryFont); MAP(XFreeFont); MAP(XCreatePixmapCursor); MAP(XDefaultScreenOfDisplay); MAP(XAllocColorCells);
+    MAP(XPutImage); MAP(XCreateBitmapFromData); MAP(XReadBitmapFile); MAP(XGetImage); MAP(XQueryFont); MAP(XFreeFont); MAP(XCreatePixmapCursor); MAP(XDefaultScreenOfDisplay); MAP(XAllocColorCells);
     MAP(XNextEvent); MAP(XPeekEvent); MAP(XPutBackEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XCheckTypedWindowEvent); MAP(XCheckMaskEvent); MAP(XCheckIfEvent); MAP(XIfEvent); MAP(XSendEvent); MAP(XFilterEvent); MAP(XLookupString); MAP(XRefreshKeyboardMapping);
     MAP(XSetCommand); MAP(XwcDrawString); MAP(XwcTextEscapement); MAP(XwcTextExtents);
 #undef MAP

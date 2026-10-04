@@ -9,6 +9,7 @@ endif()
 
 add_library(irix_recomp_runtime SHARED
     runtime/IrixGuest.c
+    runtime/IrixPath.c
     runtime/IrixMipsInterp.c
     runtime/IrixMipsJit.c
     runtime/IrixCompat.c
@@ -40,6 +41,18 @@ set_target_properties(irix_recomp_runtime PROPERTIES
     VERSION 1.0.0
     SOVERSION 1
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(irix_guest_path_test
+        tests/IrixGuestPathTest.c
+        runtime/IrixPath.c
+    )
+    target_include_directories(irix_guest_path_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+    )
+    add_test(NAME irix_guest_path_test COMMAND irix_guest_path_test)
+endif()
 
 add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixLibcBridge.c

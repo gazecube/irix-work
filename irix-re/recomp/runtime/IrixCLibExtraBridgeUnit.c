@@ -347,6 +347,52 @@ static void bridge_guest_mktemp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(uint32_t)addr;
 }
 
+static void bridge_guest_mkstemp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    char *guest_template = (char *)irix_guest_cstr(rt, addr, 65536u);
+    char host_template[4096];
+    const char *resolved;
+    size_t length, xcount = 0;
+    int fd;
+
+    if (!guest_template) {
+        g_guest_oserror = EFAULT;
+        cpu->gpr[2] = (uint64_t)(int64_t)-1;
+        return;
+    }
+
+    length = strlen(guest_template);
+    while (xcount < length && guest_template[length - xcount - 1u] == 'X')
+        ++xcount;
+    if (xcount < 6u) {
+        g_guest_oserror = EINVAL;
+        cpu->gpr[2] = (uint64_t)(int64_t)-1;
+        return;
+    }
+
+    resolved = irix_guest_resolve_path(rt, guest_template, host_template,
+                                       sizeof(host_template), "mkstemp", 0);
+    if (!resolved) {
+        g_guest_oserror = EFAULT;
+        cpu->gpr[2] = (uint64_t)(int64_t)-1;
+        return;
+    }
+
+    fd = mkstemp((char *)resolved);
+    if (fd >= 0) {
+        /* If the guest path was staged under IRIX-TREE, return the generated
+           suffix to the guest's original template buffer as POSIX requires. */
+        if (resolved != guest_template)
+            memcpy(guest_template + length - xcount,
+                   resolved + strlen(resolved) - xcount, xcount);
+        g_guest_oserror = 0;
+    } else {
+        g_guest_oserror = errno;
+    }
+    cpu->gpr[2] = (uint64_t)(int64_t)fd;
+}
+
 static uint32_t guest_page_round(uint32_t n)
 {
     if (!n || n > UINT32_MAX - (IRIX_GUEST_PAGE_SIZE - 1u)) return 0;
@@ -537,6 +583,7 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if (!strcmp(name, "oserror")) return bridge_guest_oserror;
     if (!strcmp(name, "flock")) return bridge_guest_flock;
     if (!strcmp(name, "mktemp")) return bridge_guest_mktemp;
+    if (!strcmp(name, "mkstemp")) return bridge_guest_mkstemp;
     if (!strcmp(name, "mmap")) return bridge_guest_mmap;
     if (!strcmp(name, "munmap")) return bridge_guest_munmap;
     fn = irix_clib_extra_bridge_lookup_base(name);

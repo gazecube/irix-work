@@ -1501,15 +1501,6 @@ static int write_irix_xstat(IrixGuestRuntime *rt, uint32_t version,
     return -1;
 }
 
-static int irix_is_guest_system_path(const char *guest)
-{
-    return strncmp(guest, "/usr/lib32/", 11u) == 0 ||
-           strncmp(guest, "/lib32/", 7u) == 0 ||
-           strncmp(guest, "/usr/lib/", 9u) == 0 ||
-           strncmp(guest, "/lib/", 5u) == 0 ||
-           strncmp(guest, "/usr/gfx/", 9u) == 0;
-}
-
 static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
                                   char *buf, size_t bufsz)
 {
@@ -1537,18 +1528,6 @@ static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
         }
     }
 
-    if (guest[0] != '/' || !rt->rootfs || !rt->rootfs[0])
-        return guest;
-
-    n = snprintf(buf, bufsz, "%s%s", rt->rootfs, guest);
-    if (n <= 0 || (size_t)n >= bufsz) {
-        errno = ENAMETOOLONG;
-        return 0;
-    }
-
-    if (stat(buf, &st) == 0)
-        return buf;
-
     /*
      * The extracted install tree contains the ISA-specific N32 runtime
      * libraries but not all of the canonical top-level aliases that exist on
@@ -1559,7 +1538,7 @@ static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
      * Keep this deliberately narrow: do not recursively search arbitrary
      * subdirectories, and do not apply it to internal/ libraries.
      */
-    if (strncmp(guest, "/usr/lib32/", 11u) == 0) {
+    if (rt && rt->rootfs && strncmp(guest, "/usr/lib32/", 11u) == 0) {
         const char *name = guest + 11u;
         if (*name && !strchr(name, '/')) {
             n = snprintf(buf, bufsz, "%s/usr/lib32/mips4/%s",
@@ -1582,23 +1561,8 @@ static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
         }
     }
 
-    /*
-     * Never let an unresolved IRIX system-library path escape into the host
-     * filesystem.  A host /usr/lib32/libm.so may be x86 and can be opened
-     * successfully, only for the guest rld to reject it later.
-     *
-     * Ordinary device/temp paths still intentionally fall back to the host.
-     */
-    if (irix_is_guest_system_path(guest)) {
-        n = snprintf(buf, bufsz, "%s%s", rt->rootfs, guest);
-        if (n <= 0 || (size_t)n >= bufsz) {
-            errno = ENAMETOOLONG;
-            return 0;
-        }
-        return buf;
-    }
-
-    return guest;
+    return irix_guest_resolve_path(rt, guest, buf, bufsz,
+                                   "guest syscall", 0);
 }
 
 static int irix_open_flags(uint32_t f)
@@ -5101,17 +5065,33 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address, IrixGuestFunctionEntry *entry)
 {
     IrixGuestAddr caller;
+    int trace_scheme = (address == 0x0f63945cu || address == 0x0f63a090u) &&
+                       getenv("IRIX_SCHEME_TRACE") != NULL;
     if (!entry || entry->address != address ||
         ((entry->flags & IRIX_GUEST_FUNCTION_INTERIOR) &&
          !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_guest_call(rt, cpu, address);
     caller = rt->current_pc;
+    if (trace_scheme) {
+        const char *arg = irix_guest_cstr(rt, (uint32_t)cpu->gpr[4], 256u);
+        fprintf(stderr, "IRIX scheme call: target=%08x caller=%08x a0=%08x '%.*s' a1=%08x a2=%08x a3=%08x a7=%08x\n",
+                address, caller, (uint32_t)cpu->gpr[4],
+                arg ? 128 : 0, arg ? arg : "",
+                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[11]);
+    }
     irix_guest_profile_hit(rt, caller, address, entry);
     if (irix_mips_jit_requested() &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE))
         return irix_mips_jit_call(rt, cpu, address);
     {
         int rc = irix_guest_call_entry_impl(rt, cpu, address, entry);
+        if (trace_scheme) {
+            const char *value = irix_guest_cstr(rt, (uint32_t)cpu->gpr[2], 256u);
+            fprintf(stderr, "IRIX scheme return: target=%08x v0=%08x '%.*s' trap=%d\n",
+                    address, (uint32_t)cpu->gpr[2], value ? 128 : 0,
+                    value ? value : "", rt->trapped);
+        }
         return rc;
     }
 }
@@ -5120,6 +5100,37 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 {
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+    if (address == 0x0f61e9c0u && getenv("IRIX_XT_CALL_TRACE")) {
+        fprintf(stderr,
+                "IRIX XtIsRealized call: caller=%08x ra=%08x a0-a3=%08x,%08x,%08x,%08x gp=%08x\n",
+                caller, (uint32_t)cpu->gpr[31],
+                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
+                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
+                (uint32_t)cpu->gpr[28]);
+    }
+    if (getenv("IRIX_GEOMETRY_TRACE") &&
+        (address == 0x0f64be08u || address == 0x0f64b9b0u)) {
+        IrixGuestAddr widget = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr cls = widget && irix_guest_ptr(rt, widget, 8u)
+            ? irix_guest_read32be(rt, widget + 4u) : 0u;
+        IrixGuestAddr cls_name_addr = cls && irix_guest_ptr(rt, cls + 4u, 4u)
+            ? irix_guest_read32be(rt, cls + 4u) : 0u;
+        const char *cls_name = irix_guest_cstr(rt, cls_name_addr, 128u);
+        if (address == 0x0f64be08u) {
+            fprintf(stderr,
+                    "IRIX geometry XtConfigureWidget: caller=%08x widget=%08x class=%s x=%d y=%d width=%u height=%u border=%u\n",
+                    caller, widget, cls_name ? cls_name : "?",
+                    (int32_t)cpu->gpr[5], (int32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
+                    (uint32_t)cpu->gpr[9]);
+        } else {
+            fprintf(stderr,
+                    "IRIX geometry XtMakeResizeRequest: caller=%08x widget=%08x class=%s width=%u height=%u reply_width=%08x reply_height=%08x\n",
+                    caller, widget, cls_name ? cls_name : "?",
+                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8]);
+        }
+    }
     irix_guest_profile_hit(rt, caller, address, entry);
 
     /*

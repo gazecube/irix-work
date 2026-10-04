@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,13 @@ static IrixGuestRuntime *g_rt;
 static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return irix_guest_cstr(rt, addr, 65536u);
+}
+
+static const char *host_path(IrixGuestRuntime *rt, const char *guest,
+                             char *buffer, size_t size,
+                             const char *operation)
+{
+    return irix_guest_resolve_path(rt, guest, buffer, size, operation, 0);
 }
 
 static void ret_int(IrixGuestCpu *cpu, int v)
@@ -116,7 +124,9 @@ static int write_irix_stat64(IrixGuestRuntime *rt, IrixGuestAddr out,
 
 static void bridge_stat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *guest = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char buffer[PATH_MAX];
+    const char *path = guest ? host_path(rt, guest, buffer, sizeof(buffer), "stat") : 0;
     struct stat st;
     int rc = path ? stat(path, &st) : -1;
     if (rc == 0 && write_irix_stat64(rt, (uint32_t)cpu->gpr[5], &st) != 0) rc = -1;
@@ -125,7 +135,9 @@ static void bridge_stat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_lstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *guest = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char buffer[PATH_MAX];
+    const char *path = guest ? host_path(rt, guest, buffer, sizeof(buffer), "lstat") : 0;
     struct stat st;
     int rc = path ? lstat(path, &st) : -1;
     if (rc == 0 && write_irix_stat64(rt, (uint32_t)cpu->gpr[5], &st) != 0) rc = -1;
@@ -147,7 +159,9 @@ static void bridge_fstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_open(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *guest = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char buffer[PATH_MAX];
+    const char *path = guest ? host_path(rt, guest, buffer, sizeof(buffer), "open") : 0;
     uint32_t flags = (uint32_t)cpu->gpr[5];
     mode_t mode = (mode_t)(uint32_t)cpu->gpr[6];
     int rc = path ? open(path, host_open_flags(flags), mode) : -1;
@@ -156,7 +170,9 @@ static void bridge_open(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_creat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    const char *guest = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char buffer[PATH_MAX];
+    const char *path = guest ? host_path(rt, guest, buffer, sizeof(buffer), "creat") : 0;
     ret_int(cpu, path ? open(path, O_WRONLY | O_CREAT | O_TRUNC,
                              (mode_t)(uint32_t)cpu->gpr[5]) : -1);
 }
@@ -190,11 +206,16 @@ static void bridge_lseek(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 #define PATH1(name, call) \
 static void bridge_##name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
-    const char *a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?(call):-1); }
+    const char *g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX]; \
+    const char *a=g?host_path(rt,g,p,sizeof(p),#name):0; ret_int(cpu,a?(call):-1); }
 #define PATH2(name, call) \
 static void bridge_##name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
-    const char *a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); \
-    const char *b=guest_cstr(rt,(uint32_t)cpu->gpr[5]); ret_int(cpu,(a&&b)?(call):-1); }
+    const char *ga=guest_cstr(rt,(uint32_t)cpu->gpr[4]); \
+    const char *gb=guest_cstr(rt,(uint32_t)cpu->gpr[5]); \
+    char pa[PATH_MAX],pb[PATH_MAX]; \
+    const char *a=ga?host_path(rt,ga,pa,sizeof(pa),#name):0; \
+    const char *b=gb?host_path(rt,gb,pb,sizeof(pb),#name):0; \
+    ret_int(cpu,(a&&b)?(call):-1); }
 
 PATH1(unlink, unlink(a))
 PATH1(rmdir, rmdir(a))
@@ -273,21 +294,22 @@ static int host_mkdirp(const char *path, mode_t mode)
 }
 
 static void bridge_mkdir(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
-{ const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?mkdir(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
+{ const char*g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX]; const char*a=g?host_path(rt,g,p,sizeof(p),"mkdir"):0; ret_int(cpu,a?mkdir(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
 static void bridge_mkdirp(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
-{ const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?host_mkdirp(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
+{ const char*g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX]; const char*a=g?host_path(rt,g,p,sizeof(p),"mkdirp"):0; ret_int(cpu,a?host_mkdirp(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
 static void bridge_chmod(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
-{ const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?chmod(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
+{ const char*g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX]; const char*a=g?host_path(rt,g,p,sizeof(p),"chmod"):0; ret_int(cpu,a?chmod(a,(mode_t)(uint32_t)cpu->gpr[5]):-1); }
 static void bridge_fchmod(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
 { (void)rt; ret_int(cpu,fchmod((int)cpu->gpr[4],(mode_t)(uint32_t)cpu->gpr[5])); }
 static void bridge_chown(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
-{ const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); ret_int(cpu,a?chown(a,(uid_t)(uint32_t)cpu->gpr[5],(gid_t)(uint32_t)cpu->gpr[6]):-1); }
+{ const char*g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX]; const char*a=g?host_path(rt,g,p,sizeof(p),"chown"):0; ret_int(cpu,a?chown(a,(uid_t)(uint32_t)cpu->gpr[5],(gid_t)(uint32_t)cpu->gpr[6]):-1); }
 static void bridge_fchown(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
 { (void)rt; ret_int(cpu,fchown((int)cpu->gpr[4],(uid_t)(uint32_t)cpu->gpr[5],(gid_t)(uint32_t)cpu->gpr[6])); }
 
 static void bridge_readlink(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
 {
-    const char*a=guest_cstr(rt,(uint32_t)cpu->gpr[4]); uint32_t n=(uint32_t)cpu->gpr[6];
+    const char*g=guest_cstr(rt,(uint32_t)cpu->gpr[4]); char p[PATH_MAX];
+    const char*a=g?host_path(rt,g,p,sizeof(p),"readlink"):0; uint32_t n=(uint32_t)cpu->gpr[6];
     char*b=(char*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[5],n);
     ssize_t rc=(a&&(b||!n))?readlink(a,b,n):-1; cpu->gpr[2]=(uint64_t)(int64_t)rc;
 }

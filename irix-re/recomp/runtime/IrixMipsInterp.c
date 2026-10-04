@@ -281,6 +281,33 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
             break;
         }
+        case 0x1e: { /* DDIV */
+            int64_t n = (int64_t)cpu->gpr[rs];
+            int64_t d = (int64_t)cpu->gpr[rtno];
+            if (!d) {
+                cpu->lo = n < 0 ? 1u : UINT64_MAX;
+                cpu->hi = (uint64_t)n;
+            } else if (n == INT64_MIN && d == -1) {
+                cpu->lo = (uint64_t)INT64_MIN;
+                cpu->hi = 0;
+            } else {
+                cpu->lo = (uint64_t)(n / d);
+                cpu->hi = (uint64_t)(n % d);
+            }
+            break;
+        }
+        case 0x1f: { /* DDIVU */
+            uint64_t n = cpu->gpr[rs];
+            uint64_t d = cpu->gpr[rtno];
+            if (!d) {
+                cpu->lo = UINT64_MAX;
+                cpu->hi = n;
+            } else {
+                cpu->lo = n / d;
+                cpu->hi = n % d;
+            }
+            break;
+        }
         case 0x20:
         case 0x21:
             cpu->gpr[rd] = sx32((uint32_t)cpu->gpr[rs] + (uint32_t)cpu->gpr[rtno]);

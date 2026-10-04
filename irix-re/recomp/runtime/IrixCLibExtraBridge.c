@@ -181,6 +181,40 @@ static void bridge_snprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)n;
 }
 
+static void bridge_vsprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr fmt = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr va = (uint32_t)cpu->gpr[6];
+    size_t cap = 0, i;
+    char *out;
+    int n;
+    for (i = 0; i < rt->memory.count; ++i) {
+        const IrixGuestSegment *segment = &rt->memory.segments[i];
+        if ((segment->flags & 2u) && dst >= segment->guest_base &&
+            (uint64_t)dst < (uint64_t)segment->guest_base + segment->size) {
+            cap = (size_t)((uint64_t)segment->guest_base + segment->size - dst);
+            if (cap > 65536u) cap = 65536u;
+            break;
+        }
+    }
+    out = cap ? (char *)irix_guest_ptr(rt, dst, cap) : 0;
+    n = out ? format_guest(rt, cpu, fmt, 12u, va, out, cap) : -1;
+    if (n >= 0 && (size_t)n >= cap) { errno = EOVERFLOW; n = -1; }
+    cpu->gpr[2] = (uint64_t)(int64_t)n;
+}
+
+static void bridge_vsnprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dst = (uint32_t)cpu->gpr[4];
+    uint32_t cap = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr fmt = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr va = (uint32_t)cpu->gpr[7];
+    char *out = cap ? (char *)irix_guest_ptr(rt, dst, cap) : 0;
+    int n = format_guest(rt, cpu, fmt, 12u, va, out, cap);
+    cpu->gpr[2] = (uint64_t)(int64_t)n;
+}
+
 static void bridge_printf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char buf[8192];
@@ -368,7 +402,8 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if(!name)return 0;
     if(!strcmp(name,"__vec_new_eh2"))return bridge___vec_new_eh2;
 #define M(n) if(!strcmp(name,#n))return bridge_##n
-    M(sprintf); M(snprintf); M(printf); M(fprintf); M(vfprintf); M(puts); M(putchar);
+    M(sprintf); M(snprintf); M(vsprintf); M(vsnprintf);
+    M(printf); M(fprintf); M(vfprintf); M(puts); M(putchar);
     M(atoi); M(atol); M(atof); M(strtol); M(strtoul); M(strtod); M(setoserror); M(oserror);
     M(tolower); M(toupper); M(isalpha); M(isdigit); M(isspace); M(isalnum);
     M(isupper); M(islower); M(isxdigit); M(ispunct); M(isprint); M(iscntrl);

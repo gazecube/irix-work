@@ -130,7 +130,10 @@ static void bridge_fopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     const char *mode = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
-    FILE *f = (path && mode) ? fopen(path, mode) : 0;
+    char host_path[PATH_MAX];
+    const char *resolved = path ? irix_guest_resolve_path(
+        rt, path, host_path, sizeof(host_path), "resource:fopen", 0) : 0;
+    FILE *f = (resolved && mode) ? fopen(resolved, mode) : 0;
     IrixGuestAddr handle = alloc_file_handle(rt, f);
     if (f && !handle) fclose(f);
     cpu->gpr[2] = handle;
@@ -374,6 +377,8 @@ static void bridge_setmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     const char *mode = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
+    char host_path[PATH_MAX];
+    const char *resolved;
     FILE *f;
     IrixGuestAddr handle;
     const char *p;
@@ -382,7 +387,9 @@ static void bridge_setmntent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (!path || !mode)
         return;
 
-    f = fopen(path, mode);
+    resolved = irix_guest_resolve_path(rt, path, host_path,
+                                       sizeof(host_path), "resource:setmntent", 0);
+    f = resolved ? fopen(resolved, mode) : 0;
     if (!f)
         return;
 

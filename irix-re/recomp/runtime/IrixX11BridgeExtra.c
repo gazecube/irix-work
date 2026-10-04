@@ -1304,6 +1304,27 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    if (getenv("IRIX_INPUT_TRACE") &&
+        (e.type == ButtonPress || e.type == ButtonRelease ||
+         e.type == MotionNotify || e.type == EnterNotify ||
+         e.type == LeaveNotify)) {
+        if (e.type == ButtonPress || e.type == ButtonRelease)
+            fprintf(stderr,
+                    "IRIX input event: type=%d window=%08x root=%08lx sub=%08lx xy=%d,%d rootxy=%d,%d state=0x%x button=%u same=%d\n",
+                    e.type, (uint32_t)e.xbutton.window,
+                    (unsigned long)e.xbutton.root,
+                    (unsigned long)e.xbutton.subwindow, e.xbutton.x,
+                    e.xbutton.y, e.xbutton.x_root, e.xbutton.y_root,
+                    e.xbutton.state, e.xbutton.button, e.xbutton.same_screen);
+        else
+            fprintf(stderr,
+                    "IRIX input event: type=%d window=%08x root=%08lx sub=%08lx xy=%d,%d rootxy=%d,%d state=0x%x mode=%d detail=%d\n",
+                    e.type, (uint32_t)e.xany.window,
+                    (unsigned long)e.xcrossing.root,
+                    (unsigned long)e.xcrossing.subwindow, e.xcrossing.x,
+                    e.xcrossing.y, e.xcrossing.x_root, e.xcrossing.y_root,
+                    e.xcrossing.state, e.xcrossing.mode, e.xcrossing.detail);
+    }
     fprintf(stderr,
             "IRIX XNextEvent: type=%d window=%08x -> guest=%08x\n",
             e.type, (uint32_t)e.xany.window, out);
@@ -1386,11 +1407,21 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         time = ((uint32_t)slot[4] << 24) | ((uint32_t)slot[5] << 16) |
                ((uint32_t)slot[6] << 8) | (uint32_t)slot[7];
 
-    cpu->gpr[2] = d ? (uint32_t)XGrabPointer(
+    {
+        int result = d ? XGrabPointer(
         d, (Window)(uint32_t)cpu->gpr[5], (Bool)cpu->gpr[6],
         (unsigned int)cpu->gpr[7], (int)cpu->gpr[8], (int)cpu->gpr[9],
         (Window)(uint32_t)cpu->gpr[10], (Cursor)(uint32_t)cpu->gpr[11],
-        (Time)time) : (uint32_t)GrabNotViewable;
+        (Time)time) : GrabNotViewable;
+        if (getenv("IRIX_INPUT_TRACE"))
+            fprintf(stderr,
+                    "IRIX XGrabPointer: window=%08x owner=%u mask=0x%x pointer=%d keyboard=%d confine=%08x cursor=%08x time=%u result=%d\n",
+                    (uint32_t)cpu->gpr[5], (unsigned)cpu->gpr[6],
+                    (unsigned)cpu->gpr[7], (int)cpu->gpr[8],
+                    (int)cpu->gpr[9], (uint32_t)cpu->gpr[10],
+                    (uint32_t)cpu->gpr[11], time, result);
+        cpu->gpr[2] = (uint32_t)result;
+    }
 }
 
 static void bridge_XUngrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -1476,8 +1507,20 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     memset(&v, 0, sizeof(v));
-    fprintf(stderr, "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x\\n",
-            NextRequest(d), (unsigned long)w, mask, (unsigned)a);
+    if (getenv("IRIX_GEOMETRY_TRACE"))
+        fprintf(stderr,
+                "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x x=%d y=%d width=%d height=%d border=%d sibling=%08x stack=%d\\n",
+                NextRequest(d), (unsigned long)w, mask, (unsigned)a,
+                (int32_t)irix_guest_read32be(rt, a + 0u),
+                (int32_t)irix_guest_read32be(rt, a + 4u),
+                (int32_t)irix_guest_read32be(rt, a + 8u),
+                (int32_t)irix_guest_read32be(rt, a + 12u),
+                (int32_t)irix_guest_read32be(rt, a + 16u),
+                irix_guest_read32be(rt, a + 20u),
+                (int32_t)irix_guest_read32be(rt, a + 24u));
+    else
+        fprintf(stderr, "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x\\n",
+                NextRequest(d), (unsigned long)w, mask, (unsigned)a);
     v.x = (int32_t)irix_guest_read32be(rt, a + 0u);
     v.y = (int32_t)irix_guest_read32be(rt, a + 4u);
     v.width = (int32_t)irix_guest_read32be(rt, a + 8u);

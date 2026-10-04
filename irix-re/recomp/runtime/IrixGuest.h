@@ -112,6 +112,9 @@ void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
 void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
 void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr);
 void irix_guest_set_rootfs(IrixGuestRuntime *rt, const char *rootfs);
+const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path,
+                                    char *buffer, size_t buffer_size,
+                                    const char *operation, int optional);
 float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg);
 double irix_guest_fpr_get_d(const IrixGuestCpu *cpu, unsigned reg);
 void irix_guest_fpr_set_s(IrixGuestCpu *cpu, unsigned reg, float value);
