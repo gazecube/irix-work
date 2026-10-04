@@ -132,6 +132,11 @@ static void bridge_lstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_int(cpu, rc);
 }
 
+static void bridge_lstat64(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge_lstat(rt, cpu);
+}
+
 static void bridge_fstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     struct stat st;
@@ -324,7 +329,7 @@ IrixGuestFunction irix_fs_bridge_lookup(const char *name)
 {
     if(!name)return 0;
 #define MAP(n) if(!strcmp(name,#n))return bridge_##n
-    MAP(stat); MAP(lstat); MAP(fstat);
+    MAP(stat); MAP(lstat); MAP(lstat64); MAP(fstat);
     MAP(open); MAP(creat); MAP(close); MAP(read); MAP(write); MAP(lseek);
     MAP(unlink); MAP(remove); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
     MAP(mkdir); MAP(mkdirp); MAP(rmdir); MAP(chmod); MAP(fchmod); MAP(chown); MAP(fchown);

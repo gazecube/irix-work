@@ -114,6 +114,30 @@ static void bridge_ostream_insert_long(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = object;
 }
 
+static void bridge_ostream_insert_double(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixOstrstreamState *st = ostrstream_find(object);
+    double value;
+    int n;
+
+    if (!st) {
+        irix_guest_trap(rt, cpu, 0xeeee2202u);
+        return;
+    }
+
+    memcpy(&value, &cpu->fpr[13], sizeof(value));
+    /* SGI iostream's default floating-point precision is six digits. */
+    n = snprintf(st->text + st->len, sizeof(st->text) - st->len,
+                 "%.6g", value);
+    if (n < 0 || (size_t)n >= sizeof(st->text) - st->len) {
+        irix_guest_trap(rt, cpu, 0xeeee2203u);
+        return;
+    }
+    st->len += (size_t)n;
+    cpu->gpr[2] = object;
+}
+
 static void bridge_ostream_insert_cstr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr object = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
@@ -354,8 +378,32 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         } else if (validate_vec_count(rt, array, element_size, extended_count) == 0) {
             count = extended_count;
         } else {
+            uint32_t allocation_size = irix_libc_guest_allocation_size(array);
+            if (allocation_size && element_size &&
+                allocation_size % element_size == 0u &&
+                validate_vec_count(rt, array, element_size,
+                                   allocation_size / element_size) == 0) {
+                count = allocation_size / element_size;
+                fprintf(stderr,
+                        "IRIX __vec_delete2 inferred count=%u from allocation=%u element=%u\n",
+                        count, allocation_size, element_size);
+            } else {
+            static const uint32_t backs[] = {4u, 8u, 12u, 16u};
+            size_t cookie_i;
+            fprintf(stderr,
+                    "IRIX __vec_delete2 cookie miss: array=%08x size=%u ext=%u alloc=%u\n",
+                    array, element_size, extended_count,
+                    irix_libc_guest_allocation_size(array));
+            for (cookie_i = 0; cookie_i < sizeof(backs) / sizeof(backs[0]); ++cookie_i) {
+                IrixGuestAddr cookie = array - backs[cookie_i];
+                fprintf(stderr, "  cookie[-%u]=%08x allocbase=%u\n", backs[cookie_i],
+                        irix_guest_ptr(rt, cookie, 4u)
+                            ? irix_guest_read32be(rt, cookie) : 0u,
+                        irix_libc_guest_allocation_size(cookie));
+            }
             irix_guest_trap(rt, cpu, 0xeeee2103u);
             return;
+            }
         }
     }
 
@@ -400,6 +448,7 @@ IrixGuestFunction irix_cxx_bridge_lookup(const char *name)
     if (!strcmp(name, "str__10ostrstreamGv")) return bridge_ostrstream_str;
     if (!strcmp(name, "__ls__7ostreamGl")) return bridge_ostream_insert_long;
     if (!strcmp(name, "__ls__7ostreamGi")) return bridge_ostream_insert_long;
+    if (!strcmp(name, "__ls__7ostreamGd")) return bridge_ostream_insert_double;
     if (!strcmp(name, "__ls__7ostreamGPCc")) return bridge_ostream_insert_cstr;
     return 0;
 }

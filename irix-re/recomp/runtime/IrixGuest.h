@@ -27,6 +27,7 @@ typedef struct IrixGuestElfInfo {
     uint16_t phnum;
     IrixGuestAddr gp_value;
     IrixGuestAddr load_base;
+    IrixGuestAddr init_entry;
     char interp[256];
 } IrixGuestElfInfo;
 

@@ -789,6 +789,11 @@ int main(int argc, char **argv)
     int have_app_elf = 0;
     int have_interp_elf = 0;
     int have_rld_elf = 0;
+    IrixGuestAddr libcxx_init = 0;
+    IrixGuestAddr libcxx_gp = 0;
+    IrixGuestAddr internal_inits[64];
+    IrixGuestAddr internal_gps[64];
+    size_t internal_init_count = 0;
     char **guest_argv = argv;
 #ifdef IRIX_DIRECT_MAIN
     char **direct_guest_argv = 0;
@@ -812,6 +817,13 @@ int main(int argc, char **argv)
      */
     if (IRIX_RECOMP_ROOT[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
         setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT, 0);
+    if (IRIX_RUNTIME_TREE[0] != '\0' && !getenv("XAPPLRESDIR")) {
+        char appres[4096];
+        int n = snprintf(appres, sizeof(appres), "%s/usr/lib/X11/app-defaults",
+                         IRIX_RUNTIME_TREE);
+        if (n > 0 && (size_t)n < sizeof(appres))
+            setenv("XAPPLRESDIR", appres, 0);
+    }
 #ifdef IRIX_DIRECT_MAIN
     /* Direct translated bring-up deliberately bypasses PT_INTERP/rld. */
     setenv("IRIX_EXEC_BACKEND", "static", 1);
@@ -912,6 +924,16 @@ int main(int argc, char **argv)
 
                 if (load_elf(&rt, root, component->path, &info) != 0)
                     return 1;
+                if (info.init_entry && component->kind == 1 &&
+                    internal_init_count < 64u) {
+                    internal_inits[internal_init_count] = info.init_entry;
+                    internal_gps[internal_init_count] = info.gp_value;
+                    ++internal_init_count;
+                }
+                if (info.init_entry && strcmp(component->path, "usr/lib32/libC.so.2") == 0) {
+                    libcxx_init = info.init_entry;
+                    libcxx_gp = info.gp_value;
+                }
                 if (i == 0u) {
                     app_elf = info;
                     have_app_elf = 1;
@@ -1098,14 +1120,68 @@ int main(int argc, char **argv)
     direct_guest_argv = 0;
 #endif
 
-    /*
-     * For an ELF executable with PT_INTERP, the kernel transfers control to
-     * the interpreter's entry point, while AT_ENTRY carries the executable's
-     * own e_entry.  IRIX N32 desktop binaries use /usr/lib32/libc.so.1 as that
-     * interpreter.  Entering the executable directly still skips the libc/rld
-     * bootstrap, which is exactly what the previous run demonstrated.
-     */
 #ifdef IRIX_DIRECT_MAIN
+    /*
+     * Direct-main bypasses rld. Initialize libC and the internal desktop DSOs
+     * before fmserv uses their static state, and retain the Motif constructor
+     * needed by the Xt/Motif desktop clients. Other DSOs include graphics
+     * constructors that require SGI hardware mappings and are not safe here.
+    */
+    {
+        if (libcxx_init) {
+            IrixGuestCpu startup_cpu = cpu;
+            if (libcxx_gp)
+                cpu.gpr[28] = libcxx_gp;
+            fprintf(stderr, "IRIX direct-main libC DT_INIT: %08x gp=%08x\n",
+                    libcxx_init, libcxx_gp);
+            if (irix_guest_call(&rt, &cpu, libcxx_init) != 0) {
+                report_trap_context(&rt, &cpu);
+                return 2;
+            }
+            cpu = startup_cpu;
+        }
+        {
+            size_t i;
+            /* The manifest lists internal utility dependencies before clients. */
+            for (i = 1u; i < internal_init_count; ++i) {
+                IrixGuestCpu startup_cpu = cpu;
+                if (internal_gps[i])
+                    cpu.gpr[28] = internal_gps[i];
+                fprintf(stderr, "IRIX direct-main internal DSO DT_INIT: %08x gp=%08x\n",
+                        internal_inits[i], internal_gps[i]);
+                if (irix_guest_call(&rt, &cpu, internal_inits[i]) != 0) {
+                    report_trap_context(&rt, &cpu);
+                    return 2;
+                }
+                cpu = startup_cpu;
+            }
+            if (internal_init_count > 0u) {
+                IrixGuestCpu startup_cpu = cpu;
+                i = 0u; /* libimdApp depends on the other internal libraries. */
+                if (internal_gps[i])
+                    cpu.gpr[28] = internal_gps[i];
+                fprintf(stderr, "IRIX direct-main internal DSO DT_INIT: %08x gp=%08x\n",
+                        internal_inits[i], internal_gps[i]);
+                if (irix_guest_call(&rt, &cpu, internal_inits[i]) != 0) {
+                    report_trap_context(&rt, &cpu);
+                    return 2;
+                }
+                cpu = startup_cpu;
+            }
+        }
+        {
+            IrixGuestAddr motif_init = find_named(&rt, "vendorShellResolveConflicts");
+            if (motif_init) {
+                IrixGuestCpu startup_cpu = cpu;
+                fprintf(stderr, "IRIX direct-main Motif DT_INIT: %08x\n", motif_init);
+                if (irix_guest_call(&rt, &cpu, motif_init) != 0) {
+                    report_trap_context(&rt, &cpu);
+                    return 2;
+                }
+                cpu = startup_cpu;
+            }
+        }
+    }
     entry = find_named(&rt, "main");
     if (have_app_elf)
         cpu.gpr[28] = app_elf.gp_value;

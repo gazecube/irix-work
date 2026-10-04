@@ -7,6 +7,18 @@
 extern "C" {
 #endif
 
+typedef struct IrixMipsTranslatedFrame {
+    struct IrixMipsTranslatedFrame *previous;
+    IrixGuestAddr address;
+    uint32_t size;
+    IrixGuestAddr return_address;
+} IrixMipsTranslatedFrame;
+
+void irix_mips_interp_push_translated(IrixMipsTranslatedFrame *frame,
+                                      IrixGuestAddr address, uint32_t size,
+                                      IrixGuestAddr return_address);
+void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame);
+
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address);
 int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,

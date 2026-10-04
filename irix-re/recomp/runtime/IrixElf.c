@@ -59,6 +59,8 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
     uint16_t shnum;
     uint16_t machine;
     uint16_t i;
+    uint32_t dynamic_offset = 0;
+    uint32_t dynamic_size = 0;
     IrixGuestElfInfo info;
 
     memset(&info, 0, sizeof(info));
@@ -131,6 +133,10 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
 
         if (type == 6) /* PT_PHDR */
             info.phdr = vaddr;
+        else if (type == 2) { /* PT_DYNAMIC */
+            dynamic_offset = offset;
+            dynamic_size = filesz;
+        }
         else if (type == 3) { /* PT_INTERP */
             size_t n;
             if ((uint64_t)offset + filesz > file_size || filesz == 0) {
@@ -181,6 +187,21 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
             return -1;
         }
         memcpy(dst, file_data + offset, filesz);
+    }
+
+    if (dynamic_size && (uint64_t)dynamic_offset + dynamic_size <= file_size) {
+        uint32_t off;
+        for (off = 0; off + 8u <= dynamic_size; off += 8u) {
+            const unsigned char *dyn = file_data + dynamic_offset + off;
+            uint32_t tag = read_be32(dyn);
+            uint32_t value = read_be32(dyn + 4u);
+            if (tag == 0u) /* DT_NULL */
+                break;
+            if (tag == 12u) { /* DT_INIT */
+                info.init_entry = value;
+                break;
+            }
+        }
     }
 
     /*

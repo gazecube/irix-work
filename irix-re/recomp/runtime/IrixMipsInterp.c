@@ -18,6 +18,18 @@ extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
 extern IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt,
                                                      uint32_t size);
 
+static int irix_mips_trace_enabled(void)
+{
+    static int initialized;
+    static int enabled;
+    if (!initialized) {
+        const char *value = getenv("IRIX_MIPS_TRACE");
+        enabled = value && value[0] && strcmp(value, "0") != 0;
+        initialized = 1;
+    }
+    return enabled;
+}
+
 static uint64_t sx32(uint32_t v)
 {
     return (uint64_t)(int64_t)(int32_t)v;
@@ -207,6 +219,14 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x07:
             cpu->gpr[rd] = sx32((uint32_t)((int32_t)(uint32_t)cpu->gpr[rtno] >> ((uint32_t)cpu->gpr[rs] & 31u)));
+            break;
+        case 0x0a: /* MOVZ */
+            if (cpu->gpr[rtno] == 0)
+                cpu->gpr[rd] = cpu->gpr[rs];
+            break;
+        case 0x0b: /* MOVN */
+            if (cpu->gpr[rtno] != 0)
+                cpu->gpr[rd] = cpu->gpr[rs];
             break;
         case 0x10:
             cpu->gpr[rd] = cpu->hi;
@@ -1171,6 +1191,25 @@ int irix_mips_interp_should_force(IrixGuestAddr address)
     return 0;
 }
 
+static _Thread_local IrixMipsTranslatedFrame *translated_frame;
+
+void irix_mips_interp_push_translated(IrixMipsTranslatedFrame *frame,
+                                      IrixGuestAddr address, uint32_t size,
+                                      IrixGuestAddr return_address)
+{
+    frame->previous = translated_frame;
+    frame->address = address;
+    frame->size = size;
+    frame->return_address = return_address;
+    translated_frame = frame;
+}
+
+void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame)
+{
+    if (translated_frame == frame)
+        translated_frame = frame->previous;
+}
+
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address)
 {
@@ -1180,12 +1219,22 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     const uint64_t max_steps = UINT64_C(100000000);
     static unsigned xt_tm_repair_depth;
 
+    /* A generated function can hand an unrecognized interior branch to the
+     * interpreter after a nested jal has changed $ra. Its ABI return is the
+     * address captured when the translated function was entered, not that
+     * nested helper's live $ra. Otherwise interpretation runs into callers
+     * already active on the host stack and re-enters them recursively. */
+    if (translated_frame && translated_frame->size &&
+        address - translated_frame->address < translated_frame->size &&
+        rt->current_pc - translated_frame->address < translated_frame->size)
+        outer_ra = translated_frame->return_address;
+
     if (!mapped_exec(rt, address))
         return -1;
 
-    fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
-            address, (uint32_t)cpu->gpr[31]);
-
+    if (irix_mips_trace_enabled())
+        fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
+                address, (uint32_t)cpu->gpr[31]);
     while (!rt->trapped && steps++ < max_steps) {
         /*
          * SGI Xt translation-merge bring-up repair.
@@ -1481,10 +1530,11 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         }
                     }
 
-                    fprintf(stderr,
-                            "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
-                            "gp=%08x owner_gp=%08x\n",
-                            pc, target, (uint32_t)cpu->gpr[28], return_gp);
+                    if (irix_mips_trace_enabled())
+                        fprintf(stderr,
+                                "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
+                                "gp=%08x owner_gp=%08x\n",
+                                pc, target, (uint32_t)cpu->gpr[28], return_gp);
                     cpu->pc = target;
                     rt->current_pc = target;
                     cpu->gpr[0] = 0;

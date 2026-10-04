@@ -258,7 +258,10 @@ def render_function(cname, source, name, start, words):
       p(f'    if (branch_taken_{owner_addr:08x}) {{')
      else:
       p('    {')
-     if start<=target<end_addr:
+     # A call back to this function must enter through irix_guest_call so it
+     # gets its own local return stack.  A local goto models only an internal
+     # continuation and overflows on valid recursive libc routines.
+     if start<=target<end_addr and target!=start:
       if needs_local_link_stack:
        p('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
        p('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')

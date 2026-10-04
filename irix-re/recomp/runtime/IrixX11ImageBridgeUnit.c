@@ -159,13 +159,30 @@ static wchar_t *read_guest_wchars(IrixGuestRuntime *rt,IrixGuestAddr a,int n){wc
 static void bridge_XwcDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);int n=(int32_t)cpu->gpr[11];wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[10],n);if(d&&fs&&gc&&w)XwcDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],fs,gc,(int)cpu->gpr[8],(int)cpu->gpr[9],w,n);free(w);cpu->gpr[2]=0;}
 static void bridge_XwcTextEscapement(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[4]);int n=(int32_t)cpu->gpr[6];wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[5],n);int rc=(fs&&w)?XwcTextEscapement(fs,w,n):0;free(w);cpu->gpr[2]=(uint64_t)(int64_t)rc;}
 
+/* XwcTextExtents takes an XFontSet, wchar_t string and count.  SGI libX11's
+ * implementation dereferences the font set's guest-ABI-private methods, so
+ * translate the arguments and execute the equivalent operation with host
+ * Xlib, just as the multibyte bridge does for XmbTextExtents. */
+static void bridge_XwcTextExtents(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
+    XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[4]);
+    int n=(int32_t)cpu->gpr[6];
+    wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[5],n);
+    XRectangle ink,logical;
+    int rc=0;
+    memset(&ink,0,sizeof(ink)); memset(&logical,0,sizeof(logical));
+    if(fs&&w) rc=XwcTextExtents(fs,w,n,&ink,&logical);
+    if(cpu->gpr[7]){IrixGuestAddr a=(uint32_t)cpu->gpr[7];ew32(rt,a,(uint32_t)(int32_t)ink.x);ew32(rt,a+4u,(uint32_t)(int32_t)ink.y);ew32(rt,a+8u,(uint32_t)ink.width|((uint32_t)ink.height<<16));}
+    if(cpu->gpr[8]){IrixGuestAddr a=(uint32_t)cpu->gpr[8];ew32(rt,a,(uint32_t)(int32_t)logical.x);ew32(rt,a+4u,(uint32_t)(int32_t)logical.y);ew32(rt,a+8u,(uint32_t)logical.width|((uint32_t)logical.height<<16));}
+    free(w); cpu->gpr[2]=(uint32_t)rc;
+}
+
 IrixGuestFunction irix_x11_image_bridge_lookup(const char *name)
 {
     if(!name)return irix_x11_image_bridge_lookup_base(name);
 #define MAP(n) if(!strcmp(name,#n))return bridge_##n
     MAP(XPutImage); MAP(XCreateBitmapFromData); MAP(XGetImage); MAP(XQueryFont); MAP(XFreeFont); MAP(XCreatePixmapCursor); MAP(XDefaultScreenOfDisplay); MAP(XAllocColorCells);
     MAP(XNextEvent); MAP(XPeekEvent); MAP(XPutBackEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XCheckTypedWindowEvent); MAP(XCheckMaskEvent); MAP(XCheckIfEvent); MAP(XIfEvent); MAP(XSendEvent); MAP(XFilterEvent); MAP(XLookupString); MAP(XRefreshKeyboardMapping);
-    MAP(XSetCommand); MAP(XwcDrawString); MAP(XwcTextEscapement);
+    MAP(XSetCommand); MAP(XwcDrawString); MAP(XwcTextEscapement); MAP(XwcTextExtents);
 #undef MAP
     return irix_x11_image_bridge_lookup_base(name);
 }

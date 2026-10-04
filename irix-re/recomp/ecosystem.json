@@ -13,6 +13,12 @@
       "path": "usr/sbin/fm"
     },
     {
+      "name": "fmserv",
+      "prefix": "fmserv",
+      "kind": "runtime",
+      "path": "usr/lib/desktop/fmserv"
+    },
+    {
       "name": "fmprefs",
       "prefix": "fmprefs",
       "kind": "runtime",

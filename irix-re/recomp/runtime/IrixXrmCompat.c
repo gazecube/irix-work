@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #define IRIX_XRM_COMPAT_DB_BASE 0x72300000u
 #define IRIX_XRM_COMPAT_SEARCH_BASE 0x72310000u
@@ -34,10 +35,23 @@ static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 static const char *xrm_host_path(IrixGuestRuntime *rt, const char *path,
                                  char *buf, size_t bufsz)
 {
+    struct stat st;
     int n;
     if (!path) return 0;
     if (path[0] == '/' && rt && rt->rootfs && rt->rootfs[0]) {
+        size_t root_len = strlen(rt->rootfs);
+        /* Xt may already have expanded XAPPLRESDIR into a host path under
+           the staged tree. Do not prefix the guest root a second time. */
+        if (!strncmp(path, rt->rootfs, root_len) &&
+            (path[root_len] == '/' || path[root_len] == '\0'))
+            return path;
         n = snprintf(buf, bufsz, "%s%s", rt->rootfs, path);
+        if (n > 0 && (size_t)n < bufsz && stat(buf, &st) == 0)
+            return buf;
+        /* User resource files live in the real host home directory, outside
+           the staged guest root. Preserve that normal Xt lookup path. */
+        if (stat(path, &st) == 0)
+            return path;
         if (n > 0 && (size_t)n < bufsz)
             return buf;
     }

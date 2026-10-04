@@ -257,6 +257,11 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         compat_result(cpu, 0);
         return;
 
+    case SGI_NOHANG: /* SGI_NOHANG: disable NFS client hangs */
+        /* Linux has no process-wide equivalent to IRIX's NFS no-hang flag. */
+        compat_result(cpu, 0);
+        return;
+
     case SGI_USE_FP_BCOPY: /* SGI_USE_FP_BCOPY / SGI_FP_BCOPY */
         compat_result(cpu, 0);
         return;

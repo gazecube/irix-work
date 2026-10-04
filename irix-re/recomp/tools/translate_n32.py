@@ -166,6 +166,8 @@ def decode(addr, insn):
         if fn==0x04: return ['%s = %s;'%(reg(rd),sx32_expr('(uint32_t)%s << ((uint32_t)%s & 31u)'%(reg(rt),reg(rs))))],None
         if fn==0x06: return ['%s = %s;'%(reg(rd),sx32_expr('(uint32_t)%s >> ((uint32_t)%s & 31u)'%(reg(rt),reg(rs))))],None
         if fn==0x07: return ['%s = %s;'%(reg(rd),sx32_expr('(uint32_t)((int32_t)(uint32_t)%s >> ((uint32_t)%s & 31u))'%(reg(rt),reg(rs))))],None
+        if fn==0x0a: return ['if (%s == 0) %s = %s;'%(reg(rt),reg(rd),reg(rs))],None
+        if fn==0x0b: return ['if (%s != 0) %s = %s;'%(reg(rt),reg(rd),reg(rs))],None
         if fn==0x24: return ['%s = %s & %s;'%(reg(rd),reg(rs),reg(rt))],None
         if fn==0x26: return ['%s = %s ^ %s;'%(reg(rd),reg(rs),reg(rt))],None
         if fn==0x27: return ['%s = ~(%s | %s);'%(reg(rd),reg(rs),reg(rt))],None
@@ -694,7 +696,12 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
                         print('    if (branch_taken_%08x) {' % owner_addr)
                     else:
                         print('    {')
-                    if start <= target < start + size:
+                    # A recursive call to this function needs a new guest
+                    # activation.  Routing it through the local CFG would
+                    # keep appending to local_link_returns (for example,
+                    # libc::__flsbuf flushes a stream through itself) rather
+                    # than creating the callee's return state.
+                    if start <= target < start + size and target != start:
                         if needs_local_link_stack:
                             print('        if (local_link_depth >= sizeof(local_link_returns) / sizeof(local_link_returns[0])) {')
                             print('            irix_guest_trap(rt, cpu, 0xeeee0003u); return;')

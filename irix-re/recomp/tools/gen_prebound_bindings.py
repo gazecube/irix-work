@@ -7,7 +7,8 @@ STT_NOTYPE=0
 STT_OBJECT=1
 STT_FUNC=2
 
-def dyn_got(path):
+def dyn_symbols(path):
+    """Read all dynamic symbols, including exports without global GOT slots."""
     p=Path(path).read_bytes(); h=struct.unpack_from('>16sHHIIIIIHHHHHH',p,0); phoff,phentsz,phnum=h[5],h[9],h[10]
     ph=[struct.unpack_from('>IIIIIIII',p,phoff+i*phentsz) for i in range(phnum)]
     def voff(v):
@@ -23,15 +24,21 @@ def dyn_got(path):
     if 3 not in dyn or 0x7000000a not in dyn or 0x70000013 not in dyn: return {}
     got,local_gotno,gotsym,symtab,strtab,syment=dyn[3],dyn[0x7000000a],dyn[0x70000013],dyn[6],dyn[5],dyn[11]
     nsyms=dyn.get(0x70000011,0); out={}
-    for i in range(gotsym,nsyms):
+    for i in range(nsyms):
         off=voff(symtab+i*syment); n,v,z,info,other,sh=struct.unpack_from('>IIIBBH',p,off)
         if not n: continue
         so=voff(strtab+n); e=p.find(b'\0',so); name=p[so:e].decode('ascii','replace')
-        ge=got+(local_gotno+i-gotsym)*4
-        try: val=struct.unpack_from('>I',p,voff(ge))[0]
-        except KeyError: continue
+        ge=None; val=v
+        if i>=gotsym:
+            ge=got+(local_gotno+i-gotsym)*4
+            try: val=struct.unpack_from('>I',p,voff(ge))[0]
+            except KeyError: ge=None
         out[name]=dict(value=val,got=ge,type=info&15,bind=info>>4,shndx=sh,size=z,sym_value=v)
     return out
+
+def dyn_got(path):
+    return {name: row for name, row in dyn_symbols(path).items()
+            if row['got'] is not None}
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('stack_link_json'); ap.add_argument('bundles',nargs='+'); ap.add_argument('-o','--output',required=True)
@@ -41,16 +48,24 @@ def main():
     # must be allowed to satisfy libc's private _rld_* imports even when an
     # earlier image contributed an import-stub-shaped symbol with the same
     # name.
-    def_rank={}
+    def_rank={}; rld_fallback={}
     for bi,b in enumerate(bundles):
         for f in b['functions']:
             name=f['name']; addr=f['address']
             if not addr:
                 continue
+            # rld also exports libc-shaped placeholders such as atexit and
+            # _exithandle. Keep those as fallbacks, but let a real libc
+            # definition win when one exists.
+            if b.get('prefix') == 'irix_rld':
+                rld_fallback[name]=addr
+                continue
             old_rank=def_rank.get(name)
             if old_rank is None or bi>=old_rank:
                 defs[name]=addr
                 def_rank[name]=bi
+    for name,addr in rld_fallback.items():
+        defs.setdefault(name,addr)
     # Explicit runtime providers outrank auto-expanded DSOs regardless of
     # closure order.  Auto dependencies are appended after seed components,
     # so "last definition wins" alone can let a later recovered import stub
@@ -58,7 +73,9 @@ def main():
     for b in bundles:
         if b.get('prefix') == 'irix_rld':
             for f in b['functions']:
-                if f['address']:
+                if (f['address'] and
+                        (f['name'].startswith('_rld_') or
+                         f['name'].startswith('__rld_'))):
                     defs[f['name']] = f['address']
     for name,addr in link['globals'].items(): defs.setdefault(name,addr)
     defined_addrs={f['address'] for b in bundles for f in b['functions'] if f['address']}
@@ -73,10 +90,17 @@ def main():
     dso_data_defs={}
     dso_data_rank={}
     for bi,b in enumerate(bundles):
-        got=dyn_got(b['path'])
+        symbols=dyn_symbols(b['path'])
+        got={name: row for name, row in symbols.items()
+             if row['got'] is not None}
         bundle_gots.append(got)
-        for name,row in got.items():
-            if row['shndx']==0 or row['type']!=STT_OBJECT:
+        # DT_MIPS_GOTSYM partitions GOT users, not exported definitions.
+        # libXt's objectClass is before that boundary. Missing it binds
+        # libXm to the static Object copy, so _XmInitializeExtensions hooks
+        # the wrong class and DSO widgets skip _SG_XtInitialize entirely.
+        for name,row in symbols.items():
+            if (row['shndx']==0 or row['type']!=STT_OBJECT or
+                    row['bind'] not in (1, 2)):
                 continue
             candidate=row['sym_value'] or row['value']
             if not candidate:
@@ -86,11 +110,23 @@ def main():
                 dso_data_defs[name]=candidate
                 dso_data_rank[name]=bi
 
-    entries=[]; data_patches=[]
+    entries=[]; data_patches=[]; native_function_got_patches=[]
     for bi,b in enumerate(bundles):
         got=bundle_gots[bi]
+        owner_functions={f['address'] for f in b['functions'] if f['address']}
         for imp in b['imports']:
             name=imp['name']; addrs=[]; row=got.get(name)
+            # A prebound global GOT value can name a different import veneer
+            # in another DSO. imdFtrDB's open slot, for example, points at
+            # libC's _nsproc veneer. When this image has its own recovered
+            # veneer and a native bridge supplies the name, bind the GOT to
+            # that veneer so the call cannot be captured by the other import.
+            # Keep provider bindings for names without a native bridge.
+            if (row and row['got'] is not None and row['shndx']==0 and
+                    row['type']==STT_FUNC and imp['address'] in owner_functions and
+                    row['value'] != imp['address']):
+                native_function_got_patches.append(
+                    (row['got'], imp['address'], name, b['prefix'], row['value']))
             # st_value on an undefined ELF symbol is not necessarily a PLT
             # entry.  SGI prelinked N32 DSOs commonly leave the provider's
             # prebound address there.  Treating it as an owner-local stub
@@ -240,6 +276,9 @@ def main():
             q=json.dumps(name)
             label=json.dumps('native-target:'+name)
             w.write(f'fn=resolver?resolver({q}):0;if(fn)irix_guest_register_function(rt,0x{target:08x}u,fn,{label});\n')
+        for got_addr,veneer,name,owner,old in native_function_got_patches:
+            q=json.dumps(name)
+            w.write(f'fn=resolver?resolver({q}):0;if(fn&&irix_guest_ptr(rt,0x{got_addr:08x}u,4u))irix_guest_write32be(rt,0x{got_addr:08x}u,0x{veneer:08x}u); /* {owner}:{name}, was 0x{old:08x} */\n')
         w.write('}\n')
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt,IrixGuestDataResolver data_resolver,int prefer_dso_data){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0,dso_data_selected=0;IrixGuestAddr data_target;\n')
         for got_addr,core_target,dso_target,name,owner,old in data_patches:
@@ -262,7 +301,8 @@ def main():
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],
           'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing],
           'missing_unique':sorted({n for a,t,n,o in missing}),
-          'data_patches':[dict(got=a,core_target=ct,dso_target=dt,name=n,owner=o,old_value=old) for a,ct,dt,n,o,old in data_patches]}
+          'data_patches':[dict(got=a,core_target=ct,dso_target=dt,name=n,owner=o,old_value=old) for a,ct,dt,n,o,old in data_patches],
+          'native_function_got_patches':[dict(got=a,veneer=v,name=n,owner=o,old_value=old) for a,v,n,o,old in native_function_got_patches]}
     (out/'bindings.json').write_text(json.dumps(data,indent=2)+'\n')
     print(f'addresses={len(by)} guest_resolved={len(resolved)} guest_missing={len(missing)} unique_guest_missing={len({n for a,t,n,o in missing})} native_targets={len(target_entries)} data_patches={len(data_patches)}')
 if __name__=='__main__': main()

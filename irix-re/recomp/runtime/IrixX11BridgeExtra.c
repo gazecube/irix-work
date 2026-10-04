@@ -4,8 +4,12 @@
 #include <X11/Xlib.h>
 #include <X11/Xlibint.h>
 #include <X11/XKBlib.h>
+#include <X11/cursorfont.h>
 #include <X11/Xresource.h>
 #include <X11/Xutil.h>
+#ifdef IRIX_HAVE_XEXT
+#include <X11/extensions/shape.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1303,6 +1307,10 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     fprintf(stderr,
             "IRIX XNextEvent: type=%d window=%08x -> guest=%08x\n",
             e.type, (uint32_t)e.xany.window, out);
+    if (e.type == MapRequest)
+        fprintf(stderr, "IRIX MapRequest: parent=%08x client=%08x\n",
+                (uint32_t)e.xmaprequest.parent,
+                (uint32_t)e.xmaprequest.window);
     cpu->gpr[2] = 0;
 }
 
@@ -1342,7 +1350,7 @@ static void bridge_XLookupString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         for (i = 0; i < rc; ++i)
             fprintf(stderr, "%02x", (unsigned char)buf[i]);
     }
-    fputc('\\n', stderr);
+    fputc('\n', stderr);
     cpu->gpr[2] = (uint32_t)rc;
 }
 
@@ -1705,15 +1713,52 @@ static void bridge_XSetInputFocus(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2]=d?(uint32_t)XSetInputFocus(d,(Window)(uint32_t)cpu->gpr[5],(int)cpu->gpr[6],(Time)(uint32_t)cpu->gpr[7]):0;
 }
 
+static Cursor g_irix_root_pointer_cursor;
+static Display *g_irix_root_pointer_display;
+
 static void bridge_XCreateFontCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
     unsigned shape = (unsigned)cpu->gpr[5];
-    Cursor cursor = d ? XCreateFontCursor(d, shape) : None;
+    Cursor cursor = None;
+    Font font = None;
+    XColor fg, bg;
+    const char *source = "cursor-font";
+
+    /* SGI XCreateFontCursor creates a cursor-font glyph, which can later be
+       recolored with XRecolorCursor.  Modern host Xlib may instead return an
+       Xcursor theme pixmap (for example "left_ptr"), whose colors are baked
+       in and cannot be recolored.  Use the core cursor font to preserve the
+       IRIX behavior. */
+    if (d && shape < 65535u && (font = XLoadFont(d, "cursor")) != None) {
+        memset(&fg, 0, sizeof(fg));
+        memset(&bg, 0, sizeof(bg));
+        fg.pixel = BlackPixel(d, DefaultScreen(d));
+        fg.flags = DoRed | DoGreen | DoBlue;
+        bg.pixel = WhitePixel(d, DefaultScreen(d));
+        bg.red = bg.green = bg.blue = 65535u;
+        bg.flags = DoRed | DoGreen | DoBlue;
+        cursor = XCreateGlyphCursor(d, font, font, (unsigned short)shape,
+                                    (unsigned short)(shape + 1u), &fg, &bg);
+        XUnloadFont(d, font);
+    }
+    if (d && !cursor) {
+        source = "host-fallback";
+        cursor = XCreateFontCursor(d, shape);
+    }
     (void)rt;
     fprintf(stderr,
-            "IRIX XCreateFontCursor: shape=%u -> cursor=%08lx\n",
-            shape, (unsigned long)cursor);
+            "IRIX XCreateFontCursor: shape=%u source=%s -> cursor=%08lx\n",
+            shape, source, (unsigned long)cursor);
+    /* 4Dwm's pointerColor resource creates/recolors its normal pointer but
+       the SGI startup path never defines that cursor on the root window.
+       Keep this opt-in so ordinary X clients retain Xlib semantics.  Defer
+       definition until XRecolorCursor so the active root cursor has final RGB. */
+    if (d && cursor && shape == 2u &&
+        getenv("IRIX_DEFINE_ROOT_POINTER_CURSOR")) {
+        g_irix_root_pointer_cursor = cursor;
+        g_irix_root_pointer_display = d;
+    }
     cpu->gpr[2] = (uint32_t)cursor;
 }
 
@@ -1736,7 +1781,22 @@ static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     bg.red = irix_guest_read16be(rt, bg_addr + 4u); bg.green = irix_guest_read16be(rt, bg_addr + 6u); bg.blue = irix_guest_read16be(rt, bg_addr + 8u);
     bg.flags = (char)irix_guest_read8(rt, bg_addr + 10u); bg.pad = (char)irix_guest_read8(rt, bg_addr + 11u);
     if (rt->trapped) { cpu->gpr[2] = 0; return; }
-    cpu->gpr[2] = (uint32_t)XRecolorCursor(d, (Cursor)(uint32_t)cpu->gpr[5], &fg, &bg);
+    {
+        Cursor cursor = (Cursor)(uint32_t)cpu->gpr[5];
+        int rc = XRecolorCursor(d, cursor, &fg, &bg);
+        cpu->gpr[2] = (uint32_t)rc;
+        if (d == g_irix_root_pointer_display &&
+            cursor == g_irix_root_pointer_cursor &&
+            getenv("IRIX_DEFINE_ROOT_POINTER_CURSOR")) {
+            Window root = DefaultRootWindow(d);
+            XDefineCursor(d, root, cursor);
+            XSync(d, False);
+            fprintf(stderr,
+                    "IRIX 4Dwm recolored root pointer: cursor=%08lx fg=%04x/%04x/%04x bg=%04x/%04x/%04x\n",
+                    (unsigned long)cursor, fg.red, fg.green, fg.blue,
+                    bg.red, bg.green, bg.blue);
+        }
+    }
 }
 
 WINDOW_CALL1(bridge_XFreeCursor, XFreeCursor(d,(Cursor)(uint32_t)cpu->gpr[5]))
@@ -1803,6 +1863,145 @@ static void bridge_XChangeProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     free(longs);
 }
 
+#ifdef IRIX_HAVE_XEXT
+static uint32_t shape_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                            unsigned int index)
+{
+    IrixGuestAddr sp;
+    if (index < 8u) return (uint32_t)cpu->gpr[4u + index];
+    sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    return (uint32_t)irix_guest_read64be(
+        rt, sp + (IrixGuestAddr)((index - 8u) * 8u));
+}
+
+static void bridge_XShapeQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    IrixGuestAddr event_out = shape_arg32(rt, cpu, 1u);
+    IrixGuestAddr error_out = shape_arg32(rt, cpu, 2u);
+    int event_base = 0, error_base = 0;
+    Bool rc = d ? XShapeQueryExtension(d, &event_base, &error_base) : False;
+    wr32(rt, event_out, (uint32_t)event_base);
+    wr32(rt, error_out, (uint32_t)error_base);
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XShapeSelectInput(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    Window window = (Window)shape_arg32(rt, cpu, 1u);
+    unsigned long mask = (unsigned long)shape_arg32(rt, cpu, 2u);
+    if (d) XShapeSelectInput(d, window, mask);
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_XShapeQueryExtents(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    Window window = (Window)shape_arg32(rt, cpu, 1u);
+    IrixGuestAddr bounding_shaped_out = shape_arg32(rt, cpu, 2u);
+    IrixGuestAddr x_bounding_out = shape_arg32(rt, cpu, 3u);
+    IrixGuestAddr y_bounding_out = shape_arg32(rt, cpu, 4u);
+    IrixGuestAddr w_bounding_out = shape_arg32(rt, cpu, 5u);
+    IrixGuestAddr h_bounding_out = shape_arg32(rt, cpu, 6u);
+    IrixGuestAddr clip_shaped_out = shape_arg32(rt, cpu, 7u);
+    IrixGuestAddr x_clip_out = shape_arg32(rt, cpu, 8u);
+    IrixGuestAddr y_clip_out = shape_arg32(rt, cpu, 9u);
+    IrixGuestAddr w_clip_out = shape_arg32(rt, cpu, 10u);
+    IrixGuestAddr h_clip_out = shape_arg32(rt, cpu, 11u);
+    Bool bounding_shaped = False, clip_shaped = False;
+    int x_bounding = 0, y_bounding = 0, x_clip = 0, y_clip = 0;
+    unsigned int w_bounding = 0, h_bounding = 0, w_clip = 0, h_clip = 0;
+    Status rc = 0;
+
+    if (d && !rt->trapped)
+        rc = XShapeQueryExtents(d, window, &bounding_shaped,
+            &x_bounding, &y_bounding, &w_bounding, &h_bounding,
+            &clip_shaped, &x_clip, &y_clip, &w_clip, &h_clip);
+    if (rc) {
+        wr32(rt, bounding_shaped_out, (uint32_t)bounding_shaped);
+        wr32(rt, x_bounding_out, (uint32_t)x_bounding);
+        wr32(rt, y_bounding_out, (uint32_t)y_bounding);
+        wr32(rt, w_bounding_out, w_bounding);
+        wr32(rt, h_bounding_out, h_bounding);
+        wr32(rt, clip_shaped_out, (uint32_t)clip_shaped);
+        wr32(rt, x_clip_out, (uint32_t)x_clip);
+        wr32(rt, y_clip_out, (uint32_t)y_clip);
+        wr32(rt, w_clip_out, w_clip);
+        wr32(rt, h_clip_out, h_clip);
+    }
+    cpu->gpr[2] = (uint32_t)rc;
+}
+
+static void bridge_XShapeCombineShape(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    if (d && !rt->trapped)
+        XShapeCombineShape(d,
+            (Window)shape_arg32(rt, cpu, 1u),
+            (int32_t)shape_arg32(rt, cpu, 2u),
+            (int32_t)shape_arg32(rt, cpu, 3u),
+            (int32_t)shape_arg32(rt, cpu, 4u),
+            (Window)shape_arg32(rt, cpu, 5u),
+            (int32_t)shape_arg32(rt, cpu, 6u),
+            (int32_t)shape_arg32(rt, cpu, 7u));
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_XShapeCombineRectangles(IrixGuestRuntime *rt,
+                                           IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    IrixGuestAddr rect_addr = shape_arg32(rt, cpu, 5u);
+    int nrects = (int32_t)shape_arg32(rt, cpu, 6u);
+    XRectangle *rects = NULL;
+    int i;
+
+    if (d && !rt->trapped && nrects > 0) {
+        if (nrects > 65536 ||
+            !irix_guest_ptr(rt, rect_addr, (size_t)nrects * 8u)) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+        rects = (XRectangle *)calloc((size_t)nrects, sizeof(*rects));
+        if (!rects) {
+            cpu->gpr[2] = 0;
+            return;
+        }
+        for (i = 0; i < nrects; ++i) {
+            IrixGuestAddr r = rect_addr + (IrixGuestAddr)i * 8u;
+            rects[i].x = (short)(int16_t)irix_guest_read16be(rt, r);
+            rects[i].y = (short)(int16_t)irix_guest_read16be(rt, r + 2u);
+            rects[i].width = irix_guest_read16be(rt, r + 4u);
+            rects[i].height = irix_guest_read16be(rt, r + 6u);
+        }
+        if (!rt->trapped)
+            XShapeCombineRectangles(d, (Window)shape_arg32(rt, cpu, 1u),
+                (int)shape_arg32(rt, cpu, 2u),
+                (int32_t)shape_arg32(rt, cpu, 3u),
+                (int32_t)shape_arg32(rt, cpu, 4u), rects, nrects,
+                (int)shape_arg32(rt, cpu, 7u),
+                (int)shape_arg32(rt, cpu, 8u));
+        free(rects);
+    }
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_XShapeCombineMask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    if (d && !rt->trapped)
+        XShapeCombineMask(d,
+            (Window)shape_arg32(rt, cpu, 1u),
+            (int32_t)shape_arg32(rt, cpu, 2u),
+            (int32_t)shape_arg32(rt, cpu, 3u),
+            (int32_t)shape_arg32(rt, cpu, 4u),
+            (Pixmap)shape_arg32(rt, cpu, 5u),
+            (int32_t)shape_arg32(rt, cpu, 6u));
+    cpu->gpr[2] = 0;
+}
+#endif
+
 void irix_x11_extra_init(IrixGuestRuntime *rt)
 {
     memset(&g_x11,0,sizeof(g_x11));
@@ -1835,6 +2034,10 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XDrawLine); MAP(XDrawRectangle); MAP(XFillRectangle); MAP(XCopyArea); MAP(XGetGeometry); MAP(XTranslateCoordinates);
     MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
     MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
+#ifdef IRIX_HAVE_XEXT
+    MAP(XShapeQueryExtension); MAP(XShapeSelectInput); MAP(XShapeQueryExtents);
+    MAP(XShapeCombineShape); MAP(XShapeCombineRectangles); MAP(XShapeCombineMask);
+#endif
 #undef MAP
     return 0;
 }

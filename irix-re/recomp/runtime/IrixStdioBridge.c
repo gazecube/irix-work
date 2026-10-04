@@ -1,6 +1,7 @@
 #include "IrixStdioBridge.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
@@ -230,8 +231,34 @@ static void bridge_fgets(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr handle = (uint32_t)cpu->gpr[6];
     FILE *f = file_from_guest(rt, handle);
     char *dst = size > 0 ? (char *)irix_guest_ptr(rt, dst_addr, (size_t)size) : 0;
-    char *r = (f && dst) ? fgets(dst, size, f) : 0;
-    sync_file_by_addr(rt, handle);
+    char *r = 0;
+    if (f && dst) {
+        r = fgets(dst, size, f);
+        sync_file_by_addr(rt, handle);
+    } else if (dst && size > 1 && irix_guest_ptr(rt, handle, 16u)) {
+        /* SGI fopen may return a real guest FILE rather than a bridge slot.
+           Read its descriptor without host stdio buffering so the guest
+           stream's underlying file offset stays in sync. */
+        int fd = (int)irix_guest_read16be(rt, handle + 14u);
+        int n = 0;
+        while (fd >= 0 && fd != 0xffff && n < size - 1) {
+            char c;
+            ssize_t got = read(fd, &c, 1u);
+            if (got < 0 && errno == EINTR) continue;
+            if (got <= 0) {
+                uint8_t flag = irix_guest_read8(rt, handle + 12u);
+                irix_guest_write8(rt, handle + 12u,
+                                  flag | (got == 0 ? IRIX_IOEOF : IRIX_IOERR));
+                break;
+            }
+            dst[n++] = c;
+            if (c == '\n') break;
+        }
+        if (n) {
+            dst[n] = '\0';
+            r = dst;
+        }
+    }
     cpu->gpr[2] = r ? dst_addr : 0;
 }
 

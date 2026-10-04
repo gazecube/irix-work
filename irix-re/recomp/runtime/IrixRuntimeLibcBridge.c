@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <libgen.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
@@ -12,6 +13,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static IrixGuestRuntime *g_rt;
@@ -27,6 +29,46 @@ static const char *guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 static void ret_i32(IrixGuestCpu *cpu, int v)
 {
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)v;
+}
+
+static void bridge_dirname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *src = guest_cstr(rt, (IrixGuestAddr)cpu->gpr[4]);
+    char *copy;
+    char *result;
+    IrixGuestAddr out;
+    size_t n;
+
+    if (!src) { cpu->gpr[2] = 0; return; }
+    copy = strdup(src);
+    if (!copy) { cpu->gpr[2] = 0; return; }
+    result = dirname(copy);
+    n = strlen(result) + 1u;
+    out = irix_libc_guest_malloc((uint32_t)n);
+    if (out) {
+        char *dst = (char *)irix_guest_ptr(rt, out, n);
+        if (dst) memcpy(dst, result, n); else out = 0;
+    }
+    free(copy);
+    cpu->gpr[2] = out;
+}
+
+static void bridge_wait(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int status = 0;
+    pid_t pid = waitpid(-1, &status, 0);
+    if (pid < 0) {
+        irix_guest_write32be(rt, (IrixGuestAddr)cpu->gpr[4],
+                             (uint32_t)(int32_t)errno);
+        cpu->gpr[2] = UINT32_MAX;
+        cpu->gpr[7] = 1u;
+        return;
+    }
+    if ((uint32_t)cpu->gpr[4])
+        irix_guest_write32be(rt, (IrixGuestAddr)cpu->gpr[4],
+                             (uint32_t)status);
+    cpu->gpr[2] = (uint64_t)(int64_t)pid;
+    cpu->gpr[7] = 0u;
 }
 
 static IrixGuestAddr guest_tokenize(IrixGuestRuntime *rt, IrixGuestAddr start_addr,
@@ -385,7 +427,9 @@ void irix_runtime_libc_bridge_init(IrixGuestRuntime *rt)
 IrixGuestFunction irix_runtime_libc_bridge_lookup(const char *name)
 {
     if (!name) return 0;
+    if (!strcmp(name, "wait")) return bridge_wait;
     if (!strcmp(name, "__vec_delete2")) return bridge___vec_delete2;
+    if (!strcmp(name, "dirname")) return bridge_dirname;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(bzero);
     MAP(gettext); MAP(setcat); MAP(gettxt); MAP(setlocale);

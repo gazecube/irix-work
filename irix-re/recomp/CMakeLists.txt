@@ -97,6 +97,13 @@ if(X11_FOUND)
         irix_recomp_runtime
         X11::X11
     )
+    if(X11_Xext_LIB)
+        message(STATUS "Using host Xext: ${X11_Xext_LIB}")
+        target_compile_definitions(irix_recomp_x11_bridge PRIVATE IRIX_HAVE_XEXT=1)
+        target_link_libraries(irix_recomp_x11_bridge PUBLIC ${X11_Xext_LIB})
+    else()
+        message(WARNING "Host Xext development/runtime library not found; X Shape bridges will be disabled")
+    endif()
     if(IRIX_HOST_XT_LIBRARY)
         message(STATUS "Using host Xt: ${IRIX_HOST_XT_LIBRARY}")
         target_link_libraries(irix_recomp_x11_bridge PUBLIC ${IRIX_HOST_XT_LIBRARY})
@@ -451,7 +458,8 @@ if(IRIX_DEV_TREE)
                 if(_app_name STREQUAL "4dwm" OR
                    _app_name STREQUAL "wait4wm" OR
                    _app_name STREQUAL "toolchest" OR
-                   _app_name STREQUAL "fm")
+                   _app_name STREQUAL "fm" OR
+                   _app_name STREQUAL "fmserv")
                     set(_quick_target "irix_${_app_name}_quick_runner")
                     add_executable(${_quick_target} EXCLUDE_FROM_ALL
                         runtime/AppRunner.c)

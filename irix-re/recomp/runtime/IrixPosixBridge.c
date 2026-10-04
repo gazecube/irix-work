@@ -239,6 +239,11 @@ static void bridge_stat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+static void bridge_stat64(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge_stat(rt, cpu);
+}
+
 static void bridge_lstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *p = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -249,6 +254,11 @@ static void bridge_lstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, rc);
 }
 
+static void bridge_lstat64(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge_lstat(rt, cpu);
+}
+
 static void bridge_fstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr out = (uint32_t)cpu->gpr[5];
@@ -256,6 +266,11 @@ static void bridge_fstat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int rc = fstat((int)cpu->gpr[4], &st);
     if (rc == 0 && write_irix_stat64(rt, out, &st) != 0) rc = -1;
     ret_i32(cpu, rc);
+}
+
+static void bridge_fstat64(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    bridge_fstat(rt, cpu);
 }
 
 static void bridge_open(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -571,7 +586,8 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!name) return 0;
 #define MAP(n) if (!strcmp(name, #n)) return bridge_##n
     MAP(gethostname); MAP(getcwd); MAP(chdir); MAP(access); MAP(setreuid); MAP(setregid);
-    MAP(stat); MAP(lstat); MAP(fstat);
+    /* IRIX n32's stat64 uses the same 152-byte guest layout as stat here. */
+    MAP(stat); MAP(stat64); MAP(lstat); MAP(lstat64); MAP(fstat); MAP(fstat64);
     MAP(open); MAP(close); MAP(read); MAP(write); MAP(lseek);
     MAP(unlink); MAP(rmdir); MAP(mkdir); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
     MAP(chmod); MAP(chown); MAP(umask); MAP(dup); MAP(dup2); MAP(isatty);
