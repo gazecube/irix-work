@@ -1,0 +1,28 @@
+#!/bin/sh
+# X session launcher for the IRIX desktop recompilation.
+#
+# Run by a display manager (Ly, GDM, SDDM, ...) after login.  4Dwm becomes the
+# window manager for the real screen, so no other window manager may be
+# started, and the session ends when the IRIX session script exits.
+#
+#   IRIX_WORK      checkout containing the build tree (default below)
+#   IRIX_BUILD     build directory name under IRIX_WORK (default build-irix-re)
+set -u
+
+IRIX_WORK="${IRIX_WORK:-$HOME/Projects/irix-work}"
+IRIX_BUILD="${IRIX_BUILD:-build-irix-re}"
+session="$IRIX_WORK/$IRIX_BUILD/recomp/quick/irix-session"
+log="${XDG_CACHE_HOME:-$HOME/.cache}/irix-session.log"
+
+mkdir -p "$(dirname "$log")"
+
+if [ ! -x "$session" ]; then
+    echo "irix-desktop-session: missing $session" >&2
+    echo "irix-desktop-session: build the tree first (see irix-re/BUILDING.md)" >&2
+    exit 1
+fi
+
+# The display manager provides DISPLAY and XAUTHORITY.  Pass the session
+# environment through unchanged; the launcher script derives the guest display
+# transport from DISPLAY.
+exec "$session" >>"$log" 2>&1

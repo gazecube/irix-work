@@ -5383,6 +5383,43 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 
     /*
+     * 4Dwm outline feedback: avoid a visible erase/draw gap.
+     *
+     * DrawOutline/FlashOutline XOR-erase the old rubber-band outline and draw
+     * the new one, and the original code ends each batch with XSync.  On IRIX
+     * that is harmless, but nested servers such as Xephyr present their
+     * framebuffer when the server goes idle, so the sync between the erase and
+     * the redraw produces a frame with no outline (visible flicker on every
+     * move and resize).  Only for XSync(dpy, False) issued directly from those
+     * two routines, skip the round trip, so the erase and the redraw reach the
+     * server together and in order.  IRIX_4DWM_OUTLINE_SYNC=1 restores the original synchronous
+     * behaviour.
+     */
+    if (entry && entry->name && address == entry->address &&
+        cpu->gpr[5] == 0) {
+        static int outline_flush_only = -1;
+        const char *sym = strrchr(entry->name, ':');
+        uint32_t ra = (uint32_t)cpu->gpr[31];
+
+        sym = sym ? sym + 1 : entry->name;
+        if (outline_flush_only < 0) {
+            const char *v = getenv("IRIX_4DWM_OUTLINE_SYNC");
+            outline_flush_only = !(v && v[0] && v[0] != '0');
+        }
+        if (outline_flush_only && strcmp(sym, "XSync") == 0 &&
+            ((ra >= 0x1003da84u && ra < 0x1003de10u) ||
+             (ra >= 0x10070110u && ra < 0x100705dcu))) {
+            /*
+             * Leave the requests queued: Xlib flushes on the next reply
+             * (the QueryPointer that follows) or event wait, so erase and
+             * redraw leave in one write.
+             */
+            cpu->gpr[2] = 1; /* XSync returns Status True */
+            return 0;
+        }
+    }
+
+    /*
      * Xt per-display continuity repair.
      *
      * The real SGI Xt per-display record is created successfully by

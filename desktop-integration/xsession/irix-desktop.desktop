@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=IRIX Desktop
+Comment=IRIX 6.5 desktop recompiled for x86-64 Linux (4Dwm, Toolchest, File Manager)
+Exec=/usr/local/libexec/irix-desktop-session
+TryExec=/usr/local/libexec/irix-desktop-session
+DesktopNames=IRIX
