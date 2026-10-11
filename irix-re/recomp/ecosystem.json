@@ -228,6 +228,12 @@
       "prefix": "iconcatalog",
       "kind": "runtime",
       "path": "usr/sbin/iconcatalog"
+    },
+    {
+      "name": "iconcatalogedit",
+      "prefix": "iconcatalogedit",
+      "kind": "runtime",
+      "path": "usr/sbin/iconcatalogedit"
     }
   ],
   "shared_components": [
