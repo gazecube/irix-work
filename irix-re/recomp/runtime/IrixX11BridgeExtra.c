@@ -1860,6 +1860,19 @@ static uint32_t shape_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         rt, sp + (IrixGuestAddr)((index - 8u) * 8u));
 }
 
+/*
+ * X Double Buffer extension: Status XdbeQueryExtension(dpy, &major, &minor).
+ * None of the DBE request builders are bridged, and the guest libXext
+ * implementation would walk the Display shadow, which has no extension
+ * table.  Report the extension as unavailable; clients fall back to
+ * single-buffered drawing.
+ */
+static void bridge_XdbeQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    cpu->gpr[2] = 0;
+}
+
 static void bridge_XShapeQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
@@ -2021,6 +2034,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
     MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
 #ifdef IRIX_HAVE_XEXT
+    MAP(XdbeQueryExtension);
     MAP(XShapeQueryExtension); MAP(XShapeSelectInput); MAP(XShapeQueryExtents);
     MAP(XShapeCombineShape); MAP(XShapeCombineRectangles); MAP(XShapeCombineMask);
 #endif
