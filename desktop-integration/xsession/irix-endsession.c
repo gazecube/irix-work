@@ -70,17 +70,28 @@ static int confirm(const char *display, const char *root)
                    "-default", "No", "-buttons", "No:1,Yes:0",
                    "Do you want to log out now?", NULL };
 
+    /* Toolchest hands children an almost empty environment; xconfirm needs
+     * the same guest display transport the session launcher sets up. */
+    setenv("IRIX_RECOMP_ROOT", root, 0);
+    if (display[0] == ':') {
+        char guest_display[256];
+        snprintf(guest_display, sizeof(guest_display), "unix/%s", display);
+        setenv("IRIX_GUEST_DISPLAY", guest_display, 0);
+    }
+    setenv("IRIX_XT_XM_STABILITY", "0", 0);
     snprintf(xconfirm, sizeof(xconfirm), "%s/usr/bin/X11/xconfirm", root);
     reply[0] = '\0';
     rc = run(a1, reply, sizeof(reply));
-    if (rc >= 0 && rc != 126 && rc != 127) {
+    if (rc >= 0 && rc != 126 && rc != 127 && rc != 255) {
         /* xconfirm ran and the user answered (or dismissed it: empty reply,
          * which is "no").  Never ask a second question. */
         char *nl = strchr(reply, '\n');
         if (nl) *nl = '\0';
         return rc == 0 && strcmp(reply, "Yes") == 0;
     }
-    /* xconfirm could not run at all: fall back to xmessage (exit 0 = Yes). */
+    /* xconfirm could not run (not found, killed, or exited 255 on a startup
+     * failure such as a missing display transport): fall back to xmessage
+     * (exit 0 = Yes) so a broken dialog never silently cancels Log Out. */
     return run(a2, NULL, 0) == 0;
 }
 
