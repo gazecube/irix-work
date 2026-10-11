@@ -53,8 +53,6 @@ static std::string filetypeRoot()
     static const char *const roots[] = {
         "/usr/lib/filetype",
         "/usr/share/sgi/filetype",
-        "/opt/MaXX/usr/lib/filetype",
-        "/opt/MaXX/share/filetype",
         0
     };
     for (int i = 0; roots[i]; ++i)

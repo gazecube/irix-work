@@ -5,7 +5,6 @@ find_path(SGM_MOTIF_INCLUDE_DIR
     HINTS
         /usr/local/include
         /usr/include
-        /opt/MaXX/include
 )
 
 find_library(SGM_MOTIF_LIBRARY
@@ -15,8 +14,6 @@ find_library(SGM_MOTIF_LIBRARY
         /usr/local/lib
         /usr/lib64
         /usr/lib
-        /opt/MaXX/lib64
-        /opt/MaXX/lib
 )
 
 find_library(SGM_XT_LIBRARY
@@ -26,8 +23,6 @@ find_library(SGM_XT_LIBRARY
         /usr/local/lib
         /usr/lib64
         /usr/lib
-        /opt/MaXX/lib64
-        /opt/MaXX/lib
 )
 
 find_library(SGM_X11_LIBRARY
@@ -37,8 +32,6 @@ find_library(SGM_X11_LIBRARY
         /usr/local/lib
         /usr/lib64
         /usr/lib
-        /opt/MaXX/lib64
-        /opt/MaXX/lib
 )
 
 if(SGM_MOTIF_INCLUDE_DIR AND SGM_MOTIF_LIBRARY AND SGM_XT_LIBRARY AND SGM_X11_LIBRARY)

@@ -3,7 +3,6 @@ find_path(IMDICONPANEL_MOTIF_INCLUDE_DIR
     HINTS
         /usr/local/include
         /usr/include
-        /opt/MaXX/include
 )
 
 find_library(IMDICONPANEL_MOTIF_LIBRARY
@@ -13,8 +12,6 @@ find_library(IMDICONPANEL_MOTIF_LIBRARY
         /usr/local/lib
         /usr/lib64
         /usr/lib
-        /opt/MaXX/lib64
-        /opt/MaXX/lib
 )
 
 find_library(IMDICONPANEL_XT_LIBRARY
@@ -24,8 +21,6 @@ find_library(IMDICONPANEL_XT_LIBRARY
         /usr/local/lib
         /usr/lib64
         /usr/lib
-        /opt/MaXX/lib64
-        /opt/MaXX/lib
 )
 
 if(IMDICONPANEL_MOTIF_INCLUDE_DIR AND

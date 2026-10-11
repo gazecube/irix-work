@@ -11,7 +11,6 @@ else()
         HINTS
             /usr/local/include
             /usr/include
-            /opt/MaXX/include
     )
 
     find_library(FM_MOTIF_LIBRARY
@@ -21,8 +20,6 @@ else()
             /usr/local/lib
             /usr/lib64
             /usr/lib
-            /opt/MaXX/lib64
-            /opt/MaXX/lib
     )
     find_library(FM_XT_LIBRARY
         NAMES Xt libXt
@@ -31,8 +28,6 @@ else()
             /usr/local/lib
             /usr/lib64
             /usr/lib
-            /opt/MaXX/lib64
-            /opt/MaXX/lib
     )
     find_library(FM_X11_LIBRARY
         NAMES X11 libX11
@@ -41,8 +36,6 @@ else()
             /usr/local/lib
             /usr/lib64
             /usr/lib
-            /opt/MaXX/lib64
-            /opt/MaXX/lib
     )
 
     if(FM_MOTIF_INCLUDE_DIR AND FM_MOTIF_LIBRARY AND
@@ -62,10 +55,9 @@ else()
 endif()
 
 if(TARGET fm)
-    # MaXX ships its own libSgm.so.1 with the same historical SONAME as our
-    # reconstruction.  The reconstructed library now owns SgThumbWheel as a
-    # native widget as well as the ImdViewPanel superclass symbols.  Keep it
-    # ahead of MaXX for this executable.
+    # The reconstructed libSgm owns SgThumbWheel as a native widget as well
+    # as the ImdViewPanel superclass symbols; resolve it from the sibling
+    # build directory first.
     if(TARGET Sgm)
         set_property(TARGET fm PROPERTY
             BUILD_RPATH "$ORIGIN/../libSgm:$ORIGIN/../libimdApp")
@@ -219,11 +211,8 @@ if(TARGET imdIconPanel)
     endif()
 
     # RE: libimdIconPanel directly references the historical
-    # sgVisualDrawingAreaWidgetClass data symbol. MaXX also ships a
-    # libSgm.so.1, but that compatibility library does not provide this
-    # reconstructed symbol. Keep our sibling libSgm first here exactly as fm
-    # already does, otherwise the dynamic loader can bind libimdIconPanel to
-    # MaXX's libSgm and fail before main().
+    # sgVisualDrawingAreaWidgetClass data symbol, which only our sibling
+    # libSgm provides; resolve it first exactly as fm does.
     if(TARGET Sgm)
         target_link_libraries(iid-desktop PRIVATE Sgm)
         set_property(TARGET iid-desktop PROPERTY
