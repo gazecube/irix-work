@@ -50,3 +50,12 @@ Local, untracked edits this relies on:
           no-label     f.separator
           "Host Apps"  f.menu HostApps
       }
+
+## Claude runner
+
+`irix-claude` launches `claude-desktop` and fixes its window for 4Dwm:
+removes the Motif "no decorations" hint (so 4Dwm draws a real titlebar) and
+mirrors `_NET_WM_NAME` into `WM_NAME` (4Dwm ignores the former). Add to
+`~/.auxchestrc`:
+
+    "Claude" f.exec.sh "/path/to/desktop-integration/xsession/irix-claude"

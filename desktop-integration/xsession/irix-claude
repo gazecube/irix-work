@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Launch Claude Desktop in the IRIX session with a proper 4Dwm titlebar.
+
+Claude (Electron) asks for no window decorations through _MOTIF_WM_HINTS and
+draws its own titlebar, so 4Dwm gives it no frame; it also leaves WM_NAME
+empty (it only sets _NET_WM_NAME), so a frame would have no title text.
+
+This starts claude-desktop (a no-op focus request if it is already running)
+and then keeps its top-level windows fixed up:
+  * _MOTIF_WM_HINTS      -> decorations ALL (4Dwm adds the IRIX frame)
+  * WM_NAME / WM_ICON_NAME -> mirrored from _NET_WM_NAME
+
+Usage: irix-claude [claude-desktop args...]
+Environment: DISPLAY (required), IRIX_CLAUDE_WM_CLASS (default
+com.anthropic.Claude), IRIX_CLAUDE_BIN (default claude-desktop).
+"""
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+from Xlib import X, Xatom, display, error
+
+WM_CLASS = os.environ.get("IRIX_CLAUDE_WM_CLASS", "com.anthropic.Claude").lower()
+BIN = os.environ.get("IRIX_CLAUDE_BIN", "claude-desktop")
+MWM_HINTS_DECORATIONS = 2
+MWM_DECOR_ALL = 1
+
+
+def claude_running():
+    return subprocess.run(["pgrep", "-x", os.path.basename(BIN)],
+                          capture_output=True).returncode == 0
+
+
+def client_windows(root):
+    """Yield (window, wm_class) for every window below root with a WM_CLASS
+    that matches (clients sit inside the window manager's frames)."""
+    stack = [root]
+    depth = {root.id: 0}
+    while stack:
+        w = stack.pop()
+        try:
+            kids = w.query_tree().children
+        except error.XError:
+            continue
+        for c in kids:
+            depth[c.id] = depth[w.id] + 1
+            try:
+                cls = c.get_wm_class()
+            except error.XError:
+                cls = None
+            if cls and any(WM_CLASS in part.lower() for part in cls):
+                yield c
+            if depth[c.id] < 4:
+                stack.append(c)
+
+
+def fix(d, w):
+    A = d.intern_atom
+    mh = A("_MOTIF_WM_HINTS")
+    prop = w.get_full_property(mh, 0)
+    want = [MWM_HINTS_DECORATIONS, 0, MWM_DECOR_ALL, 0, 0]
+    if not prop or list(prop.value)[:5] != want:
+        w.change_property(mh, mh, 32, want)
+    nn = w.get_full_property(A("_NET_WM_NAME"), 0)
+    if nn and nn.value:
+        title = nn.value.decode("utf-8", "replace") if isinstance(nn.value, bytes) else str(nn.value)
+        cur = w.get_full_property(Xatom.WM_NAME, 0)
+        if not cur or not cur.value or cur.value != title.encode("latin-1", "replace"):
+            data = title.encode("latin-1", "replace")
+            w.change_property(Xatom.WM_NAME, Xatom.STRING, 8, data)
+            w.change_property(Xatom.WM_ICON_NAME, Xatom.STRING, 8, data)
+
+
+def main():
+    if not os.environ.get("DISPLAY"):
+        print("irix-claude: DISPLAY not set", file=sys.stderr)
+        return 2
+    exe = shutil.which(BIN)
+    if not exe:
+        print("irix-claude: %s not found" % BIN, file=sys.stderr)
+        return 2
+    was_running = claude_running()
+    subprocess.Popen([exe] + sys.argv[1:], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    d = display.Display()
+    root = d.screen().root
+    deadline = time.time() + (5 if was_running else 60)
+    seen = False
+    while True:
+        try:
+            found = False
+            for w in client_windows(root):
+                found = True
+                try:
+                    fix(d, w)
+                except error.XError:
+                    pass
+            d.sync()
+            seen = seen or found
+        except error.XError:
+            pass
+        if seen and not claude_running():
+            return 0
+        if not seen and time.time() > deadline:
+            return 0
+        time.sleep(1.0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
