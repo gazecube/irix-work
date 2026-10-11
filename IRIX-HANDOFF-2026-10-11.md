@@ -128,3 +128,31 @@ Launcher: `DISPLAY=:1 build-irix-re/recomp/quick/irix-session`.
 - Next step: deterministic repro + a write watch on the corrupted word (the
   object at 0x300cbed0 in the failing run) to catch the writer's PC, or add an
   allocator debug mode (poison on free, canaries, overlap check on alloc).
+
+## Update 4: tu toolkit (xconfirm / xwsh) and Log Out
+- Log Out: `irix-session --end [-f]` (confirm via xconfirm or xmessage,
+  `tellwm end_session`, SIGUSR1 to the session script via
+  `$XDG_RUNTIME_DIR/irix-session-<display>.pid`). Toolchest entry in
+  IRIX-TREE system.chestrc must be `f.checkexec.sh "$IRIX_SESSION_SCRIPT --end"`
+  (local, untracked). Verified on a nested server.
+- tu toolkit fixes (commit 1aaede138):
+  1. Guest loads from address 0..0x3fff read as zero (IRIX "usenull");
+     `IRIX_NULL_PAGE=0` disables. Fixed xconfirm's tuFont::getFont crash.
+  2. Runner now calls the executable's DT_INIT before main (static C++ ctors,
+     e.g. xwsh wshApp creating its tuXExec); `IRIX_SKIP_APP_INIT=1` disables.
+  3. `_getpty` falls back to host posix_openpt when /dev/ptc is absent (the
+     irix_spty module does not match the running kernel).
+- Runners only pick up AppRunner.c/bridge changes when relinked. Only xwsh,
+  fm, xconfirm, tellwm, 4Dwm, iconcatalog, iconcatalogedit, desktop, fmprefs
+  were relinked this session; the rest (toolchest, background, ...) still
+  carry older AppRunner/bridge code. Rebuild with
+  `cmake --build build-irix-re --target <irix_*_runner>`; after a reboot
+  delete zero-byte objects in `build-irix-re/recomp/generated-*/obj` first.
+- xwsh status: window opens and draws; shell launch fails
+  ("can't start command", it tries /usr/bin/ksh via the generic runner,
+  which has hung in rld for dynamic guest programs). Needs: working shell
+  exec, host font path with `~/.cache/irix-fonts` (SGI .pcf.Z decompressed;
+  set via Xlib set_font_path, xset +fp did not work), default geometry
+  (`XWsh*geometry: 80x24`; plain xwsh computes 0x0).
+- Xephyr/session test notes: stale 4Dwm from earlier sessions can linger;
+  never `pkill -f` with a pattern present in your own command line.
