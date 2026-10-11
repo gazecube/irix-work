@@ -50,6 +50,28 @@ done
 export DISPLAY="$display"
 export IRIX_RECOMP_ROOT="$root"
 export IRIX_GUEST_EXEC_RUNNER="$guest_runner"
+
+# Saved desktop preferences (background, ...) live as X resource files in
+# ~/.desktop-<host>/ (4DWm, Desktop).  On IRIX they were merged into the
+# resource database by the desktop libraries; here nothing reads them back,
+# so a background chosen in one session was lost at the next login.  Merge
+# them into one file and let Xt pick it up through XENVIRONMENT.
+desktop_dir="$HOME/.desktop-$(uname -n 2>/dev/null)"
+if [ -d "$desktop_dir" ]; then
+    res_tag=$(printf '%s' "$display" | tr -c 'A-Za-z0-9' _)
+    desktop_resources="${XDG_RUNTIME_DIR:-/tmp}/irix-desktop-resources-$res_tag"
+    {
+        [ -n "${XENVIRONMENT:-}" ] && [ -r "$XENVIRONMENT" ] && cat "$XENVIRONMENT"
+        for f in 4DWm Desktop; do
+            [ -r "$desktop_dir/$f" ] && cat "$desktop_dir/$f"
+        done
+    } >"$desktop_resources" 2>/dev/null
+    if [ -s "$desktop_resources" ]; then
+        export XENVIRONMENT="$desktop_resources"
+    else
+        rm -f "$desktop_resources"
+    fi
+fi
 # Keep session startup on the validated Xt/Motif path.  The runtime's legacy
 # stability fallback defaults on, but it broadly repairs missing Xt/Xm state
 # and can hide regressions; callers may still opt in explicitly.
@@ -113,7 +135,7 @@ cleanup()
     [ -n "${wm_pid:-}" ] && kill "$wm_pid" 2>/dev/null || true
 }
 echo $$ > "$pidfile"
-trap 'rm -f "$pidfile"; cleanup' EXIT
+trap 'rm -f "$pidfile" "${desktop_resources:-}"; cleanup' EXIT
 trap 'exit 0' INT TERM USR1
 
 echo "IRIX session: preparing icon visuals"
