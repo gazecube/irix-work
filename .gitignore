@@ -1,0 +1,32 @@
+# Build trees and archives
+/build/
+/build-*/
+/build-*.tar.zst*
+*.tar.zst
+*.tar.zst.part-*
+
+# SGI runtime/development trees are proprietary and huge; never commit them
+/IRIX-TREE/
+/holyshit/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Kernel module build output (sources like *.c/Makefile stay tracked)
+irix-re/kernel/**/*.o
+irix-re/kernel/**/*.ko
+irix-re/kernel/**/*.cmd
+irix-re/kernel/**/.*.cmd
+irix-re/kernel/**/*.mod
+irix-re/kernel/**/*.mod.c
+irix-re/kernel/**/*.mod.o
+irix-re/kernel/.module-common.o
+irix-re/kernel/Module.symvers
+irix-re/kernel/modules.order
+
+# Screenshots, logs and scratch output
+/*_scrot*.png
+/*.log
+*.log
+/out=*
