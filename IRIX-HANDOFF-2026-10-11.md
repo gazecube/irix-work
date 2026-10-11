@@ -79,3 +79,27 @@ Launcher: `DISPLAY=:1 build-irix-re/recomp/quick/irix-session`.
   (0x10030ebc, `this+0x18` NULL) called from `tuTopLevel::open`, right after
   `tuTopLevel::setInitialSize width=0 height=0` from `wshTopLevel::setHints`.
   Not yet investigated.
+
+## Update 2: Icon Catalog pages
+- Pages are generated, not shipped: products' install-time exitops run
+  `iconbookedit -add "Category:File Name:<path>" -syspage <Page>`.
+  `desktop-integration/iconcatalog/gen-pages.py` parses those out of idb files
+  (`~/Downloads/irix-install-sets`: 88 idbs, 105 entries, 12 pages, 69 whose
+  target exists in the tree) plus host XDG .desktop files, and applies them
+  with the native runner `build-irix-re/recomp/root/usr/sbin/iconcatalogedit`
+  (added to ecosystem.json; the generic runner busy-loops in rld for it).
+  Entries on disk are absolute symlinks in
+  `IRIX-TREE/usr/lib/desktop/iconcatalog/pages/C/<Page>/`.
+- Icon Catalog starts and shows all 12 page tabs but every page is empty
+  ("0 file(s) shown"). FAM is NOT the problem (it connects to the native fam on
+  127.0.0.1:840 like fm does). strace shows it never stats entries inside the
+  system page directories and only views the (empty) per-user page
+  directories `~/.desktop-<host>/iconcatalog/pages/<Page>`; a symlink placed
+  there did not appear either. Next: find where CatalogApp/ImdCatalog builds
+  the view model (createPageList is at 0x1000cf50-0xd4 in iconcatalog;
+  libimdApp/libimdModel for the model), or compare with fm opening the same
+  directory in a healthy session.
+- fm gets very slow/wedged when opened on huge host directories such as
+  `/usr/bin` (thousands of entries, per-file type lookups through FAM); a
+  full session restart clears it. Not a crash.
+- XDG `.desktop` host apps would be launched by reference; untested.
