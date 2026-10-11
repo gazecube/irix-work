@@ -22,9 +22,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* Run argv; if capture is non-NULL read up to cap-1 bytes of stdout into it.
- * Returns the exit status, or -1 if it could not run. */
-static int run(char *const argv[], char *capture, size_t cap)
+/* Run argv; if capture is non-NULL read up to cap-1 bytes of the given
+ * output stream (1 = stdout, 2 = stderr) into it.  Returns the exit status,
+ * or -1 if it could not run. */
+static int run(char *const argv[], char *capture, size_t cap, int stream)
 {
     int fds[2] = { -1, -1 };
     pid_t pid;
@@ -37,11 +38,14 @@ static int run(char *const argv[], char *capture, size_t cap)
         return -1;
     if (pid == 0) {
         if (capture) {
-            dup2(fds[1], 1);
+            dup2(fds[1], stream);
             close(fds[0]);
             close(fds[1]);
         }
-        freopen("/dev/null", "w", stderr);
+        if (!capture || stream != 2)
+            freopen("/dev/null", "w", stderr);
+        if (capture && stream == 2)
+            freopen("/dev/null", "w", stdout);
         execvp(argv[0], argv);
         _exit(127);
     }
@@ -81,18 +85,27 @@ static int confirm(const char *display, const char *root)
     setenv("IRIX_XT_XM_STABILITY", "0", 0);
     snprintf(xconfirm, sizeof(xconfirm), "%s/usr/bin/X11/xconfirm", root);
     reply[0] = '\0';
-    rc = run(a1, reply, sizeof(reply));
+    rc = run(a1, reply, sizeof(reply), 2);
     if (rc >= 0 && rc != 126 && rc != 127 && rc != 255) {
         /* xconfirm ran and the user answered (or dismissed it: empty reply,
          * which is "no").  Never ask a second question. */
-        char *nl = strchr(reply, '\n');
-        if (nl) *nl = '\0';
-        return rc == 0 && strcmp(reply, "Yes") == 0;
+        /* The answer arrives on stderr, next to the runner's own status
+         * line, so look for a line that is exactly the button label. */
+        char *line = reply, *nl;
+        int yes = 0;
+        while (line && *line) {
+            nl = strchr(line, '\n');
+            if (nl) *nl = '\0';
+            if (strcmp(line, "Yes") == 0)
+                yes = 1;
+            line = nl ? nl + 1 : 0;
+        }
+        return rc == 0 && yes;
     }
     /* xconfirm could not run (not found, killed, or exited 255 on a startup
      * failure such as a missing display transport): fall back to xmessage
      * (exit 0 = Yes) so a broken dialog never silently cancels Log Out. */
-    return run(a2, NULL, 0) == 0;
+    return run(a2, NULL, 0, 1) == 0;
 }
 
 int main(int argc, char **argv)
@@ -115,7 +128,7 @@ int main(int argc, char **argv)
         return 1;
 
     snprintf(tellwm, sizeof(tellwm), "%s/usr/bin/X11/tellwm", root);
-    (void)run(tw, NULL, 0);
+    (void)run(tw, NULL, 0, 1);
     sleep(1);
 
     for (i = 0; display[i] && j + 1 < sizeof(tag); ++i)

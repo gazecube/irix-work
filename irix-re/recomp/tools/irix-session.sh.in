@@ -80,11 +80,12 @@ if [ "${1:-}" = "--end" ]; then
         # plain Xlib dialog so a stray click can never end the session.
         reply=$(guest_exec /usr/bin/X11/xconfirm -display "$display" \
             -header Confirm -icon question -B No -b Yes \
-            -t "Do you want to log out now?" 2>/dev/null)
+            -t "Do you want to log out now?" 2>&1 >/dev/null)
         rc=$?
         if [ "$rc" -lt 126 ]; then
             # xconfirm ran; an empty reply means it was dismissed.
-            [ "$rc" -eq 0 ] && [ "$reply" = "Yes" ] || exit 1
+            # The answer is on stderr, beside the runner's own status line.
+            [ "$rc" -eq 0 ] && printf '%s\n' "$reply" | grep -qx Yes || exit 1
         elif command -v xmessage >/dev/null 2>&1; then
             xmessage -display "$display" -center -default No \
                 -buttons No:1,Yes:0 "Do you want to log out now?" || exit 1
