@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@
 #define IRIX_POSIX_TMP_SIZE 0x00100000u
 #define IRIX_POSIX_DIR_MAX 64u
 #define IRIX_POSIX_DIRENT_SIZE 280u
+#define IRIX_L_CUSERID 9u
 
 /* IRIX/SVR4 open(2) flag values. */
 #define IRIX_O_NDELAY   0x0004
@@ -587,6 +589,39 @@ static void bridge_getlogin(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = a;
 }
 
+static void bridge_cuserid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const struct passwd *pw = getpwuid(geteuid());
+    IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    char *guest;
+    size_t length;
+
+    if (!pw || !pw->pw_name) {
+        errno = ENOENT;
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    length = strlen(pw->pw_name);
+    if (length >= IRIX_L_CUSERID) {
+        errno = ERANGE;
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    if (!out)
+        out = tmp_alloc(IRIX_L_CUSERID);
+    guest = out ? (char *)irix_guest_ptr(rt, out, IRIX_L_CUSERID) : 0;
+    if (!guest) {
+        errno = out ? EFAULT : ENOMEM;
+        cpu->gpr[2] = 0;
+        return;
+    }
+
+    memcpy(guest, pw->pw_name, length + 1u);
+    cpu->gpr[2] = out;
+}
+
 static void bridge_strerror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = strerror((int)(int32_t)cpu->gpr[4]);
@@ -643,12 +678,7 @@ static void bridge_sigprocmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
      * LaunchAutoApps path calls sigprocmask(SIG_NOP, NULL, &oldmask).
      */
     if (!set_addr || how == 0) {
-        fprintf(stderr,
-                "IRIX sigprocmask: how=%d set=%08x old=%08x "
-                "mask=%08x,%08x,%08x,%08x\n",
-                how, set_addr, old_addr,
-                g_irix_sigmask[0], g_irix_sigmask[1],
-                g_irix_sigmask[2], g_irix_sigmask[3]);
+        (void)0;
         ret_i32(cpu, 0);
         return;
     }
@@ -678,12 +708,7 @@ static void bridge_sigprocmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    fprintf(stderr,
-            "IRIX sigprocmask: how=%d set=%08x old=%08x "
-            "mask=%08x,%08x,%08x,%08x\n",
-            how, set_addr, old_addr,
-            g_irix_sigmask[0], g_irix_sigmask[1],
-            g_irix_sigmask[2], g_irix_sigmask[3]);
+    (void)0;
     ret_i32(cpu, 0);
 }
 
@@ -709,7 +734,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     MAP(opendir); MAP(readdir); MAP(closedir);
     MAP(unlink); MAP(rmdir); MAP(mkdir); MAP(rename); MAP(link); MAP(symlink); MAP(readlink);
     MAP(chmod); MAP(chown); MAP(umask); MAP(dup); MAP(dup2); MAP(isatty);
-    MAP(sleep); MAP(usleep); MAP(time); MAP(uname); MAP(getpagesize); MAP(sysconf); MAP(getlogin);
+    MAP(sleep); MAP(usleep); MAP(time); MAP(uname); MAP(getpagesize); MAP(sysconf); MAP(getlogin); MAP(cuserid);
     MAP(sigprocmask);
     MAP(strerror);
 #undef MAP

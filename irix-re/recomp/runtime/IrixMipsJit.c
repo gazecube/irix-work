@@ -36,12 +36,8 @@ typedef struct IrixMipsJitState {
     uint64_t fault_t9;
     uint64_t fault_gp;
     uint64_t fault_sp;
-    uint64_t trace_ra;
-    IrixGuestAddr trace_ra_pc;
-    int trace_ra_valid;
     IrixGuestAddr shadow_ra[4096];
     size_t shadow_ra_depth;
-    int trace_code;
 } IrixMipsJitState;
 
 static const int gpr_regs[32] = {
@@ -221,32 +217,7 @@ static void shadow_return_hook(uc_engine *uc, uint64_t address,
     rd = (insn >> 11) & 31u;
     fn = insn & 63u;
 
-    /*
-     * Narrow rld startup trace.  This region contains the continuation that
-     * receives the RI-recovered syscall result and the epilogue currently
-     * restoring RA=0.  Keep it local so we can identify the real failing
-     * operation without enabling the global instruction tracer.
-     */
-    if ((pc >= 0x0fb71040u && pc <= 0x0fb710d8u) ||
-        (pc >= 0x0fb70e80u && pc <= 0x0fb70f20u) ||
-        (pc >= 0x0fb833e0u && pc <= 0x0fb83408u)) {
-        uint64_t v0 = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, sp = 0, t9 = 0;
-        (void)uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
-        (void)uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
-        (void)uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
-        (void)uc_reg_read(uc, UC_MIPS_REG_A2, &a2);
-        (void)uc_reg_read(uc, UC_MIPS_REG_A3, &a3);
-        (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
-        (void)uc_reg_read(uc, UC_MIPS_REG_T9, &t9);
-        fprintf(stderr,
-                "IRIX rld startup trace: pc=%08x insn=%08x "
-                "v0=%08x a0-a3=%08x,%08x,%08x,%08x "
-                "sp=%08x ra=%08x t9=%08x shadow_depth=%zu\n",
-                pc, insn, (uint32_t)v0,
-                (uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3,
-                (uint32_t)sp, (uint32_t)ra64, (uint32_t)t9,
-                s->shadow_ra_depth);
-    }
+    
 
     /* JAL always links to pc+8. */
     if (op == 0x03u) {
@@ -305,61 +276,32 @@ static void shadow_return_hook(uc_engine *uc, uint64_t address,
             return;
         }
 
-        if (!jit_guest_exec_mapped(s, ra) &&
-            jit_guest_exec_mapped(s, expected)) {
+        /*
+         * An interpreter fallback can execute several nested returns without
+         * passing through this hook.  If the architectural $ra is still a
+         * valid executable address but matches an older shadow entry, discard
+         * the stale frames above it.  Keep the architectural return target;
+         * the shadow stack is only a repair aid, never authority over a valid
+         * guest $ra.
+         */
+        if (jit_guest_exec_mapped(s, ra)) {
+            size_t i = s->shadow_ra_depth;
+            while (i && s->shadow_ra[i - 1u] != ra)
+                --i;
+            if (i)
+                s->shadow_ra_depth = i - 1u;
+            else
+                s->shadow_ra_depth = 0;
+            return;
+        }
+
+        if (jit_guest_exec_mapped(s, expected)) {
             uint64_t repaired = (uint64_t)(int64_t)(int32_t)expected;
-            fprintf(stderr,
-                    "IRIX JIT HACK: repairing bogus jr ra at pc=%08x "
-                    "ra=%08x -> %08x shadow_depth=%zu\n",
-                    pc, ra, expected, s->shadow_ra_depth);
+            (void)0;
             (void)uc_reg_write(uc, UC_MIPS_REG_RA, &repaired);
             --s->shadow_ra_depth;
         }
     }
-}
-
-static void trace_code_hook(uc_engine *uc, uint64_t address,
-                            uint32_t size, void *opaque)
-{
-    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
-    IrixGuestAddr pc = (IrixGuestAddr)(uint32_t)address;
-    uint64_t ra = 0, sp = 0;
-
-    (void)size;
-    (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
-    if (uc_reg_read(uc, UC_MIPS_REG_RA, &ra) == UC_ERR_OK) {
-        if (s->trace_ra_valid && ra != s->trace_ra) {
-            uint32_t prev_word = 0;
-            IrixGuestAddr load_addr = 0;
-            if (irix_guest_ptr(s->rt, s->trace_ra_pc, 4u))
-                prev_word = irix_guest_read32be(s->rt, s->trace_ra_pc);
-
-            /*
-             * If the instruction that changed RA was LD ra,imm(sp), show
-             * the exact guest address it loaded.  This uses the live Unicorn
-             * SP, not the runtime CPU snapshot.
-             */
-            if ((prev_word >> 26) == 0x37u &&
-                ((prev_word >> 21) & 31u) == 29u &&
-                ((prev_word >> 16) & 31u) == 31u) {
-                int16_t imm = (int16_t)(prev_word & 0xffffu);
-                load_addr = (IrixGuestAddr)((uint32_t)sp +
-                                             (int32_t)imm);
-            }
-
-            fprintf(stderr,
-                    "IRIX JIT RA change: after_pc=%08x insn=%08x "
-                    "ra:%08x->%08x next_pc=%08x live_sp=%08x "
-                    "load_addr=%08x\n",
-                    s->trace_ra_pc, prev_word,
-                    (uint32_t)s->trace_ra, (uint32_t)ra, pc,
-                    (uint32_t)sp, load_addr);
-        }
-        s->trace_ra = ra;
-        s->trace_ra_pc = pc;
-        s->trace_ra_valid = 1;
-    }
-    s->last_pc = pc;
 }
 
 static void trap_instruction_hook(uc_engine *uc, uint64_t address,
@@ -423,11 +365,7 @@ static void trap_instruction_hook(uc_engine *uc, uint64_t address,
     s->stop_address = take ? pc : pc + 4u;
     s->stop_reason = take ? IRIX_JIT_STOP_TRAP_TAKEN
                           : IRIX_JIT_STOP_TRAP_SKIP;
-    if (s->trace_code) {
-        fprintf(stderr,
-                "IRIX JIT trap shim: pc=%08x insn=%08x take=%d rs=%08x rt=%08x\n",
-                pc, insn, take, (uint32_t)rsv, (uint32_t)rtv);
-    }
+    
     (void)uc_emu_stop(uc);
 }
 
@@ -597,45 +535,6 @@ static bool invalid_memory_hook(uc_engine *uc, uc_mem_type type,
     return false;
 }
 
-static void trace_stack_write_hook(uc_engine *uc, uc_mem_type type,
-                                   uint64_t address, int size,
-                                   int64_t value, void *opaque)
-{
-    IrixMipsJitState *s = (IrixMipsJitState *)opaque;
-    uint64_t pc = 0, sp = 0, ra = 0;
-    uint64_t uvalue = (uint64_t)value;
-    int interesting = 0;
-
-    (void)type;
-
-    /*
-     * Current failing frame restores RA from 0x7fdfe128.  Also report any
-     * guest stack write whose value is 0x1000 so we can catch the producer
-     * if the exact frame shifts slightly between runs.
-     */
-    if (address <= UINT64_C(0x7fdfe128) &&
-        address + (uint64_t)size > UINT64_C(0x7fdfe128))
-        interesting = 1;
-    if (address >= UINT64_C(0x7f000000) &&
-        address < UINT64_C(0x80000000) &&
-        (uint32_t)uvalue == 0x00001000u)
-        interesting = 1;
-
-    if (!interesting)
-        return;
-
-    (void)uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
-    (void)uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
-    (void)uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-
-    fprintf(stderr,
-            "IRIX JIT stack write: pc=%08x addr=%08x size=%d "
-            "value=%016llx sp=%08x ra=%08x last_pc=%08x\n",
-            (uint32_t)pc, (uint32_t)address, size,
-            (unsigned long long)uvalue,
-            (uint32_t)sp, (uint32_t)ra, s->last_pc);
-}
-
 static int install_native_hooks(IrixMipsJitState *s)
 {
     size_t i;
@@ -718,7 +617,6 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
     status = 0x24000030u;
     (void)uc_reg_write(s->uc, UC_MIPS_REG_CP0_STATUS, &status);
 
-    s->trace_code = getenv("IRIX_JIT_TRACE") != 0;
 
     err = uc_hook_add(s->uc, &hook, UC_HOOK_BLOCK,
                       (void *)block_hook, s, 1, 0);
@@ -745,22 +643,12 @@ static IrixMipsJitState *jit_state(IrixGuestRuntime *rt)
     if (err != UC_ERR_OK)
         goto fail;
 
-    if (s->trace_code) {
-        err = uc_hook_add(s->uc, &hook, UC_HOOK_CODE,
-                          (void *)trace_code_hook, s, 1, 0);
-        if (err != UC_ERR_OK)
-            goto fail;
-    }
+    
     err = uc_hook_add(s->uc, &hook, UC_HOOK_INTR,
                       (void *)interrupt_hook, s, 1, 0);
     if (err != UC_ERR_OK)
         goto fail;
-    if (s->trace_code) {
-        err = uc_hook_add(s->uc, &hook, UC_HOOK_MEM_WRITE,
-                          (void *)trace_stack_write_hook, s, 1, 0);
-        if (err != UC_ERR_OK)
-            goto fail;
-    }
+    
     err = uc_hook_add(s->uc, &hook, UC_HOOK_MEM_UNMAPPED,
                       (void *)invalid_memory_hook, s, 1, 0);
     if (err != UC_ERR_OK)
@@ -854,7 +742,6 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         s->interrupt_gpr_valid = 0;
         s->last_block = 0;
         s->last_pc = 0;
-        s->trace_ra_valid = 0;
         s->fault_address = 0;
         s->fault_type = 0;
         s->fault_ra = 0;
@@ -863,26 +750,9 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         s->fault_sp = 0;
         pc = cpu->pc;
 
-        if (s->trace_code && irix_guest_ptr(rt, pc, 16u)) {
-            fprintf(stderr,
-                    "IRIX JIT enter pc=%08x words=%08x,%08x,%08x,%08x status=%08x\n",
-                    pc,
-                    irix_guest_read32be(rt, pc + 0u),
-                    irix_guest_read32be(rt, pc + 4u),
-                    irix_guest_read32be(rt, pc + 8u),
-                    irix_guest_read32be(rt, pc + 12u),
-                    0x24000030u);
-        }
+        
 
-        if (s->trace_code && pc >= 0x0fb71670u && pc <= 0x0fb71690u &&
-            irix_guest_ptr(rt, 0x0fb71670u, 64u)) {
-            unsigned k;
-            fprintf(stderr, "IRIX JIT memset-loop context:");
-            for (k = 0; k < 16u; ++k)
-                fprintf(stderr, " %08x",
-                        irix_guest_read32be(rt, 0x0fb71670u + k * 4u));
-            fprintf(stderr, "\n");
-        }
+        
 
         err = uc_emu_start(s->uc, pc, return_pc, 0, 0);
         if (sync_cpu_from_unicorn(s) != 0) {
@@ -901,17 +771,7 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             for (i = 1; i < 32u; ++i)
                 cpu->gpr[i] = s->interrupt_gpr[i];
             cpu->gpr[0] = 0;
-            if (s->trace_code) {
-                fprintf(stderr,
-                        "IRIX JIT interrupt snapshot: intno=%u v0=%08x "
-                        "a0-a3=%08x,%08x,%08x,%08x\n",
-                        s->interrupt_no,
-                        (uint32_t)cpu->gpr[2],
-                        (uint32_t)cpu->gpr[4],
-                        (uint32_t)cpu->gpr[5],
-                        (uint32_t)cpu->gpr[6],
-                        (uint32_t)cpu->gpr[7]);
-            }
+            
         }
 
         if (s->stop_reason == IRIX_JIT_STOP_TRAP_SKIP) {
@@ -1026,6 +886,38 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 rt->current_pc = ipc;
             }
 
+            if (s->interrupt_no == 20u && irix_guest_ptr(rt, ipc, 8u)) {
+                unsigned op = word >> 26;
+                unsigned rs = (word >> 21) & 31u;
+                unsigned rtno = (word >> 16) & 31u;
+                uint32_t delay = irix_guest_read32be(rt, ipc + 4u);
+                int branch = op == 0x04u || op == 0x05u ||
+                             op == 0x06u || op == 0x07u ||
+                             (op >= 0x14u && op <= 0x17u);
+                int take = 0;
+
+                /* A NOP delay slot has no observable effect, so ordinary
+                   and branch-likely forms share this exact fast shim. */
+                if (branch && delay == 0u) {
+                    switch (op) {
+                    case 0x04u: case 0x14u:
+                        take = cpu->gpr[rs] == cpu->gpr[rtno]; break;
+                    case 0x05u: case 0x15u:
+                        take = cpu->gpr[rs] != cpu->gpr[rtno]; break;
+                    case 0x06u: case 0x16u:
+                        take = (int64_t)cpu->gpr[rs] <= 0; break;
+                    case 0x07u: case 0x17u:
+                        take = (int64_t)cpu->gpr[rs] > 0; break;
+                    }
+                    cpu->pc = take
+                        ? ipc + 4u + (IrixGuestAddr)((int32_t)(int16_t)(word & 0xffffu) << 2)
+                        : ipc + 8u;
+                    rt->current_pc = cpu->pc;
+                    rt->fault_addr = 0;
+                    continue;
+                }
+            }
+
             {
                 uint32_t next_word = 0;
                 uint32_t prev1 = 0, prev2 = 0;
@@ -1117,11 +1009,7 @@ int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     IrixGuestAddr expected =
                         s->shadow_ra[s->shadow_ra_depth - 1u];
                     if (jit_guest_exec_mapped(s, expected)) {
-                        fprintf(stderr,
-                                "IRIX JIT: RI fallback repairing ra=%08x -> %08x "
-                                "shadow_depth=%zu\n",
-                                (uint32_t)cpu->gpr[31], expected,
-                                s->shadow_ra_depth);
+                        (void)0;
                         cpu->gpr[31] =
                             (uint64_t)(int64_t)(int32_t)expected;
                         --s->shadow_ra_depth;

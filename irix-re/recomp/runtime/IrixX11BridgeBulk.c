@@ -88,9 +88,7 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_bulk.display_count++;
     g_bulk.guest_display[i] = guest;
     g_bulk.host_display[i] = XOpenDisplay(name);
-    fprintf(stderr,
-            "IRIX X11 bulk fallback: opened secondary host Display for unknown guest=%08x\\n",
-            guest);
+    (void)0;
     return g_bulk.host_display[i];
 }
 
@@ -377,11 +375,7 @@ static void bridge_XGetWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         wr32(rt,out+84,(uint32_t)a.override_redirect);
         wr32(rt,out+88,gs);
 
-        fprintf(stderr,
-                "IRIX XGetWindowAttributes: window=%08x depth=%d visual=%08x "
-                "visualid=%08lx screen=%d guest_screen=%08x colormap=%08lx\\n",
-                (uint32_t)cpu->gpr[5],a.depth,gv,(unsigned long)vid,
-                screen_num,gs,(unsigned long)a.colormap);
+        
     }
     cpu->gpr[2]=(uint32_t)ok;
 }
@@ -485,13 +479,7 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if(list) XFree(list);
     wr32(rt,nitems_return,(uint32_t)n);
     cpu->gpr[2]=out;
-    fprintf(stderr,
-            "IRIX XGetVisualInfo: guest_display=%08x mask=%08lx "
-            "tmpl=%08x visualid=%08lx screen=%d depth=%d class=%d "
-            "n=%d out=%08x\\n",
-            (uint32_t)cpu->gpr[4], (unsigned long)mask, tmpl_addr,
-            (unsigned long)tmpl.visualid, tmpl.screen, tmpl.depth, tmpl.class,
-            n, out);
+    (void)0;
 }
 
 static void bridge_XSetCloseDownMode(IrixGuestRuntime *rt, IrixGuestCpu *cpu)

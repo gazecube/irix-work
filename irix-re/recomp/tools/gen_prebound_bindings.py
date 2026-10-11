@@ -212,20 +212,6 @@ def main():
             data_by[got_addr]=e
     data_patches=sorted(data_by.values())
 
-    for trace_name in (
-        'applicationShellWidgetClass',
-        'topLevelShellWidgetClass',
-        'sessionShellWidgetClass',
-        'shellWidgetClass',
-        'widgetClass',
-        'objectClass',
-    ):
-        core_target=link['globals'].get(trace_name,0)
-        dso_target=dso_data_defs.get(trace_name,0)
-        if core_target or dso_target:
-            print(f'DATA BIND TRACE {trace_name}: core=0x{core_target:08x} dso=0x{dso_target:08x}',
-                  file=sys.stderr)
-
     resolved=sorted(e for e in by.values() if e[1]); missing=sorted(e for e in by.values() if not e[1]); all_entries=sorted(by.values())
 
     # Fail the build rather than reaching runtime with a private rld import
@@ -236,14 +222,9 @@ def main():
         for f in b['functions'] if f['address']
     }
     if '_rld_new_interface' in rld_defs:
-        expected = rld_defs['_rld_new_interface']
         bad = [e for e in missing if e[2] == '_rld_new_interface']
-        bound = [e for e in resolved if e[2] == '_rld_new_interface']
-        print(f'RLD BIND TRACE provider=0x{expected:08x} resolved={bound} missing={bad}', file=sys.stderr)
         if bad:
             raise SystemExit('_rld_new_interface remains unresolved despite explicit irix_rld provider')
-    else:
-        print('RLD BIND TRACE: irix_rld bundle has no _rld_new_interface definition', file=sys.stderr)
     target_entries=sorted({(target,name) for addr,target,name,owner in resolved if target})
     missing_index={addr:i for i,(addr,target,name,owner) in enumerate(missing)}
     out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
@@ -283,9 +264,13 @@ def main():
         w.write('void register_irix_prebound_imports(IrixGuestRuntime *rt,IrixGuestDataResolver data_resolver,int prefer_dso_data){size_t i,j;size_t native_addresses=0,unresolved_addresses=0,native_names=0,unresolved_names=0,dso_data_selected=0;IrixGuestAddr data_target;\n')
         for got_addr,core_target,dso_target,name,owner,old in data_patches:
             q=json.dumps(name)
-            w.write(f'data_target=prefer_dso_data?0x{dso_target:08x}u:0x{core_target:08x}u;')
+            # Runtime-owned compatibility globals (errno, getopt state, etc.)
+            # must point at the storage used by their native bridge.  Choosing
+            # a guest libc copy first makes bridge_getopt() update one optarg
+            # while translated code reads another.
+            w.write(f'data_target=data_resolver?data_resolver({q}):0;')
+            w.write(f'if(!data_target)data_target=prefer_dso_data?0x{dso_target:08x}u:0x{core_target:08x}u;')
             w.write(f'if(!data_target)data_target=prefer_dso_data?0x{core_target:08x}u:0x{dso_target:08x}u;')
-            w.write(f'if(!data_target)data_target=data_resolver?data_resolver({q}):0;')
             if dso_target:
                 w.write(f'if(prefer_dso_data&&data_target==0x{dso_target:08x}u)++dso_data_selected;')
             w.write(f'if(data_target&&irix_guest_ptr(rt,0x{got_addr:08x}u,4u))irix_guest_write32be(rt,0x{got_addr:08x}u,data_target); /* {owner}:{name}, was 0x{old:08x}, core 0x{core_target:08x}, dso 0x{dso_target:08x} */\n')
@@ -295,8 +280,6 @@ def main():
         w.write('  for(j=0;j<i;++j)if(strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;\n')
         w.write('  if(j==i){if(missing_imports[i].native)++native_names;else++unresolved_names;}\n')
         w.write('}\n')
-        w.write(f'fprintf(stderr,"IRIX import closure: guest-resolved=%zu native-resolved=%zu unresolved=%zu unique-native=%zu unique-unresolved=%zu data-patches=%zu dso-data-selected=%zu\\n",(size_t){len(resolved)}u,native_addresses,unresolved_addresses,native_names,unresolved_names,(size_t){len(data_patches)}u,dso_data_selected);\n')
-        w.write('if(unresolved_names){fprintf(stderr,"IRIX unresolved imports:");for(i=0;i<sizeof(missing_imports)/sizeof(missing_imports[0]);++i){if(missing_imports[i].native)continue;for(j=0;j<i;++j)if(!missing_imports[j].native&&strcmp(missing_imports[j].name,missing_imports[i].name)==0)break;if(j==i)fprintf(stderr," %s",missing_imports[i].name);}fputc(\'\\n\',stderr);}\n')
         w.write('}\n')
     data={'resolved':[dict(address=a,target=t,name=n,owner=o) for a,t,n,o in resolved],
           'missing':[dict(address=a,name=n,owner=o) for a,t,n,o in missing],

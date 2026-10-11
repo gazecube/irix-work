@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static IrixGuestRuntime *g_rt;
@@ -384,9 +385,7 @@ static void bridge___vec_delete2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 validate_vec_count(rt, array, element_size,
                                    allocation_size / element_size) == 0) {
                 count = allocation_size / element_size;
-                fprintf(stderr,
-                        "IRIX __vec_delete2 inferred count=%u from allocation=%u element=%u\n",
-                        count, allocation_size, element_size);
+                
             } else {
             static const uint32_t backs[] = {4u, 8u, 12u, 16u};
             size_t cookie_i;

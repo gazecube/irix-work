@@ -221,12 +221,7 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 uint64_t total = (uint64_t)(wc_num + sc_num) * 20u;
 
                 if (sc_num < 4096u && total <= 0x00100000u) {
-                    fprintf(stderr,
-                            "IRIX XmBuildResources malloc repair: "
-                            "sc_resources=%08x bytes=%u -> sc_num=%u "
-                            "wc_num=%u size %08x -> %u\n",
-                            sc_resources, a->size, sc_num, wc_num,
-                            size, (uint32_t)total);
+                    (void)0;
                     cpu->gpr[17] =
                         (uint64_t)(int64_t)(int32_t)sc_num;
                     cpu->gpr[4] =
@@ -257,6 +252,10 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             IrixGuestAddr outer_ra = 0u;
             IrixGuestAddr outer_callsite = 0u;
+            IrixGuestAddr imd_caller_ra = 0u;
+            IrixGuestAddr imd_caller2_ra = 0u;
+            IrixGuestFunctionEntry *imd_caller = NULL;
+            IrixGuestFunctionEntry *imd_caller2 = NULL;
 
             /*
              * SGI XtMalloc at 0x0f614498 saves its caller RA with
@@ -272,14 +271,34 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                     outer_callsite = outer_ra - 8u;
             }
 
+            /* ImdString::_allocString (0x09838194) has a 0x40-byte
+             * frame and saves its caller RA at sp+0x20.  If it is the
+             * producer of an impossible request, also unwind one level
+             * beyond its frame so the corrupt list-view input is visible. */
+            if (sp && irix_guest_ptr(rt, sp + 0x20u, 8u))
+                imd_caller_ra = (IrixGuestAddr)(uint32_t)
+                    irix_guest_read64be(rt, sp + 0x20u);
+            if (sp && irix_guest_ptr(rt, sp + 0x60u, 8u))
+                imd_caller2_ra = (IrixGuestAddr)(uint32_t)
+                    irix_guest_read64be(rt, sp + 0x60u);
+            imd_caller = imd_caller_ra ?
+                irix_guest_find_function(rt, imd_caller_ra) : NULL;
+            imd_caller2 = imd_caller2_ra ?
+                irix_guest_find_function(rt, imd_caller2_ra) : NULL;
+
             fprintf(stderr,
                     "IRIX malloc BAD REQUEST: size=%08x pc=%08x ra=%08x "
                     "callsite=%08x sp=%08x outer_ra=%08x outer_callsite=%08x "
+                    "imd_ra=%08x:%s imd2_ra=%08x:%s "
                     "gp=%08x t9=%08x "
                     "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
                     "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
                     size, (uint32_t)cpu->pc, ra, callsite, sp,
                     outer_ra, outer_callsite,
+                    imd_caller_ra,
+                    imd_caller && imd_caller->name ? imd_caller->name : "?",
+                    imd_caller2_ra,
+                    imd_caller2 && imd_caller2->name ? imd_caller2->name : "?",
                     (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[25],
                     (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
                     (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
@@ -292,7 +311,7 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
             if (callsite >= 24u &&
                 irix_guest_ptr(rt, callsite - 24u, 56u)) {
-                fprintf(stderr, "IRIX malloc wrapper-insn:");
+                (void)0;
                 for (i = 0; i < 14u; ++i) {
                     IrixGuestAddr a = callsite - 24u + i * 4u;
                     fprintf(stderr, " [%08x]=%08x",
@@ -303,7 +322,7 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
             if (outer_callsite >= 32u &&
                 irix_guest_ptr(rt, outer_callsite - 32u, 80u)) {
-                fprintf(stderr, "IRIX malloc producer-insn:");
+                (void)0;
                 for (i = 0; i < 20u; ++i) {
                     IrixGuestAddr a = outer_callsite - 32u + i * 4u;
                     fprintf(stderr, " [%08x]=%08x",
@@ -313,7 +332,7 @@ static void bridge_malloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             }
 
             if (sp && irix_guest_ptr(rt, sp, 64u)) {
-                fprintf(stderr, "IRIX malloc wrapper-stack:");
+                (void)0;
                 for (i = 0; i < 8u; ++i) {
                     IrixGuestAddr a = sp + i * 8u;
                     fprintf(stderr, " [%08x]=%016llx",
@@ -388,8 +407,11 @@ static void bridge_realloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_memalign(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    (void)rt;
-    cpu->gpr[2] = alloc_guest((uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[4]);
+    uint32_t size = (uint32_t)cpu->gpr[5];
+    uint32_t align = (uint32_t)cpu->gpr[4];
+
+    
+    cpu->gpr[2] = alloc_guest(size, align);
 }
 
 static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -413,10 +435,7 @@ static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr src = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
     const char *s = guest_cstr(rt, src);
     IrixGuestAddr out = copy_host_string_to_guest(rt, s);
-    fprintf(stderr,
-            "IRIX strdup: pc=%08x ra=%08x src=%08x value=%s out=%08x\\n",
-            (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[31], src,
-            s ? s : "<NULL>", out);
+    
     cpu->gpr[2] = out;
 }
 
@@ -570,8 +589,15 @@ static void bridge_sprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_strlen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = s ? (uint64_t)strlen(s) : 0;
+    IrixGuestAddr addr = (uint32_t)cpu->gpr[4];
+    const char *s = guest_cstr(rt, addr);
+    size_t length = s ? strlen(s) : 0u;
+    /* IRIX's private commize() helper underflows when an optional extra-label
+       string is empty.  Treat its one-byte NUL input as length one so the
+       helper copies an empty result instead of requesting ~1.4 GB. */
+    if (s && length == 0u && (uint32_t)cpu->gpr[31] == 0x09691a10u)
+        length = 1u;
+    cpu->gpr[2] = length;
 }
 
 static void bridge_strcmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -678,11 +704,7 @@ static void bridge_memcpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr caller = (IrixGuestAddr)((uint32_t)cpu->gpr[31] - 8u);
     if ((caller >= 0x0fa88c00u && caller < 0x0fa89300u) ||
         (caller >= 0x0fa45c00u && caller < 0x0fa45e00u)) {
-        fprintf(stderr,
-                "IRIX passwd-path memcpy: callsite=%08x ra=%08x dst=%08x src=%08x n=%u a3=%08x sp=%08x gp=%08x\n",
-                caller, (uint32_t)cpu->gpr[31], dst_addr, src_addr, n,
-                (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[29],
-                (uint32_t)cpu->gpr[28]);
+        (void)0;
         if (src_addr && irix_guest_ptr(rt, src_addr, n ? n : 1u)) {
             unsigned i, lim = n < 48u ? n : 48u;
             fputs("  src:", stderr);
@@ -827,6 +849,8 @@ static void bridge_getopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     uint32_t optind = irix_guest_read32be(rt, g_libc.optind_addr);
     uint32_t opterr = irix_guest_read32be(rt, g_libc.opterr_addr);
     uint32_t sp = irix_guest_read32be(rt, g_libc.getopt_sp_addr);
+    uint32_t start_optind = optind;
+    uint32_t start_sp = sp;
     IrixGuestAddr arg_addr = 0;
     IrixGuestAddr optarg = 0;
     const char *arg = 0;
@@ -916,6 +940,7 @@ done:
     irix_guest_write32be(rt, g_libc.optind_addr, optind);
     irix_guest_write32be(rt, g_libc.optarg_addr, optarg);
     irix_guest_write32be(rt, g_libc.getopt_sp_addr, sp);
+    
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)result;
 }
 

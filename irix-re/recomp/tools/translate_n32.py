@@ -241,7 +241,6 @@ def decode(addr, insn):
         if addr==0x10034c04:
             return ['{ IrixGuestAddr a = %s; uint8_t v = 0;'%a,
                     '  if (a >= 0x100u) v = irix_guest_read8(rt, a);',
-                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null screen-class flags -> 0\\n");',
                     '  %s = v; }'%reg(rt)],None
         return ['%s = irix_guest_read8(rt, %s);'%(reg(rt),a)],None
     if op==0x22:
@@ -251,22 +250,14 @@ def decode(addr, insn):
     if op==0x23:
         a=mem_addr(rs,imm)
         if addr in (0x10034c00, 0x10034c10, 0x10034c14):
-            labels = {
-                0x10034c00: "screen resource",
-                0x10034c10: "screen resource +0x08",
-                0x10034c14: "screen resource +0x58",
-            }
             return ['{ IrixGuestAddr a = %s; uint32_t v = 0;'%a,
                     '  if (a >= 0x100u) v = irix_guest_read32be(rt, a);',
-                    '  else fprintf(stderr, "IRIX 4Dwm ProcessScreenResources repair: null %s -> 0\\n");'%labels[addr],
                     '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
         if addr==0x098382ac:
             return ['{ IrixGuestAddr a = %s; uint32_t v = irix_guest_read32be(rt, a);'%a,
-                    '  fprintf(stderr, "IRIX ImdString LW probe: pc=0x098382ac a1=%08x addr=%08x value=%08x\\n", (uint32_t)cpu->gpr[5], a, v);',
                     '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
         if addr==0x0fa34c9c:
             return ['{ IrixGuestAddr a = %s; uint32_t v = irix_guest_read32be(rt, a);'%a,
-                    '  fprintf(stderr, "IRIX malloc GOT load: pc=0x%08x addr=0x%08x value=%08x gp=%08x\\n", 0x0fa34c9cu, a, v, (uint32_t)%s);'%reg(28),
                     '  %s = (uint64_t)(int64_t)(int32_t)v; }'%reg(rt)],None
         return ['%s = (uint64_t)(int64_t)(int32_t)irix_guest_read32be(rt, %s);'%(reg(rt),a)],None
     if op==0x31: return ['cpu->fpr[%d] = (cpu->fpr[%d] & UINT64_C(0xffffffff00000000)) | irix_guest_read32be(rt, %s);'%(rt,rt,mem_addr(rs,imm))],None
@@ -494,7 +485,7 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
 
     fn='irix_recomp_%s%s'%(c_name(c_prefix),c_name(name))
     print('/* Generated from %s: %s @ 0x%08x, 0x%x bytes. */'%(path,name,start,size))
-    print('#include "IrixGuest.h"'); print('#include "IrixMipsInterp.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('')
+    print('#include "IrixGuest.h"'); print('#include "IrixMipsInterp.h"'); print('#include <math.h>'); print('#include <stdio.h>'); print('#include <stdlib.h>'); print('')
     print('enum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };'); print('')
     print('void %s(IrixGuestRuntime *rt, IrixGuestCpu *cpu)'%fn); print('{')
     has_delay_slot = any(
@@ -582,35 +573,14 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('    pc = 0x%08xu;' % addr)
         print('    cpu->pc = pc;')
         print('    rt->current_pc = pc;')
-        if addr in (0x0983931c, 0x098402b4):
-            tag='DT_INIT' if addr==0x0983931c else '__cplinit'
-            print('            fprintf(stderr, "IRIX libimdUtil init probe: %s pc=0x%08x sp=%%08x gp=%%08x ra=%%08x kNull.master=%%08x kEmpty.master=%%08x\\\\n", (uint32_t)cpu->gpr[29], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31], irix_guest_read32be(rt, 0x09852dccu), irix_guest_read32be(rt, 0x09852dd4u));' % (tag,addr))
         if addr == 0x0f6154e8:
             print('            cpu->gpr[8] = irix_guest_xt_ensure_resource_table(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9]);')
-        if addr == 0x0f62caa8:
-            print('            fprintf(stderr, "IRIX XtAppCreateShell entry: a0=%08x a1=%08x a2=%08x a3=%08x a4=%08x a5=%08x\\n", (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9]);')
-        if 0x0f62cb60 <= addr <= 0x0f62cb84:
-            print('            fprintf(stderr, "IRIX XtAppCreateShell tail: pc=0x%08x insn=%08x v0=%%08x ra=%%08x sp=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[29]);' % (addr,word))
         if addr == 0x0f6156a4:
-            print('            { IrixGuestAddr wc = 0u; IrixGuestAddr frame = (IrixGuestAddr)(uint32_t)cpu->gpr[7]; if ((uint32_t)cpu->gpr[2] == 0x0f6959d8u) { uint32_t wsize = 0u; if (frame && irix_guest_ptr(rt, frame + 12u, 4u)) wc = irix_guest_read32be(rt, frame + 12u); if (wc && irix_guest_ptr(rt, wc, 0x64u)) wsize = irix_guest_read32be(rt, wc + 8u); if (!wc || !wsize || wsize > 0x01000000u) wc = 0x0f695a28u; if (wc && irix_guest_ptr(rt, wc, 0x64u)) { irix_guest_xt_repair_class_resources(rt, wc); cpu->gpr[2] = irix_guest_read32be(rt, wc + 44u); cpu->gpr[16] = cpu->gpr[2]; } else { fprintf(stderr, "IRIX Xt class-resource repair skipped invalid class=%08x\\n", (uint32_t)wc); } } }')
+            print('            { IrixGuestAddr wc = 0u; IrixGuestAddr frame = (IrixGuestAddr)(uint32_t)cpu->gpr[7]; if ((uint32_t)cpu->gpr[2] == 0x0f6959d8u) { uint32_t wsize = 0u; if (frame && irix_guest_ptr(rt, frame + 12u, 4u)) wc = irix_guest_read32be(rt, frame + 12u); if (wc && irix_guest_ptr(rt, wc, 0x64u)) wsize = irix_guest_read32be(rt, wc + 8u); if (!wc || !wsize || wsize > 0x01000000u) wc = 0x0f695a28u; if (wc && irix_guest_ptr(rt, wc, 0x64u)) { irix_guest_xt_repair_class_resources(rt, wc); cpu->gpr[2] = irix_guest_read32be(rt, wc + 44u); cpu->gpr[16] = cpu->gpr[2]; } } }')
         if addr == 0x0f62b6a4:
             print('            { IrixGuestAddr w = (IrixGuestAddr)(uint32_t)cpu->gpr[20]; if (w && irix_guest_ptr(rt, w + 4u, 4u)) { IrixGuestAddr wc = irix_guest_read32be(rt, w + 4u); if (wc) irix_guest_xt_repair_class_resources(rt, wc); } }')
         if addr == 0x0f615d60:
-            print('            { IrixGuestAddr r = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; uint32_t qcall = (uint32_t)cpu->gpr[13]; if (r && irix_guest_ptr(rt, r, 28u)) { fprintf(stderr, "IRIX Xt default snapshot: s0=%08x type=%08x size=%08x def_type=%08x def_addr=%08x qcall=%08x\\n", (uint32_t)r, irix_guest_read32be(rt, r + 8u), irix_guest_read32be(rt, r + 12u), irix_guest_read32be(rt, r + 20u), irix_guest_read32be(rt, r + 24u), qcall); irix_guest_xt_normalize_resource(rt, r); fprintf(stderr, "IRIX Xt default normalized: def_type=%08x def_addr=%08x\\n", irix_guest_read32be(rt, r + 20u), irix_guest_read32be(rt, r + 24u)); } else { fprintf(stderr, "IRIX Xt default snapshot skipped invalid resource=%08x qcall=%08x\\n", (uint32_t)r, qcall); } }')
-        if addr == 0x0b2a813c:
-            print('            { IrixGuestAddr p = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; uint32_t prev = 0u, cur = 0u, next = 0u, next2 = 0u; if (p >= 4u && irix_guest_ptr(rt, p - 4u, 4u)) prev = irix_guest_read32be(rt, p - 4u); if (p && irix_guest_ptr(rt, p, 12u)) { cur = irix_guest_read32be(rt, p); next = irix_guest_read32be(rt, p + 4u); next2 = irix_guest_read32be(rt, p + 8u); } fprintf(stderr, "IRIX 4Dwm table probe: pc=0x0b2a813c s0=%08x prev=%08x cur=%08x next=%08x next2=%08x ra=%08x gp=%08x\\n", (uint32_t)p, prev, cur, next, next2, (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[28]); }')
-        if addr == 0x0b2a80d8:
-            print('            fprintf(stderr, "IRIX 4Dwm setup insns: 80d8=%08x 80dc=%08x 80e0=%08x 80e4=%08x 80e8=%08x 80ec=%08x 80f0=%08x 80f4=%08x 80f8=%08x 80fc=%08x 8100=%08x 8104=%08x 8108=%08x 810c=%08x 8110=%08x 8114=%08x 8118=%08x 811c=%08x 8120=%08x 8124=%08x\\n", irix_guest_read32be(rt,0x0b2a80d8u),irix_guest_read32be(rt,0x0b2a80dcu),irix_guest_read32be(rt,0x0b2a80e0u),irix_guest_read32be(rt,0x0b2a80e4u),irix_guest_read32be(rt,0x0b2a80e8u),irix_guest_read32be(rt,0x0b2a80ecu),irix_guest_read32be(rt,0x0b2a80f0u),irix_guest_read32be(rt,0x0b2a80f4u),irix_guest_read32be(rt,0x0b2a80f8u),irix_guest_read32be(rt,0x0b2a80fcu),irix_guest_read32be(rt,0x0b2a8100u),irix_guest_read32be(rt,0x0b2a8104u),irix_guest_read32be(rt,0x0b2a8108u),irix_guest_read32be(rt,0x0b2a810cu),irix_guest_read32be(rt,0x0b2a8110u),irix_guest_read32be(rt,0x0b2a8114u),irix_guest_read32be(rt,0x0b2a8118u),irix_guest_read32be(rt,0x0b2a811cu),irix_guest_read32be(rt,0x0b2a8120u),irix_guest_read32be(rt,0x0b2a8124u));')
-        if 0x0b294288 <= addr < 0x0b294380:
-            print('            fprintf(stderr, "IRIX Xm GetDisplay: pc=0x%08x insn=%08x v0=%%08x a0=%%08x a1=%%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x t9=%%08x ra=%%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[31]);' % (addr,word))
-        if addr == 0x0b2a80d4:
-            print('            fprintf(stderr, "IRIX 4Dwm call probe: pc=0x0b2a80d4 t9=%08x a0=%08x a1=%08x a2=%08x a3=%08x gp=%08x ra=%08x\\n", (uint32_t)cpu->gpr[25], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);')
-        if addr == 0x0b2a80d8:
-            print('            { IrixGuestFunctionEntry *e = irix_guest_find_function(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[25]); fprintf(stderr, "IRIX 4Dwm callee: t9=%08x name=%s a0=%08x\\n", (uint32_t)cpu->gpr[25], e && e->name ? e->name : "?", (uint32_t)cpu->gpr[4]); }')
-        if addr == 0x0b2a80dc:
-            print('            fprintf(stderr, "IRIX 4Dwm callee return: v0=%08x a0=%08x\\n", (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[4]);')
-        if 0x0b2a80d8 <= addr <= 0x0b2a8138:
-            print('            fprintf(stderr, "IRIX 4Dwm pretable trace: pc=0x%08x s0=%%08x s1=%%08x s2=%%08x s3=%%08x s4=%%08x s5=%%08x s6=%%08x s7=%%08x v0=%%08x v1=%%08x a0=%%08x a1=%%08x a2=%%08x a3=%%08x t0=%%08x t1=%%08x t2=%%08x t3=%%08x t4=%%08x t5=%%08x t6=%%08x t7=%%08x\\n", (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17], (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19], (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21], (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23], (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3], (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11], (uint32_t)cpu->gpr[12], (uint32_t)cpu->gpr[13], (uint32_t)cpu->gpr[14], (uint32_t)cpu->gpr[15]);' % addr)
+            print('            { IrixGuestAddr r = (IrixGuestAddr)(uint32_t)cpu->gpr[16]; if (r && irix_guest_ptr(rt, r, 28u)) irix_guest_xt_normalize_resource(rt, r); }')
         ctl_raw = static_control_info(addr, word) if control else None
         has_native_delay = bool(
             control and idx + 1 < len(decoded) and

@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 #include <dlfcn.h>
 
 extern char **environ;
@@ -55,6 +56,9 @@ void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
 #endif
 #ifndef IRIX_RECOMP_ROOT
 #define IRIX_RECOMP_ROOT ""
+#endif
+#ifndef IRIX_GUEST_EXEC_RUNNER
+#define IRIX_GUEST_EXEC_RUNNER ""
 #endif
 void irix_register_recompiled_stack(IrixGuestRuntime *rt);
 void irix_register_recompiled_stack_imports(IrixGuestRuntime *rt, IrixGuestFunction (*resolver)(const char *));
@@ -215,10 +219,7 @@ static size_t rebind_named_native_functions(IrixGuestRuntime *rt)
          */
         if (entry->address == 0x0f60e38cu) {
             native = resolve_native("XConfigureWindow");
-            fprintf(stderr,
-                    "IRIX exact XConfigureWindow rebind: addr=0x%08x name=%s native=%p old=%p\\n",
-                    entry->address, entry->name ? entry->name : "<null>",
-                    (void *)native, (void *)entry->function);
+            (void)0;
             if (native && entry->function != native) {
                 entry->function = native;
                 entry->name = "libXt:XConfigureWindow";
@@ -373,7 +374,11 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
      * ABI/path remains untouched.
      */
     if (access(path, R_OK) != 0) {
-        if (!strncmp(rel, "usr/lib32/", 10)) {
+        if (!strcmp(rel, "bin/sh")) {
+            snprintf(alias, sizeof(alias), "%s/sbin/sh", root);
+            if (access(alias, R_OK) == 0)
+                selected = alias;
+        } else if (!strncmp(rel, "usr/lib32/", 10)) {
             snprintf(alias, sizeof(alias), "%s/lib32/%s", root, rel + 10);
             if (access(alias, R_OK) == 0)
                 selected = alias;
@@ -385,7 +390,7 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
     }
 
     if (selected != path)
-        fprintf(stderr, "IRIX ELF path alias: /%s -> %s\n", rel, selected);
+        (void)0;
 
     segment_count_before = rt->memory.count;
     if (irix_guest_load_elf32be_info(rt, selected, &info) != 0) {
@@ -400,10 +405,7 @@ static int load_elf(IrixGuestRuntime *rt, const char *root, const char *rel,
                                          info.gp_value);
         }
     }
-    fprintf(stderr,
-            "IRIX ELF loaded: %s base=0x%08x entry=0x%08x gp=0x%08x segments=%zu..%zu\n",
-            selected, info.load_base, info.entry, info.gp_value,
-            segment_count_before, rt->memory.count);
+    (void)0;
     if (info_out)
         *info_out = info;
     return 0;
@@ -506,10 +508,16 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 pc + 8u, irix_guest_read32be(rt, pc + 8u));
     }
     fprintf(stderr,
-            "  regs: v0=%08x sp=%08x gp=%08x ra=%08x t9=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+            "  regs: v0=%08x sp=%08x gp=%08x ra=%08x t9=%08x "
+            "s0-s7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
+            "a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
             (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[29],
             (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31],
             (uint32_t)cpu->gpr[25],
+            (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
+            (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
+            (uint32_t)cpu->gpr[20], (uint32_t)cpu->gpr[21],
+            (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23],
             (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
             (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
             (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
@@ -622,6 +630,9 @@ static int guest_env_is_loader_control(const char *s)
         if (strncmp(s, exact[i], n) == 0)
             return 1;
     }
+    /* Runtime-only controls are consumed by the host launcher, not IRIX rld. */
+    if (strncmp(s, "IRIX_GUEST_DISPLAY=", 19u) == 0)
+        return 1;
     return 0;
 }
 
@@ -699,14 +710,23 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     if (environ) {
         size_t dst = envc;
         size_t src = 0;
+        const char *guest_display = getenv("IRIX_GUEST_DISPLAY");
         while (environ[src])
             ++src;
         while (src > 0) {
             const char *e = environ[--src];
+            char display_entry[PATH_MAX];
             if (guest_env_is_loader_control(e)) {
-                fprintf(stderr, "IRIX env: suppress host loader variable %.*s\n",
-                        (int)(strchr(e, '=') ? strchr(e, '=') - e : strlen(e)), e);
+                (void)0;
                 continue;
+            }
+            if (guest_display && strncmp(e, "DISPLAY=", 8u) == 0) {
+                int n = snprintf(display_entry, sizeof(display_entry),
+                                 "DISPLAY=%s", guest_display);
+                if (n < 0 || (size_t)n >= sizeof(display_entry))
+                    goto fail;
+                (void)0;
+                e = display_entry;
             }
             --dst;
             if (push_guest_string(rt, base, &top, e, &env_guest[dst]) != 0)
@@ -757,16 +777,7 @@ static int setup_process_stack(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     cpu->gpr[28] = app ? app->gp_value : 0u;
     cpu->gpr[29] = sp;
 
-    fprintf(stderr,
-            "IRIX process stack: sp=0x%08x argv=0x%08x envp=0x%08x envc=%zu "
-            "phdr=0x%08x phent=%u phnum=%u entry=0x%08x gp=0x%08x "
-            "interp=%s interp_base=0x%08x\n",
-            sp, argv_addr, envp_addr, envc,
-            app ? app->phdr : 0u, app ? (unsigned)app->phent : 0u,
-            app ? (unsigned)app->phnum : 0u, app ? app->entry : 0u,
-            app ? app->gp_value : 0u,
-            app && app->interp[0] ? app->interp : "(none)",
-            interp ? interp->load_base : 0u);
+    (void)0;
 
     free(argv_guest);
     free(env_guest);
@@ -795,6 +806,11 @@ int main(int argc, char **argv)
     IrixGuestAddr internal_gps[64];
     size_t internal_init_count = 0;
     char **guest_argv = argv;
+    size_t guest_argc = (size_t)argc;
+    char exec_app_path[PATH_MAX];
+#if !defined(IRIX_JIT_ONLY) && !defined(IRIX_DIRECT_MAIN)
+    char canonical_guest_argv0[PATH_MAX];
+#endif
 #ifdef IRIX_DIRECT_MAIN
     char **direct_guest_argv = 0;
 #endif
@@ -809,14 +825,12 @@ int main(int argc, char **argv)
     if (getenv("IRIX_PROFILE_DIR") && !getenv("IRIX_PROFILE_NAME"))
         setenv("IRIX_PROFILE_NAME", IRIX_APP_NAME, 0);
 
-    /*
-     * Child-process exec compatibility needs to resolve absolute IRIX paths
-     * such as /usr/bin/X11/4Dwm to the translated runners emitted under the
-     * reconstructed root.  Publish the compile-time root without overriding
-     * an explicit developer setting.
-     */
+    /* Child execve calls use one generic runner for original guest images. */
     if (IRIX_RECOMP_ROOT[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
         setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT, 0);
+    if (IRIX_GUEST_EXEC_RUNNER[0] != '\0' &&
+        !getenv("IRIX_GUEST_EXEC_RUNNER"))
+        setenv("IRIX_GUEST_EXEC_RUNNER", IRIX_GUEST_EXEC_RUNNER, 0);
     if (IRIX_RUNTIME_TREE[0] != '\0' && !getenv("XAPPLRESDIR")) {
         char appres[4096];
         int n = snprintf(appres, sizeof(appres), "%s/usr/lib/X11/app-defaults",
@@ -832,14 +846,9 @@ int main(int argc, char **argv)
     irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
     memset(&cpu, 0, sizeof(cpu));
 #ifdef IRIX_JIT_ONLY
-    if (!irix_mips_jit_available()) {
+    if (irix_mips_jit_requested() && !irix_mips_jit_available()) {
         fprintf(stderr,
                 "IRIX JIT-only runner requires Unicorn; rebuild after installing unicorn\n");
-        return 1;
-    }
-    if (!irix_mips_jit_requested()) {
-        fprintf(stderr,
-                "IRIX JIT-only runner has JIT disabled by IRIX_EXEC_BACKEND\n");
         return 1;
     }
 #endif
@@ -853,9 +862,36 @@ int main(int argc, char **argv)
     }
 
 #ifdef IRIX_JIT_ONLY
-    if (load_elf(&rt, IRIX_RUNTIME_TREE, IRIX_APP_PATH, &app_elf) != 0) {
-        fprintf(stderr, "failed to load original IRIX app %s\n", IRIX_APP_PATH);
-        return 1;
+    {
+        const char *requested = getenv("IRIX_GUEST_EXEC_PATH");
+        const char *relative = IRIX_APP_PATH;
+        const char *runner_name;
+        size_t requested_len;
+        if (requested && requested[0]) {
+            runner_name = argv && argv[0] ? strrchr(argv[0], '/') : 0;
+            runner_name = runner_name ? runner_name + 1 :
+                          (argv && argv[0] ? argv[0] : "");
+            /* The command-line launcher form is:
+                 irix-guest-exec /guest/program arg...
+               Child execve handoffs already use guest argv[0] directly. */
+            if (argc >= 2 && strcmp(runner_name, "irix-guest-exec") == 0) {
+                guest_argv = argv + 1;
+                guest_argc = (size_t)argc - 1u;
+            }
+            while (*requested == '/') ++requested;
+            requested_len = strlen(requested);
+            if (requested_len >= sizeof(exec_app_path)) {
+                fprintf(stderr, "guest exec path is too long\n");
+                return 1;
+            }
+            memcpy(exec_app_path, requested, requested_len + 1u);
+            relative = exec_app_path;
+        }
+        if (load_elf(&rt, IRIX_RUNTIME_TREE, relative, &app_elf) != 0) {
+            fprintf(stderr, "failed to load original IRIX app %s\n", relative);
+            return 1;
+        }
+        fprintf(stderr, "IRIX guest exec path: /%s\n", relative);
     }
     have_app_elf = 1;
     if (app_elf.interp[0]) {
@@ -867,7 +903,7 @@ int main(int argc, char **argv)
         }
         have_interp_elf = 1;
         fprintf(stderr,
-                "IRIX JIT PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
+                "IRIX guest-exec PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
                 app_elf.interp, interp_elf.entry, interp_elf.gp_value);
     }
     if (load_elf(&rt, IRIX_RUNTIME_TREE, "lib32/rld", &rld_elf) == 0)
@@ -941,14 +977,6 @@ int main(int argc, char **argv)
                 if (component->role == 1) {
                     interp_elf = info;
                     have_interp_elf = 1;
-                    fprintf(stderr,
-                            "IRIX PT_INTERP component: %s entry=0x%08x gp=0x%08x\n",
-                            component->path, info.entry, info.gp_value);
-                    if (irix_guest_ptr(&rt, 0x0fb5291cu, 4u))
-                        fprintf(stderr,
-                                "IRIX libc GOT startup watch: after PT_INTERP load "
-                                "[0x0fb5291c]=%08x\n",
-                                irix_guest_read32be(&rt, 0x0fb5291cu));
                 } else if (component->role == 2) {
                     rld_elf = info;
                     have_rld_elf = 1;
@@ -996,17 +1024,9 @@ int main(int argc, char **argv)
     /*
      * Registration priority is first-match in irix_guest_find_function().
      *
-     * Keep native overrides first.  Then install prebound/missing import
-     * handlers before translated functions: SGI executables and DSOs may
-     * contain executable import stubs which metadata recovery also emits as
-     * ordinary translated functions.  If those translated stubs are
-     * registered first, they shadow the name-based forwarder and private
-     * runtime imports such as libc->_rld_new_interface execute the stub
-     * itself instead of the real /usr/lib32/rld provider.
-     *
-     * The forwarder target does not need to be registered yet; lookup happens
-     * when the import is actually called, after the complete bundle below has
-     * been registered.
+     * Keep native overrides first. Then install prebound/missing import
+     * handlers before translated functions so recovered import stubs cannot
+     * shadow the name-based bridge forwarders.
      */
 #ifndef IRIX_JIT_ONLY
     irix_register_recompiled_stack_imports(&rt, resolve_native);
@@ -1016,11 +1036,6 @@ int main(int argc, char **argv)
 #else
     register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup, 0);
 #endif
-    if (irix_guest_ptr(&rt, 0x0fb5291cu, 4u))
-        fprintf(stderr,
-                "IRIX libc GOT startup watch: after import patching "
-                "[0x0fb5291c]=%08x\n",
-                irix_guest_read32be(&rt, 0x0fb5291cu));
 
     irix_register_recompiled_stack(&rt);
     register_native_dsos(&rt);
@@ -1068,14 +1083,63 @@ int main(int argc, char **argv)
 
     {
         size_t rebound = rebind_named_native_functions(&rt);
-        fprintf(stderr,
-                "IRIX native bridge authority: rebound=%zu named translated functions\\n",
-                rebound);
+        (void)0;
     }
 #else
+    /*
+     * The generic runner executes the original IRIX images, so it has no
+     * generated import registry to redirect the SGI libimdIconPanel font-set
+     * imports through the host-Xlib ABI bridge.  These are the exact N32
+     * import veneer addresses from IRIX libimdIconPanel.so:
+     *   0x09678720 XCreateFontSet
+     *   0x09678770 XFreeFontSet
+     *   0x09678798 XExtentsOfFontSet
+     * Font sets are opaque host objects; passing them through the SGI Xlib
+     * implementation makes it interpret the bridge handle as a guest struct
+     * (and in the failure case returns the bogus address 0x28 for extents).
+     */
+    {
+        typedef IrixGuestFunction (*IrixBridgeLookup)(const char *);
+        static const struct {
+            IrixGuestAddr address;
+            const char *name;
+            IrixBridgeLookup lookup;
+        } xfontset_imports[] = {
+            { 0x09678720u, "XCreateFontSet", irix_x11_window_bridge_lookup },
+            { 0x09678770u, "XFreeFontSet", irix_x11_window_bridge_lookup },
+            { 0x09678798u, "XExtentsOfFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f71fb00u, "XCreateFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f718ee0u, "XFreeFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f6f7e34u, "XExtentsOfFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f725204u, "XSetLocaleModifiers", irix_x11_bulk_lookup },
+            { 0x0f725484u, "XSupportsLocale", irix_x11_bulk_lookup },
+            { 0x0f736844u, "XBaseFontNameListOfFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f736818u, "XLocaleOfFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f72eaa8u, "XFontsOfFontSet", irix_x11_window_bridge_lookup },
+            { 0x0f6f33ccu, "XmbTextEscapement", irix_x11_bulk_lookup },
+            { 0x0f6f5aecu, "XmbTextExtents", irix_x11_window_bridge_lookup },
+            { 0x0f6f3d94u, "XmbDrawString", irix_x11_bulk_lookup },
+            { 0x0f79e84cu, "XmbDrawImageString", irix_x11_bulk_lookup },
+            { 0x0f7a0e88u, "XwcTextEscapement", irix_x11_image_bridge_lookup },
+            { 0x0f72f2e8u, "XwcTextExtents", irix_x11_image_bridge_lookup },
+            { 0x0f7a1038u, "XwcDrawString", irix_x11_image_bridge_lookup },
+        };
+        size_t i;
+        for (i = 0; i < sizeof(xfontset_imports) / sizeof(xfontset_imports[0]); ++i) {
+            IrixGuestFunction fn = xfontset_imports[i].lookup(
+                xfontset_imports[i].name);
+            if (fn && irix_guest_register_function(
+                          &rt, xfontset_imports[i].address, fn,
+                          xfontset_imports[i].name) == 0)
+                fprintf(stderr,
+                        "IRIX generic XFontSet bridge: %s at %08x\n",
+                        xfontset_imports[i].name,
+                        xfontset_imports[i].address);
+        }
+    }
     fprintf(stderr,
-            "IRIX JIT-only mode: original MIPS execution; translated "
-            "registries and native DSO overrides disabled\n");
+            "IRIX generic guest mode: original IRIX images; app-specific "
+            "translated registries and native DSO overrides disabled\n");
 #endif
 
 #ifdef IRIX_DIRECT_MAIN
@@ -1100,13 +1164,25 @@ int main(int argc, char **argv)
         for (i = 1u; i < (size_t)argc; ++i)
             direct_guest_argv[i] = argv[i];
         guest_argv = direct_guest_argv;
-        fprintf(stderr,
-                "IRIX direct guest identity: host argv0=%s guest argv0=%s\n",
-                argv[0] ? argv[0] : "(null)", guest_name);
+        (void)0;
     }
 #endif
 
-    if (setup_process_stack(&rt, &cpu, argc, guest_argv,
+#if !defined(IRIX_JIT_ONLY) && !defined(IRIX_DIRECT_MAIN)
+    /* A staged native runner is physically under IRIX_RECOMP_ROOT, while
+       guest programs expect argv[0] to name their original IRIX path. */
+    if (argc > 0 && argv && argv[0] && IRIX_RECOMP_ROOT[0] != '\0') {
+        size_t root_len = strlen(IRIX_RECOMP_ROOT);
+        if (strncmp(argv[0], IRIX_RECOMP_ROOT, root_len) == 0 &&
+            argv[0][root_len] == '/' &&
+            snprintf(canonical_guest_argv0, sizeof(canonical_guest_argv0),
+                     "%s", argv[0] + root_len) > 0) {
+            guest_argv[0] = canonical_guest_argv0;
+        }
+    }
+#endif
+
+    if (setup_process_stack(&rt, &cpu, (int)guest_argc, guest_argv,
                             have_app_elf ? &app_elf : 0,
                             have_interp_elf ? &interp_elf : 0) != 0) {
 #ifdef IRIX_DIRECT_MAIN
@@ -1132,8 +1208,7 @@ int main(int argc, char **argv)
             IrixGuestCpu startup_cpu = cpu;
             if (libcxx_gp)
                 cpu.gpr[28] = libcxx_gp;
-            fprintf(stderr, "IRIX direct-main libC DT_INIT: %08x gp=%08x\n",
-                    libcxx_init, libcxx_gp);
+            (void)0;
             if (irix_guest_call(&rt, &cpu, libcxx_init) != 0) {
                 report_trap_context(&rt, &cpu);
                 return 2;
@@ -1147,8 +1222,7 @@ int main(int argc, char **argv)
                 IrixGuestCpu startup_cpu = cpu;
                 if (internal_gps[i])
                     cpu.gpr[28] = internal_gps[i];
-                fprintf(stderr, "IRIX direct-main internal DSO DT_INIT: %08x gp=%08x\n",
-                        internal_inits[i], internal_gps[i]);
+                (void)0;
                 if (irix_guest_call(&rt, &cpu, internal_inits[i]) != 0) {
                     report_trap_context(&rt, &cpu);
                     return 2;
@@ -1160,8 +1234,7 @@ int main(int argc, char **argv)
                 i = 0u; /* libimdApp depends on the other internal libraries. */
                 if (internal_gps[i])
                     cpu.gpr[28] = internal_gps[i];
-                fprintf(stderr, "IRIX direct-main internal DSO DT_INIT: %08x gp=%08x\n",
-                        internal_inits[i], internal_gps[i]);
+                (void)0;
                 if (irix_guest_call(&rt, &cpu, internal_inits[i]) != 0) {
                     report_trap_context(&rt, &cpu);
                     return 2;
@@ -1173,7 +1246,7 @@ int main(int argc, char **argv)
             IrixGuestAddr motif_init = find_named(&rt, "vendorShellResolveConflicts");
             if (motif_init) {
                 IrixGuestCpu startup_cpu = cpu;
-                fprintf(stderr, "IRIX direct-main Motif DT_INIT: %08x\n", motif_init);
+                (void)0;
                 if (irix_guest_call(&rt, &cpu, motif_init) != 0) {
                     report_trap_context(&rt, &cpu);
                     return 2;
@@ -1185,9 +1258,7 @@ int main(int argc, char **argv)
     entry = find_named(&rt, "main");
     if (have_app_elf)
         cpu.gpr[28] = app_elf.gp_value;
-    fprintf(stderr,
-            "IRIX %s DIRECT translated main: main=0x%08x gp=0x%08x\n",
-            IRIX_APP_NAME, entry, (uint32_t)cpu.gpr[28]);
+    (void)0;
     if (!entry) {
         fprintf(stderr, "translated %s main not found\n", IRIX_APP_NAME);
         return 1;
@@ -1227,15 +1298,6 @@ int main(int argc, char **argv)
     }
 #endif
 #endif /* IRIX_DIRECT_MAIN */
-    fprintf(stderr,
-            "IRIX %s bootstrap: functions=%zu process_entry=0x%08x "
-            "interp_entry=0x%08x app_entry=0x%08x gp=0x%08x "
-            "main=0x%08x DISPLAY=%s\n",
-            IRIX_APP_NAME, rt.function_count, entry,
-            have_interp_elf ? interp_elf.entry : 0u,
-            have_app_elf ? app_elf.entry : 0u,
-            (uint32_t)cpu.gpr[28], find_named(&rt, "main"),
-            getenv("DISPLAY") ? getenv("DISPLAY") : "(unset)");
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
         if (rt.trapped && rt.trap_code == 0xeeee23ffu) {
             int status = (int)(rt.fault_addr & 0xffu);
@@ -1259,8 +1321,6 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    fprintf(stderr, "IRIX %s returned: v0=0x%llx\n",
-            IRIX_APP_NAME, (unsigned long long)cpu.gpr[2]);
     irix_guest_runtime_destroy(&rt);
     return (int)(uint32_t)cpu.gpr[2];
 }

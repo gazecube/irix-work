@@ -415,8 +415,6 @@ static void bridge_sgikopt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     value = getenv(envname);
-    fprintf(stderr, "IRIX sgikopt: option=%s%s\n",
-            option, value ? " (environment override)" : " (unset)");
 
     if (!value) {
         errno = EINVAL;
@@ -494,9 +492,6 @@ static void bridge_getpwuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     uid_t uid = (uid_t)(uint32_t)cpu->gpr[4];
     struct passwd *pw = getpwuid(uid);
     IrixGuestAddr out = copy_guest_passwd_n32(rt, pw);
-    fprintf(stderr, "IRIX getpwuid: uid=%lu host=%s guest=0x%08x\n",
-            (unsigned long)uid, pw && pw->pw_name ? pw->pw_name : "(null)",
-            (unsigned)out);
     cpu->gpr[2] = out;
 }
 
@@ -505,9 +500,6 @@ static void bridge_getpwnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     struct passwd *pw = name ? getpwnam(name) : 0;
     IrixGuestAddr out = copy_guest_passwd_n32(rt, pw);
-    fprintf(stderr, "IRIX getpwnam: name=%s host=%s guest=0x%08x\n",
-            name ? name : "(null)", pw && pw->pw_name ? pw->pw_name : "(null)",
-            (unsigned)out);
     cpu->gpr[2] = out;
 }
 
@@ -567,9 +559,6 @@ static void bridge_getpwuid_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         rc = write_guest_passwd_r(rt, pwd, buf, buflen, pw);
         irix_guest_write32be(rt, resultp, rc ? 0u : pwd);
     }
-    fprintf(stderr, "IRIX getpwuid_r: uid=%lu pwd=%08x buf=%08x len=%u resultp=%08x host=%s rc=%d\n",
-            (unsigned long)uid, (unsigned)pwd, (unsigned)buf, buflen,
-            (unsigned)resultp, pw && pw->pw_name ? pw->pw_name : "(null)", rc);
     ret_i32(cpu, rc);
 }
 
@@ -588,9 +577,6 @@ static void bridge_getpwnam_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         rc = write_guest_passwd_r(rt, pwd, buf, buflen, pw);
         irix_guest_write32be(rt, resultp, rc ? 0u : pwd);
     }
-    fprintf(stderr, "IRIX getpwnam_r: name=%s pwd=%08x buf=%08x len=%u resultp=%08x host=%s rc=%d\n",
-            name ? name : "(null)", (unsigned)pwd, (unsigned)buf, buflen,
-            (unsigned)resultp, pw && pw->pw_name ? pw->pw_name : "(null)", rc);
     ret_i32(cpu, rc);
 }
 
@@ -746,26 +732,78 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out_addr;
 }
 
-static int guest_exec_host_path(const char *guest_path,
-                                char *host_path,
-                                size_t host_path_size)
+/* N32 passes the first eight argument slots in a0-a7 and later slots in
+   eight-byte stack slots at the caller's sp.  Keep the variadic execle
+   decoder in guest address space until each argument has been validated. */
+static uint32_t guest_n32_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                unsigned index)
 {
-    const char *root;
-    int n;
+    IrixGuestAddr sp;
+    IrixGuestAddr slot;
+    uint64_t value;
 
-    if (!guest_path || guest_path[0] != '/' ||
-        !host_path || host_path_size == 0u)
-        return 0;
+    if (index < 8u)
+        return (uint32_t)cpu->gpr[4u + index];
 
-    root = getenv("IRIX_RECOMP_ROOT");
-    if (!root || !*root)
-        return 0;
+    sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    slot = sp + (IrixGuestAddr)(index - 8u) * 8u;
+    if (slot < sp || !irix_guest_ptr(rt, slot, 8u))
+        return 0u;
+    value = irix_guest_read64be(rt, slot);
+    return (uint32_t)value;
+}
 
-    n = snprintf(host_path, host_path_size, "%s%s", root, guest_path);
-    if (n < 0 || (size_t)n >= host_path_size)
-        return 0;
+static char **guest_exec_string_vector(IrixGuestRuntime *rt,
+                                       IrixGuestAddr vector_addr)
+{
+    size_t count = 0u, i;
+    char **vector;
 
-    return access(host_path, X_OK) == 0;
+    if (!vector_addr) {
+        vector = (char **)calloc(1u, sizeof(*vector));
+        if (!vector) errno = ENOMEM;
+        return vector;
+    }
+
+    for (;;) {
+        IrixGuestAddr slot = vector_addr + (IrixGuestAddr)(count * 4u);
+        uint32_t string_addr;
+        if (slot < vector_addr || !irix_guest_ptr(rt, slot, 4u)) {
+            errno = EFAULT;
+            return NULL;
+        }
+        string_addr = irix_guest_read32be(rt, slot);
+        if (rt->trapped) {
+            errno = EFAULT;
+            return NULL;
+        }
+        if (!string_addr) break;
+        if (!guest_cstr(rt, string_addr)) {
+            errno = EFAULT;
+            return NULL;
+        }
+        if (++count >= 4096u) {
+            errno = E2BIG;
+            return NULL;
+        }
+    }
+
+    vector = (char **)calloc(count + 1u, sizeof(*vector));
+    if (!vector) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    for (i = 0; i < count; ++i) {
+        IrixGuestAddr string_addr = irix_guest_read32be(
+            rt, vector_addr + (IrixGuestAddr)(i * 4u));
+        vector[i] = (char *)guest_cstr(rt, string_addr);
+        if (!vector[i]) {
+            free(vector);
+            errno = EFAULT;
+            return NULL;
+        }
+    }
+    return vector;
 }
 
 static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -827,20 +865,12 @@ static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         argv[i] = (char *)guest_cstr(rt, argp);
     }
 
-    fprintf(stderr, "IRIX execvp: file=%s argc=%zu arg0=%s\n",
-            file, argc, argc ? argv[0] : "(null)");
 
-    if (file[0] == '/') {
-        char host_path[PATH_MAX];
-        if (guest_exec_host_path(file, host_path, sizeof(host_path))) {
-            fprintf(stderr,
-                    "IRIX guest exec redirect: %s -> %s\n",
-                    file, host_path);
-            execv(host_path, argv);
-        }
-    }
+    if (file[0] == '/')
+        irix_guest_execve(rt, file, argv, NULL);
+    else
+        execvp(file, argv);
 
-    execvp(file, argv);
 
     saved_errno = errno;
     free(argv);
@@ -851,38 +881,94 @@ static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_execl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
-    const char *arg0 = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
-    const char *arg1 = (uint32_t)cpu->gpr[6]
-        ? guest_cstr(rt, (uint32_t)cpu->gpr[6]) : NULL;
-    char host_path[PATH_MAX];
-    char *argv[3];
+    char **argv = calloc(4097u, sizeof(*argv));
+    unsigned index;
+    int saved_errno;
+    if (!path || !argv) {
+        free(argv);
+        errno = path ? ENOMEM : EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    for (index = 1u; index < 4096u; ++index) {
+        uint32_t arg = guest_n32_arg32(rt, cpu, index);
+        if (rt->trapped) { errno = EFAULT; goto failed; }
+        if (!arg) break;
+        argv[index - 1u] = (char *)guest_cstr(rt, arg);
+        if (!argv[index - 1u]) { errno = EFAULT; goto failed; }
+    }
+    if (index == 4096u) { errno = E2BIG; goto failed; }
+    irix_guest_execve(rt, path, argv, NULL);
+failed:
+    saved_errno = errno;
+    free(argv);
+    errno = saved_errno;
+    ret_i32(cpu, -1);
+}
 
-    if (!path || !arg0) {
+static void bridge_execle(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
+    char **argv = NULL;
+    char **envp = NULL;
+    unsigned index;
+    size_t argc = 0u;
+    uint32_t value;
+    int saved_errno;
+
+    if (!path) {
         errno = EFAULT;
         ret_i32(cpu, -1);
         return;
     }
 
-    argv[0] = (char *)arg0;
-    argv[1] = (char *)arg1;
-    argv[2] = NULL;
-
-    if (guest_exec_host_path(path, host_path, sizeof(host_path))) {
-        fprintf(stderr,
-                "IRIX guest execl redirect: %s -> %s arg0=%s arg1=%s\n",
-                path, host_path, arg0, arg1 ? arg1 : "(null)");
-        execv(host_path, argv);
-        fprintf(stderr,
-                "IRIX guest execl redirect failed: %s errno=%d\n",
-                host_path, errno);
+    argv = (char **)calloc(4097u, sizeof(*argv));
+    if (!argv) {
+        errno = ENOMEM;
         ret_i32(cpu, -1);
         return;
     }
 
-    fprintf(stderr,
-            "IRIX execl: no translated runner for path=%s arg0=%s arg1=%s\n",
-            path, arg0, arg1 ? arg1 : "(null)");
-    errno = ENOEXEC;
+    /* execle(path, arg0, ..., NULL, envp): the environment pointer occupies
+       the argument slot immediately after the terminating NULL. */
+    for (index = 1u; index < 4096u; ++index) {
+        value = guest_n32_arg32(rt, cpu, index);
+        if (rt->trapped) {
+            errno = EFAULT;
+            goto execle_failed;
+        }
+        if (!value) {
+            uint32_t envp_addr = guest_n32_arg32(rt, cpu, index + 1u);
+            if (rt->trapped) {
+                errno = EFAULT;
+                goto execle_failed;
+            }
+            envp = guest_exec_string_vector(rt, envp_addr);
+            if (!envp) goto execle_failed;
+            break;
+        }
+        argv[argc] = (char *)guest_cstr(rt, value);
+        if (!argv[argc]) {
+            errno = EFAULT;
+            goto execle_failed;
+        }
+        if (++argc >= 4096u) {
+            errno = E2BIG;
+            goto execle_failed;
+        }
+    }
+    if (!envp) {
+        errno = E2BIG;
+        goto execle_failed;
+    }
+
+    irix_guest_execve(rt, path, argv, envp);
+
+execle_failed:
+    saved_errno = errno;
+    free(envp);
+    free(argv);
+    errno = saved_errno;
     ret_i32(cpu, -1);
 }
 
@@ -890,14 +976,7 @@ static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t status = (uint32_t)cpu->gpr[4] & 0xffu;
 
-    /*
-     * Do not terminate the host runner directly. Match the SYS_exit path so
-     * AppRunner can report the guest exit cleanly and preserve diagnostics
-     * around the final IRIX control-flow decision.
-     */
-    fprintf(stderr,
-            "IRIX libc exit: status=%u caller_pc=%08x ra=%08x\n",
-            status, (uint32_t)cpu->pc, (uint32_t)cpu->gpr[31]);
+    /* Match the SYS_exit path so AppRunner reports the guest exit cleanly. */
     cpu->gpr[2] = status;
     cpu->gpr[7] = 0;
     rt->fault_addr = status;
@@ -950,9 +1029,77 @@ static void bridge_socket(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     rc = socket(domain, type, protocol);
-    fprintf(stderr, "IRIX socket bridge: domain=%d type=%d protocol=%d -> %d errno=%d\n",
-            irix_domain, irix_type, protocol, rc, rc < 0 ? errno : 0);
     ret_i32(cpu, rc);
+}
+
+static void bridge_socketpair(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int irix_domain = (int)(int32_t)cpu->gpr[4];
+    int irix_type = (int)(int32_t)cpu->gpr[5];
+    int protocol = (int)(int32_t)cpu->gpr[6];
+    IrixGuestAddr guest_fds = (uint32_t)cpu->gpr[7];
+    int fds[2];
+    int domain = host_socket_domain_from_irix(irix_domain);
+    int type = host_socket_type_from_irix(irix_type);
+    int rc;
+
+    if (domain < 0 || type < 0) {
+        errno = EAFNOSUPPORT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    if (!guest_fds || !irix_guest_ptr(rt, guest_fds, 8u)) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    rc = socketpair(domain, type, protocol, fds);
+    if (rc == 0) {
+        irix_guest_write32be(rt, guest_fds, (uint32_t)fds[0]);
+        irix_guest_write32be(rt, guest_fds + 4u, (uint32_t)fds[1]);
+        if (rt->trapped) {
+            close(fds[0]);
+            close(fds[1]);
+            ret_i32(cpu, -1);
+            return;
+        }
+    }
+    ret_i32(cpu, rc);
+}
+
+static char g_irix_dlerror_message[512];
+
+static void bridge_dlopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_path = (uint32_t)cpu->gpr[4];
+    const char *path = guest_path ? irix_guest_cstr(rt, guest_path, 4096u) : NULL;
+
+    /* IRIX DSOs are N32 guest images and cannot be handed to the host loader.
+       Components in the active application bundle are already registered by
+       the runner; an unbundled runtime load must fail as dlopen normally does
+       for an unavailable object, rather than trapping the entire guest. */
+    snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
+             "IRIX N32 dynamic loading is unavailable for %s",
+             path ? path : "<invalid path>");
+    
+    ret_i32(cpu, 0);
+}
+
+static void bridge_dlclose(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    (void)cpu;
+    snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
+             "dlclose called for an unavailable guest DSO");
+    ret_i32(cpu, -1);
+}
+
+static void bridge_dlerror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr message = copy_guest_tmp_string(rt, g_irix_dlerror_message);
+    g_irix_dlerror_message[0] = '\0';
+    ret_i32(cpu, (int32_t)message);
 }
 
 static void bridge_connect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -1000,8 +1147,6 @@ static void bridge_connect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
         {
             int rc = connect(fd, (struct sockaddr *)&sun, sizeof(sun));
-            fprintf(stderr, "IRIX connect bridge: fd=%d path=%s -> %d errno=%d\n",
-                    fd, sun.sun_path, rc, rc < 0 ? errno : 0);
             ret_i32(cpu, rc);
         }
         return;
@@ -1029,11 +1174,6 @@ static void bridge_connect(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         sin.sin_addr.s_addr = htonl(address);
         {
             int rc = connect(fd, (struct sockaddr *)&sin, sizeof(sin));
-            fprintf(stderr,
-                    "IRIX connect bridge: fd=%d IPv4=%u.%u.%u.%u:%u -> %d errno=%d\n",
-                    fd, (address >> 24) & 0xffu, (address >> 16) & 0xffu,
-                    (address >> 8) & 0xffu, address & 0xffu, port,
-                    rc, rc < 0 ? errno : 0);
             ret_i32(cpu, rc);
         }
         return;
@@ -1091,8 +1231,6 @@ static void bridge_bind(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     {
         int rc = bind(fd, (struct sockaddr *)&sun, sizeof(sun));
-        fprintf(stderr, "IRIX bind bridge: fd=%d path=%s -> %d errno=%d\n",
-                fd, sun.sun_path, rc, rc < 0 ? errno : 0);
         ret_i32(cpu, rc);
     }
 }
@@ -1104,8 +1242,6 @@ static void bridge_listen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     (void)rt;
     {
         int rc = listen(fd, backlog);
-        fprintf(stderr, "IRIX listen bridge: fd=%d backlog=%d -> %d errno=%d\n",
-                fd, backlog, rc, rc < 0 ? errno : 0);
         ret_i32(cpu, rc);
     }
 }
@@ -1131,8 +1267,6 @@ static void bridge_accept(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     accepted = accept(fd, addr ? (struct sockaddr *)&sun : NULL,
                       addr ? &host_len : NULL);
-    fprintf(stderr, "IRIX accept bridge: fd=%d -> %d errno=%d\n",
-            fd, accepted, accepted < 0 ? errno : 0);
     if (accepted < 0) {
         ret_i32(cpu, -1);
         return;
@@ -1507,6 +1641,85 @@ static void bridge_sginap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, 0);
 }
 
+static void bridge_cftime(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr output = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr format_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr clock_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    const char *format = format_addr ? guest_cstr(rt, format_addr) : NULL;
+    int64_t seconds;
+    time_t host_seconds;
+    struct tm local;
+    char text[256];
+    char host_format[256];
+    size_t length;
+    char *guest_output;
+    size_t format_len, i, host_format_len = 0u;
+
+    if (!output || !clock_addr || rt->trapped) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    /* IRIX N32 uses 32-bit long, and IRIX time_t is a long. */
+    seconds = (int32_t)irix_guest_read32be(rt, clock_addr);
+    if (rt->trapped) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    host_seconds = (time_t)seconds;
+    if ((int64_t)host_seconds != seconds || !localtime_r(&host_seconds, &local)) {
+        errno = EOVERFLOW;
+        ret_i32(cpu, -1);
+        return;
+    }
+
+    /* SGI cftime(3C): cftime(char *s, char *format, const time_t *clock). */
+    if (!format || !*format) {
+        format = getenv("CFTIME");
+        if (!format || !*format)
+            format = "%c";
+    }
+    /* SGI cftime reserves %C for date(1)-style output; map it to libc %c. */
+    format_len = strlen(format);
+    for (i = 0; i < format_len; ++i) {
+        if (format[i] == '%' && i + 1u < format_len && format[i + 1u] == 'C') {
+            if (host_format_len + 2u >= sizeof(host_format)) {
+                errno = EOVERFLOW;
+                ret_i32(cpu, -1);
+                return;
+            }
+            host_format[host_format_len++] = '%';
+            host_format[host_format_len++] = 'c';
+            ++i;
+        } else {
+            if (host_format_len + 1u >= sizeof(host_format)) {
+                errno = EOVERFLOW;
+                ret_i32(cpu, -1);
+                return;
+            }
+            host_format[host_format_len++] = format[i];
+        }
+    }
+    host_format[host_format_len] = '\0';
+    length = strftime(text, sizeof(text), host_format, &local);
+    if (!length) {
+        errno = EOVERFLOW;
+        ret_i32(cpu, -1);
+        return;
+    }
+    guest_output = (char *)irix_guest_ptr(rt, output, (IrixGuestAddr)length + 1u);
+    if (!guest_output) {
+        errno = EFAULT;
+        ret_i32(cpu, -1);
+        return;
+    }
+    memcpy(guest_output, text, length + 1u);
+    ret_i32(cpu, (int)length);
+}
+
 IrixGuestFunction irix_posix_bridge_lookup(const char *name)
 {
     IrixGuestFunction fn = irix_posix_bridge_lookup_base(name);
@@ -1535,8 +1748,13 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "realpath")) return bridge_realpath;
     if (!strcmp(name, "execvp")) return bridge_execvp;
     if (!strcmp(name, "execl")) return bridge_execl;
+    if (!strcmp(name, "execle")) return bridge_execle;
     if (!strcmp(name, "exit")) return bridge_exit;
     if (!strcmp(name, "socket")) return bridge_socket;
+    if (!strcmp(name, "socketpair")) return bridge_socketpair;
+    if (!strcmp(name, "dlopen")) return bridge_dlopen;
+    if (!strcmp(name, "dlclose")) return bridge_dlclose;
+    if (!strcmp(name, "dlerror")) return bridge_dlerror;
     if (!strcmp(name, "connect")) return bridge_connect;
     if (!strcmp(name, "bind")) return bridge_bind;
     if (!strcmp(name, "listen")) return bridge_listen;
@@ -1545,6 +1763,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "select")) return bridge_select;
     if (!strcmp(name, "times")) return bridge_times;
     if (!strcmp(name, "sginap")) return bridge_sginap;
+    if (!strcmp(name, "cftime")) return bridge_cftime;
     if (!strcmp(name, "setutxent")) return bridge_setutxent;
     if (!strcmp(name, "endutxent")) return bridge_endutxent;
     if (!strcmp(name, "getutxent")) return bridge_getutxent;

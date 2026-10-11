@@ -5,6 +5,7 @@
 
 #include "IrixX11BridgeExtraAccess.h"
 #include "IrixX11WindowBridgeAccess.h"
+#include "IrixX11Color.h"
 
 #include <X11/Xutil.h>
 #include <stdint.h>
@@ -18,6 +19,47 @@ static uint32_t common_stack32(IrixGuestRuntime *rt, IrixGuestCpu *cpu, unsigned
 static const char *common_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     return irix_guest_cstr(rt, addr, 65536u);
+}
+
+static GC common_gc_from_guest(IrixGuestRuntime *rt, Display *display,
+                               Drawable drawable, IrixGuestAddr guest_gc,
+                               GC *owned_gc)
+{
+    GC gc;
+    XGCValues values;
+    unsigned long mask = GCFunction | GCPlaneMask | GCForeground |
+                         GCBackground;
+
+    *owned_gc = 0;
+    gc = irix_x11_primary_gc_from_guest(guest_gc);
+    if (gc)
+        return gc;
+
+    /*
+     * Original SGI libX11 keeps GC objects in guest memory. The standard
+     * Xmb/Xwc font-set calls are bridged to host Xlib, so a guest GC pointer
+     * cannot be passed through as a host GC. Copy the pixel and raster
+     * fields used for text into a short-lived host GC on the same Display.
+     */
+    if (!display || !guest_gc ||
+        !irix_guest_ptr(rt, guest_gc, 36u) || rt->trapped)
+        return 0;
+
+    memset(&values, 0, sizeof(values));
+    values.function = (int)irix_guest_read32be(rt, guest_gc + 20u);
+    values.plane_mask = (unsigned long)irix_guest_read32be(rt,
+                                                          guest_gc + 24u);
+    values.foreground = (unsigned long)irix_guest_read32be(rt,
+                                                           guest_gc + 28u);
+    values.background = (unsigned long)irix_guest_read32be(rt,
+                                                           guest_gc + 32u);
+    if (rt->trapped)
+        return 0;
+
+    gc = XCreateGC(display, drawable, mask, &values);
+    if (gc)
+        *owned_gc = gc;
+    return gc;
 }
 
 static IrixGuestAddr common_copy_string(IrixGuestRuntime *rt, const char *s)
@@ -200,22 +242,14 @@ static char **common_read_string_list(IrixGuestRuntime *rt, IrixGuestAddr vec, i
 static void bridge_common_XCreateColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr guest_display=(uint32_t)cpu->gpr[4];
-    IrixGuestAddr guest_visual=(uint32_t)cpu->gpr[6];
-    uint32_t visualid=0u;
     Display *d = irix_x11_primary_display_from_guest(guest_display);
+    IrixGuestAddr guest_visual=(uint32_t)cpu->gpr[6];
     Visual *v = d ? common_visual_from_guest(rt, d, guest_visual) : 0;
     Colormap cmap=0;
 
-    if (guest_visual && irix_guest_ptr(rt,guest_visual+4u,4u))
-        visualid=irix_guest_read32be(rt,guest_visual+4u);
     if (d && v)
         cmap=XCreateColormap(d,(Window)(uint32_t)cpu->gpr[5],v,(int)cpu->gpr[7]);
 
-    fprintf(stderr,
-            "IRIX XCreateColormap: guest_display=%08x window=%08x "
-            "guest_visual=%08x visualid=%08x alloc=%d result=%08lx\\n",
-            guest_display,(uint32_t)cpu->gpr[5],guest_visual,visualid,
-            (int)cpu->gpr[7],(unsigned long)cmap);
     cpu->gpr[2]=(uint32_t)cmap;
 }
 
@@ -256,9 +290,9 @@ static void bridge_common_XSetDashes(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Dis
 static void bridge_common_XCopyPlane(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);int dx=(int32_t)common_stack32(rt,cpu,0u),dy=(int32_t)common_stack32(rt,cpu,1u);unsigned long plane=(unsigned long)common_stack32(rt,cpu,2u);cpu->gpr[2]=(d&&gc)?(uint32_t)XCopyPlane(d,(Drawable)(uint32_t)cpu->gpr[5],(Drawable)(uint32_t)cpu->gpr[6],gc,(int)cpu->gpr[8],(int)cpu->gpr[9],(unsigned)cpu->gpr[10],(unsigned)cpu->gpr[11],dx,dy,plane):0;}
 
 static void bridge_common_XStoreColor(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XColor c;cpu->gpr[2]=(d&&common_read_color(rt,(uint32_t)cpu->gpr[6],&c))?(uint32_t)XStoreColor(d,(Colormap)(uint32_t)cpu->gpr[5],&c):0;}
-static void bridge_common_XLookupColor(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[6]);XColor exact,screen;Status ok=(d&&s)?XLookupColor(d,(Colormap)(uint32_t)cpu->gpr[5],s,&exact,&screen):0;if(ok){common_write_color(rt,(uint32_t)cpu->gpr[7],&exact);common_write_color(rt,(uint32_t)cpu->gpr[8],&screen);}cpu->gpr[2]=(uint32_t)ok;}
-static void bridge_common_XAllocNamedColor(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];const char*s=common_cstr(rt,(uint32_t)cpu->gpr[6]);XColor screen,exact;Status ok=0;if(d&&s){if(!cmap)cmap=DefaultColormap(d,DefaultScreen(d));ok=XAllocNamedColor(d,cmap,s,&screen,&exact);}if(ok){common_write_color(rt,(uint32_t)cpu->gpr[7],&screen);common_write_color(rt,(uint32_t)cpu->gpr[8],&exact);}fprintf(stderr,"IRIX XAllocNamedColor: cmap=%08lx name=%s ok=%d pixel=%08lx\n",(unsigned long)cmap,s?s:"<NULL>",ok,(unsigned long)(ok?screen.pixel:0));cpu->gpr[2]=(uint32_t)ok;}
-static void bridge_common_XQueryColors(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];IrixGuestAddr ga=(uint32_t)cpu->gpr[6];int n=(int32_t)cpu->gpr[7];XColor*cols=0;int i;if(d&&n>0&&ga&&irix_guest_ptr(rt,ga,(size_t)n*12u)){cols=(XColor*)calloc((size_t)n,sizeof(XColor));if(cols){for(i=0;i<n;++i)common_read_color(rt,ga+(IrixGuestAddr)i*12u,&cols[i]);if(!cmap)cmap=DefaultColormap(d,DefaultScreen(d));XQueryColors(d,cmap,cols,n);for(i=0;i<n;++i)common_write_color(rt,ga+(IrixGuestAddr)i*12u,&cols[i]);free(cols);fprintf(stderr,"IRIX XQueryColors: cmap=%08lx n=%d\n",(unsigned long)cmap,n);}}cpu->gpr[2]=0;}
+static void bridge_common_XLookupColor(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[6]);XColor exact,screen;Status ok=(d&&s)?irix_x11_lookup_color(rt,d,(Colormap)(uint32_t)cpu->gpr[5],s,&exact,&screen):0;if(ok){common_write_color(rt,(uint32_t)cpu->gpr[7],&exact);common_write_color(rt,(uint32_t)cpu->gpr[8],&screen);}cpu->gpr[2]=(uint32_t)ok;}
+static void bridge_common_XAllocNamedColor(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];const char*s=common_cstr(rt,(uint32_t)cpu->gpr[6]);XColor screen,exact;Status ok=0;if(d&&s){if(!cmap)cmap=DefaultColormap(d,DefaultScreen(d));ok=irix_x11_alloc_named_color(rt,d,cmap,s,&screen,&exact);}if(ok){common_write_color(rt,(uint32_t)cpu->gpr[7],&screen);common_write_color(rt,(uint32_t)cpu->gpr[8],&exact);}cpu->gpr[2]=(uint32_t)ok;}
+static void bridge_common_XQueryColors(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];IrixGuestAddr ga=(uint32_t)cpu->gpr[6];int n=(int32_t)cpu->gpr[7];XColor*cols=0;int i;if(d&&n>0&&ga&&irix_guest_ptr(rt,ga,(size_t)n*12u)){cols=(XColor*)calloc((size_t)n,sizeof(XColor));if(cols){for(i=0;i<n;++i)common_read_color(rt,ga+(IrixGuestAddr)i*12u,&cols[i]);if(!cmap)cmap=DefaultColormap(d,DefaultScreen(d));XQueryColors(d,cmap,cols,n);for(i=0;i<n;++i)common_write_color(rt,ga+(IrixGuestAddr)i*12u,&cols[i]);free(cols);}}cpu->gpr[2]=0;}
 
 static void bridge_common_XGetErrorDatabaseText(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*n=common_cstr(rt,(uint32_t)cpu->gpr[5]);const char*m=common_cstr(rt,(uint32_t)cpu->gpr[6]);const char*def=common_cstr(rt,(uint32_t)cpu->gpr[7]);char*b=(char*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[8],(size_t)(uint32_t)cpu->gpr[9]);cpu->gpr[2]=(d&&n&&m&&def&&b)?(uint32_t)XGetErrorDatabaseText(d,n,m,def,b,(int)cpu->gpr[9]):0;}
 
@@ -309,16 +343,11 @@ static void bridge_common_XMatchVisualInfo(IrixGuestRuntime *rt,IrixGuestCpu *cp
         irix_guest_write32be(rt,out+32u,(uint32_t)v.colormap_size);
         irix_guest_write32be(rt,out+36u,(uint32_t)v.bits_per_rgb);
     }
-    fprintf(stderr,
-            "IRIX XMatchVisualInfo: guest_display=%08x screen=%d depth=%d "
-            "class=%d ok=%d out=%08x visualid=%08lx\\n",
-            guest_display,screen,depth,visual_class,(int)ok,out,
-            (unsigned long)(ok?v.visualid:0));
     cpu->gpr[2]=(uint32_t)ok;
 }
 
 static void bridge_common_XListDepths(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);int n=0,i;int*list=d?XListDepths(d,(int)cpu->gpr[5],&n):0;IrixGuestAddr out=0;if(list&&n>0){out=bulk_alloc((uint32_t)n*4u);if(out)for(i=0;i<n;++i)irix_guest_write32be(rt,out+(IrixGuestAddr)i*4u,(uint32_t)list[i]);}if(list)XFree(list);if((uint32_t)cpu->gpr[6])irix_guest_write32be(rt,(uint32_t)cpu->gpr[6],(uint32_t)n);cpu->gpr[2]=out;}
-static void bridge_common_XLoadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);Font f=0;if(d){if(!s||!*s)s="fixed";f=XLoadFont(d,s);if(!f&&strcmp(s,"fixed"))f=XLoadFont(d,"fixed");}fprintf(stderr,"IRIX XLoadFont: name=%s result=%08lx\n",s?s:"<NULL>",(unsigned long)f);cpu->gpr[2]=(uint32_t)f;}
+static void bridge_common_XLoadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);Font f=0;if(d){if(!s||!*s)s="fixed";f=XLoadFont(d,s);if(!f&&strcmp(s,"fixed"))f=XLoadFont(d,"fixed");}cpu->gpr[2]=(uint32_t)f;}
 static void bridge_common_XUnloadFont(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);(void)rt;cpu->gpr[2]=d?(uint32_t)XUnloadFont(d,(Font)(uint32_t)cpu->gpr[5]):0;}
 
 static void bridge_common_XTextWidth(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontStruct*f=irix_x11_primary_font_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);cpu->gpr[2]=(uint64_t)(int64_t)((f&&s)?XTextWidth(f,s,(int)cpu->gpr[6]):0);}
@@ -328,13 +357,49 @@ static void common_write_char_struct(IrixGuestRuntime *rt,IrixGuestAddr a,const 
 static void bridge_common_XTextExtents(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontStruct*f=irix_x11_primary_font_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);int dir=0,asc=0,desc=0;XCharStruct overall;memset(&overall,0,sizeof(overall));if(f&&s)XTextExtents(f,s,(int)cpu->gpr[6],&dir,&asc,&desc,&overall);if((uint32_t)cpu->gpr[7])irix_guest_write32be(rt,(uint32_t)cpu->gpr[7],(uint32_t)dir);if((uint32_t)cpu->gpr[8])irix_guest_write32be(rt,(uint32_t)cpu->gpr[8],(uint32_t)asc);if((uint32_t)cpu->gpr[9])irix_guest_write32be(rt,(uint32_t)cpu->gpr[9],(uint32_t)desc);common_write_char_struct(rt,(uint32_t)cpu->gpr[10],&overall);cpu->gpr[2]=0;}
 static void bridge_common_XTextExtents16(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontStruct*f=irix_x11_primary_font_from_guest((uint32_t)cpu->gpr[4]);int n=(int32_t)cpu->gpr[6];XChar2b*s=(XChar2b*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[5],n>0?(size_t)n*2u:1u);int dir=0,asc=0,desc=0;XCharStruct overall;memset(&overall,0,sizeof(overall));if(f&&s)XTextExtents16(f,s,n,&dir,&asc,&desc,&overall);if((uint32_t)cpu->gpr[7])irix_guest_write32be(rt,(uint32_t)cpu->gpr[7],(uint32_t)dir);if((uint32_t)cpu->gpr[8])irix_guest_write32be(rt,(uint32_t)cpu->gpr[8],(uint32_t)asc);if((uint32_t)cpu->gpr[9])irix_guest_write32be(rt,(uint32_t)cpu->gpr[9],(uint32_t)desc);common_write_char_struct(rt,(uint32_t)cpu->gpr[10],&overall);cpu->gpr[2]=0;}
 
-static void bridge_common_XDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[9]);cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,(int)cpu->gpr[10]):0;}
-static void bridge_common_XDrawImageString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[9]);cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawImageString(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,(int)cpu->gpr[10]):0;}
+static void bridge_common_XDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[9]);int n=(int32_t)cpu->gpr[10];cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,n):0;}
+static void bridge_common_XDrawImageString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[9]);int n=(int32_t)cpu->gpr[10];cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawImageString(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,n):0;}
 static void bridge_common_XDrawString16(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);int n=(int32_t)cpu->gpr[10];XChar2b*s=(XChar2b*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[9],n>0?(size_t)n*2u:1u);cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawString16(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,n):0;}
 static void bridge_common_XDrawImageString16(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[6]);int n=(int32_t)cpu->gpr[10];XChar2b*s=(XChar2b*)irix_guest_ptr(rt,(uint32_t)cpu->gpr[9],n>0?(size_t)n*2u:1u);cpu->gpr[2]=(d&&gc&&s)?(uint32_t)XDrawImageString16(d,(Drawable)(uint32_t)cpu->gpr[5],gc,(int)cpu->gpr[7],(int)cpu->gpr[8],s,n):0;}
 
-static void bridge_common_XmbDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[10]);if(d&&fs&&gc&&s)XmbDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],fs,gc,(int)cpu->gpr[8],(int)cpu->gpr[9],s,(int)cpu->gpr[11]);cpu->gpr[2]=0;}
-static void bridge_common_XmbDrawImageString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[10]);if(d&&fs&&gc&&s)XmbDrawImageString(d,(Drawable)(uint32_t)cpu->gpr[5],fs,gc,(int)cpu->gpr[8],(int)cpu->gpr[9],s,(int)cpu->gpr[11]);cpu->gpr[2]=0;}
+static void bridge_common_XmbDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{
+    Display *d=irix_x11_window_font_display_from_guest(rt,(uint32_t)cpu->gpr[4]);
+    Drawable drawable=(Drawable)(uint32_t)cpu->gpr[5];
+    XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);
+    GC owned_gc=0;
+    GC gc=common_gc_from_guest(rt,d,drawable,(uint32_t)cpu->gpr[7],&owned_gc);
+    const char *s=common_cstr(rt,(uint32_t)cpu->gpr[10]);
+    int n=(int32_t)cpu->gpr[11];
+
+    /* Flush SGI Xlib's private connection before drawing through host Xlib. */
+    (void)irix_x11_window_sync_guest_display(rt,cpu,(uint32_t)cpu->gpr[4]);
+    if(d&&fs&&gc&&s)
+        XmbDrawString(d,drawable,fs,gc,(int)cpu->gpr[8],
+                      (int)cpu->gpr[9],s,n);
+    if (d) XSync(d, False);
+    if(owned_gc) XFreeGC(d,owned_gc);
+    cpu->gpr[2]=0;
+}
+
+static void bridge_common_XmbDrawImageString(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{
+    Display *d=irix_x11_window_font_display_from_guest(rt,(uint32_t)cpu->gpr[4]);
+    Drawable drawable=(Drawable)(uint32_t)cpu->gpr[5];
+    XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);
+    GC owned_gc=0;
+    GC gc=common_gc_from_guest(rt,d,drawable,(uint32_t)cpu->gpr[7],&owned_gc);
+    const char *s=common_cstr(rt,(uint32_t)cpu->gpr[10]);
+    int n=(int32_t)cpu->gpr[11];
+
+    (void)irix_x11_window_sync_guest_display(rt,cpu,(uint32_t)cpu->gpr[4]);
+    if(d&&fs&&gc&&s)
+        XmbDrawImageString(d,drawable,fs,gc,(int)cpu->gpr[8],
+                           (int)cpu->gpr[9],s,n);
+    if (d) XSync(d, False);
+    if(owned_gc) XFreeGC(d,owned_gc);
+    cpu->gpr[2]=0;
+}
 static void bridge_common_XmbTextEscapement(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);cpu->gpr[2]=(uint64_t)(int64_t)((fs&&s)?XmbTextEscapement(fs,s,(int)cpu->gpr[6]):0);}
 
 static void bridge_common_XGrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
@@ -344,15 +409,7 @@ static void bridge_common_XGrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
     int result=d?XGrabButton(d,(unsigned)cpu->gpr[5],(unsigned)cpu->gpr[6],
         (Window)(uint32_t)cpu->gpr[7],(Bool)cpu->gpr[8],(unsigned)cpu->gpr[9],
         (int)cpu->gpr[10],(int)cpu->gpr[11],confine,cursor):0;
-    if(getenv("IRIX_INPUT_TRACE"))
-        fprintf(stderr,"IRIX XGrabButton: button=%u modifiers=0x%x window=0x%08x owner=%u mask=0x%x pointer=%d keyboard=%d confine=0x%08lx cursor=0x%08lx result=%d ra=%08x sp=%08x slots=%08x,%08x overflow=%08x,%08x\n",
-            (unsigned)cpu->gpr[5],(unsigned)cpu->gpr[6],(uint32_t)cpu->gpr[7],
-            (unsigned)cpu->gpr[8],(unsigned)cpu->gpr[9],(int)cpu->gpr[10],
-            (int)cpu->gpr[11],(unsigned long)confine,(unsigned long)cursor,result,
-            (uint32_t)cpu->gpr[31],(uint32_t)cpu->gpr[29],
-            common_stack32(rt,cpu,0u),common_stack32(rt,cpu,1u),
-            (uint32_t)irix_guest_read64be(rt,(IrixGuestAddr)(uint32_t)cpu->gpr[29]+64u),
-            (uint32_t)irix_guest_read64be(rt,(IrixGuestAddr)(uint32_t)cpu->gpr[29]+72u));
+    
     cpu->gpr[2]=(uint32_t)result;
 }
 static void bridge_common_XUngrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUngrabButton(d,(unsigned)cpu->gpr[5],(unsigned)cpu->gpr[6],(Window)(uint32_t)cpu->gpr[7]):0;(void)rt;}

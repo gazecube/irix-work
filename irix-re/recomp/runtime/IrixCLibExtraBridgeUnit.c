@@ -548,17 +548,11 @@ static void bridge_guest_setoserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (value == 135 &&
         caller_name &&
         !strcmp(caller_name, "_imdFtrGetType")) {
-        fprintf(stderr,
-                "IRIX desktop bring-up: suppress "
-                "_imdFtrGetType EUCLEAN(135) ra=%08x\n",
-                ra);
+        
         value = 0;
     }
 
-    fprintf(stderr,
-            "IRIX setoserror trace: old=%d new=%d caller_pc=%08x "
-            "ra=%08x caller=%s\n",
-            old, value, (uint32_t)cpu->pc, ra, caller_name);
+    
     g_guest_oserror = value;
     cpu->gpr[2] = (uint64_t)(int64_t)old;
 }
@@ -567,11 +561,7 @@ static void bridge_guest_oserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr ra = (IrixGuestAddr)(uint32_t)cpu->gpr[31];
     IrixGuestFunctionEntry *caller = irix_guest_find_function(rt, ra);
-    fprintf(stderr,
-            "IRIX oserror trace: value=%d caller_pc=%08x "
-            "ra=%08x caller=%s\n",
-            g_guest_oserror, (uint32_t)cpu->pc, ra,
-            caller && caller->name ? caller->name : "?");
+    
     cpu->gpr[2] = (uint64_t)(int64_t)g_guest_oserror;
 }
 

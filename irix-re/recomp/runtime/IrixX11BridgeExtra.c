@@ -1,5 +1,6 @@
 #include "IrixGuest.h"
 #include "IrixX11BridgeExtraAccess.h"
+#include "IrixX11WindowBridgeAccess.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xlibint.h>
@@ -325,9 +326,7 @@ static void write_display_shadow(size_t i, Display *dpy)
 
     if (host_formats) XFree(host_formats);
 
-    fprintf(stderr,
-            "IRIX Display shadow: guest=%08x free_funcs=%08x min_keycode=%d max_keycode=%d screens=%d\\n",
-            d, free_funcs, min_keycode, max_keycode, ns);
+    
 
     if (ns > 16) ns = 16;
     for (s = 0; s < ns; ++s) {
@@ -411,11 +410,7 @@ static void write_display_shadow(size_t i, Display *dpy)
         wr32(rt, gs + 72, (uint32_t)hs->save_unders);
         wr32(rt, gs + 76, (uint32_t)hs->root_input_mask);
 
-        fprintf(stderr,
-                "IRIX Screen visual shadow: screen=%d depths=%d depth_list=%08x "
-                "default_visual=%08x visualid=%08lx\\n",
-                s, gdepths ? hs->ndepths : 0, gdepths, gv,
-                (unsigned long)(hv ? hv->visualid : 0));
+        
     }
 }
 
@@ -665,26 +660,17 @@ static int irix_host_xerror_continue(Display *dpy, XErrorEvent *ev)
 
 static void bridge_XOpenDisplay(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    IrixGuestAddr name_addr = (uint32_t)cpu->gpr[4];
-    const char *name = guest_cstr(rt, name_addr);
-    const char *host_display = getenv("DISPLAY");
+    const char *name = guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
     Display *dpy;
     IrixGuestAddr guest_display;
 
-    fprintf(stderr,
-            "IRIX XOpenDisplay: guest_name=0x%08x name=%s%s%s host_DISPLAY=%s%s%s\\n",
-            name_addr,
-            name ? "\\\"" : "<", name ? name : "NULL", name ? "\\\"" : ">",
-            host_display ? "\\\"" : "<", host_display ? host_display : "NULL",
-            host_display ? "\\\"" : ">");
+    
 
     dpy = XOpenDisplay(name);
     if (dpy)
         XSetErrorHandler(irix_host_xerror_continue);
     guest_display = display_to_guest(dpy);
-    fprintf(stderr,
-            "IRIX XOpenDisplay: host_result=%p guest_result=0x%08x\\n",
-            (void *)dpy, guest_display);
+    
     cpu->gpr[2] = guest_display;
 }
 
@@ -931,8 +917,24 @@ static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt; \
     cpu->gpr[2] = d ? (uint32_t)(call) : 0; }
 
-SIMPLE_DISPLAY0(bridge_XFlush, XFlush(d))
-SIMPLE_DISPLAY0(bridge_XSync, XSync(d, (Bool)cpu->gpr[5]))
+static void bridge_XFlush(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_display = (uint32_t)cpu->gpr[4];
+    Display *d = display_from_guest(guest_display);
+    cpu->gpr[2] = d ? (uint32_t)XFlush(d)
+                     : (uint32_t)irix_x11_window_flush_guest_display(rt,
+                                                                      guest_display);
+}
+
+static void bridge_XSync(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_display = (uint32_t)cpu->gpr[4];
+    Display *d = display_from_guest(guest_display);
+    cpu->gpr[2] = d ? (uint32_t)XSync(d, (Bool)cpu->gpr[5])
+                     : (uint32_t)irix_x11_window_sync_guest_display(rt, cpu,
+                                                                     guest_display);
+}
+
 SIMPLE_DISPLAY0(bridge_XPending, XPending(d))
 #define IRIX_XEVENT_SIZE 96u
 
@@ -1304,34 +1306,9 @@ static void bridge_XNextEvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    if (getenv("IRIX_INPUT_TRACE") &&
-        (e.type == ButtonPress || e.type == ButtonRelease ||
-         e.type == MotionNotify || e.type == EnterNotify ||
-         e.type == LeaveNotify)) {
-        if (e.type == ButtonPress || e.type == ButtonRelease)
-            fprintf(stderr,
-                    "IRIX input event: type=%d window=%08x root=%08lx sub=%08lx xy=%d,%d rootxy=%d,%d state=0x%x button=%u same=%d\n",
-                    e.type, (uint32_t)e.xbutton.window,
-                    (unsigned long)e.xbutton.root,
-                    (unsigned long)e.xbutton.subwindow, e.xbutton.x,
-                    e.xbutton.y, e.xbutton.x_root, e.xbutton.y_root,
-                    e.xbutton.state, e.xbutton.button, e.xbutton.same_screen);
-        else
-            fprintf(stderr,
-                    "IRIX input event: type=%d window=%08x root=%08lx sub=%08lx xy=%d,%d rootxy=%d,%d state=0x%x mode=%d detail=%d\n",
-                    e.type, (uint32_t)e.xany.window,
-                    (unsigned long)e.xcrossing.root,
-                    (unsigned long)e.xcrossing.subwindow, e.xcrossing.x,
-                    e.xcrossing.y, e.xcrossing.x_root, e.xcrossing.y_root,
-                    e.xcrossing.state, e.xcrossing.mode, e.xcrossing.detail);
-    }
-    fprintf(stderr,
-            "IRIX XNextEvent: type=%d window=%08x -> guest=%08x\n",
-            e.type, (uint32_t)e.xany.window, out);
-    if (e.type == MapRequest)
-        fprintf(stderr, "IRIX MapRequest: parent=%08x client=%08x\n",
-                (uint32_t)e.xmaprequest.parent,
-                (uint32_t)e.xmaprequest.window);
+    
+    
+    
     cpu->gpr[2] = 0;
 }
 
@@ -1362,16 +1339,7 @@ static void bridge_XLookupString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     rc = XLookupString(&e, buf, bytes, keysym_addr ? &ks : NULL, NULL);
     if (keysym_addr) wr32(rt, keysym_addr, (uint32_t)ks);
-    fprintf(stderr,
-            "IRIX XLookupString: keycode=%u state=0x%x bytes=%d rc=%d keysym=0x%lx",
-            e.keycode, e.state, bytes, rc, (unsigned long)ks);
-    if (rc > 0 && buf) {
-        int i;
-        fputs(" data=", stderr);
-        for (i = 0; i < rc; ++i)
-            fprintf(stderr, "%02x", (unsigned char)buf[i]);
-    }
-    fputc('\n', stderr);
+    
     cpu->gpr[2] = (uint32_t)rc;
 }
 
@@ -1413,13 +1381,7 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         (unsigned int)cpu->gpr[7], (int)cpu->gpr[8], (int)cpu->gpr[9],
         (Window)(uint32_t)cpu->gpr[10], (Cursor)(uint32_t)cpu->gpr[11],
         (Time)time) : GrabNotViewable;
-        if (getenv("IRIX_INPUT_TRACE"))
-            fprintf(stderr,
-                    "IRIX XGrabPointer: window=%08x owner=%u mask=0x%x pointer=%d keyboard=%d confine=%08x cursor=%08x time=%u result=%d\n",
-                    (uint32_t)cpu->gpr[5], (unsigned)cpu->gpr[6],
-                    (unsigned)cpu->gpr[7], (int)cpu->gpr[8],
-                    (int)cpu->gpr[9], (uint32_t)cpu->gpr[10],
-                    (uint32_t)cpu->gpr[11], time, result);
+        
         cpu->gpr[2] = (uint32_t)result;
     }
 }
@@ -1436,15 +1398,24 @@ SIMPLE_DISPLAY0(bridge_XBell, XBell(d, (int)cpu->gpr[5]))
 
 static void bridge_XCreateSimpleWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    unsigned long background_pixel =
+        (unsigned long)irix_guest_read64be(rt, sp + 64u);
+    if (rt->trapped) {
+        cpu->gpr[2] = 0;
+        return;
+    }
     cpu->gpr[2] = d ? (uint32_t)XCreateSimpleWindow(d, (Window)(uint32_t)cpu->gpr[5],
         (int)cpu->gpr[6], (int)cpu->gpr[7], (unsigned)cpu->gpr[8], (unsigned)cpu->gpr[9],
-        (unsigned)cpu->gpr[10], (unsigned long)cpu->gpr[11], (unsigned long)cpu->gpr[12]) : 0;
+        (unsigned)cpu->gpr[10], (unsigned long)cpu->gpr[11],
+        background_pixel) : 0;
 }
 
 #define WINDOW_CALL1(name, call) \
 static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
-    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt; \
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]); \
+    (void)rt; \
     cpu->gpr[2] = d ? (uint32_t)(call) : 0; }
 
 WINDOW_CALL1(bridge_XDestroyWindow, XDestroyWindow(d, (Window)(uint32_t)cpu->gpr[5]))
@@ -1460,8 +1431,7 @@ static void bridge_XMoveWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Window w = (Window)(uint32_t)cpu->gpr[5];
     int x = (int32_t)cpu->gpr[6], y = (int32_t)cpu->gpr[7];
     (void)rt;
-    fprintf(stderr, "IRIX XMoveWindow: serial=%lu window=0x%lx x=%d y=%d\\n",
-            d ? NextRequest(d) : 0ul, (unsigned long)w, x, y);
+    
     cpu->gpr[2] = d ? (uint32_t)XMoveWindow(d, w, x, y) : 0;
 }
 
@@ -1472,11 +1442,7 @@ static void bridge_XResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     unsigned width = (unsigned)cpu->gpr[6], height = (unsigned)cpu->gpr[7];
     IrixGuestAddr caller = (uint32_t)cpu->gpr[31];
     const IrixGuestFunctionEntry *ce = irix_guest_find_function(rt, caller);
-    fprintf(stderr,
-            "IRIX XResizeWindow: serial=%lu caller=0x%08x %s window=0x%lx width=%u height=%u\\n",
-            d ? NextRequest(d) : 0ul, caller,
-            (ce && ce->name) ? ce->name : "?",
-            (unsigned long)w, width, height);
+    
     cpu->gpr[2] = d ? (uint32_t)XResizeWindow(d, w, width, height) : 0;
 }
 
@@ -1487,9 +1453,7 @@ static void bridge_XMoveResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int x = (int32_t)cpu->gpr[6], y = (int32_t)cpu->gpr[7];
     unsigned width = (unsigned)cpu->gpr[8], height = (unsigned)cpu->gpr[9];
     (void)rt;
-    fprintf(stderr,
-            "IRIX XMoveResizeWindow: serial=%lu window=0x%lx x=%d y=%d width=%u height=%u\\n",
-            d ? NextRequest(d) : 0ul, (unsigned long)w, x, y, width, height);
+    
     cpu->gpr[2] = d ? (uint32_t)XMoveResizeWindow(d, w, x, y, width, height) : 0;
 }
 
@@ -1507,20 +1471,7 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     memset(&v, 0, sizeof(v));
-    if (getenv("IRIX_GEOMETRY_TRACE"))
-        fprintf(stderr,
-                "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x x=%d y=%d width=%d height=%d border=%d sibling=%08x stack=%d\\n",
-                NextRequest(d), (unsigned long)w, mask, (unsigned)a,
-                (int32_t)irix_guest_read32be(rt, a + 0u),
-                (int32_t)irix_guest_read32be(rt, a + 4u),
-                (int32_t)irix_guest_read32be(rt, a + 8u),
-                (int32_t)irix_guest_read32be(rt, a + 12u),
-                (int32_t)irix_guest_read32be(rt, a + 16u),
-                irix_guest_read32be(rt, a + 20u),
-                (int32_t)irix_guest_read32be(rt, a + 24u));
-    else
-        fprintf(stderr, "IRIX XConfigureWindow bridge: serial=%lu window=0x%lx mask=0x%x changes=0x%08x\\n",
-                NextRequest(d), (unsigned long)w, mask, (unsigned)a);
+    
     v.x = (int32_t)irix_guest_read32be(rt, a + 0u);
     v.y = (int32_t)irix_guest_read32be(rt, a + 4u);
     v.width = (int32_t)irix_guest_read32be(rt, a + 8u);
@@ -1542,11 +1493,6 @@ static void bridge_XSelectInput(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         cpu->gpr[2] = 0;
         return;
     }
-
-    if (mask & SubstructureRedirectMask)
-        fprintf(stderr, "IRIX XSelectInput WM claim: window=0x%lx mask=0x%lx root=0x%lx\n",
-                (unsigned long)w, (unsigned long)mask,
-                (unsigned long)DefaultRootWindow(d));
 
     rc = XSelectInput(d, w, mask);
     cpu->gpr[2] = (uint32_t)rc;
@@ -1720,9 +1666,22 @@ static void bridge_XFillRectangle(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XCopyArea(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *d=display_from_guest((uint32_t)cpu->gpr[4]); GC gc=gc_from_guest((uint32_t)cpu->gpr[7]); (void)rt;
+    Display *d=display_from_guest((uint32_t)cpu->gpr[4]); GC gc=gc_from_guest((uint32_t)cpu->gpr[7]);
+    IrixGuestAddr sp=(IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    /* The N32 caller places the final two arguments at SP and SP+8. */
+    int dest_x=(int32_t)irix_guest_read64be(rt,sp);
+    int dest_y=(int32_t)irix_guest_read64be(rt,sp+8u);
+    if(rt->trapped){cpu->gpr[2]=0;return;}
     cpu->gpr[2]=(d&&gc)?(uint32_t)XCopyArea(d,(Drawable)(uint32_t)cpu->gpr[5],(Drawable)(uint32_t)cpu->gpr[6],gc,
-        (int)cpu->gpr[8],(int)cpu->gpr[9],(unsigned)cpu->gpr[10],(unsigned)cpu->gpr[11],(int)cpu->gpr[12],(int)cpu->gpr[13]):0;
+        (int)cpu->gpr[8],(int)cpu->gpr[9],(unsigned)cpu->gpr[10],(unsigned)cpu->gpr[11],dest_x,dest_y):0;
+}
+
+static uint32_t n32_stack_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                unsigned index)
+{
+    IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+    return (uint32_t)irix_guest_read64be(
+        rt, sp + (IrixGuestAddr)(index * 8u));
 }
 
 static void bridge_XGetGeometry(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -1731,7 +1690,8 @@ static void bridge_XGetGeometry(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (d) s=XGetGeometry(d,(Drawable)(uint32_t)cpu->gpr[5],&root,&x,&y,&w,&h,&b,&depth);
     wr32(rt,(uint32_t)cpu->gpr[6],(uint32_t)root); wr32(rt,(uint32_t)cpu->gpr[7],(uint32_t)x);
     wr32(rt,(uint32_t)cpu->gpr[8],(uint32_t)y); wr32(rt,(uint32_t)cpu->gpr[9],w);
-    wr32(rt,(uint32_t)cpu->gpr[10],h); wr32(rt,(uint32_t)cpu->gpr[11],b); wr32(rt,(uint32_t)cpu->gpr[12],depth);
+    wr32(rt,(uint32_t)cpu->gpr[10],h); wr32(rt,(uint32_t)cpu->gpr[11],b);
+    wr32(rt,n32_stack_arg32(rt,cpu,0u),depth);
     cpu->gpr[2]=(uint32_t)s;
 }
 
@@ -1786,13 +1746,10 @@ static void bridge_XCreateFontCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         XUnloadFont(d, font);
     }
     if (d && !cursor) {
-        source = "host-fallback";
         cursor = XCreateFontCursor(d, shape);
     }
     (void)rt;
-    fprintf(stderr,
-            "IRIX XCreateFontCursor: shape=%u source=%s -> cursor=%08lx\n",
-            shape, source, (unsigned long)cursor);
+    
     /* 4Dwm's pointerColor resource creates/recolors its normal pointer but
        the SGI startup path never defines that cursor on the root window.
        Keep this opt-in so ordinary X clients retain Xlib semantics.  Defer
@@ -1834,10 +1791,6 @@ static void bridge_XRecolorCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             Window root = DefaultRootWindow(d);
             XDefineCursor(d, root, cursor);
             XSync(d, False);
-            fprintf(stderr,
-                    "IRIX 4Dwm recolored root pointer: cursor=%08lx fg=%04x/%04x/%04x bg=%04x/%04x/%04x\n",
-                    (unsigned long)cursor, fg.red, fg.green, fg.blue,
-                    bg.red, bg.green, bg.blue);
         }
     }
 }
@@ -1851,9 +1804,7 @@ static void bridge_XDefineCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Cursor cursor = (Cursor)(uint32_t)cpu->gpr[6];
     int rc = d ? XDefineCursor(d, w, cursor) : 0;
     (void)rt;
-    fprintf(stderr,
-            "IRIX XDefineCursor: window=%08lx cursor=%08lx -> %d\n",
-            (unsigned long)w, (unsigned long)cursor, rc);
+    
     if (d) XFlush(d);
     cpu->gpr[2] = (uint32_t)rc;
 }
@@ -1864,9 +1815,7 @@ static void bridge_XUndefineCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Window w = (Window)(uint32_t)cpu->gpr[5];
     int rc = d ? XUndefineCursor(d, w) : 0;
     (void)rt;
-    fprintf(stderr,
-            "IRIX XUndefineCursor: window=%08lx -> %d\n",
-            (unsigned long)w, rc);
+    
     if (d) XFlush(d);
     cpu->gpr[2] = (uint32_t)rc;
 }

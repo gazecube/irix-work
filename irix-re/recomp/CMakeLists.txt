@@ -52,6 +52,77 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     )
     add_test(NAME irix_guest_path_test COMMAND irix_guest_path_test)
+
+    add_executable(irix_guest_identity_test tests/IrixGuestIdentityTest.c)
+    target_link_libraries(irix_guest_identity_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_guest_identity_test COMMAND irix_guest_identity_test)
+
+    add_executable(irix_guest_memory_io_test tests/IrixGuestMemoryIoTest.c)
+    target_link_libraries(irix_guest_memory_io_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_guest_memory_io_test COMMAND irix_guest_memory_io_test)
+
+    add_executable(irix_mips_call_boundary_test tests/IrixMipsCallBoundaryTest.c)
+    target_link_libraries(irix_mips_call_boundary_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_mips_call_boundary_test COMMAND irix_mips_call_boundary_test)
+
+    add_executable(irix_posix_cftime_test tests/IrixPosixCftimeTest.c)
+    target_link_libraries(irix_posix_cftime_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        m
+    )
+    add_test(NAME irix_posix_cftime_test COMMAND irix_posix_cftime_test)
+
+    add_executable(irix_posix_cuserid_test tests/IrixPosixCuseridTest.c)
+    target_link_libraries(irix_posix_cuserid_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_posix_cuserid_test COMMAND irix_posix_cuserid_test)
+
+    add_executable(irix_posix_execle_test tests/IrixPosixExecleTest.c)
+    target_link_libraries(irix_posix_execle_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_posix_execle_test COMMAND irix_posix_execle_test)
 endif()
 
 add_library(irix_recomp_libc_bridge STATIC
@@ -88,6 +159,14 @@ find_library(IRIX_HOST_XT_LIBRARY NAMES Xt
     NO_DEFAULT_PATH
 )
 if(X11_FOUND)
+    if(BUILD_TESTING)
+        add_executable(irix_x11_color_test
+            tests/IrixX11ColorTest.c runtime/IrixX11Color.c runtime/IrixPath.c)
+        target_include_directories(irix_x11_color_test PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/runtime)
+        target_link_libraries(irix_x11_color_test PRIVATE X11::X11)
+        add_test(NAME irix_x11_color_test COMMAND irix_x11_color_test)
+    endif()
     add_library(irix_recomp_x11_bridge STATIC
         runtime/IrixX11BridgeUnit.c
         runtime/IrixX11BridgeExtraUnit.c
@@ -96,6 +175,7 @@ if(X11_FOUND)
         runtime/IrixX11ContextBridge.c
         runtime/IrixX11BridgeBulkUnit.c
         runtime/IrixRuntimeX11Bridge.c
+        runtime/IrixX11Color.c
         runtime/IrixRuntimeXtBridge.c
         runtime/IrixX11WindowBridgeUnit.c
         runtime/IrixX11ImageBridgeUnit.c
@@ -291,8 +371,53 @@ if(IRIX_DEV_TREE)
                     GROUP_READ GROUP_EXECUTE
                     WORLD_READ WORLD_EXECUTE)
 
+            # The default 4Dwm Log Out action runs the original endsession
+            # script. Stage the script and interpreter; gettxt, xconfirm, and
+            # xprop are built as normal guest applications at their IRIX paths.
+            add_custom_target(irix_session_logout_payloads
+                COMMAND "${CMAKE_COMMAND}" -E make_directory
+                        "${IRIX_RECOMP_ROOT}/sbin"
+                        "${IRIX_RECOMP_ROOT}/usr/bin"
+                        "${IRIX_RECOMP_ROOT}/usr/bin/X11"
+                        "${IRIX_RECOMP_ROOT}/usr/lib/X11"
+                        "${IRIX_RECOMP_ROOT}/usr/include/X11"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${IRIX_RUNTIME_TREE}/sbin/sh"
+                        "${IRIX_RECOMP_ROOT}/sbin/sh"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${IRIX_RUNTIME_TREE}/usr/bin/X11/endsession"
+                        "${IRIX_RECOMP_ROOT}/usr/bin/X11/endsession"
+                COMMAND chmod +x
+                        "${IRIX_RECOMP_ROOT}/sbin/sh"
+                        "${IRIX_RECOMP_ROOT}/usr/bin/X11/endsession"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${IRIX_RUNTIME_TREE}/usr/lib/X11/system.4Dwmrc"
+                        "${IRIX_RECOMP_ROOT}/usr/lib/X11/system.4Dwmrc"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${IRIX_RUNTIME_TREE}/usr/lib/X11/system.chestrc"
+                        "${IRIX_RECOMP_ROOT}/usr/lib/X11/system.chestrc"
+                DEPENDS
+                    "${IRIX_RUNTIME_TREE}/sbin/sh"
+                    "${IRIX_RUNTIME_TREE}/usr/bin/X11/endsession"
+                    "${IRIX_RUNTIME_TREE}/usr/lib/X11/system.4Dwmrc"
+                    "${IRIX_RUNTIME_TREE}/usr/lib/X11/system.chestrc"
+                COMMENT "Staging guest logout script and helper images"
+                VERBATIM
+            )
+
+            add_custom_target(irix_session_visual_payloads
+                COMMAND "${CMAKE_COMMAND}" -E make_directory
+                        "${IRIX_RECOMP_ROOT}/usr/include/X11/bitmaps"
+                COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${IRIX_RUNTIME_TREE}/usr/include/X11/bitmaps"
+                        "${IRIX_RECOMP_ROOT}/usr/include/X11/bitmaps"
+                COMMENT "Staging authentic IRIX X11 bitmap and pixmap assets"
+                VERBATIM
+            )
+
             add_custom_target(irix_session
-                DEPENDS irix_ecosystem
+                DEPENDS irix_ecosystem irix_session_logout_payloads
+                        irix_session_visual_payloads
                 COMMENT "Interactive Desktop core session is ready at recomp/quick/irix-session"
             )
 
@@ -377,6 +502,7 @@ if(IRIX_DEV_TREE)
                     ${IRIX_ECOSYSTEM_DIR}
                 )
                 target_compile_definitions(${_app_runner_target} PRIVATE
+                    IRIX_DIRECT_MAIN=1
                     IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
                     IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
                     IRIX_DEV_TREE="${IRIX_DEV_TREE}"
@@ -385,6 +511,7 @@ if(IRIX_DEV_TREE)
                     IRIX_APP_PATH="${_app_path}"
                     IRIX_APP_BUILD_DIR="${_app_dir}"
                     IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                    IRIX_GUEST_EXEC_RUNNER="${CMAKE_CURRENT_BINARY_DIR}/irix-guest-exec"
                     IRIX_APP_REGISTER=register_${_app_prefix}
                 )
                 target_link_libraries(${_app_runner_target} PRIVATE
@@ -449,6 +576,7 @@ if(IRIX_DEV_TREE)
                         IRIX_APP_PATH="${_app_path}"
                         IRIX_APP_BUILD_DIR="${_app_dir}"
                         IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                        IRIX_GUEST_EXEC_RUNNER="${CMAKE_CURRENT_BINARY_DIR}/irix-guest-exec"
                         IRIX_APP_REGISTER=register_${_app_prefix}
                     )
                     target_link_libraries(irix_desktop_quick_runner PRIVATE
@@ -509,6 +637,7 @@ if(IRIX_DEV_TREE)
                         IRIX_APP_PATH="${_app_path}"
                         IRIX_APP_BUILD_DIR="${_app_dir}"
                         IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                        IRIX_GUEST_EXEC_RUNNER="${CMAKE_CURRENT_BINARY_DIR}/irix-guest-exec"
                         IRIX_APP_REGISTER=register_${_app_prefix}
                     )
                     target_link_libraries(${_quick_target} PRIVATE
@@ -522,7 +651,6 @@ if(IRIX_DEV_TREE)
                         m
                     )
                     set_target_properties(${_quick_target} PROPERTIES ENABLE_EXPORTS ON)
-                    add_dependencies(irix_session ${_quick_target})
                 endif()
 
                 # Fast bring-up path: run the original IRIX MIPS executable
@@ -549,6 +677,7 @@ if(IRIX_DEV_TREE)
                     IRIX_APP_NAME="${_app_name}"
                     IRIX_APP_PATH="${_app_path}"
                     IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                    IRIX_GUEST_EXEC_RUNNER="${CMAKE_CURRENT_BINARY_DIR}/irix-guest-exec"
                 )
                 target_link_libraries(${_jit_runner_target} PRIVATE
                     irix_recomp_libc_bridge
@@ -561,6 +690,43 @@ if(IRIX_DEV_TREE)
                 set_target_properties(${_jit_runner_target} PROPERTIES ENABLE_EXPORTS ON)
                 add_dependencies(irix_ecosystem_jit ${_jit_runner_target})
             endforeach()
+
+            # Generic original-path process entry. Child execve calls route
+            # MIPS ELFs and #! scripts here so guest paths, argv, environment,
+            # PT_INTERP and rld are handled by the same runtime without
+            # per-application quick-runner aliases.
+            add_executable(irix_guest_exec_runner runtime/AppRunner.c)
+            set_target_properties(irix_guest_exec_runner PROPERTIES
+                OUTPUT_NAME "irix-guest-exec"
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+                BUILD_RPATH "$ORIGIN"
+                ENABLE_EXPORTS ON
+            )
+            target_include_directories(irix_guest_exec_runner PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                ${IRIX_ECOSYSTEM_DIR}
+            )
+            target_compile_definitions(irix_guest_exec_runner PRIVATE
+                IRIX_JIT_ONLY=1
+                IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+                IRIX_INTERNAL_TREE="${IRIX_INTERNAL_TREE}"
+                IRIX_DEV_TREE="${IRIX_DEV_TREE}"
+                IRIX_CORE_IMAGE_DIR=""
+                IRIX_APP_NAME="guest-exec"
+                IRIX_APP_PATH="usr/bin/X11/4Dwm"
+                IRIX_RECOMP_ROOT="${IRIX_RECOMP_ROOT}"
+                IRIX_GUEST_EXEC_RUNNER="${CMAKE_CURRENT_BINARY_DIR}/irix-guest-exec"
+            )
+            target_link_libraries(irix_guest_exec_runner PRIVATE
+                irix_recomp_libc_bridge
+                irix_recomp_x11_bridge
+                irix_recomp_runtime
+                X11::X11
+                ${CMAKE_DL_LIBS}
+                m
+            )
+            add_dependencies(irix_session irix_guest_exec_runner)
+            add_dependencies(irix_ecosystem_jit irix_guest_exec_runner)
         endif()
     endif()
 endif()

@@ -12,7 +12,7 @@ def ident(s): return re.sub(r'[^A-Za-z0-9_]', '_', s)
 
 DEFAULT_MAX_FILE_BYTES=2*1024*1024
 PARTITION_VERSION=1
-BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n#include <stdio.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
+BATCH_PREAMBLE='#include "IrixGuest.h"\n#include "IrixMipsInterp.h"\n#include <math.h>\n#include <stdio.h>\n#include <stdlib.h>\n\nenum { IRIX_PENDING_NONE, IRIX_PENDING_JUMP, IRIX_PENDING_CALL, IRIX_PENDING_RETURN, IRIX_PENDING_LINK };\n\n'
 
 def function_body(text):
     marker='void irix_recomp_'
@@ -602,7 +602,15 @@ def main():
     ap=argparse.ArgumentParser(); ap.add_argument('binary'); ap.add_argument('-o','--output',required=True); ap.add_argument('--prefix')
     a=ap.parse_args(); path=Path(a.binary); out=Path(a.output); prefix=a.prefix or path.stem; out.mkdir(parents=True,exist_ok=True)
     elf=t.Elf32BE(str(path)); defs=[]
-    for n,addr,size,sh in elf.symbols():
+    symbols=elf.symbols()
+    # A real STT_FUNC symbol at the nominal end is a hard code boundary.
+    # Without this check the repair below sees the next function's stack-frame
+    # prologue and extends the preceding function through it.  The FM binary
+    # has adjacent readFromDesktop/processArgs symbols; swallowing processArgs
+    # made indirect calls into its argument parser dispatch to the wrong
+    # translated body and trap on an otherwise valid option string.
+    symbol_starts={addr for _,addr,size,_ in symbols if size}
+    for n,addr,size,sh in symbols:
         if size:
             # Some SGI dynamic symbols have a nominal st_size that ends before
             # the function's real sequential body.  __exec_rld is one example:
@@ -624,7 +632,8 @@ def main():
                 op=(last>>26)&0x3f; fn=last&0x3f
                 terminal=(op in (0x02,0x03) or
                           (op==0x00 and fn in (0x08,0x09)))
-                if not terminal and _stack_frame_setup(nxt):
+                if (not terminal and end not in symbol_starts and
+                        _stack_frame_setup(nxt)):
                     sec=next((s for s in elf.sections
                               if (s['flags']&SHF_EXECINSTR) and
                                  s['addr']<=addr<s['addr']+s['size'] and

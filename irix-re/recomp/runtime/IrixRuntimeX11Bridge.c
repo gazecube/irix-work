@@ -1,5 +1,6 @@
 #include "IrixRuntimeX11Bridge.h"
 #include "IrixX11BridgeExtraAccess.h"
+#include "IrixX11Color.h"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -114,9 +115,7 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_x11.display_count++;
     g_x11.guest_display[i] = guest;
     g_x11.host_display[i] = XOpenDisplay(name);
-    fprintf(stderr,
-            "IRIX runtime X11 fallback: opened secondary host Display for unknown guest=%08x\n",
-            guest);
+    (void)0;
     return g_x11.host_display[i];
 }
 
@@ -398,7 +397,7 @@ static void bridge_XAllocNamedColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     XColor screen_def, exact_def;
     int rc = 0;
     if (d && name && screen_out && exact_out) {
-        rc = XAllocNamedColor(d, cmap, name, &screen_def, &exact_def);
+        rc = irix_x11_alloc_named_color(rt, d, cmap, name, &screen_def, &exact_def);
         if (rc) {
             guest_xcolor_write(rt, screen_out, &screen_def);
             guest_xcolor_write(rt, exact_out, &exact_def);
@@ -431,7 +430,7 @@ static void bridge_XParseColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int rc = 0;
     if (d && spec && out) {
         memset(&color, 0, sizeof(color));
-        rc = XParseColor(d, cmap, spec, &color);
+        rc = irix_x11_parse_color(rt, d, cmap, spec, &color);
         if (rc) guest_xcolor_write(rt, out, &color);
     }
     cpu->gpr[2] = (uint32_t)rc;
@@ -502,9 +501,7 @@ static void bridge_XInstallColormap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Colormap cmap=(Colormap)(uint32_t)cpu->gpr[5];
     Display *d = fallback_display(rt, guest_display);
     int rc=d ? XInstallColormap(d,cmap) : 0;
-    fprintf(stderr,
-            "IRIX XInstallColormap: guest_display=%08x cmap=%08lx rc=%d\n",
-            guest_display,(unsigned long)cmap,rc);
+    (void)0;
     cpu->gpr[2]=(uint32_t)rc;
 }
 

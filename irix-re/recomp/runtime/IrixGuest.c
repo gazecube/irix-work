@@ -7,10 +7,12 @@
 #include "IrixXrmQuarkBridge.h"
 
 #include <errno.h>
+#include <elf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sched.h>
 #ifndef SIG_BLOCK
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1
@@ -18,10 +20,20 @@
 #endif
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/time.h>
+#include <sys/select.h>
+#include <sys/uio.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <asm/unistd.h>
+#include <sys/un.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <time.h>
 
 extern char **environ;
 
@@ -30,20 +42,11 @@ extern char **environ;
    generated translation unit. */
 extern IrixGuestAddr irix_libc_guest_malloc(uint32_t size);
 
-static int irix_mips_trace_enabled(void)
-{
-    static int initialized;
-    static int enabled;
-    if (!initialized) {
-        const char *value = getenv("IRIX_MIPS_TRACE");
-        enabled = value && value[0] && strcmp(value, "0") != 0;
-        initialized = 1;
-    }
-    return enabled;
-}
+
 
 #define IRIX_NSIG 128u
 #define IRIX_SIGACTION_N32_SIZE 32u
+#define IRIX_SIGALRM 14u
 
 typedef struct IrixKernelSigAction {
     uint32_t flags;
@@ -53,6 +56,56 @@ typedef struct IrixKernelSigAction {
 } IrixKernelSigAction;
 
 static IrixKernelSigAction g_kernel_sigactions[IRIX_NSIG];
+
+static uint64_t monotonic_time_ns(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+int irix_guest_poll_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint64_t now;
+    uint32_t handler;
+    IrixGuestCpu saved;
+    IrixGuestAddr saved_pc;
+
+    if (!rt || !cpu || !rt->alarm_deadline_ns)
+        return 0;
+    now = monotonic_time_ns();
+    if (!now || now < rt->alarm_deadline_ns)
+        return 0;
+
+    /* An alarm is one-shot even when its guest handler rearms it. */
+    rt->alarm_deadline_ns = 0;
+    handler = g_kernel_sigactions[IRIX_SIGALRM].handler;
+    if (handler == 1u) /* SIG_IGN */
+        return 0;
+    if (!handler) { /* SIG_DFL terminates with the signal status. */
+        cpu->gpr[2] = 128u + IRIX_SIGALRM;
+        cpu->gpr[7] = 0;
+        rt->fault_addr = 128u + IRIX_SIGALRM;
+        irix_guest_trap(rt, cpu, 0xeeee23ffu);
+        return -1;
+    }
+
+    /*
+     * The interpreter has no asynchronous host signal frame. Invoke the guest
+     * handler synchronously at an instruction boundary, then restore the
+     * interrupted register context. This keeps a MIPS handler address out of
+     * host sigaction() and covers guest alarm-driven timeout paths.
+     */
+    saved = *cpu;
+    saved_pc = rt->current_pc;
+    cpu->gpr[4] = IRIX_SIGALRM;
+    if (irix_guest_call(rt, cpu, handler) != 0 || rt->trapped)
+        return -1;
+    *cpu = saved;
+    rt->current_pc = saved_pc;
+    return 0;
+}
 
 #define IRIX_GUEST_GP_RANGE_MAX 512u
 
@@ -365,6 +418,75 @@ static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, 
     return 0;
 }
 
+static int read_irix_sockaddr(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                              socklen_t length,
+                              struct sockaddr_storage *out)
+{
+    uint8_t *guest;
+    uint16_t family;
+    size_t copy_length;
+
+    if (!addr || length < 2u || length > sizeof(*out)) {
+        errno = EINVAL;
+        return -1;
+    }
+    guest = (uint8_t *)irix_guest_ptr(rt, addr, length);
+    if (!guest) {
+        errno = EFAULT;
+        return -1;
+    }
+    family = irix_guest_read16be(rt, addr);
+    if (rt->trapped)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    copy_length = length;
+    memcpy(out, guest, copy_length);
+
+    /* IRIX sockaddr families use big-endian ABI values. Linux's local
+       families match, while IRIX AF_INET6 (26) maps to Linux AF_INET6 (10). */
+    if (family == 24u)
+        family = AF_INET6;
+    else if (family != AF_UNIX && family != AF_INET) {
+        errno = EAFNOSUPPORT;
+        return -1;
+    }
+    ((struct sockaddr *)out)->sa_family = family;
+    return 0;
+}
+
+static int host_socket_domain_from_irix(int domain)
+{
+    switch (domain) {
+    case 0: return AF_UNSPEC;
+    case 1: return AF_UNIX;
+    case 2: return AF_INET;
+    case 24:
+#ifdef AF_INET6
+        return AF_INET6;
+#else
+        return -1;
+#endif
+    default: return -1;
+    }
+}
+
+static int host_socket_type_from_irix(int type)
+{
+    switch (type) {
+    case 1: return SOCK_DGRAM;
+    case 2: return SOCK_STREAM;
+    case 3: return SOCK_STREAM; /* SOCK_STREAM | orderly release */
+    case 4: return SOCK_RAW;
+#ifdef SOCK_RDM
+    case 5: return SOCK_RDM;
+#endif
+#ifdef SOCK_SEQPACKET
+    case 6: return SOCK_SEQPACKET;
+#endif
+    default: return -1;
+    }
+}
+
 static void memory_fault(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     if (!rt->trapped) {
@@ -421,6 +543,211 @@ void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
     if (!seg)
         return 0;
     return seg->host_base + (uint32_t)(addr - seg->guest_base);
+}
+
+static int guest_range_mapped(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                              size_t size)
+{
+    uint64_t cursor = addr;
+    uint64_t end = cursor + (uint64_t)size;
+
+    if (end > UINT32_MAX + 1ull || end < cursor)
+        return 0;
+    while (cursor < end) {
+        IrixGuestSegment *seg = find_segment(rt, (IrixGuestAddr)cursor, 1u);
+        uint64_t seg_end;
+        if (!seg)
+            return 0;
+        seg_end = (uint64_t)seg->guest_base + seg->size;
+        cursor = seg_end < end ? seg_end : end;
+    }
+    return 1;
+}
+
+static int guest_copy_to_host(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                              void *host, size_t size)
+{
+    uint64_t cursor = addr;
+    size_t copied = 0;
+
+    if (!guest_range_mapped(rt, addr, size))
+        return -1;
+    while (copied < size) {
+        IrixGuestSegment *seg = find_segment(rt, (IrixGuestAddr)cursor, 1u);
+        uint64_t seg_end = (uint64_t)seg->guest_base + seg->size;
+        size_t chunk = (size_t)(seg_end - cursor);
+        if (chunk > size - copied)
+            chunk = size - copied;
+        memcpy((uint8_t *)host + copied,
+               seg->host_base + (size_t)(cursor - seg->guest_base), chunk);
+        copied += chunk;
+        cursor += chunk;
+    }
+    return 0;
+}
+
+static int guest_copy_from_host(IrixGuestRuntime *rt, IrixGuestAddr addr,
+                                const void *host, size_t size)
+{
+    uint64_t cursor = addr;
+    size_t copied = 0;
+
+    if (!guest_range_mapped(rt, addr, size))
+        return -1;
+    while (copied < size) {
+        IrixGuestSegment *seg = find_segment(rt, (IrixGuestAddr)cursor, 1u);
+        uint64_t seg_end = (uint64_t)seg->guest_base + seg->size;
+        size_t chunk = (size_t)(seg_end - cursor);
+        if (chunk > size - copied)
+            chunk = size - copied;
+        memcpy(seg->host_base + (size_t)(cursor - seg->guest_base),
+               (const uint8_t *)host + copied, chunk);
+        copied += chunk;
+        cursor += chunk;
+    }
+    return 0;
+}
+
+#define IRIX_GUEST_IOV_MAX 1024u
+
+static int irix_guest_iov(IrixGuestRuntime *rt, IrixGuestAddr vector_addr,
+                          uint32_t vector_count, int guest_to_host,
+                          struct iovec **out_iov, void ***out_storage)
+{
+    struct iovec *iov;
+    void **storage;
+    uint64_t total = 0;
+    uint32_t i;
+
+    *out_iov = NULL;
+    *out_storage = NULL;
+    if (vector_count > IRIX_GUEST_IOV_MAX ||
+        (vector_count && !guest_range_mapped(
+            rt, vector_addr, (size_t)vector_count * 8u))) {
+        errno = EFAULT;
+        return -1;
+    }
+    iov = calloc(vector_count ? vector_count : 1u, sizeof(*iov));
+    storage = calloc(vector_count ? vector_count : 1u, sizeof(*storage));
+    if (!iov || !storage) {
+        free(iov);
+        free(storage);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    for (i = 0; i < vector_count; ++i) {
+        IrixGuestAddr entry = vector_addr + (IrixGuestAddr)(i * 8u);
+        IrixGuestAddr base = irix_guest_read32be(rt, entry);
+        uint32_t length = irix_guest_read32be(rt, entry + 4u);
+        void *buffer;
+
+        if (rt->trapped || !guest_range_mapped(rt, base, length)) {
+            errno = EFAULT;
+            goto fail;
+        }
+        total += length;
+        if (total > (uint64_t)SSIZE_MAX) {
+            errno = EINVAL;
+            goto fail;
+        }
+        buffer = malloc(length ? length : 1u);
+        if (!buffer) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        storage[i] = buffer;
+        iov[i].iov_base = buffer;
+        iov[i].iov_len = length;
+        if (guest_to_host && length &&
+            guest_copy_to_host(rt, base, buffer, length) != 0) {
+            errno = EFAULT;
+            goto fail;
+        }
+    }
+    *out_iov = iov;
+    *out_storage = storage;
+    return 0;
+
+fail:
+    for (i = 0; i < vector_count; ++i)
+        free(storage[i]);
+    free(storage);
+    free(iov);
+    return -1;
+}
+
+static void irix_guest_iov_free(struct iovec *iov, void **storage,
+                               uint32_t vector_count)
+{
+    uint32_t i;
+    if (storage)
+        for (i = 0; i < vector_count; ++i)
+            free(storage[i]);
+    free(storage);
+    free(iov);
+}
+
+int64_t irix_guest_read_fd(IrixGuestRuntime *rt, int fd,
+                           IrixGuestAddr addr, size_t count)
+{
+    uint64_t cursor = addr;
+    size_t total = 0;
+
+    if (!count)
+        return 0;
+    if (!guest_range_mapped(rt, addr, count)) {
+        errno = EFAULT;
+        return -1;
+    }
+    while (total < count) {
+        IrixGuestSegment *seg = find_segment(rt, (IrixGuestAddr)cursor, 1u);
+        uint64_t seg_end = (uint64_t)seg->guest_base + seg->size;
+        size_t chunk = (size_t)(seg_end - cursor);
+        ssize_t n;
+        if (chunk > count - total)
+            chunk = count - total;
+        n = read(fd, seg->host_base + (size_t)(cursor - seg->guest_base),
+                 chunk);
+        if (n < 0)
+            return total ? (int64_t)total : -1;
+        total += (size_t)n;
+        cursor += (size_t)n;
+        if ((size_t)n < chunk)
+            break;
+    }
+    return (int64_t)total;
+}
+
+int64_t irix_guest_write_fd(IrixGuestRuntime *rt, int fd,
+                            IrixGuestAddr addr, size_t count)
+{
+    uint64_t cursor = addr;
+    size_t total = 0;
+
+    if (!count)
+        return 0;
+    if (!guest_range_mapped(rt, addr, count)) {
+        errno = EFAULT;
+        return -1;
+    }
+    while (total < count) {
+        IrixGuestSegment *seg = find_segment(rt, (IrixGuestAddr)cursor, 1u);
+        uint64_t seg_end = (uint64_t)seg->guest_base + seg->size;
+        size_t chunk = (size_t)(seg_end - cursor);
+        ssize_t n;
+        if (chunk > count - total)
+            chunk = count - total;
+        n = write(fd, seg->host_base + (size_t)(cursor - seg->guest_base),
+                  chunk);
+        if (n < 0)
+            return total ? (int64_t)total : -1;
+        total += (size_t)n;
+        cursor += (size_t)n;
+        if ((size_t)n < chunk)
+            break;
+    }
+    return (int64_t)total;
 }
 
 const char *irix_guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t max_len)
@@ -536,9 +863,7 @@ void irix_guest_repair_xm_screen_private(IrixGuestRuntime *rt,
     irix_guest_write32be(rt, priv + 0u, 0u);
     irix_guest_write32be(rt, priv + 4u, 0u);
     irix_guest_write32be(rt, screen + 0x104u, priv);
-    fprintf(stderr,
-            "IRIX XmScreen repair: screen=%08x old_private=%08x private=%08x\n",
-            screen, old_priv, priv);
+    (void)0;
 }
 
 static int irix_guest_xt_resources_are_indirect(IrixGuestRuntime *rt,
@@ -736,10 +1061,7 @@ static void irix_guest_xt_repair_class_resources_inner(IrixGuestRuntime *rt,
 
         super_widget_size = irix_guest_read32be(rt, sc + 8u);
         if (!super_widget_size || super_widget_size > 0x01000000u) {
-            fprintf(stderr,
-                    "IRIX Xt class-resource repair: class=%08x "
-                    "bad superclass=%08x widget_size=%u\n",
-                    wc, sc, super_widget_size);
+            (void)0;
             return;
         }
 
@@ -1006,102 +1328,9 @@ uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr addr)
     return ((uint64_t)hi << 32) | lo;
 }
 
-static void rld_watch_write(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
-{
-    unsigned i;
-    uint64_t end = (uint64_t)addr + size;
-    for (i = 0; i < rt->rld_watch_depth; ++i) {
-        IrixGuestRldWatchFrame *f = &rt->rld_watch[i];
-        uint64_t slot_end = (uint64_t)f->slot + 8u;
-        if (!f->warned && rt->current_pc != 0x0fb69b8cu &&
-            (uint64_t)addr < slot_end && end > (uint64_t)f->slot) {
-            uint64_t before = irix_guest_read64be(rt, f->slot);
-            fprintf(stderr,
-                    "IRIX rld saved-s0 overwrite: pc=%08x frame_sp=%08x slot=%08x expected=%016llx before=%016llx write_addr=%08x size=%zu\n",
-                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                    (uint32_t)f->slot, (unsigned long long)f->expected_s0,
-                    (unsigned long long)before, (uint32_t)addr, size);
-            f->warned = 1;
-        }
-    }
-}
-
-void irix_guest_rld_watch_enter(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
-{
-    IrixGuestRldWatchFrame *f;
-    if (rt->rld_watch_depth >= IRIX_GUEST_RLD_WATCH_MAX) {
-        fprintf(stderr, "IRIX rld watch overflow: pc=%08x sp=%08x\n",
-                (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[29]);
-        return;
-    }
-    f = &rt->rld_watch[rt->rld_watch_depth++];
-    f->sp = (IrixGuestAddr)((uint32_t)cpu->gpr[29] - 0x30u);
-    f->slot = f->sp + 0x10u;
-    f->expected_s0 = cpu->gpr[16];
-    f->warned = 0;
-}
-
-void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
-{
-    IrixGuestAddr sp = (IrixGuestAddr)cpu->gpr[29];
-    unsigned i;
-    for (i = rt->rld_watch_depth; i > 0; --i) {
-        IrixGuestRldWatchFrame *f = &rt->rld_watch[i - 1u];
-        uint64_t actual;
-        if (f->sp != sp)
-            continue;
-        actual = irix_guest_read64be(rt, f->slot);
-        if (actual != f->expected_s0)
-            fprintf(stderr,
-                    "IRIX rld saved-s0 CORRUPT: pc=%08x frame_sp=%08x slot=%08x expected=%016llx actual=%016llx\n",
-                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                    (uint32_t)f->slot, (unsigned long long)f->expected_s0,
-                    (unsigned long long)actual);
-        return;
-    }
-}
-
-void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu)
-{
-    IrixGuestAddr sp = (IrixGuestAddr)cpu->gpr[29];
-    unsigned i;
-    for (i = rt->rld_watch_depth; i > 0; --i) {
-        unsigned index = i - 1u;
-        IrixGuestRldWatchFrame *f = &rt->rld_watch[index];
-        if (f->sp != sp)
-            continue;
-        if (cpu->gpr[16] != f->expected_s0)
-            fprintf(stderr,
-                    "IRIX rld s0 restore mismatch: pc=%08x frame_sp=%08x expected=%016llx restored=%016llx\n",
-                    (uint32_t)rt->current_pc, (uint32_t)f->sp,
-                    (unsigned long long)f->expected_s0,
-                    (unsigned long long)cpu->gpr[16]);
-        if (index + 1u < rt->rld_watch_depth)
-            memmove(&rt->rld_watch[index], &rt->rld_watch[index + 1u],
-                    (rt->rld_watch_depth - index - 1u) * sizeof(rt->rld_watch[0]));
-        --rt->rld_watch_depth;
-        return;
-    }
-
-    fprintf(stderr, "IRIX rld unmatched epilogue: pc=%08x actual_sp=%08x active=",
-            (uint32_t)rt->current_pc, (uint32_t)sp);
-    if (!rt->rld_watch_depth) {
-        fprintf(stderr, "none");
-    } else {
-        for (i = 0; i < rt->rld_watch_depth; ++i)
-            fprintf(stderr, "%s%08x", i ? "," : "", (uint32_t)rt->rld_watch[i].sp);
-    }
-    fputc('\n', stderr);
-}
-
 void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 {
     uint8_t *p;
-    rld_watch_write(rt, addr, 1u);
-    if (addr >= 0x0fb5291cu && addr < 0x0fb52920u)
-        fprintf(stderr,
-                "IRIX libc GOT byte watch: pc=0x%08x addr=0x%08x value=%02x\n",
-                rt->current_pc, addr, value);
     p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
     if (!p) { memory_fault(rt, addr); return; }
     *p = value;
@@ -1110,12 +1339,6 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value)
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value)
 {
     uint8_t *p;
-    rld_watch_write(rt, addr, 2u);
-    if ((uint64_t)addr < UINT64_C(0x0fb52920) &&
-        (uint64_t)addr + 2u > UINT64_C(0x0fb5291c))
-        fprintf(stderr,
-                "IRIX libc GOT half watch: pc=0x%08x addr=0x%08x value=%04x\n",
-                rt->current_pc, addr, value);
     p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
     if (!p) { memory_fault(rt, addr); return; }
     p[0] = (uint8_t)(value >> 8); p[1] = (uint8_t)value;
@@ -1124,19 +1347,6 @@ void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t val
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value)
 {
     uint8_t *p;
-    rld_watch_write(rt, addr, 4u);
-    if (addr == 0x0fb5291cu) {
-        uint32_t old_value = 0;
-        uint8_t *oldp = (uint8_t *)irix_guest_ptr(rt, addr, 4u);
-        if (oldp)
-            old_value = ((uint32_t)oldp[0] << 24) |
-                        ((uint32_t)oldp[1] << 16) |
-                        ((uint32_t)oldp[2] << 8) |
-                        (uint32_t)oldp[3];
-        fprintf(stderr,
-                "IRIX libc GOT watch: pc=0x%08x slot=0x%08x %08x -> %08x\n",
-                rt->current_pc, addr, old_value, value);
-    }
     if (rt->errno_proxy_addr && addr == rt->errno_proxy_addr) {
         errno = (int)(int32_t)value;
         return;
@@ -1411,38 +1621,47 @@ static int write_irix_xstat32(IrixGuestRuntime *rt, IrixGuestAddr out,
         errno = EFAULT;
         return -1;
     }
-    p = (unsigned char *)irix_guest_ptr(rt, out, 136u);
+    /*
+     * IRIX N32's ordinary `struct stat` is not a 32-bit structure.  dev_t,
+     * mode_t, uid_t, etc. are 32-bit, but ino_t and off_t remain 64-bit.
+     * Keep the kernel xstat(2) version-2 wire layout from sys/stat.h:
+     *   ino @16, size @56, times @68, blksize @92, blocks @96.
+     * In particular, libc's _findbuf reads st_blksize at +92 while setting
+     * up the FILE buffer; writing it at +80 silently makes regular-file
+     * fgetc fail before it ever issues read(2).
+     */
+    p = (unsigned char *)irix_guest_ptr(rt, out, 152u);
     if (!p) {
         errno = EFAULT;
         return -1;
     }
-    memset(p, 0, 136u);
+    memset(p, 0, 152u);
     irix_guest_write32be(rt, out + 0u, irix_syscall_dev(st->st_dev));
-    irix_guest_write32be(rt, out + 16u, (uint32_t)st->st_ino);
-    irix_guest_write32be(rt, out + 20u, (uint32_t)st->st_mode);
-    irix_guest_write32be(rt, out + 24u, (uint32_t)st->st_nlink);
-    irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_uid);
-    irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_gid);
-    irix_guest_write32be(rt, out + 36u, irix_syscall_rdev(st, fd, guest_path));
-    irix_guest_write32be(rt, out + 48u, (uint32_t)st->st_size);
+    irix_guest_write64be(rt, out + 16u, (uint64_t)st->st_ino);
+    irix_guest_write32be(rt, out + 24u, (uint32_t)st->st_mode);
+    irix_guest_write32be(rt, out + 28u, (uint32_t)st->st_nlink);
+    irix_guest_write32be(rt, out + 32u, (uint32_t)st->st_uid);
+    irix_guest_write32be(rt, out + 36u, (uint32_t)st->st_gid);
+    irix_guest_write32be(rt, out + 40u, irix_syscall_rdev(st, fd, guest_path));
+    irix_guest_write64be(rt, out + 56u, (uint64_t)(int64_t)st->st_size);
 #if defined(__APPLE__)
-    irix_guest_write32be(rt, out + 56u, (uint32_t)st->st_atimespec.tv_sec);
-    irix_guest_write32be(rt, out + 60u, (uint32_t)st->st_atimespec.tv_nsec);
-    irix_guest_write32be(rt, out + 64u, (uint32_t)st->st_mtimespec.tv_sec);
-    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_mtimespec.tv_nsec);
-    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_ctimespec.tv_sec);
-    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_ctimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_atimespec.tv_sec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_atimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_mtimespec.tv_sec);
+    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_mtimespec.tv_nsec);
+    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_ctimespec.tv_sec);
+    irix_guest_write32be(rt, out + 88u, (uint32_t)st->st_ctimespec.tv_nsec);
 #else
-    irix_guest_write32be(rt, out + 56u, (uint32_t)st->st_atim.tv_sec);
-    irix_guest_write32be(rt, out + 60u, (uint32_t)st->st_atim.tv_nsec);
-    irix_guest_write32be(rt, out + 64u, (uint32_t)st->st_mtim.tv_sec);
-    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_mtim.tv_nsec);
-    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_ctim.tv_sec);
-    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_ctim.tv_nsec);
+    irix_guest_write32be(rt, out + 68u, (uint32_t)st->st_atim.tv_sec);
+    irix_guest_write32be(rt, out + 72u, (uint32_t)st->st_atim.tv_nsec);
+    irix_guest_write32be(rt, out + 76u, (uint32_t)st->st_mtim.tv_sec);
+    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_mtim.tv_nsec);
+    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_ctim.tv_sec);
+    irix_guest_write32be(rt, out + 88u, (uint32_t)st->st_ctim.tv_nsec);
 #endif
-    irix_guest_write32be(rt, out + 80u, (uint32_t)st->st_blksize);
-    irix_guest_write32be(rt, out + 84u, (uint32_t)st->st_blocks);
-    memcpy(p + 88u, "efs", 4u);
+    irix_guest_write32be(rt, out + 92u, (uint32_t)st->st_blksize);
+    irix_guest_write64be(rt, out + 96u, (uint64_t)(int64_t)st->st_blocks);
+    memcpy(p + 104u, "efs", 4u);
     return rt->trapped ? -1 : 0;
 }
 
@@ -1544,18 +1763,14 @@ static const char *irix_host_path(IrixGuestRuntime *rt, const char *guest,
             n = snprintf(buf, bufsz, "%s/usr/lib32/mips4/%s",
                          rt->rootfs, name);
             if (n > 0 && (size_t)n < bufsz && stat(buf, &st) == 0) {
-                fprintf(stderr,
-                        "IRIX path alias: %s -> /usr/lib32/mips4/%s\n",
-                        guest, name);
+                (void)0;
                 return buf;
             }
 
             n = snprintf(buf, bufsz, "%s/usr/lib32/mips3/%s",
                          rt->rootfs, name);
             if (n > 0 && (size_t)n < bufsz && stat(buf, &st) == 0) {
-                fprintf(stderr,
-                        "IRIX path alias: %s -> /usr/lib32/mips3/%s\n",
-                        guest, name);
+                (void)0;
                 return buf;
             }
         }
@@ -1603,6 +1818,157 @@ static void syscall_result(IrixGuestCpu *cpu, int64_t value)
         cpu->gpr[2] = (uint64_t)value;
         cpu->gpr[7] = 0;
     }
+}
+
+/* Identify guest ELF images and interpreter scripts before handing execve to
+   the host kernel. IRIX media trees are not executable on the host, but the
+   generic guest runner can load the original paths and run their MIPS code. */
+static int irix_guest_exec_kind(const char *host_path, char *interpreter,
+                                size_t interpreter_size, char *script_arg,
+                                size_t script_arg_size)
+{
+    unsigned char header[4096];
+    FILE *file;
+    size_t n;
+
+    if (!host_path) return 0;
+    file = fopen(host_path, "rb");
+    if (!file) return 0;
+    n = fread(header, 1u, sizeof(header), file);
+    fclose(file);
+
+    if (n >= 2u && header[0] == '#' && header[1] == '!') {
+        size_t i = 2u, start, end, arg_start;
+        while (i < n && (header[i] == ' ' || header[i] == '\t')) ++i;
+        start = i;
+        while (i < n && header[i] != ' ' && header[i] != '\t' &&
+               header[i] != '\r' && header[i] != '\n') ++i;
+        end = i;
+        if (end == start || end - start >= interpreter_size) return 0;
+        memcpy(interpreter, header + start, end - start);
+        interpreter[end - start] = '\0';
+        while (i < n && (header[i] == ' ' || header[i] == '\t')) ++i;
+        arg_start = i;
+        while (i < n && header[i] != '\r' && header[i] != '\n') ++i;
+        while (i > arg_start && (header[i - 1u] == ' ' ||
+                                 header[i - 1u] == '\t')) --i;
+        if (script_arg_size) {
+            size_t arg_len = i - arg_start;
+            if (arg_len >= script_arg_size) return 0;
+            memcpy(script_arg, header + arg_start, arg_len);
+            script_arg[arg_len] = '\0';
+        }
+        return 2;
+    }
+
+    if (n >= 52u && header[0] == 0x7fu && header[1] == 'E' &&
+        header[2] == 'L' && header[3] == 'F' &&
+        header[EI_CLASS] == ELFCLASS32 && header[EI_DATA] == ELFDATA2MSB &&
+        header[18] == 0 && header[19] == EM_MIPS)
+        return 1;
+    return 0;
+}
+
+static void irix_free_host_vector(char **vector)
+{
+    size_t i;
+    if (!vector) return;
+    for (i = 0; vector[i]; ++i) free(vector[i]);
+    free(vector);
+}
+
+static char **irix_exec_environment(char *const base[], const char *guest_path)
+{
+    size_t count = 0, i, used = 0;
+    char **out;
+    char *path_entry;
+    char *backend_entry;
+    size_t path_len;
+    size_t backend_len;
+    static const char exec_key[] = "IRIX_GUEST_EXEC_PATH=";
+    const char *backend = getenv("IRIX_EXEC_BACKEND");
+    if (!backend || !backend[0]) backend = "jit";
+
+    if (base) while (base[count]) ++count;
+    out = (char **)calloc(count + 3u, sizeof(*out));
+    if (!out) return 0;
+    for (i = 0; i < count; ++i) {
+        if (!strncmp(base[i], "IRIX_GUEST_EXEC_PATH=", 21u) ||
+            !strncmp(base[i], "IRIX_EXEC_BACKEND=", 18u))
+            continue;
+        out[used] = strdup(base[i]);
+        if (!out[used++]) { irix_free_host_vector(out); return 0; }
+    }
+    path_len = sizeof(exec_key) - 1u + strlen(guest_path) + 1u;
+    path_entry = (char *)malloc(path_len);
+    if (!path_entry) {
+        irix_free_host_vector(out);
+        return 0;
+    }
+    snprintf(path_entry, path_len, "%s%s", exec_key, guest_path);
+    out[used++] = path_entry;
+    backend_len = strlen(backend) + sizeof("IRIX_EXEC_BACKEND=");
+    backend_entry = (char *)malloc(backend_len);
+    if (!backend_entry) { irix_free_host_vector(out); return 0; }
+    snprintf(backend_entry, backend_len, "IRIX_EXEC_BACKEND=%s", backend);
+    out[used] = backend_entry;
+    return out;
+}
+
+/* Shared process replacement for syscall and libc entry points. */
+int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
+                       char *const argv[], char *const envp[])
+{
+    char host_path[PATH_MAX], native_path[PATH_MAX];
+    char interpreter[512] = "", script_arg[512] = "";
+    const char *path, *native_root = getenv("IRIX_RECOMP_ROOT");
+    char **child_argv = 0, **child_env = 0;
+    size_t argc = 0, i, j;
+    int kind, saved_errno;
+    if (!guest_path || !argv) { errno = EFAULT; return -1; }
+    path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+    if (!path) return -1;
+    /* Installed x86 runners retain the guest pathname. Prefer one when
+       available; a missing runner still uses the original IRIX image. */
+    if (guest_path[0] == '/' && native_root && native_root[0]) {
+        int n = snprintf(native_path, sizeof(native_path), "%s%s",
+                         native_root, guest_path);
+        if (n > 0 && (size_t)n < sizeof(native_path) &&
+            access(native_path, X_OK) == 0)
+            path = native_path;
+    }
+    kind = irix_guest_exec_kind(path, interpreter, sizeof(interpreter),
+                                script_arg, sizeof(script_arg));
+    if (kind) {
+        const char *runner = getenv("IRIX_GUEST_EXEC_RUNNER");
+        const char *image = kind == 2 ? interpreter : guest_path;
+        if (!runner || !runner[0] || access(runner, X_OK)) {
+            errno = ENOENT;
+            return -1;
+        }
+        if (kind == 2) {
+            while (argv[argc]) {
+                if (++argc >= 4096u) { errno = E2BIG; return -1; }
+            }
+            child_argv = (char **)calloc(argc + 4u, sizeof(*child_argv));
+            if (!child_argv) { errno = ENOMEM; return -1; }
+            child_argv[0] = (char *)image;
+            i = 1u;
+            if (script_arg[0]) child_argv[i++] = script_arg;
+            child_argv[i++] = (char *)guest_path;
+            for (j = 1u; j < argc; ++j) child_argv[i++] = argv[j];
+        }
+        child_env = irix_exec_environment(envp ? envp : environ, image);
+        if (child_env)
+            execve(runner, child_argv ? child_argv : argv, child_env);
+    } else {
+        execve(path, argv, envp ? envp : environ);
+    }
+    saved_errno = errno;
+    irix_free_host_vector(child_env);
+    free(child_argv);
+    errno = saved_errno;
+    return -1;
 }
 
 /* Convert an IRIX N32 NULL-terminated char ** into host pointers.  The
@@ -1685,10 +2051,586 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          * guest process exit status instead of reporting it as a fault.
          */
         uint32_t status = (uint32_t)cpu->gpr[4] & 0xffu;
+        
         cpu->gpr[2] = status;
         cpu->gpr[7] = 0;
         rt->fault_addr = status;
         irix_guest_trap(rt, cpu, 0xeeee23ffu);
+        return;
+    }
+    case SYS_socket: { /* socket(domain, type, protocol) */
+        int domain = host_socket_domain_from_irix(
+            (int)(uint32_t)cpu->gpr[4]);
+        int type = host_socket_type_from_irix(
+            (int)(uint32_t)cpu->gpr[5]);
+        int protocol = (int)(uint32_t)cpu->gpr[6];
+        if (domain < 0 || type < 0) {
+            errno = EAFNOSUPPORT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)socket(domain, type, protocol));
+        return;
+    }
+    case SYS_socketpair: { /* socketpair(domain, type, protocol, sv) */
+        int domain = host_socket_domain_from_irix(
+            (int)(uint32_t)cpu->gpr[4]);
+        int type = host_socket_type_from_irix(
+            (int)(uint32_t)cpu->gpr[5]);
+        int protocol = (int)(uint32_t)cpu->gpr[6];
+        IrixGuestAddr guest_fds = (uint32_t)cpu->gpr[7];
+        int fds[2];
+        int rc;
+
+        if (domain < 0 || type < 0) {
+            errno = EAFNOSUPPORT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (!guest_fds || !irix_guest_ptr(rt, guest_fds, 8u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        rc = socketpair(domain, type, protocol, fds);
+        if (rc == 0) {
+            irix_guest_write32be(rt, guest_fds, (uint32_t)fds[0]);
+            irix_guest_write32be(rt, guest_fds + 4u, (uint32_t)fds[1]);
+            if (rt->trapped) {
+                close(fds[0]);
+                close(fds[1]);
+                syscall_result(cpu, -1);
+                return;
+            }
+        }
+        syscall_result(cpu, rc);
+        return;
+    }
+    case SYS_listen: {
+        int fd = (int)(int32_t)cpu->gpr[4];
+        int backlog = (int)(int32_t)cpu->gpr[5];
+        syscall_result(cpu, (int64_t)listen(fd, backlog));
+        return;
+    }
+    case SYS_accept: {
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr address = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr length_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        struct sockaddr_storage host_address;
+        socklen_t host_length = sizeof(host_address);
+        uint32_t guest_capacity = 0;
+
+        /* IRIX accept(2) uses a 32-bit N32 socklen_t in guest memory. */
+        if (address && (!length_addr ||
+            !irix_guest_ptr(rt, length_addr, 4u))) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (address) {
+            guest_capacity = irix_guest_read32be(rt, length_addr);
+            if (!irix_guest_ptr(rt, address, guest_capacity)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+        }
+        memset(&host_address, 0, sizeof(host_address));
+        result = (int64_t)accept(fd,
+            address ? (struct sockaddr *)&host_address : NULL,
+            address ? &host_length : NULL);
+        if (result >= 0 && address) {
+            size_t copy_length = guest_capacity < host_length
+                               ? guest_capacity : host_length;
+            uint8_t *guest_address =
+                (uint8_t *)irix_guest_ptr(rt, address, copy_length);
+            if (copy_length && !guest_address) {
+                close((int)result);
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            if (copy_length) {
+                memcpy(guest_address, &host_address, copy_length);
+                if (copy_length >= sizeof(sa_family_t))
+                    irix_guest_write16be(rt, address,
+                        (uint16_t)((struct sockaddr *)&host_address)->sa_family);
+            }
+            irix_guest_write32be(rt, length_addr, (uint32_t)host_length);
+            if (rt->trapped) {
+                close((int)result);
+                syscall_result(cpu, -1);
+                return;
+            }
+        }
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_sendto: {
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr buffer = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t length = (size_t)(uint32_t)cpu->gpr[6];
+        int flags = (int)(int32_t)cpu->gpr[7];
+        IrixGuestAddr address = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        socklen_t address_length = (socklen_t)(uint32_t)cpu->gpr[9];
+        void *data = irix_guest_ptr(rt, buffer, length);
+        struct sockaddr_storage host_address;
+        if (!data && length) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (address && read_irix_sockaddr(rt, address, address_length,
+                                          &host_address) != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)sendto(fd, data, length, flags,
+            address ? (const struct sockaddr *)&host_address : NULL,
+            address ? address_length : 0));
+        return;
+    }
+    case SYS_recvfrom: {
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr buffer = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t length = (size_t)(uint32_t)cpu->gpr[6];
+        int flags = (int)(int32_t)cpu->gpr[7];
+        IrixGuestAddr address = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        IrixGuestAddr addrlen_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[9];
+        void *data = irix_guest_ptr(rt, buffer, length);
+        struct sockaddr_storage host_address;
+        socklen_t host_length = sizeof(host_address);
+        if ((!data && length) || (address &&
+            (!addrlen_addr || !irix_guest_ptr(rt, addrlen_addr, 4u)))) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (address) {
+            uint32_t capacity = irix_guest_read32be(rt, addrlen_addr);
+            if (!irix_guest_ptr(rt, address, capacity)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            if (capacity < host_length) host_length = capacity;
+        }
+        result = (int64_t)recvfrom(fd, data, length, flags,
+            address ? (struct sockaddr *)&host_address : NULL,
+            address ? &host_length : NULL);
+        if (result >= 0 && address) {
+            uint8_t *guest_address = irix_guest_ptr(rt, address, host_length);
+            memcpy(guest_address, &host_address, host_length);
+            irix_guest_write16be(rt, address,
+                (uint16_t)((struct sockaddr *)&host_address)->sa_family);
+            irix_guest_write32be(rt, addrlen_addr, (uint32_t)host_length);
+        }
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_connect:
+    case SYS_bind: { /* connect/bind(fd, sockaddr, length) */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr address = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        socklen_t length = (socklen_t)(uint32_t)cpu->gpr[6];
+        struct sockaddr_storage host_address;
+        
+        if (read_irix_sockaddr(rt, address, length, &host_address) != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (number == SYS_connect) {
+            int rc;
+            const struct sockaddr *connect_address =
+                (const struct sockaddr *)&host_address;
+            socklen_t connect_length = length;
+
+            /*
+             * The SGI xconnc shared-memory transport is kernel-specific.
+             * When an original client chooses the standard TCP loopback X11
+             * transport, connect it to the host X server's Unix socket
+             * instead. This keeps all X protocol I/O on the original guest
+             * libX11 path while allowing Xephyr/Xorg without xconnc to serve
+             * the client. Other addresses and ports retain normal TCP
+             * behavior.
+             */
+            if (host_address.ss_family == AF_INET &&
+                length >= sizeof(struct sockaddr_in)) {
+                const struct sockaddr_in *in =
+                    (const struct sockaddr_in *)&host_address;
+                uint32_t host = ntohl(in->sin_addr.s_addr);
+                unsigned port = ntohs(in->sin_port);
+                if ((host >> 24) == 127u && port >= 6000u && port < 6100u) {
+                    struct sockaddr_un x_socket;
+                    unsigned display_number = port - 6000u;
+                    int path_len = snprintf(x_socket.sun_path,
+                                            sizeof(x_socket.sun_path),
+                                            "/tmp/.X11-unix/X%u",
+                                            display_number);
+                    if (path_len > 0 &&
+                        (size_t)path_len < sizeof(x_socket.sun_path)) {
+                        int unix_fd;
+                        memset(&x_socket, 0, sizeof(x_socket));
+                        x_socket.sun_family = AF_UNIX;
+                        snprintf(x_socket.sun_path, sizeof(x_socket.sun_path),
+                                 "/tmp/.X11-unix/X%u", display_number);
+                        unix_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+                        if (unix_fd >= 0) {
+                            socklen_t unix_len = (socklen_t)(
+                                offsetof(struct sockaddr_un, sun_path) +
+                                (size_t)path_len + 1u);
+                            if (connect(unix_fd,
+                                        (const struct sockaddr *)&x_socket,
+                                        unix_len) == 0) {
+                                if (dup2(unix_fd, fd) >= 0) {
+                                    close(unix_fd);
+                                    rc = 0;
+                                    
+                                    syscall_result(cpu, (int64_t)rc);
+                                    return;
+                                }
+                            }
+                            close(unix_fd);
+                        }
+                    }
+                }
+            }
+            rc = connect(fd, connect_address, connect_length);
+            
+            syscall_result(cpu, (int64_t)rc);
+        } else
+            syscall_result(cpu, (int64_t)bind(
+                fd, (const struct sockaddr *)&host_address, length));
+        return;
+    }
+    case SYS_getsockname:
+    case SYS_getpeername: { /* get local/peer address in IRIX sockaddr ABI */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr address = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr length_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        struct sockaddr_storage host_address;
+        socklen_t host_length = sizeof(host_address);
+        uint32_t guest_length;
+        unsigned char *guest_bytes;
+        unsigned char *host_bytes = (unsigned char *)&host_address;
+        size_t copy_length;
+        int rc;
+
+        if (!length_addr || !irix_guest_ptr(rt, length_addr, 4u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        guest_length = irix_guest_read32be(rt, length_addr);
+        if (guest_length &&
+            (!address || !irix_guest_ptr(rt, address, guest_length))) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        memset(&host_address, 0, sizeof(host_address));
+        if (number == SYS_getsockname)
+            rc = getsockname(fd, (struct sockaddr *)&host_address, &host_length);
+        else
+            rc = getpeername(fd, (struct sockaddr *)&host_address, &host_length);
+        if (rc == 0) {
+            if (host_length < sizeof(sa_family_t)) {
+                errno = EINVAL;
+                syscall_result(cpu, -1);
+                return;
+            }
+            copy_length = guest_length < host_length ? guest_length : host_length;
+            guest_bytes = (unsigned char *)irix_guest_ptr(rt, address,
+                                                          copy_length);
+            if (copy_length && !guest_bytes) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            if (copy_length >= 2u) {
+                uint16_t family = ((struct sockaddr *)&host_address)->sa_family;
+                uint16_t guest_family = family == AF_UNIX ? 1u :
+                                        family == AF_INET ? 2u :
+                                        family == AF_INET6 ? 24u : family;
+                irix_guest_write16be(rt, address, guest_family);
+                if (copy_length > 2u)
+                    memcpy(guest_bytes + 2u, host_bytes + 2u,
+                           copy_length - 2u);
+            } else if (copy_length) {
+                memcpy(guest_bytes, host_bytes, copy_length);
+            }
+            irix_guest_write32be(rt, length_addr, (uint32_t)host_length);
+        }
+        syscall_result(cpu, (int64_t)rc);
+        return;
+    }
+    case SYS_sendmsg:
+    case SYS_recvmsg: { /* sendmsg/recvmsg with the IRIX N32 BSD layout */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr msg_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        int flags = (int)(int32_t)cpu->gpr[6];
+        uint32_t name_addr, name_len, iov_addr, iov_count;
+        uint32_t rights_addr, rights_len;
+        struct sockaddr_storage name_storage;
+        struct iovec *host_iov = NULL;
+        void **host_iov_storage = NULL;
+        struct msghdr msg;
+        unsigned i;
+        ssize_t rc;
+
+        if (!irix_guest_ptr(rt, msg_addr, 24u)) {
+            errno = EFAULT;
+            
+            syscall_result(cpu, -1);
+            return;
+        }
+        name_addr = irix_guest_read32be(rt, msg_addr + 0u);
+        name_len = irix_guest_read32be(rt, msg_addr + 4u);
+        iov_addr = irix_guest_read32be(rt, msg_addr + 8u);
+        iov_count = irix_guest_read32be(rt, msg_addr + 12u);
+        rights_addr = irix_guest_read32be(rt, msg_addr + 16u);
+        rights_len = irix_guest_read32be(rt, msg_addr + 20u);
+        if (iov_count > 64u ||
+            (iov_count && !guest_range_mapped(
+                rt, iov_addr, (size_t)iov_count * 8u))) {
+            errno = iov_count > 64u
+                        ? EMSGSIZE : EFAULT;
+            
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (rights_addr || rights_len) {
+            /* The legacy SGI access-rights ABI needs explicit SCM_RIGHTS
+             * conversion; never pass guest pointers to the host kernel. */
+            errno = EOPNOTSUPP;
+            syscall_result(cpu, -1);
+            return;
+        }
+        memset(&msg, 0, sizeof(msg));
+        if (name_addr) {
+            if (read_irix_sockaddr(rt, name_addr, name_len, &name_storage) != 0) {
+                syscall_result(cpu, -1);
+                return;
+            }
+            msg.msg_name = &name_storage;
+            msg.msg_namelen = (socklen_t)name_len;
+        }
+        if (irix_guest_iov(rt, iov_addr, iov_count,
+                           number == SYS_sendmsg,
+                           &host_iov, &host_iov_storage) != 0) {
+            
+            syscall_result(cpu, -1);
+            return;
+        }
+        msg.msg_iov = host_iov;
+        msg.msg_iovlen = iov_count;
+        if (number == SYS_sendmsg)
+            rc = sendmsg(fd, &msg, flags);
+        else
+            rc = recvmsg(fd, &msg, flags);
+        
+        if (rc >= 0 && number == SYS_recvmsg) {
+            size_t remaining = (size_t)rc;
+            for (i = 0; i < iov_count && remaining; ++i) {
+                IrixGuestAddr entry = iov_addr + (IrixGuestAddr)(i * 8u);
+                IrixGuestAddr base = irix_guest_read32be(rt, entry);
+                size_t copied = host_iov[i].iov_len;
+                if (copied > remaining) copied = remaining;
+                if (guest_copy_from_host(rt, base, host_iov[i].iov_base,
+                                         copied) != 0) {
+                    errno = EFAULT;
+                    rc = -1;
+                    break;
+                }
+                remaining -= copied;
+            }
+        }
+        if (rc >= 0 && number == SYS_recvmsg) {
+            if (name_addr)
+                irix_guest_write32be(rt, msg_addr + 4u,
+                                     (uint32_t)msg.msg_namelen);
+            irix_guest_write32be(rt, msg_addr + 20u,
+                                 (uint32_t)msg.msg_controllen);
+        }
+        irix_guest_iov_free(host_iov, host_iov_storage, iov_count);
+        syscall_result(cpu, (int64_t)rc);
+        return;
+    }
+    case SYS_shutdown: { /* shutdown(fd, how) */
+        syscall_result(cpu, (int64_t)shutdown(
+            (int)(int32_t)cpu->gpr[4], (int)(int32_t)cpu->gpr[5]));
+        return;
+    }
+    case SYS_setsockopt: { /* setsockopt(fd, level, option, value, length) */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        int level = (int)(int32_t)cpu->gpr[5];
+        int option = (int)(int32_t)cpu->gpr[6];
+        IrixGuestAddr value_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+        socklen_t length = (socklen_t)(uint32_t)cpu->gpr[8];
+        int value;
+
+        if (level == 0xffff) {
+            level = SOL_SOCKET;
+            switch (option) {
+            case 0x0001: option = SO_DEBUG; break;
+            case 0x0004: option = SO_REUSEADDR; break;
+            case 0x0008: option = SO_KEEPALIVE; break;
+            case 0x0010: option = SO_DONTROUTE; break;
+            case 0x0020: option = SO_BROADCAST; break;
+            case 0x0100: option = SO_OOBINLINE; break;
+            case 0x1001: option = SO_SNDBUF; break;
+            case 0x1002: option = SO_RCVBUF; break;
+            case 0x1007: option = SO_ERROR; break;
+            case 0x1008: option = SO_TYPE; break;
+            default: errno = ENOPROTOOPT; syscall_result(cpu, -1); return;
+            }
+        } else if (level != IPPROTO_TCP && level != IPPROTO_IP &&
+                   level != IPPROTO_IPV6) {
+            errno = ENOPROTOOPT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (length != 4u || !value_addr ||
+            !irix_guest_ptr(rt, value_addr, 4u)) {
+            errno = length == 4u ? EFAULT : EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        value = (int32_t)irix_guest_read32be(rt, value_addr);
+        syscall_result(cpu, (int64_t)setsockopt(fd, level, option,
+                                                &value, sizeof(value)));
+        return;
+    }
+    case SYS_getsockopt: { /* getsockopt(fd, level, option, value, lengthp) */
+        int fd = (int)(int32_t)cpu->gpr[4];
+        int level = (int)(int32_t)cpu->gpr[5];
+        int option = (int)(int32_t)cpu->gpr[6];
+        IrixGuestAddr value_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+        IrixGuestAddr length_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        socklen_t length = sizeof(int);
+        int value;
+        int rc;
+
+        if (level == 0xffff) {
+            level = SOL_SOCKET;
+            switch (option) {
+            case 0x0001: option = SO_DEBUG; break;
+            case 0x0004: option = SO_REUSEADDR; break;
+            case 0x0008: option = SO_KEEPALIVE; break;
+            case 0x0010: option = SO_DONTROUTE; break;
+            case 0x0020: option = SO_BROADCAST; break;
+            case 0x0100: option = SO_OOBINLINE; break;
+            case 0x1001: option = SO_SNDBUF; break;
+            case 0x1002: option = SO_RCVBUF; break;
+            case 0x1007: option = SO_ERROR; break;
+            case 0x1008: option = SO_TYPE; break;
+            default: errno = ENOPROTOOPT; syscall_result(cpu, -1); return;
+            }
+        } else if (level != IPPROTO_TCP && level != IPPROTO_IP &&
+                   level != IPPROTO_IPV6) {
+            errno = ENOPROTOOPT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (!value_addr || !length_addr ||
+            !irix_guest_ptr(rt, value_addr, 4u) ||
+            !irix_guest_ptr(rt, length_addr, 4u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        rc = getsockopt(fd, level, option, &value, &length);
+        if (rc == 0) {
+            irix_guest_write32be(rt, value_addr, (uint32_t)value);
+            irix_guest_write32be(rt, length_addr, (uint32_t)length);
+        }
+        syscall_result(cpu, (int64_t)rc);
+        return;
+    }
+    case SYS_select: { /* select(nfds, readfds, writefds, exceptfds, timeout) */
+        int nfds = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr guest_sets[3] = {
+            (IrixGuestAddr)(uint32_t)cpu->gpr[5],
+            (IrixGuestAddr)(uint32_t)cpu->gpr[6],
+            (IrixGuestAddr)(uint32_t)cpu->gpr[7]
+        };
+        fd_set host_sets[3];
+        fd_set *host_ptrs[3] = { NULL, NULL, NULL };
+        IrixGuestAddr timeout_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        struct timeval timeout;
+        struct timeval *timeout_ptr = NULL;
+        unsigned set_index;
+        int fd;
+        int rc;
+
+        if (nfds < 0 || nfds > FD_SETSIZE) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        for (set_index = 0; set_index < 3u; ++set_index) {
+            unsigned bit;
+            if (!guest_sets[set_index])
+                continue;
+            if (!irix_guest_ptr(rt, guest_sets[set_index], 128u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            FD_ZERO(&host_sets[set_index]);
+            host_ptrs[set_index] = &host_sets[set_index];
+            for (bit = 0; bit < (unsigned)nfds; ++bit) {
+                uint32_t word = irix_guest_read32be(
+                    rt, guest_sets[set_index] + (bit / 32u) * 4u);
+                if (rt->trapped) {
+                    errno = EFAULT;
+                    syscall_result(cpu, -1);
+                    return;
+                }
+                if (word & (1u << (bit & 31u)))
+                    FD_SET((int)bit, &host_sets[set_index]);
+            }
+        }
+        if (timeout_addr) {
+            if (!irix_guest_ptr(rt, timeout_addr, 8u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            timeout.tv_sec = (int32_t)irix_guest_read32be(rt, timeout_addr);
+            timeout.tv_usec = (int32_t)irix_guest_read32be(rt, timeout_addr + 4u);
+            if (timeout.tv_sec < 0 || timeout.tv_usec < 0 ||
+                timeout.tv_usec >= 1000000) {
+                errno = EINVAL;
+                syscall_result(cpu, -1);
+                return;
+            }
+            timeout_ptr = &timeout;
+        }
+        rc = select(nfds, host_ptrs[0], host_ptrs[1], host_ptrs[2], timeout_ptr);
+        
+        if (rc >= 0) {
+            for (set_index = 0; set_index < 3u; ++set_index) {
+                if (!guest_sets[set_index])
+                    continue;
+                for (fd = 0; fd < 1024; fd += 32) {
+                    uint32_t word = 0;
+                    unsigned bit;
+                    for (bit = 0; bit < 32u && fd + (int)bit < nfds; ++bit)
+                        if (FD_ISSET(fd + (int)bit, &host_sets[set_index]))
+                            word |= 1u << bit;
+                    irix_guest_write32be(
+                        rt, guest_sets[set_index] + (unsigned)fd / 8u, word);
+                }
+            }
+            if (timeout_addr) {
+                irix_guest_write32be(rt, timeout_addr,
+                                     (uint32_t)timeout.tv_sec);
+                irix_guest_write32be(rt, timeout_addr + 4u,
+                                     (uint32_t)timeout.tv_usec);
+            }
+        }
+        syscall_result(cpu, (int64_t)rc);
         return;
     }
     case SYS_sigprocmask: { /* ksigprocmask(how, set, oldset) */
@@ -1751,6 +2693,15 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, kill(pid, signo));
         return;
     }
+    case SYS_setpgrp: { /* setpgrp(flags): return pgrp or create a new session */
+        int flags = (int)(int32_t)cpu->gpr[4];
+
+        /* IRIX's System V setpgrp syscall returns the current process group
+         * when flags is zero, and behaves like setsid when flags is nonzero.
+         * The SGI kernel's irix_setpgrp(flags) implements this convention. */
+        syscall_result(cpu, flags ? (int64_t)setsid() : (int64_t)getpgrp());
+        return;
+    }
     case SYS_fork: { /* fork */
         pid_t pid = fork();
 
@@ -1773,32 +2724,231 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             cpu->gpr[3] = 1u;
             cpu->gpr[7] = 0u;
             cpu->gpr[0] = 0u;
-            fprintf(stderr, "IRIX fork: child pid=%ld\n", (long)getpid());
         } else {
             cpu->gpr[2] = (uint64_t)(int64_t)pid;
             cpu->gpr[3] = 0u;
             cpu->gpr[7] = 0u;
             cpu->gpr[0] = 0u;
-            fprintf(stderr, "IRIX fork: parent child=%ld\n", (long)pid);
         }
         return;
     }
     case SYS_execve: { /* execve(path, argv, envp) */
-        const char *guest_path = irix_guest_cstr(
-            rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
-        IrixGuestAddr argv_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        IrixGuestAddr envp_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
-        char host_path[PATH_MAX];
-        char runner_path[PATH_MAX];
-        const char *path;
-        const char *base;
-        char **argv;
-        char **envp = environ;
+        const char *path = irix_guest_cstr(rt, (IrixGuestAddr)cpu->gpr[4], 65536u);
+        char **argv = 0, **envp = 0;
+        IrixGuestAddr env_addr = (IrixGuestAddr)cpu->gpr[6];
         int saved_errno;
-        ssize_t exe_len;
-        size_t i;
+        if (!path) { errno = EFAULT; goto exec_syscall_failed; }
+        argv = irix_guest_string_vector(rt, (IrixGuestAddr)cpu->gpr[5]);
+        if (!argv) goto exec_syscall_failed;
+        if (env_addr) {
+            envp = irix_guest_string_vector(rt, env_addr);
+            if (!envp) goto exec_syscall_failed;
+        }
+        irix_guest_execve(rt, path, argv, envp);
+exec_syscall_failed:
+        saved_errno = errno;
+        free(argv);
+        free(envp);
+        errno = saved_errno;
+        syscall_result(cpu, -1);
+        return;
+    }
 
-        if (!guest_path || !argv_addr) {
+    case SYS_getdents: { /* getdents(fd, IRIX dirent buffer, byte capacity) */
+        struct LinuxDirent64 {
+            uint64_t ino;
+            int64_t off;
+            uint16_t reclen;
+            uint8_t type;
+            char name[];
+        };
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr out_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t capacity = (size_t)(uint32_t)cpu->gpr[6];
+        unsigned char *host_buffer;
+        long got;
+        size_t in_offset = 0, out_offset = 0, n;
+        if (capacity && !irix_guest_ptr(rt, out_addr, capacity)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        host_buffer = malloc(capacity ? capacity : 1u);
+        if (!host_buffer) {
+            errno = ENOMEM;
+            syscall_result(cpu, -1);
+            return;
+        }
+        got = syscall(__NR_getdents64, fd, host_buffer, capacity);
+        if (got >= 0) {
+            while (in_offset + offsetof(struct LinuxDirent64, name) < (size_t)got) {
+                struct LinuxDirent64 *entry =
+                    (struct LinuxDirent64 *)(host_buffer + in_offset);
+                size_t name_len, record_len;
+                if (entry->reclen < offsetof(struct LinuxDirent64, name) + 1u ||
+                    in_offset + entry->reclen > (size_t)got)
+                    break;
+                name_len = strnlen(entry->name,
+                    entry->reclen - offsetof(struct LinuxDirent64, name));
+                record_len = (18u + name_len + 1u + 7u) & ~7u;
+                if (out_offset + record_len > capacity)
+                    break;
+                irix_guest_write64be(rt, out_addr + (IrixGuestAddr)out_offset,
+                                     entry->ino);
+                irix_guest_write64be(rt, out_addr + (IrixGuestAddr)out_offset + 8u,
+                                     (uint64_t)entry->off);
+                irix_guest_write16be(rt, out_addr + (IrixGuestAddr)out_offset + 16u,
+                                     (uint16_t)record_len);
+                for (n = 0; n <= name_len; ++n)
+                    irix_guest_write8(rt, out_addr + (IrixGuestAddr)out_offset + 18u + n,
+                                      (uint8_t)entry->name[n]);
+                in_offset += entry->reclen;
+                out_offset += record_len;
+            }
+        }
+        free(host_buffer);
+        syscall_result(cpu, got < 0 ? -1 : (int64_t)out_offset);
+        return;
+    }
+    case 1207: { /* ngetdents64: return directory bytes and byte count */
+        struct LinuxDirent64 {
+            uint64_t ino;
+            int64_t off;
+            uint16_t reclen;
+            uint8_t type;
+            char name[];
+        };
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr out_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t capacity = (size_t)(uint32_t)cpu->gpr[6];
+        IrixGuestAddr count_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+        unsigned char *host_buffer;
+        long got;
+        size_t in_offset = 0, out_offset = 0, n;
+        if ((capacity && !irix_guest_ptr(rt, out_addr, capacity)) ||
+            (count_addr && !irix_guest_ptr(rt, count_addr, 4u))) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        host_buffer = malloc(capacity ? capacity : 1u);
+        if (!host_buffer) {
+            free(host_buffer);
+            errno = ENOMEM;
+            syscall_result(cpu, -1);
+            return;
+        }
+        got = syscall(__NR_getdents64, fd, host_buffer, capacity);
+        if (got >= 0) {
+            while (in_offset + offsetof(struct LinuxDirent64, name) < (size_t)got) {
+                struct LinuxDirent64 *entry =
+                    (struct LinuxDirent64 *)(host_buffer + in_offset);
+                size_t name_len, record_len;
+                if (entry->reclen < offsetof(struct LinuxDirent64, name) + 1u ||
+                    in_offset + entry->reclen > (size_t)got)
+                    break;
+                name_len = strnlen(entry->name,
+                    entry->reclen - offsetof(struct LinuxDirent64, name));
+                record_len = (18u + name_len + 1u + 7u) & ~7u;
+                if (out_offset + record_len > capacity)
+                    break;
+                irix_guest_write64be(rt, out_addr + (IrixGuestAddr)out_offset,
+                                     entry->ino);
+                irix_guest_write64be(rt, out_addr + (IrixGuestAddr)out_offset + 8u,
+                                     (uint64_t)entry->off);
+                irix_guest_write16be(rt, out_addr + (IrixGuestAddr)out_offset + 16u,
+                                     (uint16_t)record_len);
+                for (n = 0; n <= name_len; ++n)
+                    irix_guest_write8(rt, out_addr + (IrixGuestAddr)out_offset + 18u + n,
+                                      (uint8_t)entry->name[n]);
+                in_offset += entry->reclen;
+                out_offset += record_len;
+            }
+            if (count_addr)
+                irix_guest_write32be(rt, count_addr, (uint32_t)out_offset);
+        }
+        free(host_buffer);
+        syscall_result(cpu, got < 0 ? -1 : (int64_t)out_offset);
+        return;
+    }
+    case SYS_read: { /* read */
+        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t count = (size_t)(uint32_t)cpu->gpr[6];
+        void *p = count ? irix_guest_ptr(rt, addr, count) : NULL;
+        result = p || !count
+            ? (int64_t)read((int)(int32_t)cpu->gpr[4], p, count)
+            : irix_guest_read_fd(rt, (int)(int32_t)cpu->gpr[4], addr, count);
+        
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_write: { /* write */
+        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t count = (size_t)(uint32_t)cpu->gpr[6];
+        const void *p = irix_guest_ptr(rt, addr, count);
+        result = p || !count
+            ? (int64_t)write((int)(int32_t)cpu->gpr[4], p, count)
+            : irix_guest_write_fd(rt, (int)(int32_t)cpu->gpr[4], addr, count);
+        
+        
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_readv:
+    case SYS_writev: {
+        int fd = (int)(int32_t)cpu->gpr[4];
+        IrixGuestAddr vector_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        int32_t signed_count = (int32_t)cpu->gpr[6];
+        uint32_t vector_count;
+        struct iovec *iov = NULL;
+        void **storage = NULL;
+
+        if (signed_count < 0 ||
+            (uint32_t)signed_count > IRIX_GUEST_IOV_MAX) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        vector_count = (uint32_t)signed_count;
+        if (irix_guest_iov(rt, vector_addr, vector_count,
+                           number == SYS_writev, &iov, &storage) != 0) {
+            
+            syscall_result(cpu, -1);
+            return;
+        }
+
+        result = number == SYS_writev
+            ? (int64_t)writev(fd, iov, (int)vector_count)
+            : (int64_t)readv(fd, iov, (int)vector_count);
+        
+        if (result >= 0 && number == SYS_readv) {
+            size_t remaining = (size_t)result;
+            uint32_t i;
+            for (i = 0; i < vector_count && remaining; ++i) {
+                IrixGuestAddr entry = vector_addr + (IrixGuestAddr)(i * 8u);
+                IrixGuestAddr base = irix_guest_read32be(rt, entry);
+                size_t copied = iov[i].iov_len < remaining
+                              ? iov[i].iov_len : remaining;
+                if (copied && guest_copy_from_host(
+                        rt, base, storage[i], copied) != 0) {
+                    errno = EFAULT;
+                    result = -1;
+                    break;
+                }
+                remaining -= copied;
+            }
+        }
+        irix_guest_iov_free(iov, storage, vector_count);
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_creat: { /* creat(path, mode) */
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
+        char host_path[PATH_MAX];
+        const char *path;
+        mode_t mode = (mode_t)(uint32_t)cpu->gpr[5];
+        if (!guest_path) {
             errno = EFAULT;
             syscall_result(cpu, -1);
             return;
@@ -1808,99 +2958,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             syscall_result(cpu, -1);
             return;
         }
-        argv = irix_guest_string_vector(rt, argv_addr);
-        if (!argv) {
-            syscall_result(cpu, -1);
-            return;
-        }
-        if (envp_addr) {
-            envp = irix_guest_string_vector(rt, envp_addr);
-            if (!envp) {
-                saved_errno = errno;
-                free(argv);
-                errno = saved_errno;
-                syscall_result(cpu, -1);
-                return;
-            }
-        }
-
-        /* Guest child ELFs are MIPS/N32 and cannot be executed by the host
-         * kernel. Dispatch a matching sibling quick runner instead. */
-        base = strrchr(guest_path, '/');
-        base = base ? base + 1 : guest_path;
-        exe_len = readlink("/proc/self/exe", runner_path,
-                           sizeof(runner_path) - 1u);
-        if (exe_len > 0 && (size_t)exe_len < sizeof(runner_path)) {
-            char *slash;
-            runner_path[exe_len] = '\0';
-            slash = strrchr(runner_path, '/');
-            if (slash) {
-                size_t suffix_size;
-                slash[1] = '\0';
-                suffix_size = sizeof(runner_path) -
-                              (size_t)(slash + 1 - runner_path);
-                if (snprintf(slash + 1, suffix_size, "%s-quick", base) > 0 &&
-                    access(runner_path, X_OK) == 0) {
-                    fprintf(stderr,
-                            "IRIX execve translated child: %s -> %s\n",
-                            guest_path, runner_path);
-                    execve(runner_path, argv, envp);
-                    saved_errno = errno;
-                    if (envp_addr) free(envp);
-                    free(argv);
-                    errno = saved_errno;
-                    syscall_result(cpu, -1);
-                    return;
-                }
-            }
-        }
-
-        fprintf(stderr, "IRIX execve: %s -> %s", guest_path, path);
-        for (i = 0; argv[i] && i < 32u; ++i)
-            fprintf(stderr, " argv[%zu]=%s", i, argv[i]);
-        if (envp) {
-            for (i = 0; envp[i] && i < 256u; ++i) {
-                if (!strncmp(envp[i], "DISPLAY=", 8u) ||
-                    !strncmp(envp[i], "HOME=", 5u) ||
-                    !strncmp(envp[i], "XAPPLRESDIR=", 12u) ||
-                    !strncmp(envp[i], "XENVIRONMENT=", 13u) ||
-                    !strncmp(envp[i], "PATH=", 5u))
-                    fprintf(stderr, " %s", envp[i]);
-            }
-        }
-        fputc('\n', stderr);
-        execve(path, argv, envp);
-
-        saved_errno = errno;
-        if (envp_addr) free(envp);
-        free(argv);
-        errno = saved_errno;
-        syscall_result(cpu, -1);
-        return;
-    }
-    case SYS_read: { /* read */
-        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        size_t count = (size_t)(uint32_t)cpu->gpr[6];
-        void *p = irix_guest_ptr(rt, addr, count);
-        if (!p && count) {
-            errno = EFAULT;
-            syscall_result(cpu, -1);
-            return;
-        }
-        result = (int64_t)read((int)(int32_t)cpu->gpr[4], p, count);
-        syscall_result(cpu, result);
-        return;
-    }
-    case SYS_write: { /* write */
-        IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
-        size_t count = (size_t)(uint32_t)cpu->gpr[6];
-        const void *p = irix_guest_ptr(rt, addr, count);
-        if (!p && count) {
-            errno = EFAULT;
-            syscall_result(cpu, -1);
-            return;
-        }
-        result = (int64_t)write((int)(int32_t)cpu->gpr[4], p, count);
+        result = (int64_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
         syscall_result(cpu, result);
         return;
     }
@@ -1922,10 +2980,6 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         result = (int64_t)open(path, irix_open_flags(flags), mode);
-        fprintf(stderr, "IRIX open: %s -> %s flags=0x%x = %lld%s%s\n",
-                guest_path, path, flags, (long long)result,
-                result < 0 ? " errno=" : "",
-                result < 0 ? strerror(errno) : "");
         syscall_result(cpu, result);
         return;
     }
@@ -1933,6 +2987,36 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         result = (int64_t)close((int)(int32_t)cpu->gpr[4]);
         syscall_result(cpu, result);
         return;
+    case SYS_link: {
+        const char *old_guest = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
+        const char *new_guest = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 65536u);
+        char old_host[PATH_MAX], new_host[PATH_MAX];
+        const char *old_path, *new_path;
+        if (!old_guest || !new_guest) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        old_path = irix_host_path(rt, old_guest, old_host, sizeof(old_host));
+        new_path = irix_host_path(rt, new_guest, new_host, sizeof(new_host));
+        if (!old_path || !new_path) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)link(old_path, new_path));
+        return;
+    }
+    case SYS_unlink: {
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
+        char host_path[PATH_MAX];
+        const char *path;
+        if (!guest_path) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+        if (!path) { syscall_result(cpu, -1); return; }
+        syscall_result(cpu, (int64_t)unlink(path));
+        return;
+    }
     case SYS_pipe: { /* pipe */
         int fds[2];
 
@@ -1951,7 +3035,6 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         cpu->gpr[3] = (uint64_t)(int64_t)fds[1];
         cpu->gpr[7] = 0u;
         cpu->gpr[0] = 0u;
-        fprintf(stderr, "IRIX pipe: -> %d,%d\n", fds[0], fds[1]);
         return;
     }
     case SYS_fcntl: { /* fcntl(fd, cmd, arg) */
@@ -2001,17 +3084,83 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         case 4: /* F_SETFL */
             result = (int64_t)fcntl(fd, F_SETFL, irix_open_flags(arg));
             break;
+        case 6:  /* F_SETLK */
+        case 7:  /* F_SETLKW */
+        case 12: /* F_SETBSDLK: IRIX compatibility alias for F_SETLK */
+        case 13: /* F_SETBSDLKW: IRIX compatibility alias for F_SETLKW */
+        case 14: { /* F_GETLK */
+            const size_t guest_flock_size = 48u;
+            IrixGuestAddr guest_flock = arg;
+            struct flock host_flock;
+            int host_cmd;
+            uint16_t guest_lock_type;
+            void *guest_flock_ptr = guest_flock
+                ? irix_guest_ptr(rt, guest_flock, guest_flock_size) : 0;
+
+            if (!guest_flock_ptr || rt->trapped) {
+                errno = EFAULT;
+                result = -1;
+                break;
+            }
+
+            /*
+             * IRIX N32 struct flock uses 64-bit offsets and reserves the
+             * final 16 bytes. Translate its 48-byte big-endian form instead
+             * of passing the guest layout to Linux's smaller host struct.
+             */
+            memset(&host_flock, 0, sizeof(host_flock));
+            guest_lock_type = irix_guest_read16be(rt, guest_flock);
+            switch (guest_lock_type) {
+            case 1u: host_flock.l_type = F_RDLCK; break;
+            case 2u: host_flock.l_type = F_WRLCK; break;
+            case 3u: host_flock.l_type = F_UNLCK; break;
+            default: {
+                errno = EINVAL;
+                result = -1;
+                goto fcntl_lock_done;
+            }
+            }
+            host_flock.l_whence = (short)irix_guest_read16be(rt,
+                                                            guest_flock + 2u);
+            host_flock.l_start = (off_t)(int64_t)irix_guest_read64be(
+                rt, guest_flock + 8u);
+            host_flock.l_len = (off_t)(int64_t)irix_guest_read64be(
+                rt, guest_flock + 16u);
+            if (rt->trapped) {
+                errno = EFAULT;
+                result = -1;
+                break;
+            }
+
+            host_cmd = (cmd == 6 || cmd == 12) ? F_SETLK
+                     : (cmd == 7 || cmd == 13) ? F_SETLKW : F_GETLK;
+            result = (int64_t)fcntl(fd, host_cmd, &host_flock);
+
+            if (result == 0 && cmd == 14) {
+                uint16_t guest_lock_type = host_flock.l_type == F_RDLCK ? 1u
+                    : host_flock.l_type == F_WRLCK ? 2u : 3u;
+                irix_guest_write16be(rt, guest_flock,
+                                     guest_lock_type);
+                irix_guest_write16be(rt, guest_flock + 2u,
+                                     (uint16_t)host_flock.l_whence);
+                irix_guest_write64be(rt, guest_flock + 8u,
+                                     (uint64_t)(int64_t)host_flock.l_start);
+                irix_guest_write64be(rt, guest_flock + 16u,
+                                     (uint64_t)(int64_t)host_flock.l_len);
+                /* Linux has no IRIX remote lock system-id field. */
+                irix_guest_write32be(rt, guest_flock + 24u, 0u);
+                irix_guest_write32be(rt, guest_flock + 28u,
+                                     (uint32_t)host_flock.l_pid);
+            }
+        fcntl_lock_done:
+            break;
+        }
         default:
             errno = EINVAL;
             result = -1;
             break;
         }
 
-        fprintf(stderr,
-                "IRIX fcntl: fd=%d cmd=%d arg=0x%x -> %lld%s%s\n",
-                fd, cmd, arg, (long long)result,
-                result < 0 ? " errno=" : "",
-                result < 0 ? strerror(errno) : "");
         syscall_result(cpu, result);
         return;
     }
@@ -2019,6 +3168,21 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         int fd = (int)(int32_t)cpu->gpr[4];
         uint32_t cmd = (uint32_t)cpu->gpr[5];
         IrixGuestAddr arg_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+
+        /* X11 transport's IRIX socket bytes-readable query. */
+        if (cmd == 0x4004730au) {
+            int available = 0;
+            if (!arg_addr || !irix_guest_ptr(rt, arg_addr, 4u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            result = (int64_t)ioctl(fd, FIONREAD, &available);
+            if (result == 0)
+                irix_guest_write32be(rt, arg_addr, (uint32_t)available);
+            syscall_result(cpu, result);
+            return;
+        }
 
         /*
          * IRIX STREAMS I_STR is 0x5308.  Its N32 strioctl contains a
@@ -2087,6 +3251,7 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          * marshalling as they are added.
          */
         result = (int64_t)ioctl(fd, cmd, (unsigned long)(uint32_t)arg_addr);
+        
         syscall_result(cpu, result);
         return;
     }
@@ -2161,8 +3326,6 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             }
 
             rt->program_break = requested;
-            fprintf(stderr, "IRIX break: init heap 0x%08x -> 0x%08x\n",
-                    heap_base, requested);
             syscall_result(cpu, 0);
             return;
         }
@@ -2190,9 +3353,110 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             }
         }
         rt->program_break = requested;
-        fprintf(stderr, "IRIX break: 0x%08x -> 0x%08x\n",
-                old_break, requested);
         syscall_result(cpu, 0);
+        return;
+    }
+    case SYS_alarm: { /* alarm(seconds) */
+        uint32_t seconds = (uint32_t)cpu->gpr[4];
+        uint64_t now = monotonic_time_ns();
+        uint32_t remaining = 0u;
+        if (rt->alarm_deadline_ns && now && rt->alarm_deadline_ns > now) {
+            uint64_t delta = rt->alarm_deadline_ns - now;
+            remaining = (uint32_t)((delta + 999999999ull) / 1000000000ull);
+        }
+        rt->alarm_deadline_ns = seconds && now
+            ? now + (uint64_t)seconds * 1000000000ull : 0u;
+        syscall_result(cpu, remaining);
+        return;
+    }
+    case SYS_waitsys: { /* waitid(idtype, id, siginfo, options) */
+        int idtype = (int)(int32_t)cpu->gpr[4];
+        id_t id = (id_t)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr info_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        uint32_t guest_options = (uint32_t)cpu->gpr[7];
+        idtype_t host_type;
+        int host_options = 0;
+        siginfo_t info;
+        unsigned i;
+        if (idtype == 0) host_type = P_PID;
+        else if (idtype == 2) host_type = P_PGID;
+        else if (idtype == 7) host_type = P_ALL;
+        else {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (guest_options & 1u) host_options |= WEXITED;
+        if (guest_options & (2u | 4u)) host_options |= WSTOPPED;
+        if (guest_options & 8u) host_options |= WCONTINUED;
+        if (guest_options & 0100u) host_options |= WNOHANG;
+        if (guest_options & 0200u) host_options |= WNOWAIT;
+        if (!host_options) host_options = WEXITED;
+        if (!info_addr || !irix_guest_ptr(rt, info_addr, 128u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        memset(&info, 0, sizeof(info));
+        result = (int64_t)waitid(host_type, id, &info, host_options);
+        if (result == 0) {
+            for (i = 0; i < 128u; i += 4u)
+                irix_guest_write32be(rt, info_addr + i, 0u);
+            irix_guest_write32be(rt, info_addr + 0u,
+                                 info.si_pid ? 18u : 0u); /* IRIX SIGCLD */
+            irix_guest_write32be(rt, info_addr + 4u, (uint32_t)info.si_code);
+            irix_guest_write32be(rt, info_addr + 8u, (uint32_t)info.si_errno);
+            irix_guest_write32be(rt, info_addr + 12u, (uint32_t)info.si_pid);
+            irix_guest_write32be(rt, info_addr + 20u, (uint32_t)info.si_status);
+        }
+        syscall_result(cpu, result);
+        return;
+    }
+    case SYS_sgikopt: { /* sgikopt(name, value, capacity) */
+        IrixGuestAddr name_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr value_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        size_t capacity = (size_t)(uint32_t)cpu->gpr[6];
+        const char *name = irix_guest_cstr(rt, name_addr, 256u);
+        const char *value = NULL;
+        size_t length;
+        if (name && strcmp(name, "diskless") == 0)
+            value = "isfalse";
+        if (!name || !value) {
+            errno = name ? ENOENT : EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        length = strlen(value) + 1u;
+        if (capacity < length || !irix_guest_ptr(rt, value_addr, length)) {
+            errno = capacity < length ? ERANGE : EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        memcpy(irix_guest_ptr(rt, value_addr, length), value, length);
+        syscall_result(cpu, 0);
+        return;
+    }
+    case SYS_sginap: { /* sginap(ticks), IRIX clock is 100 Hz */
+        int32_t ticks = (int32_t)cpu->gpr[4];
+        struct timespec requested, remaining;
+        if (ticks <= 0) {
+            (void)sched_yield();
+            syscall_result(cpu, 0);
+            return;
+        }
+        requested.tv_sec = ticks / 100;
+        requested.tv_nsec = (long)(ticks % 100) * 10000000L;
+        if (nanosleep(&requested, &remaining) == 0) {
+            syscall_result(cpu, 0);
+            return;
+        }
+        if (errno == EINTR) {
+            int64_t left = (int64_t)remaining.tv_sec * 100 +
+                           (remaining.tv_nsec + 9999999L) / 10000000L;
+            syscall_result(cpu, left > INT32_MAX ? INT32_MAX : left);
+            return;
+        }
+        syscall_result(cpu, -1);
         return;
     }
     case SYS_ksigaction: { /* sigaction(sig, act, oact, sigtramp) */
@@ -2250,6 +3514,25 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         syscall_result(cpu, (int64_t)gethostname(name, len));
         return;
     }
+    case SYS_getdomainname: { /* getdomainname(char *name, size_t len) */
+        IrixGuestAddr name_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        size_t len = (size_t)(uint32_t)cpu->gpr[5];
+        char *name;
+
+        if (!len) {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        name = (char *)irix_guest_ptr(rt, name_addr, len);
+        if (!name) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, (int64_t)getdomainname(name, len));
+        return;
+    }
     case SYS_chdir: {
         const char *path = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
         if (!path) { errno = EFAULT; syscall_result(cpu, -1); return; }
@@ -2304,9 +3587,14 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     case SYS_rename: {
-        const char *oldp = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
-        const char *newp = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 65536u);
-        if (!oldp || !newp) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        const char *old_guest = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
+        const char *new_guest = irix_guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 65536u);
+        char old_host[PATH_MAX], new_host[PATH_MAX];
+        const char *oldp, *newp;
+        if (!old_guest || !new_guest) { errno = EFAULT; syscall_result(cpu, -1); return; }
+        oldp = irix_host_path(rt, old_guest, old_host, sizeof(old_host));
+        newp = irix_host_path(rt, new_guest, new_host, sizeof(new_host));
+        if (!oldp || !newp) { syscall_result(cpu, -1); return; }
         syscall_result(cpu, (int64_t)rename(oldp, newp));
         return;
     }
@@ -2361,19 +3649,85 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case SYS_getpid: /* getpid */
         syscall_result(cpu, (int64_t)getpid());
         return;
+    case SYS_time: { /* time(time_t *tloc), IRIX N32 time_t is 32-bit */
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        time_t now = time(0);
+        if (now == (time_t)-1) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (out) {
+            if (!irix_guest_ptr(rt, out, 4u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            irix_guest_write32be(rt, out, (uint32_t)now);
+        }
+        syscall_result(cpu, (int32_t)now);
+        return;
+    }
     case SYS_getuid: /* getuid */
         syscall_result(cpu, (int64_t)getuid());
+        /* IRIX's getuid syscall returns both IDs: libc's getuid() uses v0,
+           while geteuid() reads v1 when the syscall succeeds. */
+        cpu->gpr[3] = (uint64_t)geteuid();
         return;
+    case SYS_BSD_getime: { /* BSDgettimeofday(timeval *, timezone *) */
+        IrixGuestAddr tv_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr tz_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        struct timeval tv;
+        if (gettimeofday(&tv, NULL) != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        /* IRIX N32 uses 32-bit time_t and long in struct timeval. */
+        if (tv_addr) {
+            if (!irix_guest_ptr(rt, tv_addr, 8u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            irix_guest_write32be(rt, tv_addr, (uint32_t)tv.tv_sec);
+            irix_guest_write32be(rt, tv_addr + 4u, (uint32_t)tv.tv_usec);
+        }
+        if (tz_addr) {
+            if (!irix_guest_ptr(rt, tz_addr, 8u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            /* The obsolete timezone result is not needed by Xlib callers. */
+            irix_guest_write32be(rt, tz_addr, 0u);
+            irix_guest_write32be(rt, tz_addr + 4u, 0u);
+        }
+        syscall_result(cpu, 0);
+        return;
+    }
     case SYS_access: { /* access */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         int mode = (int)(int32_t)cpu->gpr[5];
-        const char *path = irix_guest_cstr(rt, path_addr, 65536u);
-        if (!path) {
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
+        char host_path[PATH_MAX];
+        const char *path;
+        int access_rc;
+        int access_errno;
+        if (!guest_path) {
             errno = EFAULT;
             syscall_result(cpu, -1);
             return;
         }
-        syscall_result(cpu, (int64_t)access(path, mode));
+        path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+        if (!path) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        access_rc = access(path, mode);
+        access_errno = access_rc < 0 ? errno : 0;
+        
+        if (access_rc < 0)
+            errno = access_errno;
+        syscall_result(cpu, (int64_t)access_rc);
         return;
     }
     case SYS_syssgi: /* syssgi */
@@ -2381,6 +3735,8 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     case SYS_getgid: /* getgid */
         syscall_result(cpu, (int64_t)getgid());
+        /* Match the paired real/effective GID return used by IRIX libc. */
+        cpu->gpr[3] = (uint64_t)getegid();
         return;
     case SYS_sysmp: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
@@ -2434,8 +3790,10 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         result = (int64_t)stat(path, &st);
+        
         if (result == 0 && write_irix_xstat(rt, version, out, &st, -1, guest_path) != 0)
             result = -1;
+        
         syscall_result(cpu, result);
         return;
     }
@@ -2579,13 +3937,6 @@ static void report_nearest_functions(IrixGuestRuntime *rt, IrixGuestAddr address
                 (uint32_t)(above->address - address));
 }
 
-static int trace_dialog_call(const char *name)
-{
-    if (!name) return 0;
-    return strstr(name, "postBlocked__15VkDialogManager") != 0 ||
-           strstr(name, "waitForDialog__15VkDialogManager") != 0;
-}
-
 static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
                                           IrixGuestCpu *cpu)
 {
@@ -2614,10 +3965,7 @@ static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
     wc = irix_guest_read32be(rt, wc_ptrp);
     wc_num = irix_guest_read32be(rt, wc_nump);
 
-    fprintf(stderr,
-            "IRIX native _XmBuildResources: wc=%08x wc_num=%u "
-            "sc=%08x sc_num=%u\n",
-            wc, wc_num, sc, sc_num);
+    (void)0;
 
     if (wc_num == 0u) {
         irix_guest_write32be(rt, wc_ptrp, sc);
@@ -2724,10 +4072,7 @@ static int irix_native_xm_build_resources(IrixGuestRuntime *rt,
     irix_guest_write32be(rt, wc_ptrp, merged);
     irix_guest_write32be(rt, wc_nump, new_num);
 
-    fprintf(stderr,
-            "IRIX native _XmBuildResources: merged=%08x count=%u "
-            "capacity=%u\n",
-            merged, new_num, wc_num + sc_num);
+    (void)0;
 
     cpu->gpr[2] = 0u;
     cpu->gpr[0] = 0u;
@@ -2780,12 +4125,7 @@ static int irix_native_xt_gc_alloc(IrixGuestRuntime *rt,
     }
 
     gc = irix_x11_primary_create_gc(rt, display, drawable, mask, values);
-    fprintf(stderr,
-            "IRIX Xt direct GC compatibility: %s widget=%08x "
-            "screen=%08x display=%08x drawable=%08x mask=%08x values=%08x "
-            "-> gc=%08x\n",
-            allocate_form ? "XtAllocateGC" : "XtGetGC",
-            widget, screen, display, drawable, mask, values, gc);
+    
 
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)gc;
     cpu->gpr[0] = 0;
@@ -2865,10 +4205,7 @@ static int irix_guest_repair_synthetic_motif_bce_class(
                 irix_guest_xrm_quark_literal(rt, "OSF_MOTIF");
             if (motif_q) {
                 irix_guest_write32be(rt, ext + 0x04u, motif_q);
-                fprintf(stderr,
-                        "IRIX Motif BCE record-type repair: "
-                        "class=%08x ext=%08x NULLQUARK -> XmQmotif=%08x\n",
-                        cls, ext, motif_q);
+                (void)0;
                 return 1;
             }
             return 0;
@@ -3003,11 +4340,7 @@ static unsigned irix_guest_repair_motif_bce_inheritance_depth(
             if (inherited != xt_inherit) {
                 irix_guest_write32be(rt, ext + off, inherited);
                 ++repaired;
-                fprintf(stderr,
-                        "IRIX Xm BCE inheritance repair: "
-                        "class=%08x ext=%08x off=%02x "
-                        "_XtInherit -> %08x super=%08x super_ext=%08x\n",
-                        cls, ext, off, inherited, super, super_ext);
+                (void)0;
             }
         }
     }
@@ -3205,13 +4538,7 @@ static IrixGuestAddr irix_guest_resolve_xm_widget_navigable(
                     irix_guest_cstr(rt, super_name_addr, 256u);
 
                 irix_guest_write32be(rt, ext + 0x6cu, candidate);
-                fprintf(stderr,
-                        "IRIX Xm widgetNavigable inheritance repair: "
-                        "widget=%08x class=%08x(%s) ext=%08x "
-                        "_XtInherit -> %08x from super=%08x(%s)\n",
-                        widget, cls, class_name ? class_name : "?",
-                        ext, candidate, super,
-                        super_name ? super_name : "?");
+                (void)0;
                 return candidate;
             }
         }
@@ -3311,10 +4638,7 @@ static void irix_guest_repair_motif_accepts_objects(IrixGuestRuntime *rt,
     if (ext) {
         if (irix_guest_read8(rt, ext + 0x10u) == 0u) {
             irix_guest_write8(rt, ext + 0x10u, 1u);
-            fprintf(stderr,
-                    "IRIX Xt Composite accepts_objects repair: "
-                    "parent=%08x class=%08x ext=%08x false->true\n",
-                    parent, cls, ext);
+            (void)0;
         }
         return;
     }
@@ -3364,11 +4688,7 @@ static void irix_guest_repair_motif_accepts_objects(IrixGuestRuntime *rt,
     irix_guest_write8(rt, fresh + 0x11u, allows_change);
     irix_guest_write32be(rt, cls + 0x84u, fresh);
 
-    fprintf(stderr,
-            "IRIX Xt Composite extension repair: "
-            "parent=%08x class=%08x old=%08x inherited=%08x -> ext=%08x "
-            "accepts_objects=1\n",
-            parent, cls, old_head, inherited, fresh);
+    (void)0;
 }
 
 static int irix_guest_repair_xt_widget_alloc(IrixGuestRuntime *rt,
@@ -3543,10 +4863,7 @@ int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
                 (IrixGuestAddr)(uint32_t)cpu->gpr[saved_candidates[i]];
             if (irix_guest_looks_like_widget(rt, candidate)) {
                 parent = candidate;
-                fprintf(stderr,
-                        "IRIX VendorExt bring-up fallback: "
-                        "using r%u=%08x as extParent\n",
-                        saved_candidates[i], candidate);
+                (void)0;
                 break;
             }
         }
@@ -3559,10 +4876,7 @@ int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
                     irix_guest_read32be(rt, a3 + 0x10u);
                 if (irix_guest_looks_like_widget(rt, candidate)) {
                     parent = candidate;
-                    fprintf(stderr,
-                            "IRIX VendorExt bring-up fallback: "
-                            "using a3+0x10=%08x as extParent\n",
-                            candidate);
+                    (void)0;
                 }
             }
         }
@@ -3571,10 +4885,7 @@ int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
             return 0;
     }
 
-    fprintf(stderr,
-            "IRIX VendorExt extParent repair: "
-            "ext=%08x logical=%08x shell=%08x -> a0=%08x\n",
-            ext, logical_parent, g_xt_alloc_widget_hint, parent);
+    (void)0;
 
     cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)parent;
     cpu->gpr[0] = 0;
@@ -3595,38 +4906,27 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     static IrixGuestAddr last_xt_convert_widget;
     static IrixGuestAddr last_xt_display;
 
-    if (address == 0x0f629714u) {
-        IrixGuestAddr list = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-        fprintf(stderr, "IRIX XtManageChildren args: list=%08x count=%u ra=%08x",
-                list, (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[31]);
-        if (list && irix_guest_ptr(rt, list, 4u))
-            fprintf(stderr, " first=%08x",
-                    irix_guest_read32be(rt, list));
-        if (list && (uint32_t)cpu->gpr[5] > 1u &&
-            irix_guest_ptr(rt, list, 8u))
-            fprintf(stderr, " second=%08x",
-                    irix_guest_read32be(rt, list + 4u));
-        fputc('\n', stderr);
-    }
-    if (address == 0x0f629928u)
-        fprintf(stderr,
-                "IRIX XtManageChild arg: widget=%08x ra=%08x\n",
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[31]);
+    
+    
 
     /*
      * Stability-first Xt GC cache bypass.
      *
      * SGI Xt's private GC-cache list is corrupted in the hybrid runtime
-     * before first desktop realization.  The cache is an optimization, not a
-     * drawing requirement.  Create a real host Xlib GC directly and return
-     * the existing guest GC handle, avoiding the broken private linked list.
+     * before first desktop realization.  This host Xlib bridge is only valid
+     * for that static hybrid path: a generic original-image process owns an
+     * SGI Xlib Display and must run the original Xt GC allocator instead.
      */
-    if (address == 0x0f61cd84u) { /* XtGetGC */
-        fprintf(stderr, "IRIX Xt GC cache bypass: XtGetGC\n");
+    if (address == 0x0f61cd84u &&
+        getenv("IRIX_EXEC_BACKEND") &&
+        strcmp(getenv("IRIX_EXEC_BACKEND"), "static") == 0) { /* XtGetGC */
+        
         return irix_native_xt_gc_alloc(rt, cpu, 0);
     }
-    if (address == 0x0f61cdccu) { /* XtAllocateGC */
-        fprintf(stderr, "IRIX Xt GC cache bypass: XtAllocateGC\n");
+    if (address == 0x0f61cdccu &&
+        getenv("IRIX_EXEC_BACKEND") &&
+        strcmp(getenv("IRIX_EXEC_BACKEND"), "static") == 0) { /* XtAllocateGC */
+        
         return irix_native_xt_gc_alloc(rt, cpu, 1);
     }
 
@@ -3641,9 +4941,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      */
     if (address == 0x0f62d5f4u &&
         (uint32_t)cpu->gpr[4] == 0u) {
-        fprintf(stderr,
-                "IRIX Xt bring-up compatibility: "
-                "XtRealizeWidget(NULL) -> no-op\n");
+        (void)0;
         cpu->gpr[2] = 0u;
         cpu->gpr[0] = 0u;
         return 0;
@@ -3820,13 +5118,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             repaired = irix_guest_repair_xt_widget_alloc(
                 rt, cpu, caller_sp, repair_class, csize_ptr, out_slot);
 
-            fprintf(stderr,
-                    "IRIX Motif false XtAllocateProc bypass: "
-                    "class=%08x repair_class=%08x csize_ptr=%08x "
-                    "out_slot=%08x repaired=%d widget=%08x\n",
-                    alloc_class, repair_class, csize_ptr, out_slot, repaired,
-                    (out_slot && irix_guest_ptr(rt, out_slot, 4u))
-                        ? irix_guest_read32be(rt, out_slot) : 0u);
+            (void)0;
 
             cpu->gpr[0] = 0u;
             return rt->trapped ? -1 : 0;
@@ -3881,10 +5173,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     if (entry && xm_build_resources_entry &&
         entry == xm_build_resources_entry &&
         address == entry->address) {
-        fprintf(stderr,
-                "IRIX native override: _XmBuildResources "
-                "entry=%08x interior=0b2a9588\n",
-                entry->address);
+        (void)0;
         return irix_native_xm_build_resources(rt, cpu);
     }
 
@@ -3908,10 +5197,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             widget_class = irix_guest_read32be(rt, widget + 4u);
 
         if (!widget_class || !irix_guest_ptr(rt, widget_class, 0x68u)) {
-            fprintf(stderr,
-                    "IRIX _XmSaveCoreClassTranslations repair: "
-                    "widget=%08x class=%08x -> skip empty save\n",
-                    widget, widget_class);
+            (void)0;
             cpu->gpr[2] = 0u;
             cpu->gpr[0] = 0u;
             return 0;
@@ -3935,9 +5221,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         IrixGuestAddr repaired =
             irix_guest_xt_ensure_resource_table(rt, table, count);
         if (!rt->trapped && repaired != table) {
-            fprintf(stderr,
-                    "IRIX XmSortResourceList repair: raw=%08x count=%u -> table=%08x\n",
-                    table, count, repaired);
+            (void)0;
             cpu->gpr[4] = repaired;
         }
     }
@@ -3956,9 +5240,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         IrixGuestAddr scratch =
             (IrixGuestAddr)(uint32_t)cpu->gpr[29] + 0x0ea8u;
         if (irix_guest_ptr(rt, scratch, 4u)) {
-            fprintf(stderr,
-                    "IRIX Xt translation parser repair: a2=NULL -> %08x\n",
-                    scratch);
+            (void)0;
             cpu->gpr[6] = scratch;
         }
     }
@@ -3983,8 +5265,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (!rt->trapped && ext &&
             irix_guest_ptr(rt, ext + 0x10u, 4u) &&
             irix_guest_read32be(rt, ext + 0x10u) == 0x0f6588b8u) {
-            fprintf(stderr,
-                    "IRIX Xt inheritance repair: XmDialogShell core extension hook _XtInherit -> NULL\n");
+            (void)0;
             irix_guest_write32be(rt, ext + 0x10u, 0u);
         }
     }
@@ -4125,10 +5406,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             last_xt_display = d;
         } else if (last_xt_display &&
                    irix_guest_ptr(rt, last_xt_display, 176u)) {
-            fprintf(stderr,
-                    "IRIX Xt per-display argument repair: _XtGetPerDisplay "
-                    "display=%08x -> %08x\\n",
-                    d, last_xt_display);
+            (void)0;
             cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)last_xt_display;
         } else {
             fprintf(stderr,
@@ -4181,9 +5459,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
 
             if (repair) {
-                fprintf(stderr,
-                        "IRIX Xt convert context repair: _XtConvert widget NULL -> %08x\\n",
-                        repair);
+                (void)0;
                 cpu->gpr[4] = (uint64_t)(int64_t)(int32_t)repair;
                 last_xt_convert_widget = repair;
             }
@@ -4210,8 +5486,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         IrixGuestAddr registrar_gp = irix_guest_gp_for_address(registrar);
         int rrc;
 
-        fprintf(stderr,
-                "IRIX 4Dwm bring-up: forcing _XmRegisterConverters before _XtConvert\\n");
+        (void)0;
         if (registrar_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)registrar_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)registrar;
@@ -4219,8 +5494,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (!rt->trapped && rrc == 0) {
             motif_converters_forced = 1;
             *cpu = saved_cpu;
-            fprintf(stderr,
-                    "IRIX 4Dwm bring-up: Motif converters registered\\n");
+            (void)0;
         } else {
             fprintf(stderr,
                     "IRIX 4Dwm bring-up: _XmRegisterConverters failed rc=%d trapped=%d\\n",
@@ -4269,9 +5543,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)xe->address;
 
-            fprintf(stderr,
-                    "IRIX direct-main original alias: %s %08x -> %08x\n",
-                    entry->name, address, xe->address);
+            (void)0;
 
             rc = irix_mips_interp_call(rt, cpu, xe->address);
             if (!rt->trapped)
@@ -4330,10 +5602,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     !(xe->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
                     irix_guest_ptr(rt, xe->address, 4u)) {
                     exec_address = xe->address;
-                    if (irix_mips_trace_enabled())
-                        fprintf(stderr,
-                                "IRIX GUI stability alias: %s %08x -> %08x\n",
-                                entry->name, address, exec_address);
+                    
                     break;
                 }
             }
@@ -4344,10 +5613,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)exec_address;
 
-        if (irix_mips_trace_enabled())
-            fprintf(stderr,
-                    "IRIX GUI stability mode: %s @ %08x -> original MIPS %08x\n",
-                    entry->name, address, exec_address);
+        
 
         rc = irix_mips_interp_call(rt, cpu, exec_address);
 
@@ -4374,9 +5640,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
-        fprintf(stderr,
-                "IRIX 4Dwm fast bring-up: ProcessScreenResources -> original MIPS\n");
-        rc = irix_mips_interp_call(rt, cpu, address);
+        (void)0;
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
@@ -4395,9 +5660,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
-        fprintf(stderr,
-                "IRIX 4Dwm fast bring-up: _WmGetDynamicDefault -> original MIPS\n");
-        rc = irix_mips_interp_call(rt, cpu, address);
+        (void)0;
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
@@ -4415,9 +5679,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
-        fprintf(stderr,
-                "IRIX 4Dwm fast bring-up: _WmBackgroundPixmapDefault -> original MIPS\n");
-        rc = irix_mips_interp_call(rt, cpu, address);
+        (void)0;
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
@@ -4439,10 +5702,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (target_gp)
                 cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
-            fprintf(stderr,
-                    "IRIX 4Dwm fast bring-up: %s -> original MIPS\n",
-                    entry->name);
-            rc = irix_mips_interp_call(rt, cpu, address);
+            (void)0;
+            rc = irix_mips_interp_invoke(rt, cpu, address);
             if (!rt->trapped)
                 cpu->gpr[28] = saved_gp;
             return rc;
@@ -4458,10 +5719,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      */
     if ((!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) &&
         irix_mips_interp_should_force(address)) {
-        fprintf(stderr,
-                "IRIX dispatcher: forced interpreter target=%08x\n",
-                address);
-        return irix_mips_interp_call(rt, cpu, address);
+        
+        return irix_mips_interp_invoke(rt, cpu, address);
     }
 
     /*
@@ -4487,7 +5746,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fprintf(stderr,
                 "IRIX Xt TMparse internal fallback: %08x -> original MIPS\n",
                 address);
-        rc = irix_mips_interp_call(rt, cpu, address);
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
@@ -4520,7 +5779,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fprintf(stderr,
                 "IRIX Xt TMparse fallback: %s @ %08x -> original MIPS\n",
                 entry->name, address);
-        rc = irix_mips_interp_call(rt, cpu, address);
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
         return rc;
@@ -4554,7 +5813,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
 
-            interp_rc = irix_mips_interp_call(rt, cpu, address);
+            interp_rc = irix_mips_interp_invoke(rt, cpu, address);
             if (interp_rc == 0) {
                 if (!rt->trapped)
                     cpu->gpr[28] = saved_gp;
@@ -4562,6 +5821,13 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
             if (rt->trapped)
                 return -1;
+
+            fprintf(stderr,
+                    "IRIX guest interpreter dispatch failed: target=%08x rc=%d "
+                    "cpu_pc=%08x current_pc=%08x ra=%08x gp=%08x\n",
+                    address, interp_rc, (uint32_t)cpu->pc,
+                    (uint32_t)rt->current_pc, (uint32_t)cpu->gpr[31],
+                    (uint32_t)cpu->gpr[28]);
 
             /* No executable mapping / not a real guest function. Restore the
                caller before producing the INVALID GUEST CALL diagnostic. */
@@ -4588,6 +5854,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     irix_guest_read32be(rt, address + 12u),
                     irix_guest_read32be(rt, address + 16u));
         }
+        
         report_nearest_functions(rt, address);
         if (s4 && irix_guest_ptr(rt, s4, 28u)) {
             fprintf(stderr,
@@ -4688,8 +5955,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          */
         if (address == 0x0b29c904u &&
             (uint32_t)cpu->gpr[4] == 0x66697865u) {
-            fprintf(stderr,
-                    "IRIX XmFontList repair: raw \"fixed\" sentinel -> NULL\n");
+            (void)0;
             cpu->gpr[4] = 0;
         }
 
@@ -4714,9 +5980,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 irix_guest_write32be(rt, scratch, (uint32_t)cpu->gpr[4]);
                 irix_guest_write32be(rt, args + 0u, 4u);
                 irix_guest_write32be(rt, args + 4u, scratch);
-                fprintf(stderr,
-                        "IRIX XtCvtStringToCursor repair: args=%08x size=4 addr=%08x dpy=%08x\n",
-                        args, scratch, (uint32_t)cpu->gpr[4]);
+                (void)0;
             }
             uint32_t arg_size = 0, arg_addr = 0, arg_value = 0;
             if (args && irix_guest_ptr(rt, args, 8u)) {
@@ -4725,12 +5989,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 if (arg_addr && irix_guest_ptr(rt, arg_addr, 4u))
                     arg_value = irix_guest_read32be(rt, arg_addr);
             }
-            fprintf(stderr,
-                    "IRIX XtCvtStringToCursor entry: caller=%08x dpy=%08x args=%08x num_args=%08x from=%08x to=%08x closure=%08x arg0.size=%08x arg0.addr=%08x arg0.value=%08x",
-                    (uint32_t)cpu->pc, (uint32_t)cpu->gpr[4], args,
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                    arg_size, arg_addr, arg_value);
+            (void)0;
             if (args && irix_guest_ptr(rt, args, 32u)) {
                 fprintf(stderr,
                         " words=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
@@ -4775,12 +6034,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         caller_saved[8] = cpu->gpr[30];
         if (address == 0x10044150u) {
             IrixGuestFunctionEntry *caller_entry = irix_guest_find_function(rt, caller_pc);
-            fprintf(stderr,
-                    "IRIX tuTopLevel::resize entry: caller_pc=0x%08x %s this=0x%08x width=%d height=%d ra=0x%08x\\n",
-                    caller_pc,
-                    (caller_entry && caller_entry->name) ? caller_entry->name : "?",
-                    (uint32_t)cpu->gpr[4], (int32_t)cpu->gpr[5],
-                    (int32_t)cpu->gpr[6], (uint32_t)cpu->gpr[31]);
+            (void)0;
         }
         if (address == 0x10043a60u) {
             IrixGuestFunctionEntry *caller_entry = irix_guest_find_function(rt, caller_pc);
@@ -4793,82 +6047,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         }
         if (address == 0x10024fdcu) {
             IrixGuestFunctionEntry *caller_entry = irix_guest_find_function(rt, caller_pc);
-            fprintf(stderr,
-                    "IRIX tuGadget::resize entry: caller_pc=0x%08x %s this=0x%08x width=%d height=%d ra=0x%08x\\n",
-                    caller_pc,
-                    (caller_entry && caller_entry->name) ? caller_entry->name : "?",
-                    (uint32_t)cpu->gpr[4], (int32_t)cpu->gpr[5],
-                    (int32_t)cpu->gpr[6], (uint32_t)cpu->gpr[31]);
+            (void)0;
         }
-        /*
-         * Targeted call-boundary tracer for stalls that occur immediately
-         * after a known guest call site.  Set IRIX_TRACE_FROM_CALLER to a
-         * guest PC (hex accepted).  Once that caller is observed, dump the
-         * next 64 dispatcher crossings.  This stays dormant in normal runs.
-         */
-        {
-            static int trace_init;
-            static IrixGuestAddr trace_from;
-            static unsigned trace_left;
-            if (!trace_init) {
-                const char *s = getenv("IRIX_TRACE_FROM_CALLER");
-                if (s && *s)
-                    trace_from = (IrixGuestAddr)strtoul(s, NULL, 0);
-                trace_init = 1;
-            }
-            if (trace_from && caller_pc == trace_from)
-                trace_left = 64u;
-            if (trace_left) {
-                fprintf(stderr,
-                        "IRIX call trace: caller_pc=0x%08x callee=0x%08x:%s "
-                        "ra=0x%08x sp=0x%08x gp=0x%08x at=0x%08x t9=0x%08x "
-                        "a0-a3=%08x,%08x,%08x,%08x "
-                        "s0-s3=%08x,%08x,%08x,%08x\n",
-                        caller_pc, address, entry->name ? entry->name : "?",
-                        (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[29],
-                        (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[1],
-                        (uint32_t)cpu->gpr[25],
-                        (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                        (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                        (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                        (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19]);
-                if (trace_from && caller_pc == trace_from) {
-                    IrixGuestAddr s0 = (IrixGuestAddr)(uint32_t)cpu->gpr[16];
-                    if (s0 && irix_guest_ptr(rt, s0, 32u)) {
-                        fprintf(stderr,
-                                "IRIX call trace s0@%08x: "
-                                "%08x %08x %08x %08x %08x %08x %08x %08x\n",
-                                s0,
-                                irix_guest_read32be(rt, s0 + 0u),
-                                irix_guest_read32be(rt, s0 + 4u),
-                                irix_guest_read32be(rt, s0 + 8u),
-                                irix_guest_read32be(rt, s0 + 12u),
-                                irix_guest_read32be(rt, s0 + 16u),
-                                irix_guest_read32be(rt, s0 + 20u),
-                                irix_guest_read32be(rt, s0 + 24u),
-                                irix_guest_read32be(rt, s0 + 28u));
-                    }
-                }
-                --trace_left;
-            }
-        }
-        if (trace_dialog_call(entry->name)) {
-            const char *dialog_key = NULL;
-            if (entry->name && strstr(entry->name, "postBlocked") != NULL)
-                dialog_key = irix_guest_cstr(
-                    rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 256u);
-            fprintf(stderr,
-                    "IRIX dialog trace: callee=0x%08x:%s caller_pc=0x%08x ra=0x%08x this=0x%08x a1-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x%s%s\n",
-                    address, entry->name ? entry->name : "?", caller_pc,
-                    (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[4],
-                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
-                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
-                    (uint32_t)cpu->gpr[9], (uint32_t)cpu->gpr[10],
-                    (uint32_t)cpu->gpr[11],
-                    dialog_key ? " key=" : "",
-                    dialog_key ? dialog_key : "");
-        }
-
         /*
          * Any callable guest address must execute with the $gp of the ELF
          * image that owns that address.
@@ -4929,38 +6109,17 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 if (sg_state) {
                     irix_guest_write32be(rt, sg_class + 0x60u, sg_state);
                     sg_drop_swap = 1;
-                    fprintf(stderr,
-                            "IRIX SG drop-transfer state swap: class=%08x saved=%08x scratch=%08x\n",
-                            sg_class, sg_saved_private, sg_state);
+                    
                 }
             }
         }
 
         if (xm_display_shell_call) {
-            IrixGuestAddr trace_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             if (xm_display_shell_depth++ == 0u)
                 xm_display_bootstrap_widget = 0u;
             g_xt_alloc_widget_class_hint =
                 (IrixGuestAddr)(uint32_t)cpu->gpr[6];
-            fprintf(stderr,
-                    "IRIX XmDisplay shell bootstrap begin depth=%u "
-                    "pc=%08x sp=%08x a0-a7=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x "
-                    "s0-s3=%08x,%08x,%08x,%08x "
-                    "stk10-28=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
-                    xm_display_shell_depth, caller_pc, trace_sp,
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
-                    irix_guest_read32be(rt, trace_sp + 0x10u),
-                    irix_guest_read32be(rt, trace_sp + 0x14u),
-                    irix_guest_read32be(rt, trace_sp + 0x18u),
-                    irix_guest_read32be(rt, trace_sp + 0x1cu),
-                    irix_guest_read32be(rt, trace_sp + 0x20u),
-                    irix_guest_read32be(rt, trace_sp + 0x24u),
-                    irix_guest_read32be(rt, trace_sp + 0x28u));
+            
         }
 
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
@@ -4973,9 +6132,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (sg_drop_swap && sg_class &&
             irix_guest_ptr(rt, sg_class + 0x60u, 4u)) {
             irix_guest_write32be(rt, sg_class + 0x60u, sg_saved_private);
-            fprintf(stderr,
-                    "IRIX SG drop-transfer state restore: class=%08x private=%08x\n",
-                    sg_class, sg_saved_private);
+            
         }
 
         /*
@@ -4987,28 +6144,9 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 rt, (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
 
         if (xm_display_shell_call) {
-            IrixGuestAddr trace_sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
             if (xm_display_shell_depth)
                 --xm_display_shell_depth;
-            fprintf(stderr,
-                    "IRIX XmDisplay shell bootstrap end depth=%u widget=%08x "
-                    "v0=%08x pc=%08x sp=%08x "
-                    "a0-a3=%08x,%08x,%08x,%08x "
-                    "s0-s3=%08x,%08x,%08x,%08x "
-                    "stk10-28=%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
-                    xm_display_shell_depth, xm_display_bootstrap_widget,
-                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->pc, trace_sp,
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
-                    irix_guest_read32be(rt, trace_sp + 0x10u),
-                    irix_guest_read32be(rt, trace_sp + 0x14u),
-                    irix_guest_read32be(rt, trace_sp + 0x18u),
-                    irix_guest_read32be(rt, trace_sp + 0x1cu),
-                    irix_guest_read32be(rt, trace_sp + 0x20u),
-                    irix_guest_read32be(rt, trace_sp + 0x24u),
-                    irix_guest_read32be(rt, trace_sp + 0x28u));
+            
             if (!xm_display_shell_depth) {
                 xm_display_bootstrap_widget = 0u;
                 g_xt_alloc_widget_class_hint = 0u;
@@ -5034,14 +6172,12 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             IrixGuestFunctionEntry *cont =
                 irix_guest_find_function(rt, 0x0b2942b0u);
             if (cont && cont->function) {
-                fprintf(stderr,
-                        "IRIX Xm GetDisplay continuation: 0x0b294240 -> 0x0b2942b0\n");
+                (void)0;
                 cpu->pc = 0x0b2942b0u;
                 rt->current_pc = 0x0b2942b0u;
                 cont->function(rt, cpu);
             } else {
-                fprintf(stderr,
-                        "IRIX Xm GetDisplay continuation missing at 0x0b2942b0\n");
+                (void)0;
             }
         }
 
@@ -5065,33 +6201,17 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address, IrixGuestFunctionEntry *entry)
 {
     IrixGuestAddr caller;
-    int trace_scheme = (address == 0x0f63945cu || address == 0x0f63a090u) &&
-                       getenv("IRIX_SCHEME_TRACE") != NULL;
     if (!entry || entry->address != address ||
         ((entry->flags & IRIX_GUEST_FUNCTION_INTERIOR) &&
          !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_guest_call(rt, cpu, address);
     caller = rt->current_pc;
-    if (trace_scheme) {
-        const char *arg = irix_guest_cstr(rt, (uint32_t)cpu->gpr[4], 256u);
-        fprintf(stderr, "IRIX scheme call: target=%08x caller=%08x a0=%08x '%.*s' a1=%08x a2=%08x a3=%08x a7=%08x\n",
-                address, caller, (uint32_t)cpu->gpr[4],
-                arg ? 128 : 0, arg ? arg : "",
-                (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
-                (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[11]);
-    }
     irix_guest_profile_hit(rt, caller, address, entry);
     if (irix_mips_jit_requested() &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE))
         return irix_mips_jit_call(rt, cpu, address);
     {
         int rc = irix_guest_call_entry_impl(rt, cpu, address, entry);
-        if (trace_scheme) {
-            const char *value = irix_guest_cstr(rt, (uint32_t)cpu->gpr[2], 256u);
-            fprintf(stderr, "IRIX scheme return: target=%08x v0=%08x '%.*s' trap=%d\n",
-                    address, (uint32_t)cpu->gpr[2], value ? 128 : 0,
-                    value ? value : "", rt->trapped);
-        }
         return rc;
     }
 }
@@ -5100,37 +6220,8 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 {
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
-    if (address == 0x0f61e9c0u && getenv("IRIX_XT_CALL_TRACE")) {
-        fprintf(stderr,
-                "IRIX XtIsRealized call: caller=%08x ra=%08x a0-a3=%08x,%08x,%08x,%08x gp=%08x\n",
-                caller, (uint32_t)cpu->gpr[31],
-                (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                (uint32_t)cpu->gpr[28]);
-    }
-    if (getenv("IRIX_GEOMETRY_TRACE") &&
-        (address == 0x0f64be08u || address == 0x0f64b9b0u)) {
-        IrixGuestAddr widget = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
-        IrixGuestAddr cls = widget && irix_guest_ptr(rt, widget, 8u)
-            ? irix_guest_read32be(rt, widget + 4u) : 0u;
-        IrixGuestAddr cls_name_addr = cls && irix_guest_ptr(rt, cls + 4u, 4u)
-            ? irix_guest_read32be(rt, cls + 4u) : 0u;
-        const char *cls_name = irix_guest_cstr(rt, cls_name_addr, 128u);
-        if (address == 0x0f64be08u) {
-            fprintf(stderr,
-                    "IRIX geometry XtConfigureWidget: caller=%08x widget=%08x class=%s x=%d y=%d width=%u height=%u border=%u\n",
-                    caller, widget, cls_name ? cls_name : "?",
-                    (int32_t)cpu->gpr[5], (int32_t)cpu->gpr[6],
-                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8],
-                    (uint32_t)cpu->gpr[9]);
-        } else {
-            fprintf(stderr,
-                    "IRIX geometry XtMakeResizeRequest: caller=%08x widget=%08x class=%s width=%u height=%u reply_width=%08x reply_height=%08x\n",
-                    caller, widget, cls_name ? cls_name : "?",
-                    (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
-                    (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8]);
-        }
-    }
+    
+    
     irix_guest_profile_hit(rt, caller, address, entry);
 
     /*
@@ -5174,7 +6265,9 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
          * successful item with the item whose private/cache state is NULL.
          * This is intentionally diagnostic only; no guest state is changed.
          */
-        if (address == 0x0b28ee30u) {
+        if (address == 0x0b28ee30u &&
+            getenv("IRIX_MOTIF_GADGET_TRACE") &&
+            getenv("IRIX_MOTIF_GADGET_TRACE")[0] == '1') {
             IrixGuestAddr w =
                 (IrixGuestAddr)(uint32_t)cpu->gpr[4];
             IrixGuestAddr cls = 0u;
@@ -5192,15 +6285,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                 name = irix_guest_cstr(rt, name_addr, 256u);
             }
 
-            fprintf(stderr,
-                    "IRIX Motif gadget input snapshot: "
-                    "widget=%08x class=%08x(%s) parent=%08x "
-                    "event=%08x mask=%08x sp=%08x ra=%08x\n",
-                    w, cls, name ? name : "?", parent,
-                    (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6],
-                    (uint32_t)cpu->gpr[29],
-                    (uint32_t)cpu->gpr[31]);
+            (void)0;
 
             if (w && irix_guest_ptr(rt, w, 0x100u)) {
                 for (off = 0u; off < 0x100u; off += 0x20u) {
@@ -5237,10 +6322,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                 if (!psz || psz > 0x1000u)
                     psz = 0x400u;
 
-                fprintf(stderr,
-                        "IRIX Motif gadget parent scan: "
-                        "parent=%08x class=%08x size=%08x child=%08x\n",
-                        parent, pcls, psz, w);
+                (void)0;
 
                 if (irix_guest_ptr(rt, parent, psz)) {
                     for (off = 0u; off + 4u <= psz; off += 4u) {
@@ -5253,9 +6335,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                         }
                     }
                 }
-                fprintf(stderr,
-                        "IRIX Motif gadget parent scan done: hits=%u\n",
-                        hit_count);
+                (void)0;
             }
         }
 
@@ -5319,22 +6399,16 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 
             if (!irix_guest_looks_like_widget(rt, new_w) &&
                 irix_guest_looks_like_widget(rt, saved_new_w)) {
-                fprintf(stderr,
-                        "IRIX Motif hidden init ABI repair: "
-                        "pc=0b2fcc64 a1=%08x -> s1=%08x\n",
-                        new_w, saved_new_w);
+                (void)0;
                 cpu->gpr[5] =
                     (uint64_t)(int64_t)(int32_t)saved_new_w;
             }
         }
 
-        if (irix_mips_trace_enabled())
-            fprintf(stderr,
-                    "IRIX interior guest call: target=0x%08x containing=0x%08x:%s -> interpreter\n",
-                    address, entry->address, entry->name ? entry->name : "?");
+        
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
-        rc = irix_mips_interp_call(rt, cpu, address);
+        rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped) {
             /*
              * xtWidgetAlloc's extension allocator returns to 0x0f62b578.
@@ -5352,10 +6426,7 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
                 if (!irix_guest_looks_like_widget_class(rt, alloc_class) &&
                     irix_guest_looks_like_widget_class(
                         rt, g_xt_alloc_widget_class_hint)) {
-                    fprintf(stderr,
-                            "IRIX xtWidgetAlloc class repair: "
-                            "a0=%08x -> shell-class=%08x\n",
-                            alloc_class, g_xt_alloc_widget_class_hint);
+                    (void)0;
                     alloc_class = g_xt_alloc_widget_class_hint;
                 }
 
@@ -5388,5 +6459,42 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     if (irix_mips_jit_requested() &&
         (!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)))
         return irix_mips_jit_call(rt, cpu, address);
-    return irix_guest_call_entry_impl(rt, cpu, address, entry);
+    {
+        uint64_t caller_saved[9];
+        uint64_t caller_gp = cpu->gpr[28];
+        uint64_t caller_sp = cpu->gpr[29];
+        uint64_t caller_ra = cpu->gpr[31];
+        unsigned saved_i;
+        IrixGuestAddr caller_domain_gp = irix_guest_gp_for_address(caller);
+        IrixGuestAddr target_domain_gp = irix_guest_gp_for_address(address);
+        int restore_call_ra = caller_domain_gp && target_domain_gp &&
+                              caller_domain_gp == target_domain_gp;
+        int rc;
+
+        /* Calls into original MIPS still cross this C dispatcher boundary.
+         * Enforce the N32 nonvolatile-register contract here as well as for
+         * recovered interior entries above: a nested interpreter dispatch
+         * can otherwise leak the callee's s0-s7/fp/gp/sp back into its
+         * caller.  iconv_comp's stdio scanner exposed this when its saved
+         * input-buffer pointer in s6 was replaced by the callee's EOF value.
+         */
+        for (saved_i = 0; saved_i < 8u; ++saved_i)
+            caller_saved[saved_i] = cpu->gpr[16u + saved_i];
+        caller_saved[8] = cpu->gpr[30];
+        rc = irix_guest_call_entry_impl(rt, cpu, address, entry);
+        if (!rt->trapped) {
+            for (saved_i = 0; saved_i < 8u; ++saved_i)
+                cpu->gpr[16u + saved_i] = caller_saved[saved_i];
+            cpu->gpr[28] = caller_gp;
+            cpu->gpr[29] = caller_sp;
+            cpu->gpr[30] = caller_saved[8];
+            /* Keep the caller's continuation across same-image interpreted
+             * calls. Cross-GP transfers may be SGI rld lazy-PLT tail calls,
+             * whose return address is deliberately propagated from the
+             * original .MIPS.stubs entry. */
+            if (restore_call_ra)
+                cpu->gpr[31] = caller_ra;
+        }
+        return rc;
+    }
 }

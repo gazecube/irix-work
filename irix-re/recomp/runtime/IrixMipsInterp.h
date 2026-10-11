@@ -21,6 +21,10 @@ void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame);
 
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address);
+/* Explicit guest call: keep the callee return separate from an enclosing
+   translated function's continuation handoff. */
+int irix_mips_interp_invoke(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                            IrixGuestAddr address);
 int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address);
 int irix_mips_interp_should_force(IrixGuestAddr address);

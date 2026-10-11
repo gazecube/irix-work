@@ -232,11 +232,11 @@ def dependency_search_dirs(runtime_tree, internal_tree, dev_tree):
         d = root / rel
         if d.is_dir():
             rows.append((kind, root, d))
-    # Prefer SGI's generic N32 SERVER graphics personality for the initial
-    # desktop bring-up.  This keeps the original IRIS GL -> IGLOO -> OpenGL
-    # binary chain intact without pulling in the IP30/MGRAS kernel interface.
-    # libgl.so itself remains the normal runtime-tree IGLOO DSO; its libGL
-    # dependency is resolved from SERVER32 here.
+    # Resolve IRIS GL through SGI's IGLOO compatibility layer, then resolve
+    # IGLOO's OpenGL provider from the generic N32 SERVER personality. Keep
+    # these paths ahead of device-specific graphics directories so the guest
+    # bundle does not pull in an IP30/MGRAS kernel interface.
+    add('runtime', runtime_tree, 'usr/gfx/arch/IGLOO32')
     add('runtime', runtime_tree, 'usr/gfx/arch/SERVER32')
     add('runtime', runtime_tree, 'usr/lib32')
     add('runtime', runtime_tree, 'usr/lib32/internal')
@@ -655,7 +655,7 @@ def main():
 
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'
-    compile_flags = '-std=c11 -O2 -march=native -mtune=native -pipe -Wall -Wextra -Werror -fPIC\n'
+    compile_flags = '-std=c11 -O0 -march=native -mtune=native -pipe -Wall -Wextra -Werror -fPIC\n'
     flags_stamp = out / 'compile_flags.txt'
     if not flags_stamp.is_file() or flags_stamp.read_text() != compile_flags:
         flags_stamp.write_text(compile_flags)
@@ -678,14 +678,13 @@ def main():
         return h.hexdigest()
 
     def object_source_key(src):
-        # Local build objects may legitimately be O0 (bring-up) or an older
-        # matching O2 object installed from the shared cache. Reuse either,
-        # but only when the generated C and ABI inputs are exactly current.
+        # A local object is reusable only when its complete compiler options
+        # match, so changing optimization or ABI flags cannot reuse stale code.
         h = hashlib.sha256()
         h.update(b'irix-app-object-source-v1\0')
         h.update(src.read_bytes())
         h.update(header_digest)
-        h.update(b'-std=c11 -march=native -mtune=native -pipe -fPIC\0')
+        h.update(compile_flags.encode('utf-8'))
         h.update(str(a.cc).encode('utf-8'))
         return h.hexdigest()
 
@@ -725,11 +724,8 @@ def main():
                 dst_key.write_text(expected_source_key + '\n')
                 return src, dst, None
 
-            # Bring-up policy: preserve every matching cached O2 object, but
-            # compile genuinely missing generated translation units at O0.
-            # O0 objects are intentionally not published under the O2 cache
-            # key, but their exact source identity is stamped beside the
-            # destination object so they can be reused safely.
+            # Keep clean AOT builds practical while bringing up the large
+            # generated closure. These functions still compile to native x86.
             cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native', '-pipe',
                    '-Wall', '-Wextra', '-Werror',
                    '-Wno-error=unused-label', '-Wno-error=unused-but-set-variable',

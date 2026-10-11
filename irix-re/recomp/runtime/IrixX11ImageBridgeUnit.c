@@ -5,6 +5,7 @@
 #include "IrixX11BridgeExtraAccess.h"
 #include "IrixX11WindowBridgeAccess.h"
 
+#include <stdio.h>
 #include <wchar.h>
 
 #define IRIX_N32_XEVENT_SIZE 96u
@@ -169,6 +170,7 @@ static void bridge_XReadBitmapFile(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
         if (out) irix_guest_write32be(rt, out, (uint32_t)y_hot);
     }
     cpu->gpr[2] = (uint32_t)status;
+    
 }
 
 static void bridge_XGetImage(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XImage*im=d?XGetImage(d,(Drawable)(uint32_t)cpu->gpr[5],(int)cpu->gpr[6],(int)cpu->gpr[7],(unsigned)cpu->gpr[8],(unsigned)cpu->gpr[9],(unsigned long)(uint32_t)cpu->gpr[10],(int)cpu->gpr[11]):0;IrixGuestAddr gd=0,gi=0;if(im){uint64_t n=image_data_size(im);if(n&&n<=UINT32_MAX){gd=tmp_alloc((uint32_t)n);if(gd&&im->data){void*dst=irix_guest_ptr(rt,gd,(size_t)n);if(dst)memcpy(dst,im->data,(size_t)n);}}if(im->data)XFree(im->data);im->data=gd?(char*)irix_guest_ptr(rt,gd,1u):0;gi=register_image(rt,im,gd);if(!gi){im->data=0;XDestroyImage(im);}}cpu->gpr[2]=gi;}
@@ -201,7 +203,7 @@ static void bridge_XRefreshKeyboardMapping(IrixGuestRuntime *rt,IrixGuestCpu *cp
 static void bridge_XSetCommand(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);IrixGuestAddr vec=(uint32_t)cpu->gpr[6];int n=(int32_t)cpu->gpr[7],i;char**argv=n>=0?(char**)calloc((size_t)n+1u,sizeof(*argv)):0;if(argv)for(i=0;i<n;++i){IrixGuestAddr a=er32(rt,vec+(IrixGuestAddr)i*4u);argv[i]=(char*)guest_cstr(rt,a);}cpu->gpr[2]=(d&&argv)?(uint32_t)XSetCommand(d,(Window)(uint32_t)cpu->gpr[5],argv,n):0;free(argv);}
 
 static wchar_t *read_guest_wchars(IrixGuestRuntime *rt,IrixGuestAddr a,int n){wchar_t*w;int i;if(n<0||(!a&&n))return 0;w=(wchar_t*)calloc((size_t)n+1u,sizeof(*w));if(!w)return 0;for(i=0;i<n;++i)w[i]=(wchar_t)(int32_t)er32(rt,a+(IrixGuestAddr)i*4u);return w;}
-static void bridge_XwcDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);int n=(int32_t)cpu->gpr[11];wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[10],n);if(d&&fs&&gc&&w)XwcDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],fs,gc,(int)cpu->gpr[8],(int)cpu->gpr[9],w,n);free(w);cpu->gpr[2]=0;}
+static void bridge_XwcDrawString(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_window_font_display_from_guest(rt,(uint32_t)cpu->gpr[4]);XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[6]);GC gc=irix_x11_primary_gc_from_guest((uint32_t)cpu->gpr[7]);int n=(int32_t)cpu->gpr[11];wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[10],n);(void)irix_x11_window_sync_guest_display(rt,cpu,(uint32_t)cpu->gpr[4]);if(d&&fs&&gc&&w)XwcDrawString(d,(Drawable)(uint32_t)cpu->gpr[5],fs,gc,(int)cpu->gpr[8],(int)cpu->gpr[9],w,n);if(d)XSync(d,False);free(w);cpu->gpr[2]=0;}
 static void bridge_XwcTextEscapement(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[4]);int n=(int32_t)cpu->gpr[6];wchar_t*w=read_guest_wchars(rt,(uint32_t)cpu->gpr[5],n);int rc=(fs&&w)?XwcTextEscapement(fs,w,n):0;free(w);cpu->gpr[2]=(uint64_t)(int64_t)rc;}
 
 /* XwcTextExtents takes an XFontSet, wchar_t string and count.  SGI libX11's

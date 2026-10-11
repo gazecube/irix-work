@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -25,32 +26,6 @@ static void compat_result(IrixGuestCpu *cpu, int64_t value)
         cpu->gpr[2] = (uint64_t)value;
         cpu->gpr[7] = 0;
     }
-}
-
-static int compat_range_contains_addr(IrixGuestAddr base, uint32_t len,
-                                      IrixGuestAddr addr, uint32_t width)
-{
-    uint64_t lo = base;
-    uint64_t hi = lo + len;
-    uint64_t alo = addr;
-    uint64_t ahi = alo + width;
-    return alo >= lo && ahi <= hi;
-}
-
-static void compat_watch_libc_got(IrixGuestRuntime *rt, const char *where,
-                                  IrixGuestAddr base, uint32_t len)
-{
-    const IrixGuestAddr slot = 0x0fb5291cu;
-    if (!compat_range_contains_addr(base, len, slot, 4u))
-        return;
-    if (!irix_guest_ptr(rt, slot, 4u)) {
-        fprintf(stderr, "IRIX libc GOT bulk watch: %s slot=0x%08x unmapped\n",
-                where, slot);
-        return;
-    }
-    fprintf(stderr,
-            "IRIX libc GOT bulk watch: %s range=0x%08x+0x%x slot=0x%08x value=%08x\n",
-            where, base, len, slot, irix_guest_read32be(rt, slot));
 }
 
 static int compat_elfmap(IrixGuestRuntime *rt, int fd,
@@ -93,7 +68,6 @@ static int compat_elfmap(IrixGuestRuntime *rt, int fd,
             }
         }
 
-        compat_watch_libc_got(rt, "ELFMAP before pread", vaddr, filesz);
         if (filesz) {
             got = pread(fd, dst, filesz, (off_t)offset);
             if (got < 0)
@@ -103,22 +77,14 @@ static int compat_elfmap(IrixGuestRuntime *rt, int fd,
                 return -1;
             }
         }
-        compat_watch_libc_got(rt, "ELFMAP after pread", vaddr, filesz);
         if (memsz > filesz) {
-            compat_watch_libc_got(rt, "ELFMAP before bss clear",
-                                  vaddr + filesz, memsz - filesz);
             memset((unsigned char *)dst + filesz, 0, memsz - filesz);
-            compat_watch_libc_got(rt, "ELFMAP after bss clear",
-                                  vaddr + filesz, memsz - filesz);
         }
 
         if (!first)
             first = vaddr;
 
-        fprintf(stderr,
-                "IRIX SGI_ELFMAP: fd=%d seg=%u vaddr=0x%08x "
-                "offset=0x%x filesz=0x%x memsz=0x%x flags=0x%x\n",
-                fd, i, vaddr, offset, filesz, memsz, flags);
+
     }
 
     if (first_out)
@@ -167,6 +133,14 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         case 5: /* _SC_OPEN_MAX */
             value = sysconf(_SC_OPEN_MAX);
             break;
+        case 25: /* _SC_ACL: no IRIX ACL extension in this runtime. */
+        case 26: /* _SC_AUDIT */
+        case 27: /* _SC_INF */
+        case 28: /* _SC_MAC */
+        case 29: /* _SC_CAP: this runtime exposes no IRIX capabilities. */
+        case 30: /* _SC_IP_SECOPTS */
+            value = 0;
+            break;
         default:
             fprintf(stderr, "UNIMPLEMENTED IRIX SGI_SYSCONF name %d\n", name);
             errno = EINVAL;
@@ -209,6 +183,36 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    case SGI_GETGROUPS: {
+        int capacity = (int)(int32_t)cpu->gpr[5];
+        IrixGuestAddr list_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        gid_t *groups;
+        int count, i;
+        if (capacity < 0 || capacity > 65536) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        groups = calloc((size_t)(capacity ? capacity : 1), sizeof(*groups));
+        if (!groups) {
+            errno = ENOMEM;
+            compat_result(cpu, -1);
+            return;
+        }
+        count = getgroups(capacity, groups);
+        if (count >= 0 && capacity) {
+            if (!list_addr || !irix_guest_ptr(rt, list_addr, (size_t)count * 4u)) {
+                errno = EFAULT;
+                count = -1;
+            } else for (i = 0; i < count; ++i)
+                irix_guest_write32be(rt, list_addr + (IrixGuestAddr)i * 4u,
+                                     (uint32_t)groups[i]);
+        }
+        free(groups);
+        compat_result(cpu, count);
+        return;
+    }
+
     case SGI_SSYNC: /* SGI_SSYNC */
         sync();
         compat_result(cpu, 0);
@@ -218,6 +222,15 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         result = (int64_t)getsid((pid_t)(int32_t)cpu->gpr[5]);
         compat_result(cpu, result);
         return;
+
+    case SGI_FDHI: { /* SGI_FDHI returns the highest open descriptor. */
+        int fd, highest = -1;
+        for (fd = 0; fd < 65536; ++fd)
+            if (fcntl(fd, F_GETFD) >= 0 || errno != EBADF)
+                highest = fd;
+        compat_result(cpu, highest);
+        return;
+    }
 
     case SGI_ELFMAP: { /* SGI_ELFMAP */
         int fd = (int)(int32_t)cpu->gpr[5];
@@ -421,10 +434,7 @@ void irix_compat_mmap(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             memset((unsigned char *)dst + got, 0, len - (uint32_t)got);
     }
 
-    fprintf(stderr,
-            "IRIX mmap: addr=0x%08x len=0x%x prot=0x%x flags=0x%x "
-            "fd=%d off=0x%x -> 0x%08x\n",
-            requested, len, prot, flags, fd, off, addr);
+    (void)0;
     compat_result(cpu, (int64_t)(uint32_t)addr);
 }
 
@@ -513,6 +523,10 @@ void irix_compat_prctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     case 13u: /* PR_GETSHMASK */
         /* No sproc share-group attributes are active in the host process. */
+        compat_result(cpu, 0);
+        return;
+
+    case 12u: /* PR_TERMCHILD: host child lifetime is tied to this runner. */
         compat_result(cpu, 0);
         return;
 
@@ -647,8 +661,6 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    fprintf(stderr, "IRIX sysinfo: cmd=%u value=\"%s\" size=%u\n",
-            cmd, value, required);
     compat_result(cpu, (int64_t)required);
 }
 

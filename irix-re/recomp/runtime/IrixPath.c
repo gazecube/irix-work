@@ -49,21 +49,26 @@ static int path_is_guest_system(const char *path)
     return 0;
 }
 
-static int trace_enabled(void)
-{
-    const char *value = getenv("IRIX_RESOURCE_TRACE");
-    return value && value[0] && strcmp(value, "0") != 0;
-}
-
 const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path,
                                     char *buffer, size_t buffer_size,
                                     const char *operation, int optional)
 {
     struct stat st;
     const char *resolved = guest_path;
-    int exists;
 
     if (!guest_path) return 0;
+    /* IRIX installs /bin/sh as the traditional /sbin/sh image on some
+       extracted media. Preserve the guest pathname while resolving the
+       installed image from the runtime tree. */
+    if (strcmp(guest_path, "/bin/sh") == 0 && rt && rt->rootfs &&
+        rt->rootfs[0] && buffer && buffer_size) {
+        int n = snprintf(buffer, buffer_size, "%s/sbin/sh", rt->rootfs);
+        if (buffer && buffer_size && n > 0 && (size_t)n < buffer_size &&
+            stat(buffer, &st) == 0) {
+            resolved = buffer;
+            goto report;
+        }
+    }
     if (guest_path[0] == '/' && rt && rt->rootfs && rt->rootfs[0] &&
         !path_is_within(guest_path, rt->rootfs)) {
         int n;
@@ -93,13 +98,8 @@ const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path
         }
     }
 
-    exists = stat(resolved, &st) == 0;
-    if (trace_enabled() && operation &&
-        strncmp(operation, "resource:", 9u) == 0) {
-        fprintf(stderr,
-                "IRIX resource path: %s operation=%s guest=%s resolved=%s\n",
-                exists ? "resolved" : (optional ? "optional" : "absent"),
-                operation ? operation : "file", guest_path, resolved);
-    }
+report:
+    (void)operation;
+    (void)optional;
     return resolved;
 }

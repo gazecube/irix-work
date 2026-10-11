@@ -3,10 +3,13 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <errno.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #define IRIX_X11_WINDOW_MAX_DISPLAYS 16u
 #define IRIX_N32_XSETWINDOWATTRIBUTES_SIZE 60u
@@ -79,6 +82,142 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
      * primary connection instead.
      */
     return irix_x11_primary_display_from_guest(guest);
+}
+
+static Display *font_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
+{
+    Display *dpy = fallback_display(rt, guest);
+    size_t i;
+
+    if (dpy || !guest)
+        return dpy;
+    for (i = 0; i < g_window.display_count; ++i)
+        if (g_window.guest_display[i] == guest)
+            return g_window.host_display[i];
+
+    /*
+     * In the generic runner, original SGI Xlib still owns the N32 Display
+     * object and talks to the X server directly.  It is not the host Xlib
+     * Display managed by IrixX11BridgeExtra, so font-set bridges need their
+     * own host connection.  Keep it keyed by that guest Display and reuse it
+     * for every operation on the opaque XFontSet objects created here.
+     */
+    if (g_window.display_count >= IRIX_X11_WINDOW_MAX_DISPLAYS)
+        return 0;
+    dpy = XOpenDisplay(NULL);
+    if (!dpy)
+        return 0;
+    g_window.guest_display[g_window.display_count] = guest;
+    g_window.host_display[g_window.display_count] = dpy;
+    ++g_window.display_count;
+    return dpy;
+}
+
+Display *irix_x11_window_font_display_from_guest(IrixGuestRuntime *rt,
+                                                 IrixGuestAddr guest)
+{
+    return font_display(rt, guest);
+}
+
+int irix_x11_window_flush_guest_display(IrixGuestRuntime *rt,
+                                         IrixGuestAddr guest_display)
+{
+    IrixGuestAddr buffer, bufptr, bufmax;
+    uint32_t fd;
+    size_t pending, sent = 0;
+    char *bytes;
+
+    if (!rt || !guest_display || !irix_guest_ptr(rt, guest_display, 116u))
+        return 0;
+
+    fd = irix_guest_read32be(rt, guest_display + 8u);
+    buffer = irix_guest_read32be(rt, guest_display + 104u);
+    bufptr = irix_guest_read32be(rt, guest_display + 108u);
+    bufmax = irix_guest_read32be(rt, guest_display + 112u);
+    if (rt->trapped || !buffer || bufptr < buffer || bufptr > bufmax ||
+        bufmax - buffer > 1024u * 1024u)
+        return 0;
+
+    pending = (size_t)(bufptr - buffer);
+    if (!pending)
+        return 1;
+    bytes = (char *)irix_guest_ptr(rt, buffer, pending);
+    if (!bytes || rt->trapped)
+        return 0;
+
+    while (sent < pending) {
+        ssize_t n = write((int)fd, bytes + sent, pending - sent);
+        if (n > 0) {
+            sent += (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd;
+            pfd.fd = (int)fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            if (poll(&pfd, 1, 1000) > 0 && (pfd.revents & POLLOUT))
+                continue;
+        }
+        return 0;
+    }
+
+    irix_guest_write32be(rt, guest_display + 108u, buffer);
+    return !rt->trapped;
+}
+
+int irix_x11_window_sync_guest_display(IrixGuestRuntime *rt,
+                                        IrixGuestCpu *caller,
+                                        IrixGuestAddr guest_display)
+{
+    IrixGuestFunctionEntry *target = 0;
+    IrixGuestCpu call;
+    IrixGuestAddr saved_pc;
+    size_t i;
+
+    if (!rt || !caller || !guest_display)
+        return 0;
+
+    /*
+     * FM owns its SGI Xlib Display and X socket. A host XSync on the font
+     * bridge's separate connection cannot order requests already queued on
+     * the guest connection. Call the original libX11 XSync so it performs
+     * the protocol round trip on the correct socket and drains its events
+     * through the matching Xlib state.
+     */
+    for (i = 0; i < rt->function_count; ++i) {
+        IrixGuestFunctionEntry *entry = &rt->functions[i];
+        const char *name = entry->name;
+        const char *symbol;
+        if (!name)
+            continue;
+        symbol = strrchr(name, ':');
+        symbol = symbol ? symbol + 1 : name;
+        if (strcmp(symbol, "XSync") != 0 ||
+            (entry->flags & IRIX_GUEST_FUNCTION_NATIVE) ||
+            entry->address >= 0x20000000u ||
+            !irix_guest_ptr(rt, entry->address, 4u))
+            continue;
+        target = entry;
+        break;
+    }
+
+    if (!target)
+        return irix_x11_window_flush_guest_display(rt, guest_display);
+
+    call = *caller;
+    call.gpr[4] = guest_display;
+    call.gpr[5] = 0; /* False: retain events for normal application dispatch. */
+    call.gpr[25] = target->address;
+    saved_pc = rt->current_pc;
+    if (irix_guest_call(rt, &call, target->address) != 0 || rt->trapped) {
+        rt->current_pc = saved_pc;
+        return 0;
+    }
+    rt->current_pc = saved_pc;
+    return 1;
 }
 
 static Visual *visual_from_guest(IrixGuestRuntime *rt, Display *dpy, IrixGuestAddr guest_visual)
@@ -297,23 +436,10 @@ static void bridge_XChangeWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *c
     if (!dpy) { cpu->gpr[2] = 0; return; }
     if (!w) {
         w = DefaultRootWindow(dpy);
-        fprintf(stderr,
-                "IRIX XChangeWindowAttributes: window=0 -> root=%08lx mask=%08lx\n",
-                (unsigned long)w, valuemask);
     }
     if (valuemask && !read_window_attributes(rt, guest_attrs, &attrs)) {
         cpu->gpr[2] = 0;
         return;
-    }
-    if (valuemask & CWEventMask) {
-        fprintf(stderr,
-                "IRIX XChangeWindowAttributes event mask: "
-                "window=%08lx root=%08lx events=%08lx%s\n",
-                (unsigned long)w,
-                (unsigned long)DefaultRootWindow(dpy),
-                (unsigned long)attrs.event_mask,
-                (attrs.event_mask & SubstructureRedirectMask)
-                    ? " [SubstructureRedirect]" : "");
     }
 
     rc = XChangeWindowAttributes(dpy, w, valuemask, &attrs);
@@ -335,7 +461,7 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XMapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XMapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
 static void bridge_XUnmapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUnmapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
-static void bridge_XReparentWindow(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);Window w=(Window)(uint32_t)cpu->gpr[5],p=(Window)(uint32_t)cpu->gpr[6];fprintf(stderr,"IRIX XReparentWindow: client=%08x parent=%08x x=%d y=%d\n",(uint32_t)w,(uint32_t)p,(int)cpu->gpr[7],(int)cpu->gpr[8]);cpu->gpr[2]=d?(uint32_t)XReparentWindow(d,w,p,(int)cpu->gpr[7],(int)cpu->gpr[8]):0;}
+static void bridge_XReparentWindow(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);Window w=(Window)(uint32_t)cpu->gpr[5],p=(Window)(uint32_t)cpu->gpr[6];cpu->gpr[2]=d?(uint32_t)XReparentWindow(d,w,p,(int)cpu->gpr[7],(int)cpu->gpr[8]):0;}
 static void bridge_XSetWindowBorderWidth(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBorderWidth(d,(Window)(uint32_t)cpu->gpr[5],(unsigned)cpu->gpr[6]):0;}
 static void bridge_XSetWindowColormap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowColormap(d,(Window)(uint32_t)cpu->gpr[5],(Colormap)(uint32_t)cpu->gpr[6]):0;}
 static void bridge_XSetWindowBackgroundPixmap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBackgroundPixmap(d,(Window)(uint32_t)cpu->gpr[5],(Pixmap)(uint32_t)cpu->gpr[6]):0;}
@@ -391,7 +517,7 @@ static void bridge_XQueryTree(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XCreateFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Display *dpy = font_display(rt, (uint32_t)cpu->gpr[4]);
     const char *base = guest_cstr(rt, (uint32_t)cpu->gpr[5]);
     char **missing = 0;
     int missing_count = 0, i;
@@ -417,7 +543,7 @@ static void bridge_XCreateFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XFreeFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
+    Display *dpy = font_display(rt, (uint32_t)cpu->gpr[4]);
     XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[5]);
     size_t i;
     if (dpy && set) {
@@ -478,7 +604,8 @@ static void bridge_XFontsOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_XExtentsOfFontSet(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    XFontSet set = fontset_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr guest_set = (uint32_t)cpu->gpr[4];
+    XFontSet set = fontset_from_guest(guest_set);
     XFontSetExtents *e = set ? XExtentsOfFontSet(set) : 0;
     IrixGuestAddr out = 0;
     if (e) {

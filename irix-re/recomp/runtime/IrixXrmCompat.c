@@ -188,10 +188,6 @@ static void bridge_XrmGetFileDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                                                sizeof(host_path),
                                                "resource:XrmGetFileDatabase", 1);
     XrmDatabase db = path ? XrmGetFileDatabase(path) : 0;
-    fprintf(stderr, "IRIX XrmGetFileDatabase: %s -> %s %s\n",
-            guest_path ? guest_path : "<invalid>",
-            path ? path : "<invalid>",
-            db ? "OK" : "MISS");
     cpu->gpr[2] = db_to_guest(db);
 }
 
@@ -242,10 +238,6 @@ static void bridge_XrmCombineFileDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cp
     IrixGuestAddr dstp = (uint32_t)cpu->gpr[5];
     XrmDatabase dst = db_from_guest(rd32(rt, dstp));
     Bool ok = path ? XrmCombineFileDatabase(path, &dst, (Bool)cpu->gpr[6]) : False;
-    fprintf(stderr, "IRIX XrmCombineFileDatabase: %s -> %s %s\n",
-            guest_path ? guest_path : "<invalid>",
-            path ? path : "<invalid>",
-            ok ? "OK" : "MISS");
     wr32(rt, dstp, db_to_guest(dst));
     cpu->gpr[2] = ok ? 1u : 0u;
 }
@@ -263,28 +255,6 @@ static void bridge_XrmQGetResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         read_quarks(rt, (uint32_t)cpu->gpr[6], classes, 128);
         ok = XrmQGetResource(db, names, classes, &type, &value);
     }
-    if (getenv("IRIX_RESOURCE_TRACE") && ok && value.addr && value.size <= 16u) {
-        char resource[256] = "";
-        size_t used = 0;
-        int i;
-        for (i = 0; i < 16 && names[i]; ++i) {
-            const char *part = XrmQuarkToString(names[i]);
-            int n;
-            if (!part) continue;
-            n = snprintf(resource + used, sizeof(resource) - used, "%s%s",
-                         used ? "." : "", part);
-            if (n < 0 || (size_t)n >= sizeof(resource) - used) break;
-            used += (size_t)n;
-        }
-        if (!strcmp((const char *)value.addr, "True") ||
-            !strcmp((const char *)value.addr, "False") ||
-            strstr(resource, "scheme") || strstr(resource, "Scheme") ||
-            strstr(resource, "sgiMode") || strstr(resource, "SGImode") ||
-            strstr(resource, "UserDefined") || strstr(resource, "useSchemes"))
-            fprintf(stderr, "IRIX XrmQGetResource trace: db=%08x resource=%s found=%d size=%u value=%.*s\n",
-                    (uint32_t)cpu->gpr[4], resource, (int)ok, value.size,
-                    (int)value.size, (const char *)value.addr);
-    }
     wr32(rt, (uint32_t)cpu->gpr[7], ok ? (uint32_t)type : 0u);
     write_value(rt, (uint32_t)cpu->gpr[8], ok ? &value : 0);
     cpu->gpr[2] = ok ? 1u : 0u;
@@ -301,16 +271,6 @@ static void bridge_XrmGetResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     memset(&value, 0, sizeof(value));
     if (db && name && class_name)
         ok = XrmGetResource(db, name, class_name, &type, &value);
-    if (getenv("IRIX_RESOURCE_TRACE") && name &&
-        (strstr(name, "scheme") || strstr(name, "Scheme") ||
-         strstr(name, "sgiMode") || strstr(name, "SGImode") ||
-         strstr(name, "UserDefined") || strstr(name, "useSchemes"))) {
-        fprintf(stderr, "IRIX XrmGetResource trace: db=%08x name=%s class=%s found=%d type=%s size=%u value=%.*s\n",
-                (uint32_t)cpu->gpr[4], name, class_name ? class_name : "<null>",
-                (int)ok, type ? type : "<null>", ok ? value.size : 0u,
-                ok && value.addr ? (int)value.size : 0,
-                ok && value.addr ? (const char *)value.addr : "");
-    }
     wr32(rt, (uint32_t)cpu->gpr[7], ok && type ? copy_string(type) : 0u);
     write_value(rt, (uint32_t)cpu->gpr[8], ok ? &value : 0);
     cpu->gpr[2] = ok ? 1u : 0u;

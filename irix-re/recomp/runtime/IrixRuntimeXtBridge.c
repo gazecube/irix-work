@@ -241,6 +241,7 @@ static void bridge_XtResolvePathname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *search_path = guest_path;
     IrixXtHostSubstitution *substitutions = 0;
     Substitution host_substitutions = 0;
+    size_t owned_substitution_count = 0;
     Cardinal substitution_count = (Cardinal)(uint32_t)cpu->gpr[10];
     Display *display;
     String resolved;
@@ -252,36 +253,11 @@ static void bridge_XtResolvePathname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     char *argv[] = { (char *)"irix", 0 };
     char *app_name = 0, *app_class = 0;
 
-    if (getenv("IRIX_RESOURCE_TRACE"))
-        fprintf(stderr,
-                "IRIX XtResolvePathname request: caller=%08x type=%s filename=%s suffix=%s path=%s substitutions=%08x count=%u predicate=%08x XFILESEARCHPATH=%s XAPPLRESDIR=%s\n",
-                (uint32_t)cpu->gpr[31], type ? type : "<null>",
-                filename ? filename : "<null>", suffix ? suffix : "<null>",
-                guest_path ? guest_path : (path_addr ? "<invalid>" : "<null>"),
-                subs_addr, substitution_count, predicate,
-                env_path ? env_path : "<null>",
-                getenv("XAPPLRESDIR") ? getenv("XAPPLRESDIR") : "<null>");
+    
 
     if (rt->trapped) {
         cpu->gpr[2] = 0;
         return;
-    }
-    if (path_addr && !guest_path &&
-        irix_xrm_compat_is_database_handle(rt, path_addr)) {
-        /*
-         * SGI's optional UserDefined palette probe occasionally carries its
-         * XrmDatabase token in XtResolvePathname's path slot.  That token is
-         * not a string.  Xt treats a null path as the normal default search
-         * path, which lets the built-in Base palette fallback resolve while
-         * avoiding a guest-side invalid memory read.
-         */
-        if (getenv("IRIX_RESOURCE_TRACE"))
-            fprintf(stderr,
-                    "IRIX XtResolvePathname: Xrm database handle %08x in path slot; using default search for %s\n",
-                    path_addr, filename ? filename : "<null>");
-        path_addr = 0;
-        guest_path = 0;
-        search_path = 0;
     }
     if (path_addr && !guest_path) {
         fprintf(stderr,
@@ -323,11 +299,29 @@ static void bridge_XtResolvePathname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             IrixGuestAddr rec = subs_addr + (IrixGuestAddr)(i * 8u);
             IrixGuestAddr text_addr = irix_guest_read32be(rt, rec + 4u);
             const char *text = guest_cstr(rt, text_addr);
+            const char *host_text = text;
+            char resolved_value[PATH_MAX];
             if (rt->trapped || !text) {
+                for (i = 0; i < owned_substitution_count; ++i)
+                    free(substitutions[i].substitution);
                 free(substitutions); free(owned_path); cpu->gpr[2] = 0; return;
             }
+            /* Xt expands custom substitutions before searching.  Absolute
+               guest paths such as FileManager's labelPixmap values must be
+               rooted in IRIX-TREE before host Xt tests them. */
+            if (text[0] == '/')
+                host_text = irix_guest_resolve_path(
+                    rt, text, resolved_value, sizeof(resolved_value),
+                    "resource:XtResolvePathname substitution", 1);
             substitutions[i].match = (char)irix_guest_read8(rt, rec);
-            substitutions[i].substitution = (String)text;
+            substitutions[i].substitution = strdup(host_text ? host_text : text);
+            if (!substitutions[i].substitution) {
+                for (i = 0; i < owned_substitution_count; ++i)
+                    free(substitutions[i].substitution);
+                free(substitutions); free(owned_path); cpu->gpr[2] = 0; return;
+            }
+            ++owned_substitution_count;
+            
         }
         host_substitutions = (Substitution)substitutions;
     }
@@ -338,12 +332,12 @@ static void bridge_XtResolvePathname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         app_name = strdup("irix");
         app_class = strdup("IRIX");
     }
-    if (getenv("IRIX_RESOURCE_TRACE"))
-        fprintf(stderr, "IRIX XtResolvePathname identity: name=%s class=%s\n",
-                app_name ? app_name : "<null>", app_class ? app_class : "<null>");
+    
     display = xt_path_display(&argc, argv, app_name, app_class);
     if (!display) {
         free(app_name); free(app_class);
+        for (i = 0; i < owned_substitution_count; ++i)
+            free(substitutions[i].substitution);
         free(substitutions); free(owned_path); cpu->gpr[2] = 0; return;
     }
 
@@ -361,15 +355,17 @@ static void bridge_XtResolvePathname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     g_xt_predicate_context = previous_predicate;
     free(app_name);
     free(app_class);
+    for (i = 0; i < owned_substitution_count; ++i)
+        free(substitutions[i].substitution);
     free(substitutions);
     if (!resolved) {
-        if (getenv("IRIX_RESOURCE_TRACE"))
-            fprintf(stderr, "IRIX XtResolvePathname miss: caller=%08x search=%s\n",
-                    (uint32_t)cpu->gpr[31], search_path ? search_path : "<null>");
+        
         free(owned_path);
         cpu->gpr[2] = 0;
         return;
     }
+
+    
 
     free(owned_path);
 
@@ -428,9 +424,7 @@ static void bridge_XtError(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (msg &&
         (!strcmp(msg, "Object \"(null)\" does not have windowed ancestor") ||
          !strcmp(msg, "Couldn't find per display information"))) {
-        fprintf(stderr,
-                "IRIX Xt bring-up compatibility: suppressed fatal: %s\n",
-                msg);
+        (void)0;
         cpu->gpr[2] = 0u;
         cpu->gpr[0] = 0u;
         return;

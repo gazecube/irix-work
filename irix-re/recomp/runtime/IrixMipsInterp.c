@@ -7,6 +7,7 @@ extern int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
                                                    IrixGuestCpu *cpu,
                                                    IrixGuestAddr pc);
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,17 +19,7 @@ extern IrixGuestAddr irix_guest_gp_for_address(IrixGuestAddr address);
 extern IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt,
                                                      uint32_t size);
 
-static int irix_mips_trace_enabled(void)
-{
-    static int initialized;
-    static int enabled;
-    if (!initialized) {
-        const char *value = getenv("IRIX_MIPS_TRACE");
-        enabled = value && value[0] && strcmp(value, "0") != 0;
-        initialized = 1;
-    }
-    return enabled;
-}
+
 
 static uint64_t sx32(uint32_t v)
 {
@@ -122,10 +113,7 @@ static int irix_xt_resource_missing_load(IrixGuestRuntime *rt,
     if (irix_guest_ptr(rt, addr, 1u))
         return 0;
 
-    fprintf(stderr,
-            "IRIX Xt malformed resource load repair HIT: "
-            "pc=%08x op=%02x rt=%u base=%08x addr=%08x -> zero\n",
-            pc, op, rtno, base, addr);
+    (void)0;
     return 1;
 }
 
@@ -155,10 +143,7 @@ static int irix_xt_xm_missing_store(IrixGuestRuntime *rt,
     if (irix_guest_ptr(rt, addr, nbytes))
         return 0;
 
-    fprintf(stderr,
-            "IRIX Xt/Xm missing private store repair HIT: "
-            "pc=%08x bits=%u base=%08x addr=%08x value=%08x -> skip\n",
-            pc, bits, base, addr, (uint32_t)value);
+    (void)0;
     return 1;
 }
 
@@ -174,10 +159,7 @@ static int irix_xt_null_output_store(IrixGuestCpu *cpu,
     if ((uint32_t)cpu->gpr[rs] != 0u || addr >= 0x00000100u)
         return 0;
 
-    fprintf(stderr,
-            "IRIX Xt NULL output-store repair HIT: "
-            "pc=%08x bits=%u rs=%u addr=%08x value=%08x -> skip\n",
-            pc, bits, rs, addr, value);
+    (void)0;
     return 1;
 }
 
@@ -197,6 +179,10 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     rt->current_pc = pc;
     cpu->pc = pc;
 
+    
+
+    
+
     if (insn == 0u)
         return 0;
 
@@ -205,6 +191,18 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         case 0x00:
             cpu->gpr[rd] = sx32((uint32_t)cpu->gpr[rtno] << sa);
             break;
+        case 0x01: { /* MOVF/MOVT (MOVCI), selected by an FPU condition code. */
+            unsigned cc = (rtno >> 2) & 7u;
+            unsigned tf = rtno & 1u;
+            unsigned fcc_bit = cc == 0u ? 23u : 24u + cc;
+
+            /* rt[1] and shamt are reserved in the MOVCI encoding. */
+            if ((rtno & 2u) != 0u || sa != 0u)
+                return 1;
+            if (((cpu->fcr31 >> fcc_bit) & 1u) == tf)
+                cpu->gpr[rd] = cpu->gpr[rs];
+            break;
+        }
         case 0x02:
             cpu->gpr[rd] = sx32((uint32_t)cpu->gpr[rtno] >> sa);
             break;
@@ -239,6 +237,16 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x13:
             cpu->lo = cpu->gpr[rs];
+            break;
+        case 0x14: /* DSLLV */
+            cpu->gpr[rd] = cpu->gpr[rtno] << ((uint32_t)cpu->gpr[rs] & 63u);
+            break;
+        case 0x16: /* DSRLV */
+            cpu->gpr[rd] = cpu->gpr[rtno] >> ((uint32_t)cpu->gpr[rs] & 63u);
+            break;
+        case 0x17: /* DSRAV */
+            cpu->gpr[rd] = (uint64_t)((int64_t)cpu->gpr[rtno] >>
+                                      ((uint32_t)cpu->gpr[rs] & 63u));
             break;
         case 0x18: {
             int64_t p = (int64_t)(int32_t)(uint32_t)cpu->gpr[rs] *
@@ -279,6 +287,21 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->lo = sx32(n / d);
                 cpu->hi = sx32(n % d);
             }
+            break;
+        }
+        case 0x1c: { /* DMULT */
+            __int128 product = (__int128)(int64_t)cpu->gpr[rs] *
+                               (__int128)(int64_t)cpu->gpr[rtno];
+            cpu->lo = (uint64_t)product;
+            cpu->hi = (uint64_t)((unsigned __int128)product >> 64);
+            break;
+        }
+        case 0x1d: { /* DMULTU */
+            unsigned __int128 product =
+                (unsigned __int128)cpu->gpr[rs] *
+                (unsigned __int128)cpu->gpr[rtno];
+            cpu->lo = (uint64_t)product;
+            cpu->hi = (uint64_t)(product >> 64);
             break;
         }
         case 0x1e: { /* DDIV */
@@ -479,6 +502,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[rtno] = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, a);
             break;
         case 0x23:
+        case 0x30: /* LL: single-threaded guest memory uses ordinary load. */
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
 
             /*
@@ -492,9 +516,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (((pc >= 0x100363e8u && pc < 0x10036608u) ||
                  (pc >= 0x10036cc4u && pc < 0x10037200u)) &&
                 (uint32_t)cpu->gpr[rs] == 0u && a < 0x00000100u) {
-                fprintf(stderr,
-                        "IRIX 4Dwm _WmGetDynamicDefault null-resource LW: "
-                        "pc=%08x addr=%08x -> zero\n", pc, a);
+                if (getenv("IRIX_MOTIF_GADGET_TRACE") &&
+                    strcmp(getenv("IRIX_MOTIF_GADGET_TRACE"), "1") == 0)
+                    fprintf(stderr,
+                            "IRIX 4Dwm _WmGetDynamicDefault null-resource LW: "
+                            "pc=%08x addr=%08x -> zero\n", pc, a);
                 cpu->gpr[rtno] = 0u;
                 break;
             }
@@ -511,9 +537,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                  pc == 0x1003640cu || pc == 0x10036578u ||
                  pc == 0x10036580u) &&
                 (uint32_t)cpu->gpr[rs] == 0u) {
-                fprintf(stderr,
-                        "IRIX 4Dwm null-resource interp repair: "
-                        "pc=%08x null base -> zero\n", pc);
+                (void)0;
                 cpu->gpr[rtno] = 0u;
                 break;
             }
@@ -532,10 +556,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 (uint32_t)cpu->gpr[rs] != 0u &&
                 (uint32_t)cpu->gpr[rs] < 0x00010000u &&
                 !irix_guest_ptr(rt, a, 4u)) {
-                fprintf(stderr,
-                        "IRIX Xt malformed low-pointer LW repair HIT: "
-                        "pc=%08x rs=%u base=%08x addr=%08x -> zero\n",
-                        pc, rs, (uint32_t)cpu->gpr[rs], a);
+                (void)0;
                 cpu->gpr[rtno] = 0u;
                 break;
             }
@@ -568,10 +589,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     if (parent && irix_guest_ptr(rt, parent, 0x0cu)) {
                         cpu->gpr[4] =
                             (uint64_t)(int64_t)(int32_t)parent;
-                        fprintf(stderr,
-                                "IRIX VendorExt hard bring-up repair: "
-                                "a3=%08x a3+10=%08x -> a0=%08x\n",
-                                a3, parent, parent);
+                        (void)0;
                     }
                 }
 
@@ -598,10 +616,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     for (i = 0; i < 0x20u; i += 4u)
                         irix_guest_write32be(rt, out + i, 0u);
                     irix_guest_write32be(rt, a, out);
-                    fprintf(stderr,
-                            "IRIX Xt class output ABI repair HIT: "
-                            "pc=%08x slot=%08x -> out=%08x\n",
-                            pc, a, out);
+                    (void)0;
                 }
             }
 
@@ -616,10 +631,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              * that this routine already knows how to handle.
              */
             if (pc == 0x0b208148u && a == 0u && rtno == 6u) {
-                fprintf(stderr,
-                        "IRIX libSgm NULL LW repair HIT: "
-                        "pc=%08x rs=%u rt=%u imm=%d a=%08x -> a2=00000000\n",
-                        pc, rs, rtno, (int)imm, a);
+                (void)0;
                 cpu->gpr[rtno] = 0u;
                 break;
             }
@@ -635,17 +647,17 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (((pc >= 0x100363e8u && pc < 0x10036608u) ||
                  (pc >= 0x10036cc4u && pc < 0x10037200u)) &&
                 (uint32_t)cpu->gpr[rs] == 0u && a < 0x00000100u) {
-                fprintf(stderr,
-                        "IRIX 4Dwm _WmGetDynamicDefault null-resource LBU: "
-                        "pc=%08x addr=%08x -> zero\n", pc, a);
+                if (getenv("IRIX_MOTIF_GADGET_TRACE") &&
+                    strcmp(getenv("IRIX_MOTIF_GADGET_TRACE"), "1") == 0)
+                    fprintf(stderr,
+                            "IRIX 4Dwm _WmGetDynamicDefault null-resource LBU: "
+                            "pc=%08x addr=%08x -> zero\n", pc, a);
                 cpu->gpr[rtno] = 0u;
                 break;
             }
             if ((pc == 0x10034c04u || pc == 0x10036410u) &&
                 (uint32_t)cpu->gpr[rs] == 0u) {
-                fprintf(stderr,
-                        "IRIX 4Dwm ProcessScreenResources interp repair: "
-                        "pc=10034c04 null base -> zero\n");
+                (void)0;
                 cpu->gpr[rtno] = 0u;
                 break;
             }
@@ -673,6 +685,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x28:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            
             if (irix_xt_xm_missing_store(rt, pc,
                     (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 8u,
                     cpu->gpr[rtno]))
@@ -680,6 +693,11 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (!irix_xt_null_output_store(cpu, pc, rs, a,
                     (uint32_t)cpu->gpr[rtno], 8u))
                 irix_guest_write8(rt, a, (uint8_t)cpu->gpr[rtno]);
+            break;
+        case 0x38: /* SC: translated desktop processes are single-threaded. */
+            a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            irix_guest_write32be(rt, a, (uint32_t)cpu->gpr[rtno]);
+            cpu->gpr[rtno] = 1u;
             break;
         case 0x29:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
@@ -693,8 +711,10 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x2b:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            
 
-            if (pc == 0x0b29090cu) {
+            if (pc == 0x0b29090cu && getenv("IRIX_MOTIF_GADGET_TRACE") &&
+                strcmp(getenv("IRIX_MOTIF_GADGET_TRACE"), "1") == 0) {
                 fprintf(stderr,
                         "IRIX Motif hover NULL-store state: "
                         "rs=%u rt=%u base=%08x addr=%08x value=%08x "
@@ -746,11 +766,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
              */
             if (pc == 0x0b2081c0u && a == 0u &&
                 rs == 3u && rtno == 5u) {
-                fprintf(stderr,
-                        "IRIX libSgm NULL return-store repair HIT: "
-                        "pc=%08x v1=%08x a1=%08x -> skip store\n",
-                        pc, (uint32_t)cpu->gpr[3],
-                        (uint32_t)cpu->gpr[5]);
+                (void)0;
                 break;
             }
 
@@ -766,6 +782,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         case 0x3f:
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            
             if (irix_xt_xm_missing_store(rt, pc,
                     (IrixGuestAddr)(uint32_t)cpu->gpr[rs], a, 64u,
                     cpu->gpr[rtno]))
@@ -807,6 +824,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             uint32_t m, v;
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
             q = a & ~3u;
+            
             m = irix_guest_read32be(rt, q);
             v = (uint32_t)cpu->gpr[rtno];
             switch (a & 3u) {
@@ -823,6 +841,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             uint32_t m, v;
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
             q = a & ~3u;
+            
             m = irix_guest_read32be(rt, q);
             v = (uint32_t)cpu->gpr[rtno];
             switch (a & 3u) {
@@ -832,6 +851,38 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             default: m = v; break;
             }
             irix_guest_write32be(rt, q, m);
+            break;
+        }
+        case 0x2c: { /* SDL: store doubleword left, big-endian */
+            unsigned n;
+            uint64_t m, preserve;
+            a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            
+            n = a & 7u;
+            m = irix_guest_read64be(rt, a & ~7u);
+            preserve = n ? (~UINT64_C(0) << (64u - n * 8u)) : 0u;
+            m = (m & preserve) | (cpu->gpr[rtno] >> (n * 8u));
+            irix_guest_write64be(rt, a & ~7u, m);
+            break;
+        }
+        case 0x2d: { /* SDR: store doubleword right, big-endian */
+            unsigned n;
+            unsigned shift;
+            uint64_t m, preserve;
+            a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
+            
+            n = a & 7u;
+            m = irix_guest_read64be(rt, a & ~7u);
+            /* SDR writes the low n+1 bytes of rt through the effective
+               address, which is the high end of the aligned memory word.
+               Preserve the remaining low bytes and shift those source bytes
+               into place (the opposite merge direction from SDL). */
+            shift = (7u - n) * 8u;
+            preserve = n < 7u
+                ? (UINT64_MAX >> ((n + 1u) * 8u))
+                : 0u;
+            m = (m & preserve) | (cpu->gpr[rtno] << shift);
+            irix_guest_write64be(rt, a & ~7u, m);
             break;
         }
         case 0x1a: {
@@ -914,6 +965,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 case 0x06: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)cpu->fpr[fs]; break;
                 case 0x07: irix_guest_fpr_set_s(cpu, fd, -sf); break;
                 case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sf; break;
+                case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc((double)sf); break; /* TRUNC.L.S */
                 case 0x21: irix_guest_fpr_set_d(cpu, fd, (double)sf); break;
                 case 0x32: if(sf==tf)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
                 case 0x3c: if(sf<tf)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
@@ -935,6 +987,7 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 case 0x06: cpu->fpr[fd]=cpu->fpr[fs]; break;
                 case 0x07: irix_guest_fpr_set_d(cpu, fd, -sd); break;
                 case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sd; break;
+                case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc(sd); break; /* TRUNC.L.D */
                 case 0x20: irix_guest_fpr_set_s(cpu, fd, (float)sd); break;
                 case 0x32: if(sd==td)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
                 case 0x3c: if(sd<td)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
@@ -1027,6 +1080,18 @@ static int mapped_exec(IrixGuestRuntime *rt, IrixGuestAddr pc)
     return 0;
 }
 
+static int is_lazy_plt_call(IrixGuestRuntime *rt, IrixGuestAddr pc)
+{
+    if (pc < 4u || !irix_guest_ptr(rt, pc - 4u, 4u) ||
+        !irix_guest_ptr(rt, pc + 4u, 4u))
+        return 0;
+    /* SGI .MIPS.stubs save the incoming return address in t7 and put the
+     * symbol index in t8 before calling rld. Only these calls can return
+     * past their own JALR continuation. */
+    return irix_guest_read32be(rt, pc - 4u) == 0x03e07825u &&
+           (irix_guest_read32be(rt, pc + 4u) & 0xffff0000u) == 0x34180000u;
+}
+
 int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address)
 {
@@ -1047,6 +1112,8 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     rtno = (insn >> 16) & 31u;
     rd = (insn >> 11) & 31u;
     fn = insn & 63u;
+
+    
 
     if (!is_control(insn)) {
         int rc = exec_simple(rt, cpu, pc, insn);
@@ -1237,6 +1304,22 @@ void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame)
         translated_frame = frame->previous;
 }
 
+int irix_mips_interp_invoke(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                            IrixGuestAddr address)
+{
+    IrixMipsTranslatedFrame boundary;
+    int result;
+    /* An explicit call into a hidden helper may fall inside its caller's
+       nominal ELF range. Hide that caller's continuation frame so the
+       interpreter stops at this callee's live ra. Direct generated-C
+       handoffs still use irix_mips_interp_call and retain their outer ra. */
+    irix_mips_interp_push_translated(&boundary, address, 0u,
+                                      (IrixGuestAddr)cpu->gpr[31]);
+    result = irix_mips_interp_call(rt, cpu, address);
+    irix_mips_interp_pop_translated(&boundary);
+    return result;
+}
+
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address)
 {
@@ -1259,10 +1342,10 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     if (!mapped_exec(rt, address))
         return -1;
 
-    if (irix_mips_trace_enabled())
-        fprintf(stderr, "IRIX MIPS interpreter: enter pc=%08x ra=%08x\n",
-                address, (uint32_t)cpu->gpr[31]);
+    
     while (!rt->trapped && steps++ < max_steps) {
+        if (irix_guest_poll_alarm(rt, cpu) != 0 || rt->trapped)
+            return -1;
         /*
          * SGI Xt translation-merge bring-up repair.
          *
@@ -1285,7 +1368,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 ch = irix_guest_read8(rt, raw);
 
             if (ch == '<' || ch == '#' || ch == ' ' ||
-                ch == '\\t' || ch == '\\n') {
+                ch == '\t' || ch == '\n') {
                 IrixGuestCpu saved_cpu = *cpu;
                 IrixGuestAddr saved_current_pc = rt->current_pc;
                 IrixGuestAddr parsed = 0u;
@@ -1305,10 +1388,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     if (parsed && irix_guest_ptr(rt, parsed, 4u)) {
                         cpu->gpr[7] =
                             (uint64_t)(int64_t)(int32_t)parsed;
-                        fprintf(stderr,
-                                "IRIX Xt translation repair: helper=0f622e2c "
-                                "raw=%08x -> parsed=%08x\n",
-                                raw, parsed);
+                        (void)0;
                     } else {
                         fprintf(stderr,
                                 "IRIX Xt translation repair FAILED: "
@@ -1333,6 +1413,24 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         rd = (insn >> 11) & 31u;
         fn = insn & 63u;
 
+        
+
+        
+
+        
+        
+        
+
+
+        
+
+        
+        
+        
+        
+        
+        
+
         /*
          * SGI XmPushButtonGadget Enter/Leave hot-path trace.
          *
@@ -1342,27 +1440,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          * Trace only the short machine-code windows around those two paths so
          * we can see the exact instruction that derives/clobbers r31.
          */
-        if ((pc >= 0x0b290560u && pc <= 0x0b290620u) ||
-            (pc >= 0x0b2908c0u && pc <= 0x0b290940u)) {
-            fprintf(stderr,
-                    "IRIX Motif PBG hover trace: "
-                    "pc=%08x insn=%08x "
-                    "v0=%08x v1=%08x "
-                    "a0=%08x a1=%08x a2=%08x a3=%08x "
-                    "t0=%08x t1=%08x t2=%08x t3=%08x "
-                    "s0=%08x s1=%08x s2=%08x s3=%08x "
-                    "gp=%08x sp=%08x fp=%08x ra=%08x\n",
-                    pc, insn,
-                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                    (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
-                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
-                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[29],
-                    (uint32_t)cpu->gpr[30], (uint32_t)cpu->gpr[31]);
-        }
+        
 
         /*
          * Focused trace for the real SGI _XtGetResources failure.  Running
@@ -1372,21 +1450,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          * we can see exactly where r31 changes from the call return address
          * into the bogus 0x000004ac resource/quark-like value.
          */
-        if (pc >= 0x0f616660u && pc <= 0x0f6166b8u) {
-            fprintf(stderr,
-                    "IRIX XtGetResources trace: pc=%08x insn=%08x "
-                    "v0=%08x v1=%08x a0=%08x a1=%08x a2=%08x a3=%08x "
-                    "s0=%08x s1=%08x s2=%08x s3=%08x "
-                    "t8=%08x t9=%08x gp=%08x ra=%08x\n",
-                    pc, insn,
-                    (uint32_t)cpu->gpr[2], (uint32_t)cpu->gpr[3],
-                    (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5],
-                    (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7],
-                    (uint32_t)cpu->gpr[16], (uint32_t)cpu->gpr[17],
-                    (uint32_t)cpu->gpr[18], (uint32_t)cpu->gpr[19],
-                    (uint32_t)cpu->gpr[24], (uint32_t)cpu->gpr[25],
-                    (uint32_t)cpu->gpr[28], (uint32_t)cpu->gpr[31]);
-        }
+        
 
         /*
          * Narrow SGI Motif repair while executing original MIPS inside
@@ -1396,6 +1460,8 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          */
         if (pc == 0x0b314ffcu)
             (void)irix_guest_repair_xm_vendor_ext_parent(rt, cpu, pc);
+
+        
 
         if (!is_control(insn)) {
             int rc = exec_simple(rt, cpu, pc, insn);
@@ -1422,17 +1488,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
         if (op == 0u && fn == 0x08u) {
             target = (IrixGuestAddr)(uint32_t)cpu->gpr[rs];
-            if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
-                (target >= 0x0f627000u && target < 0x0f630000u)) {
-                fprintf(stderr,
-                        "IRIX MIPS interp JR: pc=%08x rs=%u target=%08x "
-                        "ra=%08x s0=%08x s1=%08x t9=%08x\n",
-                        pc, rs, target,
-                        (uint32_t)cpu->gpr[31],
-                        (uint32_t)cpu->gpr[16],
-                        (uint32_t)cpu->gpr[17],
-                        (uint32_t)cpu->gpr[25]);
-            }
+            
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
 
@@ -1463,11 +1519,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
                 if (return_gp &&
                     (uint32_t)cpu->gpr[28] != return_gp) {
-                    fprintf(stderr,
-                            "IRIX MIPS interp JR GP domain: pc=%08x target=%08x "
-                            "gp %08x -> %08x outer_ra=%08x\n",
-                            pc, target, (uint32_t)cpu->gpr[28],
-                            return_gp, outer_ra);
+                    
                     cpu->gpr[28] =
                         (uint64_t)(int64_t)(int32_t)return_gp;
                 }
@@ -1545,23 +1597,12 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
                                 cpu->gpr[2] =
                                     (uint64_t)(int64_t)(int32_t)out;
-                                fprintf(stderr,
-                                        "IRIX Xt bring-up return shim: "
-                                        "pc=%08x bad_v0=%08x bad_cls=%08x "
-                                        "-> v0=%08x "
-                                        "[+4=%08x +8=%08x +c=000004c7]\n",
-                                        pc, ret, cls, out,
-                                        (uint32_t)cpu->gpr[20],
-                                        (uint32_t)cpu->gpr[16]);
+                                (void)0;
                             }
                         }
                     }
 
-                    if (irix_mips_trace_enabled())
-                        fprintf(stderr,
-                                "IRIX MIPS interp OUTER return: pc=%08x target=%08x "
-                                "gp=%08x owner_gp=%08x\n",
-                                pc, target, (uint32_t)cpu->gpr[28], return_gp);
+                    
                     cpu->pc = target;
                     rt->current_pc = target;
                     cpu->gpr[0] = 0;
@@ -1590,11 +1631,27 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[rd] = sx32(pc + 8u);
             if (exec_delay(rt, cpu, pc + 4u) != 0)
                 return -1;
+            
             cpu->pc = pc;
             if (irix_guest_call(rt, cpu, target) != 0)
                 return -1;
+            
             if (!rd)
                 return 0;
+            /*
+             * SGI rld's lazy PLT resolver tail-calls the resolved symbol with
+             * the original caller's $ra (saved in $t7 by the PLT stub).  The
+             * resolved function therefore returns past the resolver's own
+             * JALR continuation.  Propagate that non-local return through
+             * the PLT-stub interpreter frame instead of falling through into
+             * the next 24-byte .MIPS.stubs entry.
+             */
+            if (rd == 31u && is_lazy_plt_call(rt, pc) &&
+                (IrixGuestAddr)(uint32_t)cpu->gpr[31] != pc + 8u) {
+                return 0;
+            }
+            if (rd == 31u)
+                cpu->gpr[31] = sx32(pc + 8u);
             pc += 8u;
             continue;
         }
@@ -1602,8 +1659,10 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (op == 0x02u || op == 0x03u) {
             target = ((pc + 4u) & 0xf0000000u) | ((insn & 0x03ffffffu) << 2);
             if (op == 0x03u) {
-                if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
-                    (target >= 0x0f627000u && target < 0x0f630000u)) {
+                if (getenv("IRIX_MOTIF_GADGET_TRACE") &&
+                    strcmp(getenv("IRIX_MOTIF_GADGET_TRACE"), "1") == 0 &&
+                    ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
+                     (target >= 0x0f627000u && target < 0x0f630000u))) {
                     fprintf(stderr,
                             "IRIX MIPS interp JAL: pc=%08x target=%08x "
                             "ra(new)=%08x s0=%08x s1=%08x t9=%08x\n",
@@ -1633,8 +1692,10 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             {
                 IrixGuestFunctionEntry *te =
                     irix_guest_find_function(rt, target);
-                if ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
-                    (target >= 0x0f627000u && target < 0x0f630000u)) {
+                if (getenv("IRIX_MOTIF_GADGET_TRACE") &&
+                    strcmp(getenv("IRIX_MOTIF_GADGET_TRACE"), "1") == 0 &&
+                    ((pc >= 0x0f627000u && pc < 0x0f630000u) ||
+                     (target >= 0x0f627000u && target < 0x0f630000u))) {
                     fprintf(stderr,
                             "IRIX MIPS interp J: pc=%08x target=%08x "
                             "entry=%08x:%s ra=%08x s0=%08x s1=%08x t9=%08x\n",

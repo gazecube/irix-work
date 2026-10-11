@@ -73,6 +73,7 @@
 #define SYS_getdents 1081
 #define SYS_sginap 1082
 #define SYS_sgikopt 1083
+#define SYS_sgikopt 1083
 #define SYS_sysfs 1084
 #define SYS_getmsg 1085
 #define SYS_putmsg 1086
@@ -165,5 +166,7 @@
 #define SYS_lchown 1178
 #define SYS_priocntl 1179
 #define SYS_ksigqueue 1180
+#define SYS_readv 1181
+#define SYS_writev 1182
 
 #endif

@@ -12,7 +12,6 @@ extern "C" {
 #define IRIX_GUEST_MAX_SEGMENTS 256
 #define IRIX_GUEST_MAX_FUNCTIONS 131072
 #define IRIX_GUEST_FUNCTION_CACHE_SIZE 262144
-#define IRIX_GUEST_RLD_WATCH_MAX 32
 
 #define IRIX_GUEST_FUNCTION_NATIVE     0x00000001u
 #define IRIX_GUEST_FUNCTION_RECOMPILED 0x00000002u
@@ -65,13 +64,6 @@ typedef struct IrixGuestFunctionEntry {
     uint32_t flags;
 } IrixGuestFunctionEntry;
 
-typedef struct IrixGuestRldWatchFrame {
-    IrixGuestAddr sp;
-    IrixGuestAddr slot;
-    uint64_t expected_s0;
-    int warned;
-} IrixGuestRldWatchFrame;
-
 typedef struct IrixGuestRuntime {
     IrixGuestMemory memory;
     IrixGuestAddr trap_pc;
@@ -82,10 +74,9 @@ typedef struct IrixGuestRuntime {
     IrixGuestAddr errno_proxy_addr;
     const char *rootfs;
     IrixGuestAddr program_break;
+    uint64_t alarm_deadline_ns;
     IrixGuestAddr compat_alloc_cur;
     IrixGuestQuarkifyEncoded xrm_quarkify_encoded;
-    IrixGuestRldWatchFrame rld_watch[IRIX_GUEST_RLD_WATCH_MAX];
-    unsigned rld_watch_depth;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
     IrixGuestFunctionEntry *function_cache[IRIX_GUEST_FUNCTION_CACHE_SIZE];
     size_t function_count;
@@ -93,10 +84,17 @@ typedef struct IrixGuestRuntime {
     void *jit_state;
 } IrixGuestRuntime;
 
+int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
+                       char *const argv[], char *const envp[]);
+
 void irix_guest_runtime_init(IrixGuestRuntime *rt);
 void irix_guest_runtime_destroy(IrixGuestRuntime *rt);
 int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsigned flags);
 void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size);
+int64_t irix_guest_read_fd(IrixGuestRuntime *rt, int fd,
+                           IrixGuestAddr addr, size_t count);
+int64_t irix_guest_write_fd(IrixGuestRuntime *rt, int fd,
+                            IrixGuestAddr addr, size_t count);
 const char *irix_guest_cstr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t max_len);
 
 uint8_t irix_guest_read8(IrixGuestRuntime *rt, IrixGuestAddr addr);
@@ -107,9 +105,6 @@ void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr addr, uint8_t value);
 void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint16_t value);
 void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t value);
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value);
-void irix_guest_rld_watch_enter(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
-void irix_guest_rld_watch_restore(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
-void irix_guest_rld_watch_leave(IrixGuestRuntime *rt, const IrixGuestCpu *cpu);
 void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr);
 void irix_guest_set_rootfs(IrixGuestRuntime *rt, const char *rootfs);
 const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path,
@@ -141,6 +136,7 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address, IrixGuestFunctionEntry *entry);
 void irix_guest_trap(IrixGuestRuntime *rt, IrixGuestCpu *cpu, uint32_t code);
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+int irix_guest_poll_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc);
 IrixGuestAddr irix_guest_xt_ensure_resource_table(IrixGuestRuntime *rt, IrixGuestAddr table, uint32_t num_resources);
 int irix_guest_xt_normalize_resource(IrixGuestRuntime *rt, IrixGuestAddr res);

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -296,6 +297,13 @@ static void bridge_getdtablehi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 #endif
     if (n < 0) n = 256;
     if (n > INT32_MAX) n = INT32_MAX;
+    /*
+     * Linux reports the process fd limit here (often over a million), but
+     * IRIX getdtablehi is passed directly to select as nfds.  Our guest fd_set
+     * and host select bridge are bounded by FD_SETSIZE, so never return an
+     * unusable nfds that makes a service's select loop spin on EINVAL.
+     */
+    if (n > FD_SETSIZE) n = FD_SETSIZE;
     cpu->gpr[2] = (uint32_t)n;
 }
 

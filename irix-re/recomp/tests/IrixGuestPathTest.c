@@ -42,6 +42,10 @@ int main(void)
 
     memset(&rt, 0, sizeof(rt));
     if (!mkdtemp(root)) return 1;
+    snprintf(path, sizeof(path), "%s/sbin", root);
+    if (mkdir(path, 0700) != 0) ok = 0;
+    snprintf(path, sizeof(path), "%s/sbin/sh", root);
+    if (!make_file(path)) ok = 0;
     snprintf(path, sizeof(path), "%s/usr", root);
     if (mkdir(path, 0700) != 0) ok = 0;
     snprintf(path, sizeof(path), "%s/usr/lib", root);
@@ -64,6 +68,8 @@ int main(void)
     if (!make_file(path)) ok = 0;
 
     rt.rootfs = root;
+    snprintf(expected, sizeof(expected), "%s/sbin/sh", root);
+    if (!require_path(&rt, "/bin/sh", expected)) ok = 0;
     snprintf(expected, sizeof(expected), "%s/usr/lib/X11/system.chestrc", root);
     if (!require_path(&rt, "/usr/lib/X11/system.chestrc", expected)) ok = 0;
 
@@ -99,6 +105,10 @@ int main(void)
     snprintf(path, sizeof(path), "%s/usr/include/X11", root);
     rmdir(path);
     snprintf(path, sizeof(path), "%s/usr/include", root);
+    rmdir(path);
+    snprintf(path, sizeof(path), "%s/sbin/sh", root);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/sbin", root);
     rmdir(path);
     snprintf(path, sizeof(path), "%s/usr/lib/X11/system.chestrc", root);
     unlink(path);

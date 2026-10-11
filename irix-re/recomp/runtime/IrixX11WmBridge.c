@@ -49,9 +49,7 @@ static Display *fallback_display(IrixGuestRuntime *rt, IrixGuestAddr guest)
     i = g_wm.display_count++;
     g_wm.guest_display[i] = guest;
     g_wm.host_display[i] = XOpenDisplay(name);
-    fprintf(stderr,
-            "IRIX X11 WM fallback: opened secondary host Display for unknown guest=%08x\n",
-            guest);
+    (void)0;
     return g_wm.host_display[i];
 }
 

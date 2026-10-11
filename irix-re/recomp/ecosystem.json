@@ -49,6 +49,138 @@
       "path": "usr/bin/X11/tellwm"
     },
     {
+      "name": "gettxt",
+      "prefix": "gettxt",
+      "kind": "runtime",
+      "path": "usr/bin/gettxt",
+      "shared_components": []
+    },
+    {
+      "name": "xconfirm",
+      "prefix": "xconfirm",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xconfirm",
+      "shared_components": []
+    },
+    {
+      "name": "xprop",
+      "prefix": "xprop",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xprop",
+      "shared_components": []
+    },
+    {
+      "name": "background",
+      "prefix": "background",
+      "kind": "runtime",
+      "path": "usr/sbin/background",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
+    },
+    {
+      "name": "schemebr",
+      "prefix": "schemebr",
+      "kind": "runtime",
+      "path": "usr/sbin/schemebr",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
+    },
+    {
+      "name": "screensaver",
+      "prefix": "screensaver",
+      "kind": "runtime",
+      "path": "usr/sbin/screensaver",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
+    },
+    {
+      "name": "mouse",
+      "prefix": "mouse",
+      "kind": "runtime",
+      "path": "usr/sbin/mouse",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
+    },
+    {
+      "name": "keyboard",
+      "prefix": "keyboard",
+      "kind": "runtime",
+      "path": "usr/sbin/keyboard",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
+    },
+    {
+      "name": "accessx",
+      "prefix": "accessx",
+      "kind": "runtime",
+      "path": "usr/sbin/accessx",
+      "shared_components": []
+    },
+    {
+      "name": "apanel",
+      "prefix": "apanel",
+      "kind": "runtime",
+      "path": "usr/sbin/apanel",
+      "shared_components": []
+    },
+    {
+      "name": "xsetmon",
+      "prefix": "xsetmon",
+      "kind": "runtime",
+      "path": "usr/bin/X11/xsetmon",
+      "shared_components": []
+    },
+    {
       "name": "userenv",
       "prefix": "userenv",
       "kind": "runtime",

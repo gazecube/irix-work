@@ -77,8 +77,7 @@ static void bridge_XResourceManagerString(IrixGuestRuntime *rt,
     } else {
         dpy = XOpenDisplay(0);
         if (dpy) {
-            fprintf(stderr,
-                    "IRIX XResourceManagerString: primary Display unavailable; temporary fallback\n");
+            (void)0;
             resource_string = XResourceManagerString(dpy);
             out = copy_host_string_to_guest(rt, cpu, resource_string);
             XCloseDisplay(dpy);

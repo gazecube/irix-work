@@ -54,8 +54,6 @@ static void bridge_XDisplayKeycodes(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
     int minc = 0, maxc = 0;
     if (d) XDisplayKeycodes(d, &minc, &maxc);
-    fprintf(stderr, "IRIX XDisplayKeycodes: guest=%08x min=%d max=%d\\n",
-            (uint32_t)cpu->gpr[4], minc, maxc);
     wr32(rt, (uint32_t)cpu->gpr[5], (uint32_t)minc);
     wr32(rt, (uint32_t)cpu->gpr[6], (uint32_t)maxc);
     cpu->gpr[2] = 0;
@@ -68,8 +66,6 @@ static void bridge_XGetKeyboardMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int count = (int)(uint32_t)cpu->gpr[6];
     KeyCode first = (KeyCode)(uint32_t)cpu->gpr[5];
     KeySym *map;
-    fprintf(stderr, "IRIX XGetKeyboardMapping: guest=%08x first=%u count=%d\\n",
-            (uint32_t)cpu->gpr[4], (unsigned)first, count);
     map = d ? XGetKeyboardMapping(d, first, count, &per) : 0;
     IrixGuestAddr out = 0;
     int i, n = (count > 0 && per > 0) ? count * per : 0;

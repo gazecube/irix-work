@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=IRIX Desktop (Development)
+Comment=Start the native x86-64 recompilation of the IRIX desktop
+Exec=/usr/local/libexec/dtlogin-desktop-session --desktop-file /usr/share/xsessions/irix-session.desktop
+TryExec=/usr/local/libexec/dtlogin-desktop-session
+X-Dtlogin-DesktopNames=IRIX

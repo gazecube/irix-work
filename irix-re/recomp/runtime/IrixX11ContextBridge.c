@@ -56,9 +56,7 @@ static void bridge_XSaveContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixX11ContextEntry *e = find_entry(display, rid, context);
     (void)rt;
 
-    fprintf(stderr,
-            "IRIX XSaveContext: display=%08x rid=%08x context=%08x data=%08x existing=%s\n",
-            display, rid, (uint32_t)context, data, e ? "yes" : "no");
+    
 
     if (e) {
         e->data = data;
@@ -85,10 +83,7 @@ static void bridge_XFindContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr out = (uint32_t)cpu->gpr[7];
     IrixX11ContextEntry *e = find_entry(display, rid, context);
 
-    fprintf(stderr,
-            "IRIX XFindContext: display=%08x rid=%08x context=%08x out=%08x hit=%s data=%08x\n",
-            display, rid, (uint32_t)context, out,
-            e ? "yes" : "no", e ? e->data : 0u);
+    
 
     if (!e) {
         cpu->gpr[2] = (uint32_t)XCNOENT;
