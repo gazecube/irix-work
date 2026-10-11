@@ -1950,11 +1950,11 @@ static char **irix_exec_environment(char *const base[], const char *guest_path)
 /* The guest environment is often empty (Toolchest children, for instance),
  * which leaves native runners without a display.  Fill in the host variables
  * a desktop program cannot work without; anything the guest set wins. */
-static char **irix_merge_host_env(char *const base[])
+static char **irix_merge_host_env(char *const base[], int host_shell)
 {
     static const char *const keep[] = {
         "DISPLAY", "XAUTHORITY", "HOME", "USER", "LOGNAME", "LANG",
-        "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", 0
+        "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", "SHELL", 0
     };
     size_t count = 0, used = 0, k;
     char **out;
@@ -1963,14 +1963,22 @@ static char **irix_merge_host_env(char *const base[])
                           sizeof(*out));
     if (!out) return 0;
     for (; used < count; ++used) {
-        out[used] = strdup(base[used]);
+        const char *hs = getenv("SHELL");
+        /* The guest sees SHELL=/bin/sh; a native host program wants the
+           user's real login shell back. */
+        if (host_shell && hs && !strncmp(base[used], "SHELL=", 6u)) {
+            out[used] = (char *)malloc(strlen(hs) + 7u);
+            if (out[used]) sprintf(out[used], "SHELL=%s", hs);
+        } else {
+            out[used] = strdup(base[used]);
+        }
         if (!out[used]) { irix_free_host_vector(out); return 0; }
     }
     for (k = 0; keep[k]; ++k) {
         size_t n = strlen(keep[k]), i;
         const char *v = getenv(keep[k]);
         int have = 0;
-        if (!v) continue;
+        if (!v || (!host_shell && !strcmp(keep[k], "SHELL"))) continue;
         for (i = 0; i < count; ++i)
             if (!strncmp(base[i], keep[k], n) && base[i][n] == '=') have = 1;
         if (have) continue;
@@ -2024,13 +2032,13 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
             child_argv[i++] = (char *)guest_path;
             for (j = 1u; j < argc; ++j) child_argv[i++] = argv[j];
         }
-        merged_env = irix_merge_host_env(envp ? envp : environ);
+        merged_env = irix_merge_host_env(envp ? envp : environ, 0);
         child_env = irix_exec_environment(merged_env ? merged_env :
                                           (envp ? envp : environ), image);
         if (child_env)
             execve(runner, child_argv ? child_argv : argv, child_env);
     } else {
-        merged_env = irix_merge_host_env(envp ? envp : environ);
+        merged_env = irix_merge_host_env(envp ? envp : environ, 1);
         execve(path, argv, merged_env ? merged_env : (envp ? envp : environ));
     }
     saved_errno = errno;
