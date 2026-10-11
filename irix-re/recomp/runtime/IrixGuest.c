@@ -1947,44 +1947,66 @@ static char **irix_exec_environment(char *const base[], const char *guest_path)
     return out;
 }
 
-/* The guest environment is often empty (Toolchest children, for instance),
- * which leaves native runners without a display.  Fill in the host variables
- * a desktop program cannot work without; anything the guest set wins. */
-static char **irix_merge_host_env(char *const base[], int host_shell)
+/* Environment for a native child.
+ *
+ * The guest's own environment is often empty (Toolchest children, for
+ * instance).  A native runner needs at least DISPLAY and friends; a host
+ * program such as a terminal or the user's login shell needs the whole host
+ * environment (PATH, ENV, LANG, ...) to behave as it does outside the
+ * session.  host_env selects the second case: start from the host
+ * environment, let variables the guest set override it, and always take
+ * SHELL from the host (the guest sees /bin/sh). */
+static int irix_env_has(char *const vec[], size_t count, const char *entry)
+{
+    const char *eq = strchr(entry, '=');
+    size_t n = eq ? (size_t)(eq - entry) : strlen(entry), i;
+    for (i = 0; i < count; ++i)
+        if (!strncmp(vec[i], entry, n) && vec[i][n] == '=')
+            return 1;
+    return 0;
+}
+
+static char **irix_merge_host_env(char *const base[], int host_env)
 {
     static const char *const keep[] = {
         "DISPLAY", "XAUTHORITY", "HOME", "USER", "LOGNAME", "LANG",
-        "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", "SHELL", 0
+        "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", 0
     };
-    size_t count = 0, used = 0, k;
+    extern char **environ;
+    size_t bcount = 0, hcount = 0, used = 0, i, k;
     char **out;
-    if (base) while (base[count]) ++count;
-    out = (char **)calloc(count + (sizeof(keep) / sizeof(keep[0])) + 1u,
-                          sizeof(*out));
+    if (base) while (base[bcount]) ++bcount;
+    if (host_env && environ) while (environ[hcount]) ++hcount;
+    out = (char **)calloc(bcount + hcount + 16u, sizeof(*out));
     if (!out) return 0;
-    for (; used < count; ++used) {
-        const char *hs = getenv("SHELL");
-        /* The guest sees SHELL=/bin/sh; a native host program wants the
-           user's real login shell back. */
-        if (host_shell && hs && !strncmp(base[used], "SHELL=", 6u)) {
-            out[used] = (char *)malloc(strlen(hs) + 7u);
-            if (out[used]) sprintf(out[used], "SHELL=%s", hs);
-        } else {
-            out[used] = strdup(base[used]);
-        }
+    for (i = 0; i < bcount; ++i) {
+        if (host_env && !strncmp(base[i], "SHELL=", 6u) && getenv("SHELL"))
+            continue;               /* replaced by the host value below */
+        out[used] = strdup(base[i]);
         if (!out[used]) { irix_free_host_vector(out); return 0; }
+        ++used;
     }
-    for (k = 0; keep[k]; ++k) {
-        size_t n = strlen(keep[k]), i;
-        const char *v = getenv(keep[k]);
-        int have = 0;
-        if (!v || (!host_shell && !strcmp(keep[k], "SHELL"))) continue;
-        for (i = 0; i < count; ++i)
-            if (!strncmp(base[i], keep[k], n) && base[i][n] == '=') have = 1;
-        if (have) continue;
-        out[used] = (char *)malloc(n + strlen(v) + 2u);
-        if (!out[used]) { irix_free_host_vector(out); return 0; }
-        sprintf(out[used++], "%s=%s", keep[k], v);
+    if (host_env) {
+        for (i = 0; i < hcount; ++i) {
+            if (!strncmp(environ[i], "IRIX_GUEST_EXEC_PATH=", 21u) ||
+                !strncmp(environ[i], "IRIX_EXEC_BACKEND=", 18u))
+                continue;
+            if (irix_env_has(out, used, environ[i]))
+                continue;
+            out[used] = strdup(environ[i]);
+            if (!out[used]) { irix_free_host_vector(out); return 0; }
+            ++used;
+        }
+    } else {
+        for (k = 0; keep[k]; ++k) {
+            const char *v = getenv(keep[k]);
+            size_t n = strlen(keep[k]);
+            if (!v || irix_env_has(out, used, keep[k]))
+                continue;
+            out[used] = (char *)malloc(n + strlen(v) + 2u);
+            if (!out[used]) { irix_free_host_vector(out); return 0; }
+            sprintf(out[used++], "%s=%s", keep[k], v);
+        }
     }
     return out;
 }

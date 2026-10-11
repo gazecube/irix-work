@@ -2,8 +2,23 @@
 set -u
 
 default_root="@IRIX_RECOMP_ROOT@"
-root="${IRIX_RECOMP_ROOT:-$default_root}"
 runtime="@IRIX_RUNTIME_TREE@"
+default_guest_runner="@CMAKE_CURRENT_BINARY_DIR@/irix-guest-exec"
+# Installed prefix layout (desktop-integration/install-irix.sh):
+#   <prefix>/bin/irix-session  <prefix>/root  <prefix>/tree  <prefix>/lib
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+prefix="$(cd "$(dirname "$self")/.." 2>/dev/null && pwd)"
+if [ -d "$prefix/root" ] && [ -d "$prefix/tree" ]; then
+    default_root="$prefix/root"
+    runtime="$prefix/tree"
+    default_guest_runner="$prefix/bin/irix-guest-exec"
+    LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+fi
+root="${IRIX_RECOMP_ROOT:-$default_root}"
+IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE:-$runtime}"
+export IRIX_RUNTIME_TREE
+runtime="$IRIX_RUNTIME_TREE"
 display="${DISPLAY:-:1}"
 
 makeicons="/usr/lib/desktop/makeIconVisuals"
@@ -12,7 +27,6 @@ wm="/usr/bin/X11/4Dwm"
 waitwm="/usr/bin/X11/wait4wm"
 toolchest="/usr/bin/X11/toolchest"
 fm="/usr/sbin/fm"
-default_guest_runner="@CMAKE_CURRENT_BINARY_DIR@/irix-guest-exec"
 guest_runner="${IRIX_GUEST_EXEC_RUNNER:-$default_guest_runner}"
 
 if [ ! -x "$guest_runner" ]; then

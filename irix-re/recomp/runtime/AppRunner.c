@@ -57,6 +57,16 @@ void irix_guest_register_gp_range(IrixGuestAddr base, uint32_t size,
 #ifndef IRIX_RECOMP_ROOT
 #define IRIX_RECOMP_ROOT ""
 #endif
+
+/* The trees baked in at build time can be relocated for an installed prefix:
+ * IRIX_RUNTIME_TREE / IRIX_RECOMP_ROOT in the environment take precedence. */
+static const char *irix_env_or(const char *name, const char *compiled)
+{
+    const char *v = getenv(name);
+    return (v && v[0]) ? v : compiled;
+}
+#define IRIX_RUNTIME_TREE_PATH() irix_env_or("IRIX_RUNTIME_TREE", IRIX_RUNTIME_TREE)
+#define IRIX_RECOMP_ROOT_PATH()  irix_env_or("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT)
 #ifndef IRIX_GUEST_EXEC_RUNNER
 #define IRIX_GUEST_EXEC_RUNNER ""
 #endif
@@ -264,7 +274,7 @@ static void register_native_dsos(IrixGuestRuntime *rt)
         /* Native translated DSOs live at their original IRIX paths inside
            the shared reconstructed root, not in an application-private lib
            directory. */
-        snprintf(path, sizeof(path), "%s/%s", IRIX_RECOMP_ROOT, component->path);
+        snprintf(path, sizeof(path), "%s/%s", IRIX_RECOMP_ROOT_PATH(), component->path);
         handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         if (!handle) {
             fprintf(stderr, "failed to load translated DSO %s: %s\n",
@@ -863,15 +873,15 @@ int main(int argc, char **argv)
         setenv("IRIX_PROFILE_NAME", IRIX_APP_NAME, 0);
 
     /* Child execve calls use one generic runner for original guest images. */
-    if (IRIX_RECOMP_ROOT[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
-        setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT, 0);
+    if (IRIX_RECOMP_ROOT_PATH()[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
+        setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT_PATH(), 0);
     if (IRIX_GUEST_EXEC_RUNNER[0] != '\0' &&
         !getenv("IRIX_GUEST_EXEC_RUNNER"))
         setenv("IRIX_GUEST_EXEC_RUNNER", IRIX_GUEST_EXEC_RUNNER, 0);
-    if (IRIX_RUNTIME_TREE[0] != '\0' && !getenv("XAPPLRESDIR")) {
+    if (IRIX_RUNTIME_TREE_PATH()[0] != '\0' && !getenv("XAPPLRESDIR")) {
         char appres[4096];
         int n = snprintf(appres, sizeof(appres), "%s/usr/lib/X11/app-defaults",
-                         IRIX_RUNTIME_TREE);
+                         IRIX_RUNTIME_TREE_PATH());
         if (n > 0 && (size_t)n < sizeof(appres))
             setenv("XAPPLRESDIR", appres, 0);
     }
@@ -880,7 +890,7 @@ int main(int argc, char **argv)
     setenv("IRIX_EXEC_BACKEND", "static", 1);
 #endif
     irix_guest_runtime_init(&rt);
-    irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE);
+    irix_guest_set_rootfs(&rt, IRIX_RUNTIME_TREE_PATH());
     memset(&cpu, 0, sizeof(cpu));
 #ifdef IRIX_JIT_ONLY
     if (irix_mips_jit_requested() && !irix_mips_jit_available()) {
@@ -924,7 +934,7 @@ int main(int argc, char **argv)
             memcpy(exec_app_path, requested, requested_len + 1u);
             relative = exec_app_path;
         }
-        if (load_elf(&rt, IRIX_RUNTIME_TREE, relative, &app_elf) != 0) {
+        if (load_elf(&rt, IRIX_RUNTIME_TREE_PATH(), relative, &app_elf) != 0) {
             fprintf(stderr, "failed to load original IRIX app %s\n", relative);
             return 1;
         }
@@ -934,7 +944,7 @@ int main(int argc, char **argv)
     if (app_elf.interp[0]) {
         const char *interp_rel = app_elf.interp[0] == '/' ?
                                  app_elf.interp + 1 : app_elf.interp;
-        if (load_elf(&rt, IRIX_RUNTIME_TREE, interp_rel, &interp_elf) != 0) {
+        if (load_elf(&rt, IRIX_RUNTIME_TREE_PATH(), interp_rel, &interp_elf) != 0) {
             fprintf(stderr, "failed to load PT_INTERP %s\n", app_elf.interp);
             return 1;
         }
@@ -943,7 +953,7 @@ int main(int argc, char **argv)
                 "IRIX guest-exec PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
                 app_elf.interp, interp_elf.entry, interp_elf.gp_value);
     }
-    if (load_elf(&rt, IRIX_RUNTIME_TREE, "lib32/rld", &rld_elf) == 0)
+    if (load_elf(&rt, IRIX_RUNTIME_TREE_PATH(), "lib32/rld", &rld_elf) == 0)
         have_rld_elf = 1;
 #else
     if (load_core_image(&rt) != 0) {
@@ -957,9 +967,11 @@ int main(int argc, char **argv)
             const IrixAppGuestComponent *component = &irix_app_guest_components[i];
             const char *root;
             if (component->kind == 0)
-                root = IRIX_RUNTIME_TREE;
+                root = IRIX_RUNTIME_TREE_PATH();
             else if (component->kind == 1)
-                root = IRIX_INTERNAL_TREE;
+                root = irix_env_or("IRIX_INTERNAL_TREE",
+                                   getenv("IRIX_RUNTIME_TREE") ?
+                                   IRIX_RUNTIME_TREE_PATH() : IRIX_INTERNAL_TREE);
             else
                 root = IRIX_DEV_TREE;
             {
@@ -1208,9 +1220,9 @@ int main(int argc, char **argv)
 #if !defined(IRIX_JIT_ONLY) && !defined(IRIX_DIRECT_MAIN)
     /* A staged native runner is physically under IRIX_RECOMP_ROOT, while
        guest programs expect argv[0] to name their original IRIX path. */
-    if (argc > 0 && argv && argv[0] && IRIX_RECOMP_ROOT[0] != '\0') {
-        size_t root_len = strlen(IRIX_RECOMP_ROOT);
-        if (strncmp(argv[0], IRIX_RECOMP_ROOT, root_len) == 0 &&
+    if (argc > 0 && argv && argv[0] && IRIX_RECOMP_ROOT_PATH()[0] != '\0') {
+        size_t root_len = strlen(IRIX_RECOMP_ROOT_PATH());
+        if (strncmp(argv[0], IRIX_RECOMP_ROOT_PATH(), root_len) == 0 &&
             argv[0][root_len] == '/' &&
             snprintf(canonical_guest_argv0, sizeof(canonical_guest_argv0),
                      "%s", argv[0] + root_len) > 0) {

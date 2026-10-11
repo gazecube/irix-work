@@ -147,9 +147,8 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 find_package(X11)
 find_path(XPM_INCLUDE_DIR X11/xpm.h)
 find_library(XPM_LIBRARY NAMES Xpm)
-# The hybrid Xt bridge must use the host distro libXt, never MaXX's copy.
-# MaXX may inject /opt/MaXX into CMake's search path and can also leave a
-# stale cached path behind, so keep this lookup deliberately rooted in /usr.
+# The hybrid Xt bridge must use the host distro libXt; keep this lookup
+# deliberately rooted in /usr so a stale cached path cannot leak in.
 unset(IRIX_HOST_XT_LIBRARY CACHE)
 find_library(IRIX_HOST_XT_LIBRARY NAMES Xt
     PATHS
@@ -262,6 +261,31 @@ if(IRIX_DEV_TREE)
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
     set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
     add_dependencies(irix_recompiled_stack irix_recompiled_core)
+
+    # The translated core is built once and shared by every runner as
+    # libirixcore.so instead of being copied into each executable.  Symbols
+    # it needs from the host bridges resolve against the runner's exported
+    # dynamic symbols, exactly as for the static link.
+    set(IRIX_RECOMP_CORE_SHARED "${CMAKE_CURRENT_BINARY_DIR}/libirixcore.so")
+    add_custom_command(
+        OUTPUT "${IRIX_RECOMP_CORE_SHARED}"
+        COMMAND "${CMAKE_C_COMPILER}" -shared
+                -o "${IRIX_RECOMP_CORE_SHARED}"
+                -Wl,-soname,libirixcore.so
+                -Wl,--whole-archive "${IRIX_RECOMP_CORE_LIB}"
+                -Wl,--no-whole-archive
+                "-Wl,-rpath,${CMAKE_CURRENT_BINARY_DIR}"
+        DEPENDS "${IRIX_RECOMP_CORE_LIB}"
+        COMMENT "Linking shared IRIX translated core"
+        VERBATIM
+    )
+    add_custom_target(irix_recompiled_core_shared_build
+        DEPENDS "${IRIX_RECOMP_CORE_SHARED}")
+    add_library(irix_recompiled_core_shared SHARED IMPORTED GLOBAL)
+    set_target_properties(irix_recompiled_core_shared PROPERTIES
+        IMPORTED_LOCATION "${IRIX_RECOMP_CORE_SHARED}"
+        IMPORTED_SONAME libirixcore.so)
+    add_dependencies(irix_recompiled_core_shared irix_recompiled_core_shared_build)
 
     # Native ELF containers for the statically translated IRIX libraries.
     # They preserve the original library boundaries while the existing
@@ -516,7 +540,7 @@ if(IRIX_DEV_TREE)
                 )
                 target_link_libraries(${_app_runner_target} PRIVATE
                     ${_app_bundle_target}
-                    irix_recompiled_stack
+                    irix_recompiled_core_shared
                     irix_recomp_libc_bridge
                     irix_recomp_x11_bridge
                     irix_recomp_runtime
@@ -581,7 +605,7 @@ if(IRIX_DEV_TREE)
                     )
                     target_link_libraries(irix_desktop_quick_runner PRIVATE
                         ${_app_bundle_target}
-                        irix_recompiled_stack
+                        irix_recompiled_core_shared
                         irix_recomp_libc_bridge
                         irix_recomp_x11_bridge
                         irix_recomp_runtime
@@ -642,7 +666,7 @@ if(IRIX_DEV_TREE)
                     )
                     target_link_libraries(${_quick_target} PRIVATE
                         ${_app_bundle_target}
-                        irix_recompiled_stack
+                        irix_recompiled_core_shared
                         irix_recomp_libc_bridge
                         irix_recomp_x11_bridge
                         irix_recomp_runtime
