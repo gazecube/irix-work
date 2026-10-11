@@ -621,12 +621,6 @@ static void bridge_XLoadQueryFont(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = font_to_guest(rt, f);
 }
 
-static void bridge_XrmParseCommand(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{
-    (void)rt;
-    cpu->gpr[2] = 0;
-}
-
 /*
  * SGI-private Xlib preload hint.  IRIX applications pass a variadic list of
  * atom-name strings here before opening/initializing their display.  The host
@@ -2011,7 +2005,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
 {
     if(!name) return 0;
 #define MAP(n) if(!strcmp(name,#n)) return bridge_##n
-    MAP(XrmParseCommand); MAP(_XSGIAddToPreloadAtomList);
+    MAP(_XSGIAddToPreloadAtomList);
     MAP(XOpenDisplay); MAP(XCloseDisplay); MAP(XDefaultScreen); MAP(XRootWindow); MAP(XDefaultRootWindow);
     if(!strcmp(name,"XAllocNamedColor")) return irix_x11_bulk_lookup(name);
     if(!strcmp(name,"XQueryColors")) return irix_x11_bulk_lookup(name);

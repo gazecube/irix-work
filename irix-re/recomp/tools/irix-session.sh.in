@@ -77,14 +77,11 @@ guest_exec "$prealloc" || {
 }
 
 echo "IRIX session: starting 4Dwm on $DISPLAY"
-# 4Dwm only starts its background daemon (bgInit, which publishes
-# _SGI_DESKS_BACKGROUND_DAEMON_WINDOW<root> for the Background panel and
-# xsetroot) when SG_UseBackgrounds is true, and it does not honour -xrm on its
-# command line here.  The display's resource database is read, so seed it.
-if command -v xrdb >/dev/null 2>&1; then
-    echo '*SG_UseBackgrounds: True' | xrdb -merge
-fi
-IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch &
+# SG_UseBackgrounds makes 4Dwm run bgInit, which publishes the
+# _SGI_DESKS_BACKGROUND_DAEMON_WINDOW<root> selection used by the
+# Background panel and xsetroot.
+IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch \
+    -xrm '*SG_UseBackgrounds: True' &
 wm_pid=$!
 
 echo "IRIX session: waiting for 4Dwm"

@@ -197,6 +197,88 @@ static void bridge_XrmGetStringDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = db_to_guest(text ? XrmGetStringDatabase(text) : 0);
 }
 
+/*
+ * XrmParseCommand(XrmDatabase *db, XrmOptionDescList table, int count,
+ *                 const char *name, int *argc, char **argv)
+ *
+ * Guest layouts are N32: XrmOptionDescRec is four 32-bit words {option,
+ * specifier, argKind, value} and argv is an array of 32-bit guest pointers.
+ * Parse with host Xlib against host-side copies, then write the consumed
+ * argc/argv and the database token back so the guest sees the same result a
+ * native IRIX Xlib would produce (resources from -xrm, -name, ... applied,
+ * recognised options removed from argv).
+ */
+#define IRIX_XRM_MAX_OPTIONS 256
+#define IRIX_XRM_MAX_ARGS 1024
+static void bridge_XrmParseCommand(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dbp = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+    IrixGuestAddr table = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    int count = (int)(int32_t)cpu->gpr[6];
+    const char *name = guest_cstr(rt, (IrixGuestAddr)(uint32_t)cpu->gpr[7]);
+    IrixGuestAddr argcp = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+    IrixGuestAddr argvp = (IrixGuestAddr)(uint32_t)cpu->gpr[9];
+    XrmOptionDescRec opts[IRIX_XRM_MAX_OPTIONS];
+    char *hargv[IRIX_XRM_MAX_ARGS + 1];
+    IrixGuestAddr gargv[IRIX_XRM_MAX_ARGS + 1];
+    XrmDatabase db;
+    int argc, new_argc, i, j;
+
+    cpu->gpr[2] = 0;
+    if (!dbp || !name || !argcp || !argvp || count < 0 ||
+        count > IRIX_XRM_MAX_OPTIONS)
+        return;
+    argc = (int)(int32_t)rd32(rt, argcp);
+    if (argc < 0 || argc > IRIX_XRM_MAX_ARGS)
+        return;
+
+    for (i = 0; i < count; ++i) {
+        IrixGuestAddr e = table + (IrixGuestAddr)(i * 16u);
+        uint32_t kind = rd32(rt, e + 8u);
+        uint32_t value = rd32(rt, e + 12u);
+        const char *opt = guest_cstr(rt, rd32(rt, e));
+        uint32_t spec_addr = rd32(rt, e + 4u);
+        /* ResArg/SkipArg/SkipLine/SkipNArgs entries (e.g. Xt's -xrm) have a
+         * NULL specifier. */
+        const char *spec = spec_addr ? guest_cstr(rt, spec_addr) : 0;
+        if (!opt || (spec_addr && !spec))
+            return;
+        opts[i].option = (char *)opt;
+        opts[i].specifier = (char *)spec;
+        opts[i].argKind = (XrmOptionKind)kind;
+        /* SkipNArgs carries a count; ResArg/NoArg carry a string. */
+        if (kind == (uint32_t)XrmoptionSkipNArgs)
+            opts[i].value = (XPointer)(intptr_t)(int32_t)value;
+        else
+            opts[i].value = value ? (XPointer)guest_cstr(rt, value) : 0;
+    }
+    for (i = 0; i < argc; ++i) {
+        gargv[i] = rd32(rt, argvp + (IrixGuestAddr)(i * 4u));
+        hargv[i] = (char *)guest_cstr(rt, gargv[i]);
+        if (!hargv[i])
+            return;
+    }
+    hargv[argc] = 0;
+
+    db = db_from_guest(rd32(rt, dbp));
+    new_argc = argc;
+    XrmParseCommand(&db, opts, count, name, &new_argc, hargv);
+    wr32(rt, dbp, db_to_guest(db));
+
+    /* Map the surviving host pointers back to their guest addresses. */
+    for (i = 0; i < new_argc; ++i) {
+        IrixGuestAddr g = 0;
+        for (j = 0; j < argc; ++j)
+            if (gargv[j] && guest_cstr(rt, gargv[j]) == hargv[i]) {
+                g = gargv[j];
+                break;
+            }
+        wr32(rt, argvp + (IrixGuestAddr)(i * 4u), g);
+    }
+    wr32(rt, argvp + (IrixGuestAddr)((unsigned)new_argc * 4u), 0u);
+    wr32(rt, argcp, (uint32_t)new_argc);
+}
+
 static void bridge_XrmDestroyDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     XrmDatabase db = db_from_guest((uint32_t)cpu->gpr[4]);
@@ -369,6 +451,7 @@ IrixGuestFunction irix_xrm_compat_lookup(const char *name)
     MAP(XrmGetFileDatabase);
     MAP(XrmGetStringDatabase);
     MAP(XrmDestroyDatabase);
+    MAP(XrmParseCommand);
     MAP(XrmMergeDatabases);
     MAP(XrmCombineDatabase);
     MAP(XrmCombineFileDatabase);
