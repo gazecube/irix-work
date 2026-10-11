@@ -1,58 +1,90 @@
 #!/bin/sh
 set -u
 
-root="@IRIX_RECOMP_ROOT@"
+default_root="@IRIX_RECOMP_ROOT@"
+root="${IRIX_RECOMP_ROOT:-$default_root}"
 runtime="@IRIX_RUNTIME_TREE@"
-logdir="${TMPDIR:-/tmp}/irix-session"
 display="${DISPLAY:-:1}"
 
-mkdir -p "$logdir"
+makeicons="/usr/lib/desktop/makeIconVisuals"
+prealloc="/usr/lib/desktop/preallocColors"
+wm="/usr/bin/X11/4Dwm"
+waitwm="/usr/bin/X11/wait4wm"
+toolchest="/usr/bin/X11/toolchest"
+fm="/usr/sbin/fm"
+default_guest_runner="@CMAKE_CURRENT_BINARY_DIR@/irix-guest-exec"
+guest_runner="${IRIX_GUEST_EXEC_RUNNER:-$default_guest_runner}"
 
-makeicons="$root/usr/lib/desktop/makeIconVisuals"
-prealloc="$root/usr/lib/desktop/preallocColors"
-wm="@CMAKE_CURRENT_BINARY_DIR@/quick/4Dwm-quick"
-waitwm="@CMAKE_CURRENT_BINARY_DIR@/quick/wait4wm-quick"
-toolchest="@CMAKE_CURRENT_BINARY_DIR@/quick/toolchest-quick"
-fm="@CMAKE_CURRENT_BINARY_DIR@/quick/fm-quick"
-fmserv="@CMAKE_CURRENT_BINARY_DIR@/quick/fmserv-quick"
-
-for p in "$makeicons" "$prealloc" "$wm" "$waitwm" "$toolchest" "$fmserv" "$fm"; do
-    if [ ! -x "$p" ]; then
-        echo "IRIX session: missing executable: $p" >&2
+if [ ! -x "$guest_runner" ]; then
+    echo "IRIX session: missing guest process runner: $guest_runner" >&2
+    exit 1
+fi
+for p in "$makeicons" "$prealloc" "$wm" "$waitwm" "$toolchest" "$fm"; do
+    if [ ! -r "$runtime$p" ]; then
+        echo "IRIX session: missing guest image: $p" >&2
+        exit 1
+    fi
+done
+for guest_path in "$makeicons" "$prealloc" "$wm" "$waitwm" "$toolchest" "$fm"; do
+    runner="$root$guest_path"
+    if [ ! -x "$runner" ]; then
+        echo "IRIX session: missing native x86-64 app runner: $runner" >&2
         exit 1
     fi
 done
 
 export DISPLAY="$display"
 export IRIX_RECOMP_ROOT="$root"
+export IRIX_GUEST_EXEC_RUNNER="$guest_runner"
+# Keep session startup on the validated Xt/Motif path.  The runtime's legacy
+# stability fallback defaults on, but it broadly repairs missing Xt/Xm state
+# and can hide regressions; callers may still opt in explicitly.
+export IRIX_XT_XM_STABILITY="${IRIX_XT_XM_STABILITY:-0}"
+# Select the standard Unix-domain X transport inside original SGI libX11.
+# DISPLAY remains the user's :N display on the host; only the guest process
+# sees unix/:N, avoiding IRIX's /dev/xconnc shared-memory transport device.
+case "$display" in
+    :*) export IRIX_GUEST_DISPLAY="unix/$display" ;;
+esac
+guest_exec()
+{
+    guest_path=$1
+    shift
+    runner="$root$guest_path"
+    "$runner" "$@"
+}
 
 cleanup()
 {
     [ -n "${fm_pid:-}" ] && kill "$fm_pid" 2>/dev/null || true
-    [ -n "${fmserv_pid:-}" ] && kill "$fmserv_pid" 2>/dev/null || true
     [ -n "${toolchest_pid:-}" ] && kill "$toolchest_pid" 2>/dev/null || true
     [ -n "${wm_pid:-}" ] && kill "$wm_pid" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
 
 echo "IRIX session: preparing icon visuals"
-IRIX_EXEC_BACKEND=interp "$makeicons" >"$logdir/makeIconVisuals.log" 2>&1 || {
+guest_exec "$makeicons" || {
     status=$?
     echo "IRIX session: makeIconVisuals failed: $status" >&2
-    tail -80 "$logdir/makeIconVisuals.log" >&2 2>/dev/null || true
     exit "$status"
 }
 
 echo "IRIX session: preallocating colors"
-IRIX_EXEC_BACKEND=interp "$prealloc" >"$logdir/preallocColors.log" 2>&1 || {
+guest_exec "$prealloc" || {
     status=$?
     echo "IRIX session: preallocColors failed: $status" >&2
-    tail -80 "$logdir/preallocColors.log" >&2 2>/dev/null || true
     exit "$status"
 }
 
 echo "IRIX session: starting 4Dwm on $DISPLAY"
-IRIX_DEFINE_ROOT_POINTER_CURSOR=1 "$wm" -launch -xrm '*SG_UseBackgrounds: True' >"$logdir/4Dwm.log" 2>&1 &
+# 4Dwm only starts its background daemon (bgInit, which publishes
+# _SGI_DESKS_BACKGROUND_DAEMON_WINDOW<root> for the Background panel and
+# xsetroot) when SG_UseBackgrounds is true, and it does not honour -xrm on its
+# command line here.  The display's resource database is read, so seed it.
+if command -v xrdb >/dev/null 2>&1; then
+    echo '*SG_UseBackgrounds: True' | xrdb -merge
+fi
+IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch &
 wm_pid=$!
 
 echo "IRIX session: waiting for 4Dwm"
@@ -63,11 +95,10 @@ while [ "$attempt" -lt 40 ]; do
         wait "$wm_pid"
         wm_status=$?
         echo "IRIX session: 4Dwm exited during startup: $wm_status" >&2
-        tail -120 "$logdir/4Dwm.log" >&2 2>/dev/null || true
         exit "$wm_status"
     fi
 
-    "$waitwm" >"$logdir/wait4wm.log" 2>&1
+    guest_exec "$waitwm"
     wait_status=$?
     if [ "$wait_status" -eq 0 ]; then
         break
@@ -80,25 +111,18 @@ done
 
 if [ "$wait_status" -ne 0 ]; then
     echo "IRIX session: wait4wm timed out: $wait_status" >&2
-    tail -120 "$logdir/4Dwm.log" >&2 2>/dev/null || true
-    tail -120 "$logdir/wait4wm.log" >&2 2>/dev/null || true
     exit "$wait_status"
 fi
 
 echo "IRIX session: 4Dwm ready; starting Toolchest"
-"$toolchest" >"$logdir/toolchest.log" 2>&1 &
+guest_exec "$toolchest" &
 toolchest_pid=$!
 
-echo "IRIX session: starting File Manager service"
-"$fmserv" "$DISPLAY" >"$logdir/fmserv.log" 2>&1 &
-fmserv_pid=$!
-
 echo "IRIX session: starting desktop File Manager"
-"$fm" -b "$HOME" >"$logdir/fm.log" 2>&1 &
+guest_exec "$fm" -b &
 fm_pid=$!
 
 echo "IRIX session: running"
-echo "IRIX session logs: $logdir"
 
 # Keep the session owner alive. If the WM exits, the session is over.
 wait "$wm_pid"
