@@ -73,12 +73,14 @@ static int confirm(const char *display, const char *root)
     snprintf(xconfirm, sizeof(xconfirm), "%s/usr/bin/X11/xconfirm", root);
     reply[0] = '\0';
     rc = run(a1, reply, sizeof(reply));
-    if (rc == 0 && reply[0]) {
+    if (rc >= 0 && rc != 126 && rc != 127) {
+        /* xconfirm ran and the user answered (or dismissed it: empty reply,
+         * which is "no").  Never ask a second question. */
         char *nl = strchr(reply, '\n');
         if (nl) *nl = '\0';
-        return strcmp(reply, "Yes") == 0;
+        return rc == 0 && strcmp(reply, "Yes") == 0;
     }
-    /* xconfirm unavailable or failed: fall back to xmessage (exit 0 = Yes). */
+    /* xconfirm could not run at all: fall back to xmessage (exit 0 = Yes). */
     return run(a2, NULL, 0) == 0;
 }
 

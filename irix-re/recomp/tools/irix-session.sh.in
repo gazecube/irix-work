@@ -68,8 +68,9 @@ if [ "${1:-}" = "--end" ]; then
             -header Confirm -icon question -B No -b Yes \
             -t "Do you want to log out now?" 2>/dev/null)
         rc=$?
-        if [ "$rc" -eq 0 ] && [ -n "$reply" ]; then
-            [ "$reply" = "Yes" ] || exit 1
+        if [ "$rc" -lt 126 ]; then
+            # xconfirm ran; an empty reply means it was dismissed.
+            [ "$rc" -eq 0 ] && [ "$reply" = "Yes" ] || exit 1
         elif command -v xmessage >/dev/null 2>&1; then
             xmessage -display "$display" -center -default No \
                 -buttons No:1,Yes:0 "Do you want to log out now?" || exit 1
