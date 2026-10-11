@@ -975,6 +975,9 @@ static void bridge_getenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     size_t i;
     if (!name) { cpu->gpr[2] = 0; return; }
     value = getenv(name);
+    /* The host login shell (e.g. /usr/local/bin/ksh) does not exist in the
+       guest tree; f.exec/system()-style callers would exec it and fail. */
+    if (!strcmp(name, "SHELL")) value = "/bin/sh";
     if (!value) { cpu->gpr[2] = 0; return; }
     for (i = 0; i < g_libc.env_cache_count; ++i) {
         if (strcmp(g_libc.env_cache[i].name, name) == 0 && strcmp(g_libc.env_cache[i].value, value) == 0) {
