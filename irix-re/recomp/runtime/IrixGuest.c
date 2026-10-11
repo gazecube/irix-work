@@ -1293,17 +1293,45 @@ void irix_guest_xt_repair_class_resources(IrixGuestRuntime *rt, IrixGuestAddr wc
     irix_guest_xt_repair_class_resources_inner(rt, wc, 0u);
 }
 
+/*
+ * IRIX maps a readable zero page at address 0 (the "usenull" behaviour):
+ * loading through a NULL pointer, or a small offset from one, yields zero
+ * instead of faulting.  SGI code relies on it, e.g. tuFont::getFont reads the
+ * first byte of strdup(NULL) expecting an empty string.  Only guest *loads*
+ * see the zero page; stores still fault and irix_guest_ptr() still returns
+ * NULL there, so native bridges keep treating NULL as an invalid pointer.
+ */
+#define IRIX_GUEST_NULL_PAGE_SIZE 0x4000u
+
+static int guest_null_page_read(IrixGuestAddr addr)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("IRIX_NULL_PAGE");
+        enabled = !(v && v[0] == '0');
+    }
+    return enabled && addr < IRIX_GUEST_NULL_PAGE_SIZE;
+}
+
 uint8_t irix_guest_read8(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 1);
-    if (!p) { memory_fault(rt, addr); return 0; }
+    if (!p) {
+        if (guest_null_page_read(addr)) return 0;
+        memory_fault(rt, addr);
+        return 0;
+    }
     return *p;
 }
 
 uint16_t irix_guest_read16be(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     uint8_t *p = (uint8_t *)irix_guest_ptr(rt, addr, 2);
-    if (!p) { memory_fault(rt, addr); return 0; }
+    if (!p) {
+        if (guest_null_page_read(addr)) return 0;
+        memory_fault(rt, addr);
+        return 0;
+    }
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }
 
@@ -1313,7 +1341,11 @@ uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr addr)
     if (rt->errno_proxy_addr && addr == rt->errno_proxy_addr)
         return (uint32_t)(int32_t)errno;
     p = (uint8_t *)irix_guest_ptr(rt, addr, 4);
-    if (!p) { memory_fault(rt, addr); return 0; }
+    if (!p) {
+        if (guest_null_page_read(addr)) return 0;
+        memory_fault(rt, addr);
+        return 0;
+    }
     {
         uint32_t value = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                          ((uint32_t)p[2] << 8) | (uint32_t)p[3];

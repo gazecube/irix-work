@@ -1,4 +1,6 @@
+#define _GNU_SOURCE
 #include "IrixLibcBridge.h"
+#include <sys/stat.h>
 
 #include <locale.h>
 #include <fcntl.h>
@@ -466,8 +468,30 @@ static void bridge__getpty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
      * DSO data aliases (__slave0/__slave1).
      */
     fd = open("/dev/ptc", O_RDWR | O_NOCTTY);
-    if (fd < 0)
-        goto fail;
+    if (fd < 0) {
+        /*
+         * No irix_spty module: fall back to the host's standard Unix98 pty.
+         * The controller fd is the guest's master; the slave is the plain
+         * /dev/pts/N node, which the guest opens by the returned name.
+         */
+        char *slave;
+        fd = posix_openpt(O_RDWR | O_NOCTTY);
+        if (fd < 0)
+            goto fail;
+        if (grantpt(fd) < 0 || unlockpt(fd) < 0 ||
+            !(slave = ptsname(fd)))
+            goto fail_close;
+        (void)chmod(slave, mode);
+        result = copy_host_string_to_guest(rt, slave);
+        if (!result)
+            goto fail_close;
+        if (fildes_addr)
+            irix_guest_write32be(rt, fildes_addr, (uint32_t)fd);
+        else
+            close(fd);
+        cpu->gpr[2] = result;
+        return;
+    }
     if (ioctl(fd, IRIX_SPTY_HOST_GET_ID, &id) < 0 ||
         id.side != IRIX_SPTY_SIDE_MASTER || id.index >= 1000u)
         goto fail_close;

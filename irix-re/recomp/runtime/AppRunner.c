@@ -1292,6 +1292,24 @@ int main(int argc, char **argv)
             }
         }
     }
+#ifdef IRIX_DIRECT_MAIN
+    /*
+     * Direct-main bypasses rld, which is what normally runs the executable's
+     * own DT_INIT (C++ static constructors).  Without it, file-scope objects
+     * such as xwsh's wshApp stay zero-filled (its tuXExec is created in that
+     * constructor).  IRIX_SKIP_APP_INIT=1 restores the old behaviour.
+     */
+    if (have_app_elf && app_elf.init_entry && !getenv("IRIX_SKIP_APP_INIT")) {
+        IrixGuestCpu startup_cpu = cpu;
+        if (app_elf.gp_value)
+            cpu.gpr[28] = app_elf.gp_value;
+        if (irix_guest_call(&rt, &cpu, app_elf.init_entry) != 0) {
+            report_trap_context(&rt, &cpu);
+            return 2;
+        }
+        cpu = startup_cpu;
+    }
+#endif
     entry = find_named(&rt, "main");
     if (have_app_elf)
         cpu.gpr[28] = app_elf.gp_value;
