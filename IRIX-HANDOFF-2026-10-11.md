@@ -103,3 +103,28 @@ Launcher: `DISPLAY=:1 build-irix-re/recomp/quick/irix-session`.
   `/usr/bin` (thousands of entries, per-file type lookups through FAM); a
   full session restart clears it. Not a crash.
 - XDG `.desktop` host apps would be launched by reference; untested.
+
+## Update 3: fm instability = heap corruption (stack-scan added)
+- `report_trap_context` in AppRunner.c now prints a heuristic **stack-scan**
+  (return-address candidates resolved to function+offset) on every trap.
+  Needs the runner relinked to take effect (done for fm).
+- Standalone `fm <dir>` hands its window to the session's single desktop fm
+  (`fm -b`) and exits status 0, so crashes show up in the *session* log.
+- Reproduction: session up, `fm /`, double-click `usr` (or `/usr/bin`).
+  Trap: `XtWindowOfObject` with a0=`0x5f2b7573` = ASCII `_+us`.
+  Chain: `FmApp::runFm -> FmWindow::FmWindow (+0x2d4/0x2ec) ->
+  VkWindow::addMenuPane (+0x94) -> VkWindow::setMenuBar (+0x3c) ->
+  XtIsRealized -> XtWindowOfObject`.
+  A widget pointer in the freshly built menu bar was overwritten by the
+  TypeCache file name (`/usr/bin` -> `_+usr_+bin`), i.e. **heap corruption by
+  path mangling**. The earlier NULL `_menuBar` in `ImdIconFinder::
+  adoptCompletion` and NULL widget in `XtAddCallback` are the same family.
+- Mangler: `convertSlashToUnderscorePlus(ImdString const&, char*)` in
+  libimdUtil (0x0983f4e0): writes into a caller 1 KB buffer, bounds-checked
+  at 0x400. Its caller at 0x0983f6a8 does `malloc(0x400)` + memset + strcpy/
+  strcat. The code itself looks bounded, so suspect the buffer overlapping a
+  live object (guest allocator in IrixLibcBridge.c: first-fit with whole-block
+  reuse, realloc/free) or a use-after-free. Not yet proven.
+- Next step: deterministic repro + a write watch on the corrupted word (the
+  object at 0x300cbed0 in the failing run) to catch the writer's PC, or add an
+  allocator debug mode (poison on free, canaries, overlap check on alloc).

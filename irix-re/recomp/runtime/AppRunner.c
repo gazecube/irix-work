@@ -539,6 +539,43 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 (uint32_t)cpu->gpr[22], (uint32_t)cpu->gpr[23],
                 (uint32_t)cpu->gpr[28]);
     }
+    /*
+     * Heuristic backtrace: scan the live guest stack for words that are
+     * return addresses into a recovered function (code is 4-byte aligned
+     * and falls inside [address, address+size)).  Frames are not walked
+     * precisely, so entries can be stale locals, but the chain of callers
+     * is usually obvious.
+     */
+    {
+        IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
+        unsigned shown = 0, words;
+        fprintf(stderr, "  stack-scan (return-address candidates):\n");
+        for (words = 0; words < 0x400u && shown < 16u; ++words) {
+            IrixGuestAddr at = sp + words * 4u;
+            IrixGuestAddr val;
+            IrixGuestFunctionEntry *best = 0;
+            size_t k;
+            if (!irix_guest_ptr(rt, at, 4u))
+                break;
+            val = irix_guest_read32be(rt, at);
+            if ((val & 3u) || val < 0x01000000u || val >= 0x7f000000u)
+                continue;
+            for (k = 0; k < rt->function_count; ++k) {
+                IrixGuestFunctionEntry *e = &rt->functions[k];
+                if (e->address <= val &&
+                    (e->size ? val < e->address + e->size
+                             : val - e->address < 0x1000u) &&
+                    (!best || e->address > best->address))
+                    best = e;
+            }
+            if (!best)
+                continue;
+            fprintf(stderr, "    [sp+0x%03x] %08x %s+0x%x\n", words * 4u, val,
+                    best->name ? best->name : "?",
+                    (unsigned)(val - best->address));
+            ++shown;
+        }
+    }
     report_guest_words(rt, "v0", (IrixGuestAddr)(uint32_t)cpu->gpr[2]);
     report_guest_words(rt, "a0", (IrixGuestAddr)(uint32_t)cpu->gpr[4]);
     report_guest_words(rt, "a1", (IrixGuestAddr)(uint32_t)cpu->gpr[5]);
