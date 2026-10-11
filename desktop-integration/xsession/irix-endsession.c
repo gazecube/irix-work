@@ -16,11 +16,39 @@
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+/* Append one line to $XDG_CACHE_HOME/irix-endsession.log (or ~/.cache).
+ * Log Out runs from Toolchest with no terminal, so this is the only way to
+ * see why it did or did not end the session. */
+static void logf_(const char *fmt, ...)
+{
+    char path[4096];
+    const char *cache = getenv("XDG_CACHE_HOME"), *home = getenv("HOME");
+    FILE *f;
+    va_list ap;
+    if (cache && *cache)
+        snprintf(path, sizeof(path), "%s/irix-endsession.log", cache);
+    else if (home && *home)
+        snprintf(path, sizeof(path), "%s/.cache/irix-endsession.log", home);
+    else
+        return;
+    f = fopen(path, "a");
+    if (!f)
+        return;
+    fprintf(f, "%ld pid=%ld ", (long)time(NULL), (long)getpid());
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('\n', f);
+    fclose(f);
+}
 
 /* Run argv; if capture is non-NULL read up to cap-1 bytes of the given
  * output stream (1 = stdout, 2 = stderr) into it.  Returns the exit status,
@@ -86,6 +114,7 @@ static int confirm(const char *display, const char *root)
     snprintf(xconfirm, sizeof(xconfirm), "%s/usr/bin/X11/xconfirm", root);
     reply[0] = '\0';
     rc = run(a1, reply, sizeof(reply), 2);
+    logf_("xconfirm rc=%d reply=[%.120s]", rc, reply);
     if (rc >= 0 && rc != 126 && rc != 127 && rc != 255) {
         /* xconfirm ran and the user answered (or dismissed it: empty reply,
          * which is "no").  Never ask a second question. */
@@ -124,11 +153,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "irix-endsession: DISPLAY and IRIX_RECOMP_ROOT required\n");
         return 2;
     }
-    if (!force && !confirm(display, root))
+    /* Guest processes see the display as "unix/:0" (the transport form the
+     * session launcher selects); the pidfile and X tools want ":0". */
+    if (!strncmp(display, "unix/", 5u))
+        display += 5;
+    logf_("start display=%s root=%s xdg_runtime=%s force=%d", display, root,
+          rt ? rt : "(unset)", force);
+    if (!force && !confirm(display, root)) {
+        logf_("not confirmed; leaving session running");
         return 1;
+    }
 
     snprintf(tellwm, sizeof(tellwm), "%s/usr/bin/X11/tellwm", root);
-    (void)run(tw, NULL, 0, 1);
+    logf_("tellwm end_session rc=%d", run(tw, NULL, 0, 1));
     sleep(1);
 
     for (i = 0; display[i] && j + 1 < sizeof(tag); ++i)
@@ -137,6 +174,7 @@ int main(int argc, char **argv)
     snprintf(pidfile, sizeof(pidfile), "%s/irix-session-%s.pid",
              rt && *rt ? rt : "/tmp", tag);
     f = fopen(pidfile, "r");
+    logf_("pidfile %s %s", pidfile, f ? "found" : "MISSING");
     if (!f) {
         fprintf(stderr, "irix-endsession: no session pidfile %s\n", pidfile);
         return 3;
@@ -148,9 +186,24 @@ int main(int argc, char **argv)
     fclose(f);
     pid = strtol(buf, NULL, 10);
     if (pid <= 1 || kill((pid_t)pid, SIGUSR1) < 0) {
+        logf_("cannot signal session pid %ld: %s", pid, strerror(errno));
         fprintf(stderr, "irix-endsession: cannot signal session %ld: %s\n",
                 pid, strerror(errno));
         return 3;
+    }
+    logf_("sent SIGUSR1 to session pid %ld", pid);
+    /* The script exits from its USR1 trap; if it is somehow still there
+     * after a few seconds, ask harder. */
+    for (i = 0; i < 30; ++i) {
+        if (kill((pid_t)pid, 0) < 0)
+            break;
+        usleep(100000);
+    }
+    if (kill((pid_t)pid, 0) == 0) {
+        logf_("session pid %ld still alive after SIGUSR1; sending SIGTERM", pid);
+        kill((pid_t)pid, SIGTERM);
+    } else {
+        logf_("session pid %ld is gone", pid);
     }
     return 0;
 }
