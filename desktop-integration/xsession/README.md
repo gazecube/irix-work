@@ -15,19 +15,38 @@ Note: `../dtlogin/irix-session.desktop` is the CDE dtlogin-import template. It
 runs `dtlogin-desktop-session` against itself, so it must not be used as a
 display-manager session entry (it re-executes itself forever).
 
-## Log Out
+## Toolchest menu commands, Log Out and host apps
 
-The stock Toolchest entry runs the guest `endsession` shell script through the
-generic runner, which starts the wrong program and depends on the guest shell.
-The session launcher now provides `irix-session --end [-f]` instead: confirm
-(IRIX `xconfirm`, falling back to `xmessage`), `tellwm end_session`, then
-SIGUSR1 to the running session script (via
-`$XDG_RUNTIME_DIR/irix-session-<display>.pid`), which stops 4Dwm, Toolchest
-and fm so the X session ends.
+Toolchest runs every `f.checkexec`/`f.exec` command as
+`/usr/lib/desktop/waitmap /bin/sh -c "<command>"`. Two problems followed:
 
-The runtime tree's `usr/lib/X11/system.chestrc` has to call it (this file is
-in the untracked IRIX-TREE, so it is a local edit):
+* the original `waitmap` traps under the guest runner before it runs the
+  command, so **no** menu command ever started; and
+* the guest process passes an empty environment.
 
-    "Log Out"  f.checkexec.sh "$IRIX_SESSION_SCRIPT --end"
+`waitmap-passthrough.c` replaces it with a helper that imports the parent's
+environment from `/proc/<ppid>/environ` and execs its arguments. It and the
+native Log Out (`irix-endsession.c`: IRIX `xconfirm`, falling back to
+`xmessage`, then `tellwm end_session` and SIGUSR1 to the session script via
+`$XDG_RUNTIME_DIR/irix-session-<display>.pid`) are built by the normal CMake
+build into the runtime root (`usr/lib/desktop/waitmap`,
+`usr/bin/X11/irix-endsession`).
 
-`IRIX_SESSION_SCRIPT` is exported by the launcher.
+Local, untracked edits this relies on:
+
+* `IRIX-TREE/usr/lib/X11/system.chestrc`:
+  `"Log Out"  f.checkexec.sh "$IRIX_RECOMP_ROOT/usr/bin/X11/irix-endsession"`
+* `~/.auxchestrc` for host apps. Use **`f.exec.sh`**, not `f.checkexec`:
+  checkexec only runs a command it can find in the guest tree, and host
+  programs are not there:
+
+      Menu HostApps
+      {
+          "Alacritty"  f.exec.sh "alacritty"
+          "Firefox"    f.exec.sh "firefox"
+      }
+      Menu ToolChest
+      {
+          no-label     f.separator
+          "Host Apps"  f.menu HostApps
+      }

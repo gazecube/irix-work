@@ -730,3 +730,27 @@ if(IRIX_DEV_TREE)
         endif()
     endif()
 endif()
+
+# Session helpers (desktop-integration/xsession), staged into the runtime
+# root at their original IRIX paths so Toolchest menu commands can find them:
+#  - waitmap: Toolchest runs every checkexec command as
+#    "/usr/lib/desktop/waitmap /bin/sh -c <cmd>"; the original traps under the
+#    guest runner, so this pass-through simply runs its arguments.
+#  - irix-endsession: native Log Out (Toolchest runs commands through the
+#    guest shell, so it cannot be a host shell script).
+if(DEFINED IRIX_RECOMP_ROOT)
+    set(_IRIX_XSESSION_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../desktop-integration/xsession")
+    if(EXISTS "${_IRIX_XSESSION_DIR}/waitmap-passthrough.c")
+        add_executable(irix_waitmap_passthrough
+            "${_IRIX_XSESSION_DIR}/waitmap-passthrough.c")
+        set_target_properties(irix_waitmap_passthrough PROPERTIES
+            OUTPUT_NAME waitmap
+            RUNTIME_OUTPUT_DIRECTORY "${IRIX_RECOMP_ROOT}/usr/lib/desktop")
+        add_executable(irix_endsession
+            "${_IRIX_XSESSION_DIR}/irix-endsession.c")
+        set_target_properties(irix_endsession PROPERTIES
+            OUTPUT_NAME irix-endsession
+            RUNTIME_OUTPUT_DIRECTORY "${IRIX_RECOMP_ROOT}/usr/bin/X11")
+    endif()
+endif()
