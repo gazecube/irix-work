@@ -59,3 +59,23 @@ Launcher: `DISPLAY=:1 build-irix-re/recomp/quick/irix-session`.
 - Resource problems: break on host `XrmParseCommand`/`XrmCombineDatabase`/
   `XrmSetDatabase`; `XrmPutFileDatabase(db, "/tmp/x")` dumps a database.
 - Never `pkill -f <pattern>` with the pattern in your own command line.
+
+## Update (after reboot)
+- Runners `xwsh`, `desktop`, `fmprefs`, `iconcatalog` are rebuilt and current.
+  Gotcha: a reboot mid-build left **zero-byte `.o` files** in
+  `build-irix-re/recomp/generated-*/obj` and the incremental builder kept
+  reusing them (link failed with undefined `irix_app_guest_components`).
+  Fix: delete zero-size objects and the bundle `.a`, then rebuild
+  (`find build-irix-re/recomp -path '*/generated-*/obj/*.o' -size 0`).
+- **Icon Catalog now starts** and shows its "Applications" tab, but the page
+  is empty ("0 file(s) shown"). Page entries are not picked up from symlinks
+  (tried relative and absolute targets) in
+  `IRIX-TREE/usr/lib/desktop/iconcatalog/pages/C/Applications/`. The real
+  page format is unknown; `iconcatalogedit -add` hangs under the generic
+  runner. The user-side counterpart is
+  `~/.desktop-<host>/iconcatalog/pages/<page>/` (a directory).
+  Needs real IRIX page data or more digging (`iconbooktocatalog`).
+- **xwsh (terminal) crashes at startup**: trap in `tuGadget::open`
+  (0x10030ebc, `this+0x18` NULL) called from `tuTopLevel::open`, right after
+  `tuTopLevel::setInitialSize width=0 height=0` from `wshTopLevel::setHints`.
+  Not yet investigated.
