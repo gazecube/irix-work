@@ -54,13 +54,51 @@ guest_exec()
     "$runner" "$@"
 }
 
+# "irix-session --end [-f]" is what the Toolchest Log Out entry runs.  The
+# stock entry executes the guest endsession shell script through the generic
+# runner, which depends on the guest /bin/sh and on xconfirm (SGI tu toolkit).
+# Do the equivalent natively: confirm, ask 4Dwm to end the session, then tell
+# the running session script (pidfile + SIGUSR1) to shut everything down.
+pidfile="${XDG_RUNTIME_DIR:-/tmp}/irix-session-$(printf '%s' "$display" | tr -c 'A-Za-z0-9' _).pid"
+if [ "${1:-}" = "--end" ]; then
+    if [ "${2:-}" != "-f" ]; then
+        # Prefer the IRIX xconfirm dialog; if it cannot run fall back to a
+        # plain Xlib dialog so a stray click can never end the session.
+        reply=$(guest_exec /usr/bin/X11/xconfirm -display "$display" \
+            -header Confirm -icon question -B No -b Yes \
+            -t "Do you want to log out now?" 2>/dev/null)
+        rc=$?
+        if [ "$rc" -eq 0 ] && [ -n "$reply" ]; then
+            [ "$reply" = "Yes" ] || exit 1
+        elif command -v xmessage >/dev/null 2>&1; then
+            xmessage -display "$display" -center -default No \
+                -buttons No:1,Yes:0 "Do you want to log out now?" || exit 1
+        else
+            echo "IRIX session: no confirmation dialog available; use --end -f" >&2
+            exit 1
+        fi
+    fi
+    guest_exec /usr/bin/X11/tellwm end_session >/dev/null 2>&1
+    sleep 1
+    if [ -r "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+        kill -USR1 "$(cat "$pidfile")"
+    else
+        pkill -u "$(id -u)" -f "$root$wm" 2>/dev/null
+    fi
+    exit 0
+fi
+IRIX_SESSION_SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+export IRIX_SESSION_SCRIPT
+
 cleanup()
 {
     [ -n "${fm_pid:-}" ] && kill "$fm_pid" 2>/dev/null || true
     [ -n "${toolchest_pid:-}" ] && kill "$toolchest_pid" 2>/dev/null || true
     [ -n "${wm_pid:-}" ] && kill "$wm_pid" 2>/dev/null || true
 }
-trap cleanup INT TERM EXIT
+echo $$ > "$pidfile"
+trap 'rm -f "$pidfile"; cleanup' EXIT
+trap 'exit 0' INT TERM USR1
 
 echo "IRIX session: preparing icon visuals"
 guest_exec "$makeicons" || {
