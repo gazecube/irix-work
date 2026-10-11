@@ -1947,6 +1947,40 @@ static char **irix_exec_environment(char *const base[], const char *guest_path)
     return out;
 }
 
+/* The guest environment is often empty (Toolchest children, for instance),
+ * which leaves native runners without a display.  Fill in the host variables
+ * a desktop program cannot work without; anything the guest set wins. */
+static char **irix_merge_host_env(char *const base[])
+{
+    static const char *const keep[] = {
+        "DISPLAY", "XAUTHORITY", "HOME", "USER", "LOGNAME", "LANG",
+        "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", 0
+    };
+    size_t count = 0, used = 0, k;
+    char **out;
+    if (base) while (base[count]) ++count;
+    out = (char **)calloc(count + (sizeof(keep) / sizeof(keep[0])) + 1u,
+                          sizeof(*out));
+    if (!out) return 0;
+    for (; used < count; ++used) {
+        out[used] = strdup(base[used]);
+        if (!out[used]) { irix_free_host_vector(out); return 0; }
+    }
+    for (k = 0; keep[k]; ++k) {
+        size_t n = strlen(keep[k]), i;
+        const char *v = getenv(keep[k]);
+        int have = 0;
+        if (!v) continue;
+        for (i = 0; i < count; ++i)
+            if (!strncmp(base[i], keep[k], n) && base[i][n] == '=') have = 1;
+        if (have) continue;
+        out[used] = (char *)malloc(n + strlen(v) + 2u);
+        if (!out[used]) { irix_free_host_vector(out); return 0; }
+        sprintf(out[used++], "%s=%s", keep[k], v);
+    }
+    return out;
+}
+
 /* Shared process replacement for syscall and libc entry points. */
 int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
                        char *const argv[], char *const envp[])
@@ -1954,7 +1988,7 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
     char host_path[PATH_MAX], native_path[PATH_MAX];
     char interpreter[512] = "", script_arg[512] = "";
     const char *path, *native_root = getenv("IRIX_RECOMP_ROOT");
-    char **child_argv = 0, **child_env = 0;
+    char **child_argv = 0, **child_env = 0, **merged_env = 0;
     size_t argc = 0, i, j;
     int kind, saved_errno;
     if (!guest_path || !argv) { errno = EFAULT; return -1; }
@@ -1990,14 +2024,18 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
             child_argv[i++] = (char *)guest_path;
             for (j = 1u; j < argc; ++j) child_argv[i++] = argv[j];
         }
-        child_env = irix_exec_environment(envp ? envp : environ, image);
+        merged_env = irix_merge_host_env(envp ? envp : environ);
+        child_env = irix_exec_environment(merged_env ? merged_env :
+                                          (envp ? envp : environ), image);
         if (child_env)
             execve(runner, child_argv ? child_argv : argv, child_env);
     } else {
-        execve(path, argv, envp ? envp : environ);
+        merged_env = irix_merge_host_env(envp ? envp : environ);
+        execve(path, argv, merged_env ? merged_env : (envp ? envp : environ));
     }
     saved_errno = errno;
     irix_free_host_vector(child_env);
+    irix_free_host_vector(merged_env);
     free(child_argv);
     errno = saved_errno;
     return -1;

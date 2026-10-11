@@ -234,6 +234,24 @@
       "prefix": "iconcatalogedit",
       "kind": "runtime",
       "path": "usr/sbin/iconcatalogedit"
+    },
+    {
+      "name": "windows",
+      "prefix": "windows",
+      "kind": "runtime",
+      "path": "usr/sbin/windows",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        }
+      ]
     }
   ],
   "shared_components": [
