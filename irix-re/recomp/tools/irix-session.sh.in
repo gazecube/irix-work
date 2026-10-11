@@ -80,8 +80,15 @@ echo "IRIX session: starting 4Dwm on $DISPLAY"
 # SG_UseBackgrounds makes 4Dwm run bgInit, which publishes the
 # _SGI_DESKS_BACKGROUND_DAEMON_WINDOW<root> selection used by the
 # Background panel and xsetroot.
+# The stock IRIX app-defaults ship *freezeOnConfig: false, which makes 4Dwm
+# draw move/resize outlines with FlashOutline (draw, sync, erase, sync in a
+# loop), so the outline blinks.  True grabs the server and uses the steady
+# DrawOutline instead.  Set IRIX_4DWM_FREEZE_ON_CONFIG=false for the original
+# blinking behaviour.
+freeze_on_config="${IRIX_4DWM_FREEZE_ON_CONFIG:-true}"
 IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch \
-    -xrm '*SG_UseBackgrounds: True' &
+    -xrm '*SG_UseBackgrounds: True' \
+    -xrm "*freezeOnConfig: $freeze_on_config" &
 wm_pid=$!
 
 echo "IRIX session: waiting for 4Dwm"
