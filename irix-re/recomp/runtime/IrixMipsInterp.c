@@ -8,6 +8,7 @@ extern int irix_guest_repair_xm_vendor_ext_parent(IrixGuestRuntime *rt,
                                                    IrixGuestAddr pc);
 
 #include <errno.h>
+#include <fenv.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,6 +162,75 @@ static int irix_xt_null_output_store(IrixGuestCpu *cpu,
 
     (void)0;
     return 1;
+}
+
+
+/* Apply the FCSR rounding mode (RM, bits 1:0) to host FP arithmetic: libc's
+ * float formatting depends on RZ/RM/RP actually changing add/sub/mul/div. */
+static void irix_apply_fp_rounding(uint32_t fcr31)
+{
+    static int current = -1;
+    int want;
+    switch (fcr31 & 3u) {
+    case 1:  want = FE_TOWARDZERO; break;
+    case 2:  want = FE_UPWARD; break;
+    case 3:  want = FE_DOWNWARD; break;
+    default: want = FE_TONEAREST; break;
+    }
+    if (want != current) {
+        fesetround(want);
+        current = want;
+    }
+}
+
+static volatile float  irix_fp_vs[2];
+static volatile double irix_fp_vd[2];
+
+static float irix_fp_s_op(int op, float a, float b)
+{
+    irix_fp_vs[0] = a; irix_fp_vs[1] = b;
+    switch (op) {
+    case 0: return irix_fp_vs[0] + irix_fp_vs[1];
+    case 1: return irix_fp_vs[0] - irix_fp_vs[1];
+    case 2: return irix_fp_vs[0] * irix_fp_vs[1];
+    default: return irix_fp_vs[0] / irix_fp_vs[1];
+    }
+}
+
+static double irix_fp_d_op(int op, double a, double b)
+{
+    irix_fp_vd[0] = a; irix_fp_vd[1] = b;
+    switch (op) {
+    case 0: return irix_fp_vd[0] + irix_fp_vd[1];
+    case 1: return irix_fp_vd[0] - irix_fp_vd[1];
+    case 2: return irix_fp_vd[0] * irix_fp_vd[1];
+    default: return irix_fp_vd[0] / irix_fp_vd[1];
+    }
+}
+
+
+/* FP -> integer conversion with MIPS semantics.  mode: 0 nearest-even,
+ * 1 toward zero, 2 toward +inf, 3 toward -inf.  NaN, infinity and
+ * out-of-range values give the IEEE invalid result (2^31-1 / 2^63-1). */
+static uint64_t irix_fp_to_int(double x, unsigned mode, int bits64)
+{
+    double r;
+    if (x != x)
+        return bits64 ? UINT64_C(0x7fffffffffffffff) : 0x7fffffffu;
+    switch (mode & 3u) {
+    case 1:  r = trunc(x); break;
+    case 2:  r = ceil(x); break;
+    case 3:  r = floor(x); break;
+    default: r = nearbyint(x); break;
+    }
+    if (bits64) {
+        if (r >= 9223372036854775808.0 || r < -9223372036854775808.0)
+            return UINT64_C(0x7fffffffffffffff);
+        return (uint64_t)(int64_t)r;
+    }
+    if (r >= 2147483648.0 || r < -2147483648.0)
+        return 0x7fffffffu;
+    return (uint64_t)(uint32_t)(int32_t)r;
 }
 
 static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
@@ -956,16 +1026,24 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 sf = irix_guest_fpr_get_s(cpu, fs);
                 tf = irix_guest_fpr_get_s(cpu, ft);
                 switch (funct) {
-                case 0x00: irix_guest_fpr_set_s(cpu, fd, sf + tf); break;
-                case 0x01: irix_guest_fpr_set_s(cpu, fd, sf - tf); break;
-                case 0x02: irix_guest_fpr_set_s(cpu, fd, sf * tf); break;
-                case 0x03: irix_guest_fpr_set_s(cpu, fd, sf / tf); break;
+                case 0x00: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_s(cpu, fd, irix_fp_s_op(0, sf, tf)); break;
+                case 0x01: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_s(cpu, fd, irix_fp_s_op(1, sf, tf)); break;
+                case 0x02: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_s(cpu, fd, irix_fp_s_op(2, sf, tf)); break;
+                case 0x03: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_s(cpu, fd, irix_fp_s_op(3, sf, tf)); break;
                 case 0x04: irix_guest_fpr_set_s(cpu, fd, sqrtf(sf)); break;
                 case 0x05: irix_guest_fpr_set_s(cpu, fd, fabsf(sf)); break;
                 case 0x06: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)cpu->fpr[fs]; break;
                 case 0x07: irix_guest_fpr_set_s(cpu, fd, -sf); break;
-                case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sf; break;
-                case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc((double)sf); break; /* TRUNC.L.S */
+                case 0x08: cpu->fpr[fd] = irix_fp_to_int((double)sf, 0, 1); break; /* ROUND.L.S */
+                case 0x09: cpu->fpr[fd] = irix_fp_to_int((double)sf, 1, 1); break; /* TRUNC.L.S */
+                case 0x0a: cpu->fpr[fd] = irix_fp_to_int((double)sf, 2, 1); break; /* CEIL.L.S */
+                case 0x0b: cpu->fpr[fd] = irix_fp_to_int((double)sf, 3, 1); break; /* FLOOR.L.S */
+                case 0x0c: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int((double)sf, 0, 0); break; /* ROUND.W.S */
+                case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int((double)sf, 1, 0); break; /* TRUNC.W.S */
+                case 0x0e: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int((double)sf, 2, 0); break; /* CEIL.W.S */
+                case 0x0f: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int((double)sf, 3, 0); break; /* FLOOR.W.S */
+                case 0x24: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int((double)sf, cpu->fcr31 & 3u, 0); break; /* CVT.W.S */
+                case 0x25: cpu->fpr[fd] = irix_fp_to_int((double)sf, cpu->fcr31 & 3u, 1); break; /* CVT.L.S */
                 case 0x21: irix_guest_fpr_set_d(cpu, fd, (double)sf); break;
                 case 0x30: case 0x31: case 0x32: case 0x33:
                 case 0x34: case 0x35: case 0x36: case 0x37:
@@ -988,16 +1066,24 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 sd = irix_guest_fpr_get_d(cpu, fs);
                 td = irix_guest_fpr_get_d(cpu, ft);
                 switch (funct) {
-                case 0x00: irix_guest_fpr_set_d(cpu, fd, sd + td); break;
-                case 0x01: irix_guest_fpr_set_d(cpu, fd, sd - td); break;
-                case 0x02: irix_guest_fpr_set_d(cpu, fd, sd * td); break;
-                case 0x03: irix_guest_fpr_set_d(cpu, fd, sd / td); break;
+                case 0x00: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_d(cpu, fd, irix_fp_d_op(0, sd, td)); break;
+                case 0x01: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_d(cpu, fd, irix_fp_d_op(1, sd, td)); break;
+                case 0x02: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_d(cpu, fd, irix_fp_d_op(2, sd, td)); break;
+                case 0x03: irix_apply_fp_rounding(cpu->fcr31); irix_guest_fpr_set_d(cpu, fd, irix_fp_d_op(3, sd, td)); break;
                 case 0x04: irix_guest_fpr_set_d(cpu, fd, sqrt(sd)); break;
                 case 0x05: irix_guest_fpr_set_d(cpu, fd, fabs(sd)); break;
                 case 0x06: cpu->fpr[fd]=cpu->fpr[fs]; break;
                 case 0x07: irix_guest_fpr_set_d(cpu, fd, -sd); break;
-                case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sd; break;
-                case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc(sd); break; /* TRUNC.L.D */
+                case 0x08: cpu->fpr[fd] = irix_fp_to_int(sd, 0, 1); break; /* ROUND.L.D */
+                case 0x09: cpu->fpr[fd] = irix_fp_to_int(sd, 1, 1); break; /* TRUNC.L.D */
+                case 0x0a: cpu->fpr[fd] = irix_fp_to_int(sd, 2, 1); break; /* CEIL.L.D */
+                case 0x0b: cpu->fpr[fd] = irix_fp_to_int(sd, 3, 1); break; /* FLOOR.L.D */
+                case 0x0c: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int(sd, 0, 0); break; /* ROUND.W.D */
+                case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int(sd, 1, 0); break; /* TRUNC.W.D */
+                case 0x0e: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int(sd, 2, 0); break; /* CEIL.W.D */
+                case 0x0f: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int(sd, 3, 0); break; /* FLOOR.W.D */
+                case 0x24: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)irix_fp_to_int(sd, cpu->fcr31 & 3u, 0); break; /* CVT.W.D */
+                case 0x25: cpu->fpr[fd] = irix_fp_to_int(sd, cpu->fcr31 & 3u, 1); break; /* CVT.L.D */
                 case 0x20: irix_guest_fpr_set_s(cpu, fd, (float)sd); break;
                 case 0x30: case 0x31: case 0x32: case 0x33:
                 case 0x34: case 0x35: case 0x36: case 0x37:
@@ -1194,7 +1280,7 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         target = pc + 4u +
                  ((int32_t)(int16_t)(insn & 0xffffu) << 2);
     } else if (op == 0x01u) {
-        int32_t v = (int32_t)(uint32_t)cpu->gpr[rs];
+        int64_t v = (int64_t)cpu->gpr[rs];   /* full 64-bit sign */
         switch (rtno) {
         case 0x00: taken = v < 0; break;
         case 0x01: taken = v >= 0; break;
@@ -1789,7 +1875,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             taken = ((cpu->fcr31 & (1u << 23)) != 0) == tf;
             target = pc + 4u + ((int32_t)(int16_t)(insn & 0xffffu) << 2);
         } else if (op == 0x01u) {
-            int32_t v = (int32_t)(uint32_t)cpu->gpr[rs];
+            int64_t v = (int64_t)cpu->gpr[rs];   /* full 64-bit sign */
             switch (rtno) {
             case 0x00: taken = v < 0; break;
             case 0x01: taken = v >= 0; break;
