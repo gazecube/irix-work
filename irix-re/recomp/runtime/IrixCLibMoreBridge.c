@@ -435,10 +435,228 @@ static void b_setreuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void b_setregid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { (void)rt; RET(setregid((gid_t)ARG(0), (gid_t)ARG(1))); }
 
+/* ---- additional imports needed by the original xdm -------------------- */
+#include <grp.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+
+void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
+                      char *const argv[], char *const envp[]);
+IrixGuestFunction irix_clib_extra_bridge_lookup_base(const char *name);
+
+static void b_sysinfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ irix_compat_systeminfo(rt, cpu); }
+
+static char **guest_vector(IrixGuestRuntime *rt, IrixGuestAddr v)
+{
+    size_t n = 0, i;
+    char **out;
+    if (!v) return 0;
+    while (n < 4096u && irix_guest_read32be(rt, v + 4u * (uint32_t)n)) ++n;
+    out = (char **)calloc(n + 1u, sizeof(*out));
+    if (!out) return 0;
+    for (i = 0; i < n; ++i)
+        out[i] = (char *)gcs(rt, irix_guest_read32be(rt, v + 4u * (uint32_t)i));
+    return out;
+}
+
+static void b_execve(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = gcs(rt, ARG(0));
+    char **argv = guest_vector(rt, ARG(1));
+    char **envp = guest_vector(rt, ARG(2));
+    int e;
+    if (!path || !argv) { free(argv); free(envp); FAIL(EFAULT); return; }
+    irix_guest_execve(rt, path, argv, envp);
+    e = errno;
+    free(argv);
+    free(envp);
+    FAIL(e ? e : ENOEXEC);
+}
+
+static void b_execv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *path = gcs(rt, ARG(0));
+    char **argv = guest_vector(rt, ARG(1));
+    int e;
+    if (!path || !argv) { free(argv); FAIL(EFAULT); return; }
+    irix_guest_execve(rt, path, argv, NULL);
+    e = errno;
+    free(argv);
+    FAIL(e ? e : ENOEXEC);
+}
+
+/* N32 struct group: gr_name, gr_passwd, gr_gid, gr_mem (char **) */
+static IrixGuestAddr put_group(IrixGuestRuntime *rt, const struct group *g)
+{
+    IrixGuestAddr rec, mem;
+    uint32_t n = 0, i;
+    if (!g) return 0;
+    while (g->gr_mem && g->gr_mem[n]) ++n;
+    rec = guest_alloc(rt, 16u);
+    mem = guest_alloc(rt, 4u * (n + 1u));
+    if (!rec || !mem) return 0;
+    for (i = 0; i < n; ++i)
+        irix_guest_write32be(rt, mem + 4u * i, guest_str(rt, g->gr_mem[i]));
+    irix_guest_write32be(rt, mem + 4u * n, 0);
+    irix_guest_write32be(rt, rec + 0u, guest_str(rt, g->gr_name ? g->gr_name : ""));
+    irix_guest_write32be(rt, rec + 4u, guest_str(rt, g->gr_passwd ? g->gr_passwd : ""));
+    irix_guest_write32be(rt, rec + 8u, (uint32_t)g->gr_gid);
+    irix_guest_write32be(rt, rec + 12u, mem);
+    return rec;
+}
+
+static void b_getgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ cpu->gpr[2] = put_group(rt, getgrent()); }
+static void b_setgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; setgrent(); RET(0); }
+static void b_endgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; endgrent(); RET(0); }
+
+static void b_killpg(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; RET(killpg((pid_t)(int32_t)ARG(0), (int)ARG(1))); }
+static void b_setpgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; RET(setpgid((pid_t)(int32_t)ARG(0), (pid_t)(int32_t)ARG(1))); }
+
+static void b_wait3(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    int st = 0;
+    pid_t r = wait3(&st, (int)ARG(1), 0);
+    if (r > 0 && ARG(0)) irix_guest_write32be(rt, ARG(0), (uint32_t)st);
+    RET(r);
+}
+
+static void b_sigsetmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{   /* BSD signal numbers 1..31 are bit (sig-1) on both systems */
+    sigset_t nw, old;
+    uint32_t m = ARG(0);
+    int i;
+    (void)rt;
+    sigemptyset(&nw);
+    for (i = 1; i < 32; ++i) if (m & (1u << (i - 1))) sigaddset(&nw, i);
+    sigprocmask(SIG_SETMASK, &nw, &old);
+    m = 0;
+    for (i = 1; i < 32; ++i) if (sigismember(&old, i) == 1) m |= 1u << (i - 1);
+    RET(m);
+}
+
+static void b_sigsuspend(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    sigset_t mask;
+    (void)rt;
+    sigemptyset(&mask);
+    (void)sigsuspend(&mask);
+    FAIL(EINTR);
+}
+
+static void b_vprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestFunction f = irix_clib_extra_bridge_lookup_base("vsprintf");
+    IrixGuestAddr buf = guest_alloc(rt, 4096u);
+    IrixGuestCpu c = *cpu;
+    const char *m;
+    if (!f || !buf) { RET(-1); return; }
+    c.gpr[4] = buf; c.gpr[5] = cpu->gpr[4]; c.gpr[6] = cpu->gpr[5];
+    f(rt, &c);
+    m = irix_guest_cstr(rt, buf, 4096u);
+    if (m) (void)!write(1, m, strlen(m));
+    RET(m ? (int)strlen(m) : -1);
+}
+
+static void b_vec_new2(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestFunction f = irix_clib_extra_bridge_lookup_base("__vec_new_eh2");
+    if (f) f(rt, cpu); else cpu->gpr[2] = 0;
+}
+
+static void b_ustat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; FAIL(ENOSYS); }
+
+/* wide-character helpers: wchar_t is a big-endian 32-bit word */
+static void b_wslen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i = 0;
+    while (ARG(0) && irix_guest_read32be(rt, ARG(0) + 4u * i)) ++i;
+    RET(i);
+}
+static void b_wscpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i = 0, c;
+    do {
+        c = irix_guest_read32be(rt, ARG(1) + 4u * i);
+        irix_guest_write32be(rt, ARG(0) + 4u * i, c);
+        ++i;
+    } while (c);
+    cpu->gpr[2] = ARG(0);
+}
+static void b_wsncpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i, n = ARG(2);
+    int end = 0;
+    for (i = 0; i < n; ++i) {
+        uint32_t c = end ? 0 : irix_guest_read32be(rt, ARG(1) + 4u * i);
+        if (!c) end = 1;
+        irix_guest_write32be(rt, ARG(0) + 4u * i, c);
+    }
+    cpu->gpr[2] = ARG(0);
+}
+
+static void b_sendto(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t len = ARG(2), alen = (uint32_t)cpu->gpr[9];
+    const void *buf = len ? irix_guest_ptr(rt, ARG(1), len) : "";
+    unsigned char sa[128];
+    uint32_t i;
+    if (alen > sizeof(sa)) { FAIL(EINVAL); return; }
+    for (i = 0; i < alen; ++i)
+        sa[i] = irix_guest_read8(rt, (uint32_t)cpu->gpr[8] + i);
+    cpu->gpr[2] = (uint64_t)(int64_t)sendto((int)ARG(0), buf, len, (int)ARG(3),
+                  alen ? (const struct sockaddr *)sa : 0, alen);
+}
+
+static void b_recvfrom(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t len = ARG(2);
+    void *buf = len ? irix_guest_ptr(rt, ARG(1), len) : 0;
+    unsigned char sa[128];
+    socklen_t alen = sizeof(sa);
+    ssize_t r = recvfrom((int)ARG(0), buf, len, (int)ARG(3),
+                         (struct sockaddr *)sa, &alen);
+    if (r >= 0 && (uint32_t)cpu->gpr[8]) {
+        uint32_t i, cap = (uint32_t)cpu->gpr[9] ?
+            irix_guest_read32be(rt, (uint32_t)cpu->gpr[9]) : 0, n = alen < cap ? alen : cap;
+        for (i = 0; i < n; ++i) irix_guest_write8(rt, (uint32_t)cpu->gpr[8] + i, sa[i]);
+        if ((uint32_t)cpu->gpr[9]) irix_guest_write32be(rt, (uint32_t)cpu->gpr[9], alen);
+    }
+    cpu->gpr[2] = (uint64_t)(int64_t)r;
+}
+
 /* ---- table ------------------------------------------------------------- */
 IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
 {
     static const struct { const char *n; IrixGuestFunction f; } t[] = {
+        { "openlog", b_zero }, { "closelog", b_zero },
+        { "sysinfo", b_sysinfo }, { "execve", b_execve }, { "execv", b_execv },
+        { "getgrent", b_getgrent }, { "setgrent", b_setgrent }, { "endgrent", b_endgrent },
+        { "gethostent", b_null }, { "sethostent", b_zero }, { "endhostent", b_zero },
+        { "killpg", b_killpg }, { "setpgid", b_setpgid }, { "wait3", b_wait3 },
+        { "sigsetmask", b_sigsetmask }, { "sigsuspend", b_sigsuspend },
+        { "setgroups", b_zero }, { "vprintf", b_vprintf },
+        { "__vec_new2", b_vec_new2 }, { "ustat", b_ustat },
+        { "wslen", b_wslen }, { "wscpy", b_wscpy }, { "wsncpy", b_wsncpy },
+        { "sendto", b_sendto }, { "recvfrom", b_recvfrom },
+        { "sigsetjmp", b_zero }, { "assert", b_zero },
+        { "getdfltprojuser", b_null }, { "ia_audit", b_zero }, { "newarraysess", b_zero },
+        { "pathfind", b_null }, { "satsetid", b_zero }, { "satvwrite", b_zero },
+        { "setprid", b_zero },
+        { "xdr_array", b_zero }, { "xdr_bool", b_zero }, { "xdr_bytes", b_zero },
+        { "xdr_char", b_zero }, { "xdr_enum", b_zero }, { "xdr_int", b_zero },
+        { "xdr_long", b_zero }, { "xdr_netobj", b_zero }, { "xdr_opaque", b_zero },
+        { "xdr_reference", b_zero }, { "xdr_short", b_zero }, { "xdr_string", b_zero },
+        { "xdr_u_char", b_zero }, { "xdr_u_int", b_zero }, { "xdr_u_long", b_zero },
+        { "xdr_u_short", b_zero }, { "xdr_uint64", b_zero }, { "xdr_union", b_zero },
+        { "xdr_void", b_zero }, { "xdr_wrapstring", b_zero },
         { "cosl", b_cosl }, { "sinl", b_sinl }, { "expl", b_expl }, { "logl", b_logl },
         { "log10l", b_log10l }, { "sinhl", b_sinhl }, { "coshl", b_coshl },
         { "sqrtl", b_sqrtl }, { "atan2l", b_atan2l }, { "hypotl", b_hypotl },
@@ -485,7 +703,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "iconv_open", b_enosys }, { "iconv", b_enosys }, { "iconv_close", b_zero },
         { "regcmp", b_null }, { "regex", b_null },
         { "crypt", b_crypt }, { "tempnam", b_null }, { "nftw64", b_enosys },
-        { "execv", b_enosys }, { "pclose", b_zero },
+        { "pclose", b_zero },
         { "_vfork", b_enosys }, { "l64a", b_null }, { "a64l", b_zero }, { "atold", b_zero },
         /* IRIS GL drawing entry points: no GL device here */
         { "RGBcolor", b_zero }, { "bgnline", b_zero }, { "bgnpolygon", b_zero },
