@@ -547,62 +547,73 @@ static void bridge_sprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
      */
     out = dst;
     for (p = fmt; *p; ++p) {
-        char tmp[64];
-        int n = 0;
-        uint32_t v;
+        char tmp[128], spec[32];
+        int n = 0, si = 0, longs = 0;
+        uint64_t v;
 
         if (*p != '%') {
             *out++ = *p;
             continue;
         }
-        ++p;
-        if (*p == '%') {
+        if (p[1] == '%') {
             *out++ = '%';
+            ++p;
             continue;
         }
-        if (!*p || arg > 11u) {
-            cpu->gpr[2] = (uint64_t)(int64_t)-1;
-            return;
+        spec[si++] = *p++;
+        while (*p && strchr("-+ #0123456789.", *p) && si < 20)
+            spec[si++] = *p++;
+        while (*p && strchr("hlLqzjt", *p)) {
+            if (*p == 'l' || *p == 'q' || *p == 'L') ++longs;
+            ++p;
         }
-
-        v = (uint32_t)cpu->gpr[arg++];
+        if (!*p) break;
+        /* a2-a7 are gpr 6..11; further N32 varargs sit in 8-byte stack slots */
+        if (arg <= 11u)
+            v = cpu->gpr[arg++];
+        else {
+            v = irix_guest_read64be(rt, (uint32_t)cpu->gpr[29] + 8u * (arg - 12u));
+            ++arg;
+        }
         switch (*p) {
         case 'c':
-            *out++ = (char)v;
+            spec[si++] = 'c'; spec[si] = 0;
+            n = snprintf(tmp, sizeof(tmp), spec, (int)(uint32_t)v);
             break;
-        case 'd':
-        case 'i':
-            n = snprintf(tmp, sizeof(tmp), "%d", (int32_t)v);
+        case 'd': case 'i':
+            spec[si++] = 'l'; spec[si++] = 'l'; spec[si++] = 'd'; spec[si] = 0;
+            n = snprintf(tmp, sizeof(tmp), spec,
+                         longs ? (long long)(int64_t)v : (long long)(int32_t)v);
             break;
-        case 'u':
-            n = snprintf(tmp, sizeof(tmp), "%u", v);
-            break;
-        case 'x':
-            n = snprintf(tmp, sizeof(tmp), "%x", v);
-            break;
-        case 'X':
-            n = snprintf(tmp, sizeof(tmp), "%X", v);
-            break;
-        case 'o':
-            n = snprintf(tmp, sizeof(tmp), "%o", v);
+        case 'u': case 'x': case 'X': case 'o':
+            spec[si++] = 'l'; spec[si++] = 'l'; spec[si++] = *p; spec[si] = 0;
+            n = snprintf(tmp, sizeof(tmp), spec,
+                         longs ? (unsigned long long)v
+                               : (unsigned long long)(uint32_t)v);
             break;
         case 'p':
-            n = snprintf(tmp, sizeof(tmp), "0x%x", v);
+            n = snprintf(tmp, sizeof(tmp), "0x%x", (uint32_t)v);
             break;
         case 's': {
-            const char *s = guest_cstr(rt, v);
-            if (!s) s = "(null)";
-            n = (int)strlen(s);
-            memcpy(out, s, (size_t)n);
-            out += n;
-            n = 0;
+            const char *str = guest_cstr(rt, (uint32_t)v);
+            if (!str) str = "(null)";
+            spec[si++] = 's'; spec[si] = 0;
+            n = snprintf(tmp, sizeof(tmp), spec, str);
+            if (n >= (int)sizeof(tmp)) {   /* long string: copy verbatim */
+                n = (int)strlen(str);
+                memcpy(out, str, (size_t)n);
+                out += n;
+                n = 0;
+            }
             break;
         }
         default:
+            *out = '\0';
             cpu->gpr[2] = (uint64_t)(int64_t)-1;
             return;
         }
         if (n > 0) {
+            if (n >= (int)sizeof(tmp)) n = (int)sizeof(tmp) - 1;
             memcpy(out, tmp, (size_t)n);
             out += n;
         }
