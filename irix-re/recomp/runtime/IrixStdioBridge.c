@@ -116,6 +116,11 @@ static IrixGuestAddr alloc_file_handle(IrixGuestRuntime *rt, FILE *host)
     return 0;
 }
 
+IrixGuestAddr irix_stdio_adopt_file(IrixGuestRuntime *rt, FILE *host)
+{
+    return alloc_file_handle(rt, host);
+}
+
 static void free_file_handle(IrixGuestRuntime *rt, IrixGuestAddr addr)
 {
     int i = slot_index(addr);

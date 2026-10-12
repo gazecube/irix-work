@@ -130,6 +130,7 @@ add_library(irix_recomp_libc_bridge STATIC
     runtime/IrixLibcBridge.c
     runtime/IrixPosixBridgeUnit.c
     runtime/IrixCLibExtraBridgeUnit.c
+    runtime/IrixCLibMoreBridge.c
     runtime/IrixCxxBridge.c
     runtime/IrixRuntimeLibcBridge.c
     runtime/IrixFsBridge.c
@@ -140,6 +141,7 @@ target_include_directories(irix_recomp_libc_bridge PUBLIC
 )
 target_link_libraries(irix_recomp_libc_bridge PUBLIC
     irix_recomp_runtime
+    crypt
 )
 set_target_properties(irix_recomp_libc_bridge PROPERTIES
     POSITION_INDEPENDENT_CODE ON

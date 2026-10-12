@@ -59,3 +59,13 @@ mirrors `_NET_WM_NAME` into `WM_NAME` (4Dwm ignores the former). Add to
 `~/.auxchestrc`:
 
     "Claude" f.exec.sh "/path/to/desktop-integration/xsession/irix-claude"
+
+### Hiding Claude's own window buttons
+
+With `IRIX_CLAUDE_HIDE_CSD=1`, `irix-claude` starts Claude Desktop with
+`--remote-debugging-port` (default 9222, `IRIX_CLAUDE_CDP_PORT`) and runs
+`irix-claude-hide-csd`, which hides the in-app close/minimize/maximize
+buttons by label so only the 4Dwm titlebar remains. This only takes effect
+when Claude is *not* already running (a running instance has no debug port).
+`irix-claude-hide-csd --dump` lists the controls it finds without hiding them;
+adjust `WINDOW_CONTROL_RE` if the app's labels differ.

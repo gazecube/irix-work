@@ -852,6 +852,7 @@ int main(int argc, char **argv)
     IrixGuestAddr internal_inits[64];
     IrixGuestAddr internal_gps[64];
     size_t internal_init_count = 0;
+    int internal_first_is_app = 0;
     char **guest_argv = argv;
     size_t guest_argc = (size_t)argc;
     char exec_app_path[PATH_MAX];
@@ -1011,6 +1012,9 @@ int main(int argc, char **argv)
                     return 1;
                 if (info.init_entry && component->kind == 1 &&
                     internal_init_count < 64u) {
+                    if (internal_init_count == 0u &&
+                        strstr(component->path, "libimdApp.so"))
+                        internal_first_is_app = 1;
                     internal_inits[internal_init_count] = info.init_entry;
                     internal_gps[internal_init_count] = info.gp_value;
                     ++internal_init_count;
@@ -1079,6 +1083,21 @@ int main(int argc, char **argv)
      */
 #ifndef IRIX_JIT_ONLY
     irix_register_recompiled_stack_imports(&rt, resolve_native);
+    if (getenv("IRIX_LIST_UNBRIDGED")) {
+        /* Debug: read import names (one per line) from the named file and
+         * print those no native bridge provides. */
+        FILE *lf = fopen(getenv("IRIX_LIST_UNBRIDGED"), "r");
+        char line[256];
+        while (lf && fgets(line, sizeof(line), lf)) {
+            size_t n = strlen(line);
+            while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+                line[--n] = 0;
+            if (n && !resolve_native(line))
+                printf("UNBRIDGED %s\n", line);
+        }
+        if (lf) fclose(lf);
+        return 0;
+    }
     register_irix_bridge_imports(&rt, resolve_native);
 #ifdef IRIX_DIRECT_MAIN
     register_irix_prebound_imports(&rt, irix_libc_bridge_data_lookup, 1);
@@ -1267,7 +1286,7 @@ int main(int argc, char **argv)
         {
             size_t i;
             /* The manifest lists internal utility dependencies before clients. */
-            for (i = 1u; i < internal_init_count; ++i) {
+            for (i = internal_first_is_app ? 1u : 0u; i < internal_init_count; ++i) {
                 IrixGuestCpu startup_cpu = cpu;
                 if (internal_gps[i])
                     cpu.gpr[28] = internal_gps[i];
@@ -1278,7 +1297,7 @@ int main(int argc, char **argv)
                 }
                 cpu = startup_cpu;
             }
-            if (internal_init_count > 0u) {
+            if (internal_first_is_app && internal_init_count > 0u) {
                 IrixGuestCpu startup_cpu = cpu;
                 i = 0u; /* libimdApp depends on the other internal libraries. */
                 if (internal_gps[i])

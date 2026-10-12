@@ -565,6 +565,8 @@ static void bridge_guest_oserror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)g_guest_oserror;
 }
 
+IrixGuestFunction irix_clib_more_bridge_lookup(const char *name);
+
 IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
 {
     IrixGuestFunction fn;
@@ -580,5 +582,5 @@ IrixGuestFunction irix_clib_extra_bridge_lookup(const char *name)
     if (fn) return fn;
     if (!strcmp(name, "sscanf")) return bridge_sscanf;
     if (!strcmp(name, "exit")) return bridge_exit;
-    return 0;
+    return irix_clib_more_bridge_lookup(name);
 }

@@ -495,6 +495,27 @@ static void bridge_getpwuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = out;
 }
 
+/* Account enumeration for the graphical login (clogin lists users). */
+static void bridge_setpwent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    setpwent();
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_endpwent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    endpwent();
+    cpu->gpr[2] = 0;
+}
+
+static void bridge_getpwent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    struct passwd *pw = getpwent();
+    cpu->gpr[2] = copy_guest_passwd_n32(rt, pw);
+}
+
 static void bridge_getpwnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *name = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
@@ -1738,6 +1759,9 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "gethostbyname")) return bridge_gethostbyname;
     if (!strcmp(name, "getpwuid")) return bridge_getpwuid;
     if (!strcmp(name, "getpwnam")) return bridge_getpwnam;
+    if (!strcmp(name, "getpwent")) return bridge_getpwent;
+    if (!strcmp(name, "setpwent")) return bridge_setpwent;
+    if (!strcmp(name, "endpwent")) return bridge_endpwent;
     if (!strcmp(name, "getpwuid_r")) return bridge_getpwuid_r;
     if (!strcmp(name, "getpwnam_r")) return bridge_getpwnam_r;
     if (!strcmp(name, "getuid")) return bridge_getuid;

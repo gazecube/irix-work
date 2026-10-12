@@ -129,6 +129,162 @@ static void bridge_XkbLookupKeySym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = ok ? 1u : 0u;
 }
 
+/*
+ * XKB per-client controls.  The guest libX11 copies would run against the
+ * bridged Display (no xkb_info), so forward them to the host connection.
+ */
+static void bridge_XkbSetDetectableAutoRepeat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    Bool detectable = (uint32_t)cpu->gpr[5] ? True : False;
+    IrixGuestAddr out = (uint32_t)cpu->gpr[6];
+    Bool supported = False, ok = False;
+
+    if (d)
+        ok = XkbSetDetectableAutoRepeat(d, detectable, &supported);
+    if (out)
+        wr32(rt, out, supported ? 1u : 0u);
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
+static void bridge_XkbGetDetectableAutoRepeat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr out = (uint32_t)cpu->gpr[5];
+    Bool supported = False;
+
+    if (d)
+        supported = XkbGetDetectableAutoRepeat(d, NULL);
+    if (out)
+        wr32(rt, out, supported ? 1u : 0u);
+    cpu->gpr[2] = supported ? 1u : 0u;
+}
+
+static void bridge_XkbSetPerClientControls(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    unsigned int change = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr io = (uint32_t)cpu->gpr[6];
+    unsigned int values = io ? (unsigned int)irix_guest_read32be(rt, io) : 0u;
+    Bool ok = False;
+
+    if (d)
+        ok = XkbSetPerClientControls(d, change, &values);
+    if (io)
+        wr32(rt, io, (uint32_t)values);
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
+static void bridge_XkbGetPerClientControls(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr out = (uint32_t)cpu->gpr[5];
+    unsigned int values = 0;
+    Bool ok = False;
+
+    if (d)
+        ok = XkbGetPerClientControls(d, &values);
+    if (out)
+        wr32(rt, out, (uint32_t)values);
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
+/* Host access control (xhost).  N32 XHostAddress: int family, int length,
+ * char *address = 12 bytes.  Forwarded to the host connection because the
+ * guest libX11 copy has no usable request state on the bridged Display. */
+static void bridge_XListHosts(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    IrixGuestAddr n_out = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr state_out = (uint32_t)cpu->gpr[6];
+    int n = 0, i;
+    Bool state = False;
+    XHostAddress *hosts = d ? XListHosts(d, &n, &state) : 0;
+    IrixGuestAddr out = 0;
+
+    wr32(rt, n_out, (uint32_t)n);
+    wr32(rt, state_out, state ? 1u : 0u);
+    if (hosts && n > 0) {
+        uint32_t total = (uint32_t)n * 12u;
+        for (i = 0; i < n; ++i)
+            total += ((uint32_t)hosts[i].length + 3u) & ~3u;
+        out = tmp_alloc(total);
+        if (out) {
+            IrixGuestAddr data = out + (IrixGuestAddr)n * 12u;
+            for (i = 0; i < n; ++i) {
+                int j;
+                wr32(rt, out + (IrixGuestAddr)i * 12u, (uint32_t)hosts[i].family);
+                wr32(rt, out + (IrixGuestAddr)i * 12u + 4u, (uint32_t)hosts[i].length);
+                wr32(rt, out + (IrixGuestAddr)i * 12u + 8u, data);
+                for (j = 0; j < hosts[i].length; ++j)
+                    irix_guest_write8(rt, data + (IrixGuestAddr)j,
+                                      (uint8_t)hosts[i].address[j]);
+                data += ((uint32_t)hosts[i].length + 3u) & ~3u;
+            }
+        }
+    }
+    if (hosts) XFree(hosts);
+    cpu->gpr[2] = out;
+}
+
+static int guest_host_address(IrixGuestRuntime *rt, IrixGuestAddr a,
+                              XHostAddress *h, char *buf, size_t cap)
+{
+    uint32_t len, src;
+    size_t i;
+    if (!a) return 0;
+    h->family = (int)irix_guest_read32be(rt, a);
+    len = irix_guest_read32be(rt, a + 4u);
+    src = irix_guest_read32be(rt, a + 8u);
+    if (len > cap) return 0;
+    for (i = 0; i < len; ++i)
+        buf[i] = (char)irix_guest_read8(rt, src + (IrixGuestAddr)i);
+    h->length = (int)len;
+    h->address = buf;
+    return 1;
+}
+
+static void bridge_XAddHost(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    XHostAddress h;
+    char buf[256];
+    if (d && guest_host_address(rt, (uint32_t)cpu->gpr[5], &h, buf, sizeof(buf)))
+        XAddHost(d, &h);
+    cpu->gpr[2] = 1;
+}
+
+static void bridge_XRemoveHost(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    XHostAddress h;
+    char buf[256];
+    if (d && guest_host_address(rt, (uint32_t)cpu->gpr[5], &h, buf, sizeof(buf)))
+        XRemoveHost(d, &h);
+    cpu->gpr[2] = 1;
+}
+
+static void bridge_XSetAccessControl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    if (d) XSetAccessControl(d, (int)(uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = 1;
+}
+
+static void bridge_XEnableAccessControl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    if (d) XEnableAccessControl(d);
+    cpu->gpr[2] = 1;
+}
+
+static void bridge_XDisableAccessControl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
+    if (d) XDisableAccessControl(d);
+    cpu->gpr[2] = 1;
+}
+
 static void bridge_XQueryBestCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(rt, (uint32_t)cpu->gpr[4]);
@@ -238,6 +394,16 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XkbLookupKeySym")) return bridge_XkbLookupKeySym;
+    if (!strcmp(name, "XListHosts")) return bridge_XListHosts;
+    if (!strcmp(name, "XAddHost")) return bridge_XAddHost;
+    if (!strcmp(name, "XRemoveHost")) return bridge_XRemoveHost;
+    if (!strcmp(name, "XSetAccessControl")) return bridge_XSetAccessControl;
+    if (!strcmp(name, "XEnableAccessControl")) return bridge_XEnableAccessControl;
+    if (!strcmp(name, "XDisableAccessControl")) return bridge_XDisableAccessControl;
+    if (!strcmp(name, "XkbSetDetectableAutoRepeat")) return bridge_XkbSetDetectableAutoRepeat;
+    if (!strcmp(name, "XkbGetDetectableAutoRepeat")) return bridge_XkbGetDetectableAutoRepeat;
+    if (!strcmp(name, "XkbSetPerClientControls")) return bridge_XkbSetPerClientControls;
+    if (!strcmp(name, "XkbGetPerClientControls")) return bridge_XkbGetPerClientControls;
     if (!strcmp(name, "XQueryBestCursor")) return bridge_XQueryBestCursor;
     if (!strcmp(name, "XGetFontProperty")) return bridge_XGetFontProperty;
     if (!strcmp(name, "XKeycodeToKeysym")) return bridge_XKeycodeToKeysym;

@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Hide Claude Desktop's in-app window buttons (close/minimize/maximize).
+
+4Dwm now draws the real titlebar (see irix-claude), so the Electron client-side
+buttons are redundant. This attaches to the app's Chrome DevTools port and
+injects a script that hides any element whose aria-label/title/test-id names a
+window control. It matches on labels rather than class names, so it survives
+the app's CSS churn, and it re-applies for every page/reload via a
+MutationObserver.
+
+Needs Claude Desktop started with --remote-debugging-port=<PORT>; irix-claude
+does that when IRIX_CLAUDE_HIDE_CSD=1.
+
+Usage:
+  irix-claude-hide-csd [--port N] [--dump]
+    --dump   print candidate controls found near the top of each page instead
+             of hiding them (use it to refine WINDOW_CONTROL_RE).
+Environment: IRIX_CLAUDE_CDP_PORT (default 9222).
+Stdlib only.
+"""
+import base64
+import json
+import os
+import socket
+import struct
+import sys
+import time
+import urllib.request
+
+PORT = int(os.environ.get("IRIX_CLAUDE_CDP_PORT", "9222"))
+
+# Words that identify a window control. Matched case-insensitively against
+# aria-label, title, data-testid and id of buttons/role=button elements.
+WINDOW_CONTROL_RE = r"(^|\b)(close|minimi[sz]e|maximi[sz]e|restore)( window)?\b"
+
+HIDE_JS = r"""
+(() => {
+  if (window.__irixHideCsd) return;
+  const re = new RegExp(%(re)s, "i");
+  const dump = %(dump)s;
+  const label = e => [e.getAttribute("aria-label"), e.getAttribute("title"),
+                      e.getAttribute("data-testid"), e.id].filter(Boolean).join(" ");
+  const sweep = () => {
+    const found = [];
+    for (const e of document.querySelectorAll('button,[role="button"]')) {
+      const r = e.getBoundingClientRect();
+      if (r.top > 64 || r.height === 0) continue;       // titlebar band only
+      const l = label(e);
+      if (!l || !re.test(l)) continue;
+      found.push({label: l, x: Math.round(r.left), y: Math.round(r.top),
+                  w: Math.round(r.width), h: Math.round(r.height),
+                  html: e.outerHTML.slice(0, 160)});
+      if (!dump) e.style.setProperty("display", "none", "important");
+    }
+    return found;
+  };
+  window.__irixHideCsd = true;
+  if (dump) return JSON.stringify(sweep(), null, 1);
+  sweep();
+  new MutationObserver(sweep).observe(document.documentElement,
+      {childList: true, subtree: true});
+})()
+"""
+
+
+class WS:
+    """Just enough RFC 6455 for CDP: masked text frames out, text frames in."""
+
+    def __init__(self, url):
+        host, rest = url[len("ws://"):].split("/", 1)
+        h, p = host.split(":")
+        self.s = socket.create_connection((h, int(p)), timeout=10)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.s.sendall(("GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n"
+                        "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+                        "Sec-WebSocket-Version: 13\r\n\r\n" % (rest, host, key)).encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = self.s.recv(4096)
+            if not chunk:
+                raise ConnectionError("websocket handshake failed")
+            buf += chunk
+        if b" 101 " not in buf.split(b"\r\n", 1)[0]:
+            raise ConnectionError("websocket upgrade refused")
+        self.n = 0
+
+    def _read(self, n):
+        out = b""
+        while len(out) < n:
+            c = self.s.recv(n - len(out))
+            if not c:
+                raise ConnectionError("closed")
+            out += c
+        return out
+
+    def send(self, obj):
+        data = json.dumps(obj).encode()
+        mask = os.urandom(4)
+        n = len(data)
+        head = b"\x81"
+        if n < 126:
+            head += bytes([0x80 | n])
+        elif n < 65536:
+            head += bytes([0x80 | 126]) + struct.pack(">H", n)
+        else:
+            head += bytes([0x80 | 127]) + struct.pack(">Q", n)
+        self.s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+    def recv(self):
+        while True:
+            b1, b2 = self._read(2)
+            n = b2 & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._read(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._read(8))[0]
+            payload = self._read(n)
+            if b1 & 0x0F == 1:
+                return json.loads(payload)
+            if b1 & 0x0F == 8:
+                raise ConnectionError("closed")
+
+    def call(self, method, **params):
+        self.n += 1
+        want = self.n
+        self.send({"id": want, "method": method, "params": params})
+        while True:
+            m = self.recv()
+            if m.get("id") == want:
+                return m
+
+    def close(self):
+        self.s.close()
+
+
+def targets():
+    with urllib.request.urlopen("http://127.0.0.1:%d/json" % PORT, timeout=3) as r:
+        return [t for t in json.load(r)
+                if t.get("type") == "page"
+                and t.get("webSocketDebuggerUrl")
+                and not t.get("url", "").startswith("devtools://")]
+
+
+def script(dump):
+    return HIDE_JS % {"re": json.dumps(WINDOW_CONTROL_RE),
+                      "dump": "true" if dump else "false"}
+
+
+def main():
+    global PORT
+    dump = "--dump" in sys.argv
+    if "--port" in sys.argv:
+        PORT = int(sys.argv[sys.argv.index("--port") + 1])
+
+    done = set()          # target ids already injected
+    seen_any = False
+    misses = 0
+    while True:
+        try:
+            ts = targets()
+            misses = 0
+            seen_any = True
+        except OSError:
+            if seen_any:
+                misses += 1
+                if misses > 5:     # app exited
+                    return 0
+            elif misses > 120:     # never came up
+                print("irix-claude-hide-csd: no DevTools port on %d" % PORT,
+                      file=sys.stderr)
+                return 1
+            else:
+                misses += 1
+            time.sleep(1)
+            continue
+
+        for t in ts:
+            if t["id"] in done and not dump:
+                continue
+            try:
+                ws = WS(t["webSocketDebuggerUrl"])
+                js = script(dump)
+                if dump:
+                    r = ws.call("Runtime.evaluate", expression=js, returnByValue=True)
+                    print("%s\n%s" % (t.get("url"),
+                                      r.get("result", {}).get("result", {}).get("value")))
+                else:
+                    ws.call("Page.addScriptToEvaluateOnNewDocument", source=js)
+                    ws.call("Runtime.evaluate", expression=js)
+                    done.add(t["id"])
+                ws.close()
+            except (OSError, ConnectionError, ValueError):
+                pass
+        if dump:
+            return 0
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

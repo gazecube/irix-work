@@ -82,9 +82,20 @@ def main():
         print("irix-claude: %s not found" % BIN, file=sys.stderr)
         return 2
     was_running = claude_running()
-    subprocess.Popen([exe] + sys.argv[1:], stdin=subprocess.DEVNULL,
+    args = sys.argv[1:]
+    hide_csd = os.environ.get("IRIX_CLAUDE_HIDE_CSD") == "1" and not was_running
+    if hide_csd:
+        port = os.environ.get("IRIX_CLAUDE_CDP_PORT", "9222")
+        args = ["--remote-debugging-port=" + port] + args
+    subprocess.Popen([exe] + args, stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
+    if hide_csd:
+        injector = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "irix-claude-hide-csd")
+        subprocess.Popen([sys.executable, injector], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     d = display.Display()
     root = d.screen().root
     deadline = time.time() + (5 if was_running else 60)
