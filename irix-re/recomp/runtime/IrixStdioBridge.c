@@ -592,6 +592,27 @@ long irix_stdio_write_stream(IrixGuestRuntime *rt, IrixGuestAddr handle,
             fd = irix_guest_read8(rt, handle + 13u);
         if (fd <= 1023u) {
             size_t done = 0;
+            /* Bytes the program's inlined putc stored into the FILE's own
+             * buffer come before this write; drain them first to keep the
+             * stream in order (_cnt@0, _ptr@4, _base@8). */
+            {
+                uint32_t cnt = irix_guest_read32be(rt, handle);
+                uint32_t ptr = irix_guest_read32be(rt, handle + 4u);
+                uint32_t base = irix_guest_read32be(rt, handle + 8u);
+                if (base && ptr > base && ptr - base < (1u << 20)) {
+                    const char *pp = (const char *)irix_guest_ptr(rt, base, ptr - base);
+                    size_t left = ptr - base;
+                    while (pp && left) {
+                        ssize_t w = write((int)fd, pp, left);
+                        if (w < 0 && errno == EINTR) continue;
+                        if (w <= 0) break;
+                        pp += w;
+                        left -= (size_t)w;
+                    }
+                    irix_guest_write32be(rt, handle + 4u, base);
+                    irix_guest_write32be(rt, handle, cnt + (ptr - base));
+                }
+            }
             while (done < n) {
                 ssize_t w = write((int)fd, buf + done, n - done);
                 if (w < 0 && errno == EINTR) continue;
