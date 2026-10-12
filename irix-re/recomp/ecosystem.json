@@ -252,6 +252,13 @@
           "path": "usr/lib32/internal/libimdXutil.so"
         }
       ]
+    },
+    {
+      "name": "reaper",
+      "prefix": "reaper",
+      "kind": "runtime",
+      "path": "usr/bin/X11/reaper",
+      "shared_components": []
     }
   ],
   "shared_components": [

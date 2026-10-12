@@ -164,9 +164,55 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    snprintf(tellwm, sizeof(tellwm), "%s/usr/bin/X11/tellwm", root);
-    logf_("tellwm end_session rc=%d", run(tw, NULL, 0, 1));
-    sleep(1);
+    /* Exactly what /usr/bin/X11/endsession does once the user has confirmed:
+     * if 4Dwm answers the test message, tell it the session is ending (it
+     * saves the session and then removes _SGI_SESSION_PROPERTY, which is
+     * what lets the login session finish); clean up _SGI_TELL_WM in case
+     * 4Dwm died.  If 4Dwm is not there, remove _SGI_SESSION_PROPERTY
+     * ourselves. */
+    {
+        char xprop[4096];
+        char *tw_t[] = { tellwm, "-t", "end_session", NULL };
+        char *rm_tell[] = { xprop, "-display", (char *)display, "-root",
+                            "-remove", "_SGI_TELL_WM", NULL };
+        char *rm_sess[] = { xprop, "-display", (char *)display, "-root",
+                            "-remove", "_SGI_SESSION_PROPERTY", NULL };
+        snprintf(tellwm, sizeof(tellwm), "%s/usr/bin/X11/tellwm", root);
+        snprintf(xprop, sizeof(xprop), "%s/usr/bin/X11/xprop", root);
+        setenv("DISPLAY", display, 1);
+        if (run(tw_t, NULL, 0, 1) == 0) {
+            logf_("tellwm -t end_session ok; sending end_session");
+            logf_("tellwm end_session rc=%d", run(tw, NULL, 0, 1));
+            run(rm_tell, NULL, 0, 1);
+        } else {
+            logf_("4Dwm not answering; removing _SGI_SESSION_PROPERTY");
+            run(rm_sess, NULL, 0, 1);
+        }
+    }
+
+    /* The session script waits for _SGI_SESSION_PROPERTY to disappear.  As a
+     * last resort, if it is still published well after that, stop the
+     * session script directly through its pidfile. */
+    {
+        char xprop[4096], out[512];
+        char *q[] = { xprop, "-display", (char *)display, "-root",
+                      "_SGI_SESSION_PROPERTY", NULL };
+        int still = 0;
+        snprintf(xprop, sizeof(xprop), "%s/usr/bin/X11/xprop", root);
+        for (i = 0; i < 20; ++i) {
+            out[0] = '\0';
+            run(q, out, sizeof(out), 1);
+            still = strstr(out, "(ATOM)") != NULL;
+            if (!still)
+                break;
+            sleep(1);
+        }
+        if (!still) {
+            logf_("session property cleared; session is ending");
+            return 0;
+        }
+        logf_("property still set after 20s; signalling session script");
+    }
 
     for (i = 0; display[i] && j + 1 < sizeof(tag); ++i)
         tag[j++] = isalnum((unsigned char)display[i]) ? display[i] : '_';
@@ -175,10 +221,8 @@ int main(int argc, char **argv)
              rt && *rt ? rt : "/tmp", tag);
     f = fopen(pidfile, "r");
     logf_("pidfile %s %s", pidfile, f ? "found" : "MISSING");
-    if (!f) {
-        fprintf(stderr, "irix-endsession: no session pidfile %s\n", pidfile);
+    if (!f)
         return 3;
-    }
     if (!fgets(buf, sizeof(buf), f)) {
         fclose(f);
         return 3;
@@ -187,23 +231,8 @@ int main(int argc, char **argv)
     pid = strtol(buf, NULL, 10);
     if (pid <= 1 || kill((pid_t)pid, SIGUSR1) < 0) {
         logf_("cannot signal session pid %ld: %s", pid, strerror(errno));
-        fprintf(stderr, "irix-endsession: cannot signal session %ld: %s\n",
-                pid, strerror(errno));
         return 3;
     }
     logf_("sent SIGUSR1 to session pid %ld", pid);
-    /* The script exits from its USR1 trap; if it is somehow still there
-     * after a few seconds, ask harder. */
-    for (i = 0; i < 30; ++i) {
-        if (kill((pid_t)pid, 0) < 0)
-            break;
-        usleep(100000);
-    }
-    if (kill((pid_t)pid, 0) == 0) {
-        logf_("session pid %ld still alive after SIGUSR1; sending SIGTERM", pid);
-        kill((pid_t)pid, SIGTERM);
-    } else {
-        logf_("session pid %ld is gone", pid);
-    }
     return 0;
 }

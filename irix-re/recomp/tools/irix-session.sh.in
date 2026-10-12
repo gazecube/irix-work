@@ -66,6 +66,8 @@ export XUSERFILESEARCHPATH
 # <desktop_dir>/0.0.  Here the display number varies by login, which sent each
 # login to a different, empty directory.  Make every display name used for
 # this session resolve to the one canonical "0.0" directory.
+# (makeDotDesktop creates the directory on IRIX's first login.)
+mkdir -p "$desktop_dir" 2>/dev/null
 if [ -d "$desktop_dir" ]; then
     canon="$desktop_dir/0.0"
     disp_name=$(printf '%s' "$display" | sed 's/^[^:]*://')   # ":1" -> "1"
@@ -230,7 +232,43 @@ fi
 
 echo "IRIX session: running"
 
-# Keep the session owner alive. If the WM exits, the session is over.
+# Xsession.dt ends with "exec reaper".  reaper ignores SIGCLD, publishes
+# _SGI_SESSION_PROPERTY on the root window and exits; SGI's xdm then keeps the
+# login session alive until that property is removed, which 4Dwm does when it
+# handles end_session (after saving its session) and endsession does if 4Dwm
+# is gone.  Do the same here: publish the property and wait for it to vanish.
+reaper="/usr/bin/X11/reaper"
+session_property=_SGI_SESSION_PROPERTY
+session_property_present()
+{
+    if command -v xprop >/dev/null 2>&1; then
+        xprop -display "$display" -root "$session_property" 2>/dev/null
+    else
+        guest_exec /usr/bin/X11/xprop -display "$display" -root "$session_property" 2>/dev/null
+    fi | grep -q "(ATOM)"
+}
+
+if [ -x "$root$reaper" ]; then
+    guest_exec "$reaper"
+    if session_property_present; then
+        echo "IRIX session: reaper set $session_property; waiting for end_session"
+        while kill -0 "$wm_pid" 2>/dev/null && session_property_present; do
+            sleep 1
+        done
+        echo "IRIX session: $session_property cleared or 4Dwm gone; ending"
+        # 4Dwm writes its session files before it clears the property; let it
+        # finish and exit before the cleanup trap stops it.
+        waited=0
+        while kill -0 "$wm_pid" 2>/dev/null && [ "$waited" -lt 20 ]; do
+            sleep 0.5
+            waited=$((waited + 1))
+        done
+        exit 0
+    fi
+    echo "IRIX session: reaper did not publish $session_property; waiting on 4Dwm" >&2
+fi
+
+# Fallback: keep the session owner alive until the WM exits.
 wait "$wm_pid"
 status=$?
 echo "IRIX session: 4Dwm exited: $status" >&2
