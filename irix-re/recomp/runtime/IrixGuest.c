@@ -2141,6 +2141,7 @@ static char **irix_guest_string_vector(IrixGuestRuntime *rt,
 /* ---- IRIX termio <-> Linux termios ------------------------------------ */
 
 #include <termios.h>
+#include <sys/vfs.h>
 
 /* Indices into IRIX c_cc[] (struct termio / termios, SVR4 numbering). */
 enum { IV_INTR = 0, IV_QUIT = 1, IV_ERASE = 2, IV_KILL = 3, IV_EOF = 4,
@@ -4199,6 +4200,97 @@ exec_syscall_failed:
     case SYS_sysinfo: /* sysinfo(command, buf, count) */
         irix_compat_systeminfo(rt, cpu);
         return;
+    case SYS_sysfs: { /* sysfs(opcode, ...): file system type index <-> name */
+        static const char *const fstypes[] = {
+            0, "xfs", "efs", "proc", "nfs", "dev", "fd", "specfs", "fifofs"
+        };
+        const unsigned nfs = sizeof(fstypes) / sizeof(fstypes[0]) - 1u;
+        uint32_t op = (uint32_t)cpu->gpr[4];
+        unsigned i;
+        if (op == 1u) {                 /* GETFSIND(name) */
+            const char *name = irix_guest_cstr(
+                rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 256u);
+            for (i = 1; name && i <= nfs; ++i) {
+                if (!strcmp(name, fstypes[i])) {
+                    syscall_result(cpu, (int64_t)i);
+                    return;
+                }
+            }
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+        } else if (op == 2u) {          /* GETFSTYP(index, buf) */
+            uint32_t idx = (uint32_t)cpu->gpr[5];
+            IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+            size_t n;
+            if (idx < 1u || idx > nfs) {
+                errno = EINVAL;
+                syscall_result(cpu, -1);
+                return;
+            }
+            n = strlen(fstypes[idx]) + 1u;
+            if (!out || !irix_guest_ptr(rt, out, n)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            for (i = 0; i < n; ++i)
+                irix_guest_write8(rt, out + i, (uint8_t)fstypes[idx][i]);
+            syscall_result(cpu, 0);
+        } else if (op == 3u) {          /* GETNFSTYP */
+            syscall_result(cpu, (int64_t)(nfs + 1u));
+        } else {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+        }
+        return;
+    }
+    case SYS_statfs:   /* statfs(path, buf, len, fstyp) */
+    case SYS_fstatfs: { /* fstatfs(fd, buf, len, fstyp) */
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        struct statfs sf;
+        int rc;
+        if (number == SYS_statfs) {
+            const char *guest_path = irix_guest_cstr(
+                rt, (IrixGuestAddr)(uint32_t)cpu->gpr[4], 65536u);
+            char host_path[PATH_MAX];
+            const char *path;
+            if (!guest_path) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+            if (!path) {
+                syscall_result(cpu, -1);
+                return;
+            }
+            rc = statfs(path, &sf);
+        } else {
+            rc = fstatfs((int)(int32_t)cpu->gpr[4], &sf);
+        }
+        if (rc != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (!out || !irix_guest_ptr(rt, out, 60u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        {   /* N32 struct statfs: short fstyp, long bsize/frsize, int64 counts */
+            unsigned i;
+            for (i = 0; i < 60u; ++i) irix_guest_write8(rt, out + i, 0);
+            irix_guest_write16be(rt, out + 0u, 0u);
+            irix_guest_write32be(rt, out + 4u, (uint32_t)sf.f_bsize);
+            irix_guest_write32be(rt, out + 8u, (uint32_t)sf.f_bsize);
+            irix_guest_write64be(rt, out + 16u, (uint64_t)sf.f_blocks);
+            irix_guest_write64be(rt, out + 24u, (uint64_t)sf.f_bavail);
+            irix_guest_write64be(rt, out + 32u, (uint64_t)sf.f_files);
+            irix_guest_write64be(rt, out + 40u, (uint64_t)sf.f_ffree);
+        }
+        syscall_result(cpu, 0);
+        return;
+    }
     case SYS_xstat: { /* xstat(version, path, statbuf) */
         uint32_t version = (uint32_t)cpu->gpr[4];
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
