@@ -1,0 +1,20 @@
+#!/bin/sh
+# Run an IRIX command by name.  This file is symlinked as <name> in the
+# generated irix-bin directory (see gen-irix-bin.py); the program is looked
+# up in the IRIX tree and started with irix-run.
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+here="$(dirname "$self")"
+name="$(basename "$0")"
+if [ "$name" = irix-cmd ]; then
+    echo "irix-cmd: invoke through a symlink named after an IRIX command" >&2
+    exit 2
+fi
+prefix="$(cd "$here/.." && pwd)"
+if [ -d "$prefix/tree" ]; then tree="$prefix/tree"; else tree="${IRIX_RUNTIME_TREE:-$prefix/IRIX-TREE}"; fi
+for d in usr/sbin sbin usr/bin bin usr/bsd usr/etc etc; do
+    if [ -f "$tree/$d/$name" ]; then
+        exec "$here/irix-run" "/$d/$name" "$@"
+    fi
+done
+echo "irix-cmd: $name not found in $tree" >&2
+exit 127

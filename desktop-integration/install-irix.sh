@@ -82,6 +82,9 @@ install -m755 "$recomp/irix-guest-exec" "$prefix/bin/irix-guest-exec"
 install -m755 "$recomp/quick/irix-session" "$prefix/bin/irix-session"
 install -m755 "$here/xsession/irix-claude" "$prefix/bin/irix-claude"
 install -m755 "$here/irix-run" "$prefix/bin/irix-run"
+install -m755 "$here/irix-cmd" "$prefix/bin/irix-cmd"
+python3 "$here/gen-irix-bin.py" --tree "$prefix/tree" --out "$prefix/irix-bin" \
+    --link-to "$prefix/bin/irix-cmd"
 
 cat >"$prefix/libexec/irix-desktop-session" <<EOF
 #!/bin/sh
@@ -106,6 +109,7 @@ cat <<EOF
 installed to $prefix
   run inside X:     $prefix/bin/irix-session        (DISPLAY must be set)
   login manager:    sudo install -m644 $prefix/irix-desktop.desktop /usr/share/xsessions/
+  IRIX commands:    add $prefix/irix-bin to the END of PATH (host tools win)
   Toolchest entry:  f.exec.sh "$prefix/bin/irix-claude"
 
 Everything is located relative to the launcher; IRIX_RECOMP_ROOT and

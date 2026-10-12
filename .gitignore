@@ -30,3 +30,4 @@ irix-re/kernel/modules.order
 /*.log
 *.log
 /out=*
+/desktop-integration/irix-bin/

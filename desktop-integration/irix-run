@@ -28,6 +28,19 @@ else
     : "${IRIX_GUEST_EXEC_RUNNER:=$build/irix-guest-exec}"
 fi
 export IRIX_RECOMP_ROOT IRIX_RUNTIME_TREE IRIX_GUEST_EXEC_RUNNER
+# IRIX curses reads the IRIX terminfo; a host-only TERM (linux, alacritty,
+# xterm-256color ...) is unknown there, so map it to one the tree has.
+tinfo="$IRIX_RUNTIME_TREE/usr/share/lib/terminfo"
+if [ -n "${TERM:-}" ] && [ -d "$tinfo" ]; then
+    first=$(printf '%s' "$TERM" | cut -c1)
+    if [ ! -f "$tinfo/$first/$TERM" ]; then
+        for cand in "${TERM%%-*}" xterm vt100 ansi; do
+            c1=$(printf '%s' "$cand" | cut -c1)
+            if [ -f "$tinfo/$c1/$cand" ]; then TERM=$cand; break; fi
+        done
+        export TERM
+    fi
+fi
 [ $# -ge 1 ] || { echo "usage: irix-run /irix/path [args...]" >&2; exit 2; }
 prog=$1; shift
 if [ -x "$IRIX_RECOMP_ROOT$prog" ]; then
