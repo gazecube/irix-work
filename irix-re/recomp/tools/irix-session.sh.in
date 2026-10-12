@@ -181,7 +181,12 @@ echo "IRIX session: starting 4Dwm on $DISPLAY"
 # DrawOutline instead.  Set IRIX_4DWM_FREEZE_ON_CONFIG=false for the original
 # blinking behaviour.
 freeze_on_config="${IRIX_4DWM_FREEZE_ON_CONFIG:-true}"
-IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch \
+# On a traditional multihead server (:0.0, :0.1) 4Dwm can manage every screen
+# with -multiscreen, as Mwm does.  Opt-in with IRIX_4DWM_MULTISCREEN=1: it
+# currently traps in XtScreenDatabase/XrmEnumerateDatabase for screen 1.
+multiscreen=
+[ "${IRIX_4DWM_MULTISCREEN:-0}" = 1 ] && multiscreen=-multiscreen
+IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch $multiscreen \
     -xrm '*SG_UseBackgrounds: True' \
     -xrm "*freezeOnConfig: $freeze_on_config" &
 wm_pid=$!
