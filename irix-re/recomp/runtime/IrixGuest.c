@@ -2167,7 +2167,7 @@ static tcflag_t host_lflag_from_irix(uint32_t l)
 }
 
 static int irix_termio_get(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
-                           int with_speeds)
+                           int with_speeds, int with_line)
 {
     struct termios t;
     uint8_t cc[IV_NCCS];
@@ -2188,7 +2188,7 @@ static int irix_termio_get(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
     cc[IV_SUSP] = t.c_cc[VSUSP];   cc[IV_DSUSP] = 0x19;       /* ^Y */
     cc[IV_REPRINT] = t.c_cc[VREPRINT]; cc[IV_DISCARD] = t.c_cc[VDISCARD];
     cc[IV_WERASE] = t.c_cc[VWERASE];   cc[IV_LNEXT] = t.c_cc[VLNEXT];
-    if (!irix_guest_ptr(rt, a, with_speeds ? 48u : 40u)) {
+    if (!irix_guest_ptr(rt, a, 16u + (with_speeds ? 8u : 0u) + (with_line ? 1u : 0u) + IV_NCCS)) {
         errno = EFAULT;
         return -1;
     }
@@ -2198,26 +2198,35 @@ static int irix_termio_get(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
     irix_guest_write32be(rt, a + 12u, irix_lflag_from_host(t.c_lflag));
     o = 16u;
     if (with_speeds) {
-        uint32_t sp = (uint32_t)(cfgetospeed(&t) & 017u);
+        uint32_t sp = (uint32_t)(t.c_cflag & 017u);
+        if (!sp) sp = (uint32_t)(cfgetospeed(&t) & 017u);
+        if (!sp && !(t.c_cflag & 010000u)) sp = 0;
         irix_guest_write32be(rt, a + o, sp);
         irix_guest_write32be(rt, a + o + 4u, sp);
         o += 8u;
     }
-    irix_guest_write8(rt, a + o, t.c_line);
+    if (with_line) {
+        irix_guest_write8(rt, a + o, t.c_line);
+        o += 1u;
+    }
     for (i = 0; i < IV_NCCS; ++i)
-        irix_guest_write8(rt, a + o + 1u + i, cc[i]);
+        irix_guest_write8(rt, a + o + i, cc[i]);
+    if (getenv("IRIX_TRACE_TERMIO"))
+        fprintf(stderr, "TERMIO-GET sp=%d line=%d c=%08x ospeed=%08x\n",
+                with_speeds, with_line, (unsigned)(t.c_cflag & 0x7fffu),
+                with_speeds ? irix_guest_read32be(rt, a + 16u) : 0u);
     return 0;
 }
 
 static int irix_termio_set(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
-                           int with_speeds, int action)
+                           int with_speeds, int with_line, int action)
 {
     struct termios t;
     uint8_t cc[IV_NCCS];
     uint32_t lflag;
     unsigned o = 16u, i;
     if (tcgetattr(fd, &t) != 0) return -1;
-    if (!irix_guest_ptr(rt, a, with_speeds ? 48u : 40u)) {
+    if (!irix_guest_ptr(rt, a, 16u + (with_speeds ? 8u : 0u) + (with_line ? 1u : 0u) + IV_NCCS)) {
         errno = EFAULT;
         return -1;
     }
@@ -2229,15 +2238,17 @@ static int irix_termio_set(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
                                ECHONL | NOFLSH | IEXTEN | TOSTOP)) |
                 host_lflag_from_irix(lflag);
     if (with_speeds) {
-        uint32_t sp = irix_guest_read32be(rt, a + 16u) & 017u;
-        if (sp) {
-            cfsetospeed(&t, (speed_t)sp);
-            cfsetispeed(&t, (speed_t)sp);
-        }
+        /* IRIX speed codes equal Linux B* below B38400; leave the line
+         * speed alone (ptys ignore it) so it never reads back as BOTHER. */
         o = 24u;
     }
+    if (with_line) o += 1u;
+    if (getenv("IRIX_TRACE_TERMIO"))
+        fprintf(stderr, "TERMIO-SET i=%08x o=%08x c=%08x l=%08x\n",
+                irix_guest_read32be(rt, a), irix_guest_read32be(rt, a + 4u),
+                irix_guest_read32be(rt, a + 8u), lflag);
     for (i = 0; i < IV_NCCS; ++i)
-        cc[i] = irix_guest_read8(rt, a + o + 1u + i);
+        cc[i] = irix_guest_read8(rt, a + o + i);
     t.c_cc[VINTR] = cc[IV_INTR];   t.c_cc[VQUIT] = cc[IV_QUIT];
     t.c_cc[VERASE] = cc[IV_ERASE]; t.c_cc[VKILL] = cc[IV_KILL];
     if (lflag & ICANON) {
@@ -3524,18 +3535,33 @@ exec_syscall_failed:
         /* Terminal attributes: IRIX termio (TIOC|1..4 old, TIOC|201..204
          * new layout), window size and flush, translated for the host tty. */
         switch (cmd) {
-        case 0x5401u: case 0x54c9u:        /* TCGETA */
+        case 0x5401u: case 0x54c9u:        /* TCGETA  (struct termio) */
             syscall_result(cpu, (int64_t)irix_termio_get(
-                rt, fd, arg_addr, cmd == 0x54c9u));
+                rt, fd, arg_addr, cmd == 0x54c9u, 1));
             return;
         case 0x5402u: case 0x54cau:        /* TCSETA  */
         case 0x5403u: case 0x54cbu:        /* TCSETAW */
         case 0x5404u: case 0x54ccu: {      /* TCSETAF */
-            int act = (cmd & 0xffu) == 0x02u || (cmd & 0xffu) == 0xcau ? TCSANOW
-                    : (cmd & 0xffu) == 0x03u || (cmd & 0xffu) == 0xcbu ? TCSADRAIN
-                    : TCSAFLUSH;
+            unsigned k = cmd & 0xffu;
+            int act = (k == 0x02u || k == 0xcau) ? TCSANOW
+                    : (k == 0x03u || k == 0xcbu) ? TCSADRAIN : TCSAFLUSH;
             syscall_result(cpu, (int64_t)irix_termio_set(
-                rt, fd, arg_addr, (cmd & 0xffu) >= 0xc9u, act));
+                rt, fd, arg_addr, k >= 0xc9u, 1, act));
+            return;
+        }
+        /* POSIX tcgetattr/tcsetattr: struct termios (no c_line) */
+        case 0x540du: case 0x54d5u:        /* TCGETS  */
+            syscall_result(cpu, (int64_t)irix_termio_get(
+                rt, fd, arg_addr, cmd == 0x54d5u, 0));
+            return;
+        case 0x540eu: case 0x54d6u:        /* TCSETS  */
+        case 0x540fu: case 0x54d7u:        /* TCSETSW */
+        case 0x5410u: case 0x54d8u: {      /* TCSETSF */
+            int isnew = (cmd & 0xffu) >= 0xd5u;
+            unsigned k = isnew ? (cmd & 0xffu) - 0xd6u : (cmd & 0xffu) - 0x0eu;
+            int act = k == 0 ? TCSANOW : k == 1 ? TCSADRAIN : TCSAFLUSH;
+            syscall_result(cpu, (int64_t)irix_termio_set(
+                rt, fd, arg_addr, isnew, 0, act));
             return;
         }
         case 0x5407u: {                    /* TCFLSH */
@@ -6624,6 +6650,24 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
 
     if (getenv("IRIX_TRACE_FPRINTF")) {
+        static IrixGuestAddr pending_buf;
+        static unsigned pending_n;
+        if (pending_buf) {
+            const char *r = irix_guest_ptr(rt, pending_buf, 64u)
+                ? irix_guest_cstr(rt, pending_buf, 128u) : 0;
+            const unsigned char *raw = irix_guest_ptr(rt, pending_buf, 64u);
+            fprintf(stderr, "AFTER[%08x] next-call=%08x len=%zu str=[%s] raw:",
+                    pending_buf, (unsigned)address, r ? strlen(r) : 0u, r ? r : "");
+            if (raw) { unsigned q; for (q = 0; q < 40; ++q) fprintf(stderr, "%02x", raw[q]); }
+            fputc('\n', stderr);
+            pending_buf = 0;
+            (void)pending_n;
+        }
+        {
+            IrixGuestAddr f1 = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+            const char *fs = irix_guest_ptr(rt, f1, 8u) ? irix_guest_cstr(rt, f1, 64u) : 0;
+            if (fs && strstr(fs, "[ %s%s =%dx%d")) pending_buf = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        }
         IrixGuestAddr fmt = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         IrixGuestAddr fmt2 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         const char *f = irix_guest_ptr(rt, fmt, 8u) ? irix_guest_cstr(rt, fmt, 128u) : 0;
