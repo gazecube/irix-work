@@ -6,6 +6,15 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 R="${IRIX_WORK:-$(cd "$here/../.." && pwd)}"
 BUILD="${IRIX_BUILD:-build-irix-re}"
-d="${1:-$DISPLAY}"
-IRIX_GUEST_DISPLAY="$d" IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE:-$R/IRIX-TREE}" \
-    exec "$R/$BUILD/recomp/root/usr/Cadmin/bin/clogin" -f "$d"
+# xdm runs the login program as `<program> -g` with DISPLAY in the environment;
+# the stock Xlogin ends in `clogin -f $1`, i.e. clogin -f -g.
+d="$DISPLAY"
+export IRIX_GUEST_DISPLAY="$d"
+export IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE:-$R/IRIX-TREE}"
+if [ -n "$IRIX_XDM_LOGIN_LOG" ]; then
+    # Debug: keep what the greeter tells xdm (username, environment).
+    "$R/$BUILD/recomp/root/usr/Cadmin/bin/clogin" -f "$@" \
+        2>>"$IRIX_XDM_LOGIN_LOG.err" | tee -a "$IRIX_XDM_LOGIN_LOG"
+    exit 0
+fi
+exec "$R/$BUILD/recomp/root/usr/Cadmin/bin/clogin" -f "$@"
