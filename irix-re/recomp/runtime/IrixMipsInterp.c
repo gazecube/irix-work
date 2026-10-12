@@ -1112,6 +1112,11 @@ static int is_lazy_plt_call(IrixGuestRuntime *rt, IrixGuestAddr pc)
            (irix_guest_read32be(rt, pc + 4u) & 0xffff0000u) == 0x34180000u;
 }
 
+/* Opt-in ring of the most recent guest PCs (IRIX_TRACE_SYSCALLS=1); the
+ * syscall tracer prints it at exit() to show where a program was. */
+uint32_t irix_pc_ring[8192];
+unsigned irix_pc_ring_pos;
+
 int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                           IrixGuestAddr address)
 {
@@ -1122,6 +1127,8 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
     if (!mapped_exec(rt, pc))
         return -1;
+
+    irix_pc_ring[irix_pc_ring_pos++ & 8191u] = pc;
 
     insn = irix_guest_read32be(rt, pc);
     if (rt->trapped)
@@ -1424,6 +1431,44 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 
         if (!mapped_exec(rt, pc))
             break;
+        irix_pc_ring[irix_pc_ring_pos++ & 8191u] = pc;
+        {
+            /* IRIX_WATCH_ENTRY=<pc>,<offset>: when execution reaches <pc>,
+             * remember sp+<offset> and report the first instruction that
+             * changes that word afterwards (stack-corruption hunting). */
+            static int init;
+            static IrixGuestAddr entry, off, watch;
+            static uint32_t last;
+            if (!init) {
+                const char *e = getenv("IRIX_WATCH_ENTRY");
+                init = 1;
+                if (e) {
+                    unsigned a = 0, b = 0;
+                    if (sscanf(e, "%x,%x", &a, &b) == 2) {
+                        entry = a;
+                        off = b;
+                    }
+                }
+            }
+            if (entry) {
+                if (watch) {
+                    uint32_t now = irix_guest_read32be(rt, watch);
+                    if (now != last) {
+                        fprintf(stderr,
+                                "WATCH %08x changed %08x -> %08x by insn before pc=%08x\n",
+                                watch, last, now, pc);
+                        last = now;
+                    }
+                }
+                if (pc == entry) {
+                    watch = (IrixGuestAddr)((uint32_t)cpu->gpr[29] + off - 0xd70u + 4u);
+                    last = irix_guest_read32be(rt, watch);
+                    fprintf(stderr, "WATCH armed at %08x (sp=%08x) value %08x ra=%08x\n",
+                            watch, (uint32_t)cpu->gpr[29], last,
+                            (uint32_t)cpu->gpr[31]);
+                }
+            }
+        }
         insn = irix_guest_read32be(rt, pc);
         if (rt->trapped)
             break;

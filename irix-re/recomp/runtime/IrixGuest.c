@@ -2272,6 +2272,18 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 fprintf(stderr, " %08x", v);
         }
         fputc('\n', stderr);
+        {
+            extern uint32_t irix_pc_ring[8192];
+            extern unsigned irix_pc_ring_pos;
+            unsigned q;
+            fprintf(stderr, "PCRING (oldest..newest, 0x1000xxxx only):");
+            for (q = 0; q < 8192; ++q) {
+                uint32_t v = irix_pc_ring[(irix_pc_ring_pos + q) & 8191u];
+                if (v >= 0x10000000u && v < 0x10100000u)
+                    fprintf(stderr, " %08x", v);
+            }
+            fputc('\n', stderr);
+        }
     }
     if (trace_syscalls)
         fprintf(stderr, "SYSCALL %u a0-a3=%08x,%08x,%08x,%08x ra=%08x\n",
@@ -4100,7 +4112,7 @@ exec_syscall_failed:
         IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         uint32_t type = (uint32_t)cpu->gpr[6];
         if (type == 0u) { /* UTS_UNAME: same identity as the uname bridge */
-            enum { NMLN = 257, FIELDS = 14 };
+            enum { NMLN = 257, FIELDS = 13 };  /* sizeof(struct utsname) */
             char host[NMLN];
             unsigned char *p = (unsigned char *)irix_guest_ptr(
                 rt, buf, (size_t)NMLN * FIELDS);
