@@ -534,6 +534,36 @@ static void bridge_fileno(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)fd;
 }
 
+long irix_stdio_write_stream(IrixGuestRuntime *rt, IrixGuestAddr handle,
+                             const char *buf, size_t n)
+{
+    FILE *f = file_from_guest(rt, handle);
+    if (f) {
+        size_t w = n ? fwrite(buf, 1u, n, f) : 0u;
+        /* Session files are written and renamed right away; keep the host
+           buffer from outliving a process that exits without fclose. */
+        sync_file_by_addr(rt, handle);
+        return (long)w;
+    }
+    if (handle && irix_guest_ptr(rt, handle, 16u)) {
+        /* A real guest FILE (e.g. stdout/stderr in the guest iob). */
+        unsigned fd = irix_guest_read16be(rt, handle + 14u);
+        if (fd == 0xffffu)
+            fd = irix_guest_read8(rt, handle + 13u);
+        if (fd <= 1023u) {
+            size_t done = 0;
+            while (done < n) {
+                ssize_t w = write((int)fd, buf + done, n - done);
+                if (w < 0 && errno == EINTR) continue;
+                if (w <= 0) return -1;
+                done += (size_t)w;
+            }
+            return (long)done;
+        }
+    }
+    return n ? (long)fwrite(buf, 1u, n, stderr) : 0;
+}
+
 int irix_stdio_bridge_init(IrixGuestRuntime *rt)
 {
     memset(g_files, 0, sizeof(g_files));

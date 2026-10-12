@@ -1966,6 +1966,21 @@ static int irix_env_has(char *const vec[], size_t count, const char *entry)
     return 0;
 }
 
+/* Variables the runners set for the *guest* that must not leak into host
+ * programs: IRIX app-defaults carry SGI color names that host Xt programs
+ * (xclock, ...) cannot resolve. */
+static int irix_env_guest_only(const char *entry)
+{
+    size_t n = strlen("/usr/lib/X11/app-defaults");
+    if (!strncmp(entry, "XAPPLRESDIR=", 12u)) {
+        size_t len = strlen(entry);
+        return len >= n && !strcmp(entry + len - n, "/usr/lib/X11/app-defaults");
+    }
+    if (!strncmp(entry, "XENVIRONMENT=", 13u))
+        return strstr(entry, "/irix-desktop-resources-") != 0;
+    return 0;
+}
+
 static char **irix_merge_host_env(char *const base[], int host_env)
 {
     static const char *const keep[] = {
@@ -1982,6 +1997,8 @@ static char **irix_merge_host_env(char *const base[], int host_env)
     for (i = 0; i < bcount; ++i) {
         if (host_env && !strncmp(base[i], "SHELL=", 6u) && getenv("SHELL"))
             continue;               /* replaced by the host value below */
+        if (host_env && irix_env_guest_only(base[i]))
+            continue;
         out[used] = strdup(base[i]);
         if (!out[used]) { irix_free_host_vector(out); return 0; }
         ++used;
@@ -1989,7 +2006,8 @@ static char **irix_merge_host_env(char *const base[], int host_env)
     if (host_env) {
         for (i = 0; i < hcount; ++i) {
             if (!strncmp(environ[i], "IRIX_GUEST_EXEC_PATH=", 21u) ||
-                !strncmp(environ[i], "IRIX_EXEC_BACKEND=", 18u))
+                !strncmp(environ[i], "IRIX_EXEC_BACKEND=", 18u) ||
+                irix_env_guest_only(environ[i]))
                 continue;
             if (irix_env_has(out, used, environ[i]))
                 continue;

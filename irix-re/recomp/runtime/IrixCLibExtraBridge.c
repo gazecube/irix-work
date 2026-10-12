@@ -1,4 +1,5 @@
 #include "IrixCLibExtraBridge.h"
+#include "IrixStdioBridge.h"
 #include "IrixLibcBridge.h"
 
 #include <ctype.h>
@@ -227,16 +228,18 @@ static void bridge_fprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char buf[8192];
     int n;
-    (void)cpu->gpr[4];
+    IrixGuestAddr stream = (uint32_t)cpu->gpr[4];
     n = format_guest(rt, cpu, (uint32_t)cpu->gpr[5], 6u,
                      (uint32_t)cpu->gpr[29], buf, sizeof(buf));
-    if (n >= 0) fputs(buf, stderr);
+    if (n >= 0)
+        (void)irix_stdio_write_stream(rt, stream, buf, strlen(buf));
     cpu->gpr[2] = (uint64_t)(int64_t)n;
 }
 
 static void bridge_vfprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     char buf[8192];
+    IrixGuestAddr stream = (uint32_t)cpu->gpr[4];
     IrixGuestAddr fmt_addr = (uint32_t)cpu->gpr[5];
     IrixGuestAddr va_addr = (uint32_t)cpu->gpr[6];
     int n;
@@ -245,13 +248,10 @@ static void bridge_vfprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
      * IRIX N32 va_list is a pointer into the 8-byte argument save area.
      * Reuse the normal formatter with register consumption disabled so
      * next_arg() reads successive 64-bit big-endian slots from va_addr.
-     *
-     * The current stdio bridge does not yet expose arbitrary guest FILE *
-     * objects here; match bridge_fprintf() and direct this path to stderr.
      */
     n = format_guest(rt, cpu, fmt_addr, 12u, va_addr, buf, sizeof(buf));
     if (n >= 0)
-        fputs(buf, stderr);
+        (void)irix_stdio_write_stream(rt, stream, buf, strlen(buf));
     cpu->gpr[2] = (uint64_t)(int64_t)n;
 }
 
