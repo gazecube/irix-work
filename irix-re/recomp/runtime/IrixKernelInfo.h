@@ -50,4 +50,10 @@ int irix_kinfo_scache_assoc(void);
 int irix_kinfo_ksym_info(const char *name, int *size, int *num);
 int irix_kinfo_ksym_get(const char *name, uint32_t *words, size_t nwords);
 
+/* Hardware identity of the machine the runtime really runs on (the Linux
+ * host's uname machine, e.g. "x86_64").  IRIX software sees this instead of
+ * an invented SGI model; only the ISA profile rld asks for stays MIPS-IV,
+ * because the guest *code* is MIPS. */
+const char *irix_kinfo_machine(void);
+
 #endif

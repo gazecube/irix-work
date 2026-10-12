@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <unistd.h>
@@ -581,6 +582,10 @@ IrixGuestFunction irix_stdio_bridge_lookup(const char *name)
 {
     (void)g_rt;
     if (!name) return 0;
+    /* IRIX_NO_STDIO_BRIDGE=1 leaves every stdio call to the original guest
+       libc, which then owns its FILE buffers and offsets end to end. */
+    if (getenv("IRIX_NO_STDIO_BRIDGE") && getenv("IRIX_NO_STDIO_BRIDGE")[0] == '1')
+        return 0;
 #define M(n) if (!strcmp(name, #n)) return bridge_##n
     M(fopen); M(fclose); M(fread); M(fwrite); M(fgets); M(fputs);
     M(fgetc); M(getc); M(ungetc); M(fputc); M(putc); M(fflush);

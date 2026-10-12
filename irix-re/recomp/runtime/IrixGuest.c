@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include "IrixKernelInfo.h"
 #include "IrixMipsInterp.h"
 #include "IrixMipsJit.h"
 #include "IrixCompat.h"
@@ -4134,7 +4135,7 @@ exec_syscall_failed:
             strncpy((char *)p + 1 * NMLN, host, NMLN - 1);
             strncpy((char *)p + 2 * NMLN, "6.5", NMLN - 1);
             strncpy((char *)p + 3 * NMLN, "6.5.7", NMLN - 1);
-            strncpy((char *)p + 4 * NMLN, "IP30", NMLN - 1);
+            strncpy((char *)p + 4 * NMLN, irix_kinfo_machine(), NMLN - 1);
             syscall_result(cpu, 0);
             return;
         }

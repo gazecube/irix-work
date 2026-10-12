@@ -1,6 +1,7 @@
 #include "IrixKernelInfo.h"
 
 #include <stdio.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,14 +11,10 @@
 #define INV_PROCESSOR    1
 #define INV_MEMORY       3
 #define INV_CPUBOARD     1
-#define INV_CPUCHIP      2
-#define INV_FPUCHIP      3
 #define INV_DCACHE       3
 #define INV_ICACHE       4
 #define INV_SIDCACHE     8
 #define INV_MAIN_MB      9
-#define INV_IP30BOARD    16
-#define C0_IMP_R10000    0x09
 
 int irix_kinfo_nprocs(void)
 {
@@ -102,15 +99,12 @@ static void put(IrixKinfoInvent *r, int cls, int type, int ctrl, int unit,
 
 size_t irix_kinfo_inventory(IrixKinfoInvent *out, size_t max)
 {
-    /* The host is presented as an IP30 (Octane) class machine with an
-     * R10000 CPU: that is a combination hinv(1) and the desktop know how to
-     * describe.  Frequency, memory size and cache sizes come from the host. */
-    const int cpu_rev = (C0_IMP_R10000 << 8) | (2 << 4) | 6;
+    /* Only what the host really has.  hinv(1) can name an SGI board or a
+     * MIPS chip, but there is none here, so no CPU board/chip/FPU record is
+     * reported: it prints the processor count and clock, caches and memory. */
     size_t n = 0;
     if (n < max) put(&out[n++], INV_PROCESSOR, INV_CPUBOARD,
-                     host_cpu_mhz(), -1, INV_IP30BOARD);
-    if (n < max) put(&out[n++], INV_PROCESSOR, INV_CPUCHIP, 0, -1, cpu_rev);
-    if (n < max) put(&out[n++], INV_PROCESSOR, INV_FPUCHIP, 0, -1, cpu_rev);
+                     host_cpu_mhz(), -1, 0);
     if (n < max) put(&out[n++], INV_MEMORY, INV_DCACHE, 0, 0,
                      (int)host_cache_bytes(1, 32 * 1024));
     if (n < max) put(&out[n++], INV_MEMORY, INV_ICACHE, 0, 0,
@@ -479,4 +473,17 @@ int irix_kinfo_ksym_get(const char *name, uint32_t *w, size_t nwords)
     }
     #undef PG
     return 0;
+}
+
+const char *irix_kinfo_machine(void)
+{
+    static char machine[65];
+    if (!machine[0]) {
+        struct utsname u;
+        if (uname(&u) == 0 && u.machine[0])
+            snprintf(machine, sizeof(machine), "%s", u.machine);
+        else
+            snprintf(machine, sizeof(machine), "unknown");
+    }
+    return machine;
 }

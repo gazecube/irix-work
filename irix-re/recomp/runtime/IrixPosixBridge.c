@@ -13,6 +13,7 @@
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
+#include "IrixKernelInfo.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -545,16 +546,15 @@ static void bridge_uname(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (!p) { errno = EFAULT; ret_i32(cpu, -1); return; }
 
     /*
-     * Do not leak the x86/Linux host identity into IRIX feature selection.
-     * This is the same compatibility boundary as systeminfo(): guest software
-     * must see a coherent SGI/IRIX machine.
+     * The system is IRIX userland; the hardware is the real host
+     * (same identity as systeminfo()).
      */
     memset(p, 0, 5u * 257u);
     strncpy((char *)p + 0u * 257u, "IRIX", 256u);
     strncpy((char *)p + 1u * 257u, u.nodename[0] ? u.nodename : "IRIS", 256u);
     strncpy((char *)p + 2u * 257u, "6.5", 256u);
     strncpy((char *)p + 3u * 257u, "6.5.7", 256u);
-    strncpy((char *)p + 4u * 257u, "IP30", 256u);
+    strncpy((char *)p + 4u * 257u, irix_kinfo_machine(), 256u);
     cpu->gpr[2] = 0;
 }
 

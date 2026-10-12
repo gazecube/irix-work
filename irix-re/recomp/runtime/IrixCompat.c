@@ -688,17 +688,15 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         value = "6.5.7";
         break;
     case 5u:   /* SI_MACHINE */
-        value = "IP30";
-        break;
     case 6u:   /* SI_ARCHITECTURE */
-        value = "mips";
+        value = irix_kinfo_machine();
         break;
     case 7u:   /* SI_HW_SERIAL */
     case 111u: /* _MIPS_SI_SERIAL */
         value = "0";
         break;
     case 8u:   /* SI_HW_PROVIDER */
-        value = "sgi";
+        value = "unknown";
         break;
     case 10u:  /* SI_INITTAB_NAME */
         value = "/etc/inittab";
@@ -711,7 +709,7 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         value = "IRIX";
         break;
     case 103u: /* _MIPS_SI_HW_NAME */
-        value = "IP30";
+        value = irix_kinfo_machine();
         break;
     case 104u: /* _MIPS_SI_NUM_PROCESSORS */
     case 110u: /* _MIPS_SI_AVAIL_PROCESSORS */
@@ -734,9 +732,10 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         break;
     case 109u: /* _MIPS_SI_PROCESSORS */
         /*
-         * rld asks this immediately after mapping itself.  Present a stable
-         * MIPS-IV R10000 identity instead of leaking the x86 host CPU into
-         * IRIX runtime selection.
+         * rld asks this immediately after mapping itself to pick the ISA
+         * directory (mips3/mips4) of the libraries.  The *guest code* is
+         * MIPS-IV, so this is the instruction-set profile it executes, not
+         * a claim about the hardware (see SI_MACHINE).
          */
         value = "R10000 2.6";
         break;
