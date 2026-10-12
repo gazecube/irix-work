@@ -303,6 +303,58 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    case 152: { /* SGI_CONST(sub, buf, len, *outlen): system sizing constants */
+        uint32_t sub = (uint32_t)cpu->gpr[5];
+        IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        uint32_t len = (uint32_t)cpu->gpr[7];
+        IrixGuestAddr outlen = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+        uint32_t vals[3];
+        uint32_t nwords = 0, bytes, i;
+
+        switch (sub) {
+        case 3u: /* SGICONST_PAGESZ: struct pageconst */
+            vals[0] = 16384u;   /* p_pagesz  */
+            vals[1] = 14u;      /* p_pnumshft */
+            vals[2] = 16384u;   /* p_nbpp    */
+            nwords = 3;
+            break;
+        case 4u: /* SGICONST_PARAM: struct paramconst */
+            vals[0] = 1u;       /* p_usize    */
+            vals[1] = 1u;       /* p_extusize */
+            nwords = 2;
+            break;
+        case 5u: /* SGICONST_SCACHE_SETASSOC: *(int *) buf */
+            if (!irix_guest_ptr(rt, buf, 4u)) {
+                errno = EFAULT; compat_result(cpu, -1); return;
+            }
+            irix_guest_write32be(rt, buf, (uint32_t)irix_kinfo_scache_assoc());
+            compat_result(cpu, 0);
+            return;
+        case 6u: /* SGICONST_SCACHE_SIZE: *(int *) buf */
+            if (!irix_guest_ptr(rt, buf, 4u)) {
+                errno = EFAULT; compat_result(cpu, -1); return;
+            }
+            irix_guest_write32be(rt, buf, (uint32_t)irix_kinfo_scache_bytes());
+            compat_result(cpu, 0);
+            return;
+        default:
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        bytes = nwords * 4u;
+        if (bytes > len) bytes = len & ~3u;
+        if (bytes && !irix_guest_ptr(rt, buf, bytes)) {
+            errno = EFAULT; compat_result(cpu, -1); return;
+        }
+        for (i = 0; i < bytes / 4u; ++i)
+            irix_guest_write32be(rt, buf + i * 4u, vals[i]);
+        if (outlen && irix_guest_ptr(rt, outlen, 4u))
+            irix_guest_write32be(rt, outlen, bytes);
+        compat_result(cpu, 0);
+        return;
+    }
+
     case 102: /* SGI_GET_EVCONF: Everest configuration; not an Everest */
         errno = EINVAL;
         compat_result(cpu, -1);
@@ -706,6 +758,100 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     compat_result(cpu, (int64_t)required);
 }
 
+/* sysget(name, buf, buflen, flags, cookie): IRIX 6.5 kernel statistics.
+ * Returns 0 or an errno value (positive) like the kernel; the caller turns
+ * that into a -1/errno return. */
+int irix_compat_sysget(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    enum { SGT_INFO = 0x1, SGT_READ = 0x2, SGT_WRITE = 0x4, SGT_SUM = 0x8,
+           SGT_CPUS = 0x10, SGT_NODES = 0x20, SGT_STAT = 0x40,
+           SC_DONE = 2, COOKIE_BYTES = 76, KSYM_OFF = 14, SGT_KSYM = 28 };
+    uint32_t name = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    uint32_t buflen = (uint32_t)cpu->gpr[6];
+    uint32_t flags = (uint32_t)cpu->gpr[7];
+    IrixGuestAddr cookie = (IrixGuestAddr)(uint32_t)cpu->gpr[8];
+    int ncpu = irix_kinfo_nprocs();
+    int percpu = 0, size = 0, num = 1, i;
+    uint32_t words[1280];
+    size_t nwords;
+
+    if (name < 1u || name > 33u) return EINVAL;
+    if (!irix_guest_ptr(rt, cookie, COOKIE_BYTES)) return EFAULT;
+    if (irix_guest_read32be(rt, cookie) == SC_DONE) return EINVAL;
+    if (!flags) return EINVAL;
+
+    switch (name) {
+    case 1: case 3: case 4: case 32: case 5: case 6: case 9: case 13:
+    case 14: case 20:
+        percpu = 1;                            /* SA_PERCPU objects */
+        /* fall through */
+    case 2: case 8: case 25: case 26:
+        size = (int)irix_kinfo_sa_size((int)name);
+        break;
+    case SGT_KSYM: {
+        char sym[64];
+        const char *s = irix_guest_cstr(rt, cookie + KSYM_OFF, 60u);
+        if (!s) return EFAULT;
+        snprintf(sym, sizeof(sym), "%s", s);
+        if (irix_kinfo_ksym_info(sym, &size, &num) != 0) return ENOENT;
+        if (flags & (SGT_CPUS | SGT_NODES)) return EINVAL;
+        if (flags & SGT_WRITE) return ENOTSUP;
+        if (flags & SGT_INFO) {
+            if (buflen < 12u || !irix_guest_ptr(rt, buf, 12u)) return EFAULT;
+            irix_guest_write32be(rt, buf, (uint32_t)size);
+            irix_guest_write32be(rt, buf + 4u, (uint32_t)num);
+            irix_guest_write32be(rt, buf + 8u, (uint32_t)num);
+        } else if (flags & SGT_READ) {
+            uint32_t want = (uint32_t)size * (uint32_t)num;
+            nwords = want / 4u;
+            if (nwords > 1024u) return EINVAL;
+            if (buflen < want || !irix_guest_ptr(rt, buf, want)) return EFAULT;
+            if (irix_kinfo_ksym_get(sym, words, nwords) != 0) return ENOENT;
+            for (i = 0; (size_t)i < nwords; ++i)
+                irix_guest_write32be(rt, buf + (IrixGuestAddr)(i * 4), words[i]);
+        } else {
+            return EINVAL;
+        }
+        irix_guest_write32be(rt, cookie, SC_DONE);
+        return 0;
+    }
+    default:
+        return ENOENT;                         /* not provided here */
+    }
+    if (!size) return ENOENT;
+
+    if ((flags & (SGT_CPUS | SGT_NODES)) && !percpu) return EINVAL;
+    if (flags & SGT_NODES) return ENOTSUP;
+    if (flags & SGT_WRITE) return ENOTSUP;
+
+    if (flags & SGT_INFO) {
+        int n = (flags & SGT_CPUS) ? ncpu : 1;
+        if (buflen < 12u || !irix_guest_ptr(rt, buf, 12u)) return EFAULT;
+        irix_guest_write32be(rt, buf, (uint32_t)size);
+        irix_guest_write32be(rt, buf + 4u, (uint32_t)n);
+        irix_guest_write32be(rt, buf + 8u, (uint32_t)n);
+    } else if (flags & SGT_READ) {
+        int n = (flags & SGT_CPUS) ? ncpu : 1;
+        uint32_t want = (uint32_t)size * (uint32_t)n;
+        int c;
+        if (buflen < want || !irix_guest_ptr(rt, buf, want)) return EFAULT;
+        for (c = 0; c < n; ++c) {
+            int which = (flags & SGT_CPUS) ? c : -1;
+            if (irix_kinfo_sa_get((int)(name == 32 ? 32 : (int)name),
+                                  which, words, (size_t)size / 4u) != 0)
+                return EINVAL;
+            for (i = 0; i < size / 4; ++i)
+                irix_guest_write32be(rt, buf + (IrixGuestAddr)(c * size + i * 4),
+                                     words[i]);
+        }
+    } else {
+        return EINVAL;
+    }
+    irix_guest_write32be(rt, cookie, SC_DONE);
+    return 0;
+}
+
 void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t cmd = (uint32_t)cpu->gpr[4];
@@ -726,6 +872,10 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     case 14u: /* MP_PGSIZE */
         compat_result(cpu, 16384);
+        return;
+
+    case 42u: /* MP_NUMNODES: one node */
+        compat_result(cpu, 1);
         return;
 
     case 21u: { /* MP_STAT(struct pda_stat *): processor status */
@@ -765,7 +915,22 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         uint32_t size = (uint32_t)cpu->gpr[7];
         int which = cmd == 15u ? (int)(int32_t)cpu->gpr[8] : -1;
         size_t need = irix_kinfo_sa_size(sub), i;
-        uint32_t words[128];
+        uint32_t words[1280];
+        if (!need && sub == 14) {
+            /* MPSA_TCPIPSTATS (struct kna): no kernel network counters
+             * here yet; an all-zero record of the size asked for. */
+            uint32_t zlen = size > 65536u ? 65536u : size;
+            uint32_t z;
+            if (!irix_guest_ptr(rt, buf, zlen)) {
+                errno = EFAULT;
+                compat_result(cpu, -1);
+                return;
+            }
+            for (z = 0; z + 4u <= zlen; z += 4u)
+                irix_guest_write32be(rt, buf + z, 0u);
+            compat_result(cpu, 0);
+            return;
+        }
         if (!need || need > sizeof(words) || size < need) {
             errno = need ? EINVAL : EINVAL;
             compat_result(cpu, -1);

@@ -40,4 +40,14 @@ size_t irix_kinfo_sa_size(int sub);
  * all processors.  Returns 0, or -1 if `sub` or `cpu` is invalid. */
 int irix_kinfo_sa_get(int sub, int cpu, uint32_t *words, size_t nwords);
 
+/* Secondary cache size in bytes and set associativity (SGICONST_SCACHE_*). */
+long irix_kinfo_scache_bytes(void);
+int irix_kinfo_scache_assoc(void);
+
+/* Named kernel objects for sysget(SGT_KSYM).  Returns the object's record
+ * size (bytes) and count, or -1 if the symbol is unknown.  irix_kinfo_ksym_get
+ * fills size*count bytes of 32-bit words in guest word order. */
+int irix_kinfo_ksym_info(const char *name, int *size, int *num);
+int irix_kinfo_ksym_get(const char *name, uint32_t *words, size_t nwords);
+
 #endif

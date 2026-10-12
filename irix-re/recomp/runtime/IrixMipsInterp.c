@@ -967,9 +967,19 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sf; break;
                 case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc((double)sf); break; /* TRUNC.L.S */
                 case 0x21: irix_guest_fpr_set_d(cpu, fd, (double)sf); break;
-                case 0x32: if(sf==tf)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
-                case 0x3c: if(sf<tf)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
-                case 0x3e: if(sf<=tf)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
+                case 0x30: case 0x31: case 0x32: case 0x33:
+                case 0x34: case 0x35: case 0x36: case 0x37:
+                case 0x38: case 0x39: case 0x3a: case 0x3b:
+                case 0x3c: case 0x3d: case 0x3e: case 0x3f: {
+                    /* c.cond: bit0 unordered, bit1 equal, bit2 less */
+                    int un = (sf != sf) || (tf != tf);
+                    int hit = ((funct & 1u) && un) ||
+                              ((funct & 2u) && !un && sf == tf) ||
+                              ((funct & 4u) && !un && sf < tf);
+                    if (hit) cpu->fcr31 |= 1u << 23;
+                    else cpu->fcr31 &= ~(1u << 23);
+                    break;
+                }
                 default: return 1;
                 }
                 break;
@@ -989,9 +999,19 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 case 0x0d: cpu->fpr[fd]=(cpu->fpr[fd]&UINT64_C(0xffffffff00000000))|(uint32_t)(int32_t)sd; break;
                 case 0x09: cpu->fpr[fd] = (uint64_t)(int64_t)trunc(sd); break; /* TRUNC.L.D */
                 case 0x20: irix_guest_fpr_set_s(cpu, fd, (float)sd); break;
-                case 0x32: if(sd==td)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
-                case 0x3c: if(sd<td)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
-                case 0x3e: if(sd<=td)cpu->fcr31|=1u<<23;else cpu->fcr31&=~(1u<<23); break;
+                case 0x30: case 0x31: case 0x32: case 0x33:
+                case 0x34: case 0x35: case 0x36: case 0x37:
+                case 0x38: case 0x39: case 0x3a: case 0x3b:
+                case 0x3c: case 0x3d: case 0x3e: case 0x3f: {
+                    /* c.cond: bit0 unordered, bit1 equal, bit2 less */
+                    int un = (sd != sd) || (td != td);
+                    int hit = ((funct & 1u) && un) ||
+                              ((funct & 2u) && !un && sd == td) ||
+                              ((funct & 4u) && !un && sd < td);
+                    if (hit) cpu->fcr31 |= 1u << 23;
+                    else cpu->fcr31 &= ~(1u << 23);
+                    break;
+                }
                 default: return 1;
                 }
                 break;

@@ -24,4 +24,6 @@ void irix_compat_prctl(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
 }
 #endif
 
+int irix_compat_sysget(IrixGuestRuntime *rt, IrixGuestCpu *cpu);
+
 #endif

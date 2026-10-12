@@ -127,6 +127,7 @@
 #define SYS_msync 1137
 #define SYS_madvise 1138
 #define SYS_pagelock 1139
+#define SYS_sysget 1226
 #define SYS_getpagesize 1140
 #define SYS_quotactl 1141
 #define SYS_BSDgetpgrp 1143

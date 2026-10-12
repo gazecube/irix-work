@@ -1,6 +1,7 @@
 #include "IrixKernelInfo.h"
 
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -280,6 +281,15 @@ size_t irix_kinfo_sa_size(int sub)
     case IRIX_KINFO_MPSA_SERR:      return SERR_WORDS * 4u;
     case IRIX_KINFO_MPSA_RMINFO:    return RMINFO_WORDS * 4u;
     case IRIX_KINFO_MPSA_SINFO_CPU: return SINFO_CPU_WORDS * 4u;
+    /* Sizes below are sizeof() of the IRIX 6.5.7m N32 structures. */
+    case 5:  return 64u;     /* MPSA_NCSTATS    struct ncstats        */
+    case 6:  return 100u;    /* MPSA_EFS        struct igetstats      */
+    case 9:  return 168u;    /* MPSA_BUFINFO    struct getblkstats    */
+    case 13: return 72u;     /* MPSA_VOPINFO    struct vnodestats     */
+    case 14: return 4824u;   /* MPSA_TCPIPSTATS struct kna            */
+    case 20: return 296u;    /* MPSA_XFSSTATS   struct xfsstats       */
+    case 25: return 32u;     /* MPSA_NODE_INFO  struct nodeinfo       */
+    case 26: return 28u;     /* MPSA_LPGSTATS   struct lpg_stat_info  */
     default:                        return 0;
     }
 }
@@ -368,9 +378,105 @@ int irix_kinfo_sa_get(int sub, int cpu, uint32_t *w, size_t nwords)
     case IRIX_KINFO_MPSA_DINFO:
     case IRIX_KINFO_MPSA_SERR:
         break;                                  /* all zero: no RFS, no overflow */
+    case 25: {                                  /* struct nodeinfo, one node */
+        unsigned long long totkb = meminfo_kb("MemTotal");
+        unsigned long long freekb = meminfo_kb("MemFree");
+        w[0] = 0;                               /* node_device */
+        w[1] = (uint32_t)(totkb * 1024ull);     /* totalmem (bytes) */
+        w[2] = (uint32_t)(freekb * 1024ull);    /* freemem  (bytes) */
+        break;
+    }
+    case 5: case 6: case 9: case 13: case 14: case 20: case 26:
+        break;                                  /* counters not kept: zero */
     default:
         return -1;
     }
     (void)i;
+    return 0;
+}
+
+long irix_kinfo_scache_bytes(void)
+{
+    return host_cache_bytes(2, 1024 * 1024);
+}
+
+int irix_kinfo_scache_assoc(void)
+{
+    return 2;
+}
+
+/* ---- sysget(SGT_KSYM) objects ----------------------------------------- */
+
+typedef struct KsymDef { const char *name; int words; } KsymDef;
+static const KsymDef ksyms[] = {
+    { "avenrun", 3 },          { "physmem", 1 },        { "kpbase", 1 },
+    { "freemem", 1 },          { "usermem", 1 },        { "dchunkpages", 1 },
+    { "bufmem", 1 },           { "chunkpages", 1 },     { "maxclick", 1 },
+    { "physmem_start", 1 },    { "syssegsz", 1 },       { "vn_vnumber", 1 },
+    { "vn_epoch", 1 },         { "vn_nfree", 1 },       { "min_file_pages", 1 },
+    { "min_free_pages", 1 },   { "swplo", 1 },          { "time", 1 },
+    { "splockmeter", 1 },
+};
+
+int irix_kinfo_ksym_info(const char *name, int *size, int *num)
+{
+    size_t i;
+    if (!name) return -1;
+    if (!strcmp(name, "gfxinfo")) {      /* struct gfxinfo (8 words) per cpu */
+        *size = 32;
+        *num = irix_kinfo_nprocs();
+        return 0;
+    }
+    for (i = 0; i < sizeof(ksyms) / sizeof(ksyms[0]); ++i) {
+        if (!strcmp(name, ksyms[i].name)) {
+            *size = ksyms[i].words * 4;
+            *num = 1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int irix_kinfo_ksym_get(const char *name, uint32_t *w, size_t nwords)
+{
+    int size, num;
+    size_t total, i;
+    unsigned long long totkb, freekb, availkb, bufkb, dirtykb;
+    if (irix_kinfo_ksym_info(name, &size, &num) != 0) return -1;
+    total = (size_t)size / 4u * (size_t)num;
+    if (nwords < total) return -1;
+    memset(w, 0, total * 4u);
+    totkb = meminfo_kb("MemTotal");
+    freekb = meminfo_kb("MemFree");
+    availkb = meminfo_kb("MemAvailable");
+    bufkb = meminfo_kb("Buffers");
+    dirtykb = meminfo_kb("Dirty");
+    #define PG(kb) ((uint32_t)((kb) * 1024ull / IRIX_PAGE_BYTES))
+    if (!strcmp(name, "avenrun")) {
+        double a[3] = { 0, 0, 0 };
+        FILE *f = fopen("/proc/loadavg", "r");
+        if (f) {
+            if (fscanf(f, "%lf %lf %lf", &a[0], &a[1], &a[2]) != 3)
+                a[0] = a[1] = a[2] = 0;
+            fclose(f);
+        }
+        for (i = 0; i < 3; ++i)
+            w[i] = (uint32_t)(a[i] * 1024.0 + 0.5);
+    } else if (!strcmp(name, "physmem") || !strcmp(name, "maxclick")) {
+        w[0] = PG(totkb);
+    } else if (!strcmp(name, "freemem")) {
+        w[0] = PG(freekb);
+    } else if (!strcmp(name, "usermem")) {
+        w[0] = PG(availkb);
+    } else if (!strcmp(name, "dchunkpages")) {
+        w[0] = PG(dirtykb);
+    } else if (!strcmp(name, "bufmem")) {
+        w[0] = PG(bufkb);
+    } else if (!strcmp(name, "vn_vnumber")) {
+        w[0] = 1;
+    } else if (!strcmp(name, "time")) {
+        w[0] = (uint32_t)time(0);
+    }
+    #undef PG
     return 0;
 }

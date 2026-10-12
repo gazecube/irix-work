@@ -31,6 +31,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
+#include <sys/times.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <time.h>
@@ -2135,10 +2136,148 @@ static char **irix_guest_string_vector(IrixGuestRuntime *rt,
     return out;
 }
 
+
+/* ---- IRIX termio <-> Linux termios ------------------------------------ */
+
+#include <termios.h>
+
+/* Indices into IRIX c_cc[] (struct termio / termios, SVR4 numbering). */
+enum { IV_INTR = 0, IV_QUIT = 1, IV_ERASE = 2, IV_KILL = 3, IV_EOF = 4,
+       IV_EOL = 5, IV_EOL2 = 6, IV_SWTCH = 7, IV_START = 8, IV_STOP = 9,
+       IV_SUSP = 10, IV_DSUSP = 11, IV_REPRINT = 12, IV_DISCARD = 13,
+       IV_WERASE = 14, IV_LNEXT = 15, IV_NCCS = 23 };
+
+static uint32_t irix_lflag_from_host(tcflag_t l)
+{
+    uint32_t o = l & (ISIG | ICANON | XCASE | ECHO | ECHOE | ECHOK | ECHONL |
+                      NOFLSH);
+    if (l & IEXTEN) o |= 0000400u;
+    if (l & TOSTOP) o |= 0001000u;
+    return o;
+}
+
+static tcflag_t host_lflag_from_irix(uint32_t l)
+{
+    tcflag_t o = (tcflag_t)(l & (ISIG | ICANON | XCASE | ECHO | ECHOE | ECHOK |
+                                 ECHONL | NOFLSH));
+    if (l & 0000400u) o |= IEXTEN;
+    if (l & 0001000u) o |= TOSTOP;
+    return o;
+}
+
+static int irix_termio_get(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
+                           int with_speeds)
+{
+    struct termios t;
+    uint8_t cc[IV_NCCS];
+    unsigned o = 0, i;
+    if (tcgetattr(fd, &t) != 0) return -1;
+    memset(cc, 0, sizeof(cc));
+    cc[IV_INTR] = t.c_cc[VINTR];   cc[IV_QUIT] = t.c_cc[VQUIT];
+    cc[IV_ERASE] = t.c_cc[VERASE]; cc[IV_KILL] = t.c_cc[VKILL];
+    if (t.c_lflag & ICANON) {      /* slots 4/5 are EOF/EOL when canonical */
+        cc[IV_EOF] = t.c_cc[VEOF];
+        cc[IV_EOL] = t.c_cc[VEOL];
+    } else {                       /* ... and VMIN/VTIME otherwise */
+        cc[IV_EOF] = t.c_cc[VMIN];
+        cc[IV_EOL] = t.c_cc[VTIME];
+    }
+    cc[IV_EOL2] = t.c_cc[VEOL2];   cc[IV_SWTCH] = t.c_cc[VSWTC];
+    cc[IV_START] = t.c_cc[VSTART]; cc[IV_STOP] = t.c_cc[VSTOP];
+    cc[IV_SUSP] = t.c_cc[VSUSP];   cc[IV_DSUSP] = 0x19;       /* ^Y */
+    cc[IV_REPRINT] = t.c_cc[VREPRINT]; cc[IV_DISCARD] = t.c_cc[VDISCARD];
+    cc[IV_WERASE] = t.c_cc[VWERASE];   cc[IV_LNEXT] = t.c_cc[VLNEXT];
+    if (!irix_guest_ptr(rt, a, with_speeds ? 48u : 40u)) {
+        errno = EFAULT;
+        return -1;
+    }
+    irix_guest_write32be(rt, a + 0u, (uint32_t)(t.c_iflag & 0x7fffu));
+    irix_guest_write32be(rt, a + 4u, (uint32_t)(t.c_oflag & 0x7fffu));
+    irix_guest_write32be(rt, a + 8u, (uint32_t)(t.c_cflag & 0x7fffu));
+    irix_guest_write32be(rt, a + 12u, irix_lflag_from_host(t.c_lflag));
+    o = 16u;
+    if (with_speeds) {
+        uint32_t sp = (uint32_t)(cfgetospeed(&t) & 017u);
+        irix_guest_write32be(rt, a + o, sp);
+        irix_guest_write32be(rt, a + o + 4u, sp);
+        o += 8u;
+    }
+    irix_guest_write8(rt, a + o, t.c_line);
+    for (i = 0; i < IV_NCCS; ++i)
+        irix_guest_write8(rt, a + o + 1u + i, cc[i]);
+    return 0;
+}
+
+static int irix_termio_set(IrixGuestRuntime *rt, int fd, IrixGuestAddr a,
+                           int with_speeds, int action)
+{
+    struct termios t;
+    uint8_t cc[IV_NCCS];
+    uint32_t lflag;
+    unsigned o = 16u, i;
+    if (tcgetattr(fd, &t) != 0) return -1;
+    if (!irix_guest_ptr(rt, a, with_speeds ? 48u : 40u)) {
+        errno = EFAULT;
+        return -1;
+    }
+    t.c_iflag = (t.c_iflag & ~0x7fffu) | (irix_guest_read32be(rt, a) & 0x7fffu);
+    t.c_oflag = (t.c_oflag & ~0x7fffu) | (irix_guest_read32be(rt, a + 4u) & 0x7fffu);
+    t.c_cflag = (t.c_cflag & ~0x7fffu) | (irix_guest_read32be(rt, a + 8u) & 0x7fffu);
+    lflag = irix_guest_read32be(rt, a + 12u);
+    t.c_lflag = (t.c_lflag & ~(ISIG | ICANON | XCASE | ECHO | ECHOE | ECHOK |
+                               ECHONL | NOFLSH | IEXTEN | TOSTOP)) |
+                host_lflag_from_irix(lflag);
+    if (with_speeds) {
+        uint32_t sp = irix_guest_read32be(rt, a + 16u) & 017u;
+        if (sp) {
+            cfsetospeed(&t, (speed_t)sp);
+            cfsetispeed(&t, (speed_t)sp);
+        }
+        o = 24u;
+    }
+    for (i = 0; i < IV_NCCS; ++i)
+        cc[i] = irix_guest_read8(rt, a + o + 1u + i);
+    t.c_cc[VINTR] = cc[IV_INTR];   t.c_cc[VQUIT] = cc[IV_QUIT];
+    t.c_cc[VERASE] = cc[IV_ERASE]; t.c_cc[VKILL] = cc[IV_KILL];
+    if (lflag & ICANON) {
+        t.c_cc[VEOF] = cc[IV_EOF];
+        t.c_cc[VEOL] = cc[IV_EOL];
+    } else {
+        t.c_cc[VMIN] = cc[IV_EOF];
+        t.c_cc[VTIME] = cc[IV_EOL];
+    }
+    t.c_cc[VEOL2] = cc[IV_EOL2];   t.c_cc[VSWTC] = cc[IV_SWTCH];
+    t.c_cc[VSTART] = cc[IV_START]; t.c_cc[VSTOP] = cc[IV_STOP];
+    t.c_cc[VSUSP] = cc[IV_SUSP];
+    t.c_cc[VREPRINT] = cc[IV_REPRINT]; t.c_cc[VDISCARD] = cc[IV_DISCARD];
+    t.c_cc[VWERASE] = cc[IV_WERASE];   t.c_cc[VLNEXT] = cc[IV_LNEXT];
+    return tcsetattr(fd, action, &t);
+}
+
 void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t number = (uint32_t)cpu->gpr[2];
     int64_t result;
+    static int trace_syscalls = -1;
+
+    if (trace_syscalls < 0)
+        trace_syscalls = getenv("IRIX_TRACE_SYSCALLS") != 0;
+    if (trace_syscalls && number == 1001u) {
+        unsigned k;
+        fprintf(stderr, "EXITSTACK status=%d:", (int)(int32_t)cpu->gpr[4]);
+        for (k = 0; k < 96; ++k) {
+            uint32_t v = irix_guest_read32be(
+                rt, (IrixGuestAddr)((uint32_t)cpu->gpr[29] + 4u * k));
+            if (v >= 0x10000000u && v < 0x10100000u)
+                fprintf(stderr, " %08x", v);
+        }
+        fputc('\n', stderr);
+    }
+    if (trace_syscalls)
+        fprintf(stderr, "SYSCALL %u a0-a3=%08x,%08x,%08x,%08x ra=%08x\n",
+                number, (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5],
+                (unsigned)cpu->gpr[6], (unsigned)cpu->gpr[7],
+                (unsigned)cpu->gpr[31]);
 
     errno = 0;
     switch (number) {
@@ -3363,6 +3502,69 @@ exec_syscall_failed:
             return;
         }
 
+        /* Terminal attributes: IRIX termio (TIOC|1..4 old, TIOC|201..204
+         * new layout), window size and flush, translated for the host tty. */
+        switch (cmd) {
+        case 0x5401u: case 0x54c9u:        /* TCGETA */
+            syscall_result(cpu, (int64_t)irix_termio_get(
+                rt, fd, arg_addr, cmd == 0x54c9u));
+            return;
+        case 0x5402u: case 0x54cau:        /* TCSETA  */
+        case 0x5403u: case 0x54cbu:        /* TCSETAW */
+        case 0x5404u: case 0x54ccu: {      /* TCSETAF */
+            int act = (cmd & 0xffu) == 0x02u || (cmd & 0xffu) == 0xcau ? TCSANOW
+                    : (cmd & 0xffu) == 0x03u || (cmd & 0xffu) == 0xcbu ? TCSADRAIN
+                    : TCSAFLUSH;
+            syscall_result(cpu, (int64_t)irix_termio_set(
+                rt, fd, arg_addr, (cmd & 0xffu) >= 0xc9u, act));
+            return;
+        }
+        case 0x5407u: {                    /* TCFLSH */
+            int q = (int)(uint32_t)cpu->gpr[6];
+            syscall_result(cpu, (int64_t)tcflush(fd,
+                q == 0 ? TCIFLUSH : q == 1 ? TCOFLUSH : TCIOFLUSH));
+            return;
+        }
+        case 0x5405u:                      /* TCSBRK: drain or send break */
+            syscall_result(cpu, (int64_t)((uint32_t)cpu->gpr[6]
+                ? tcdrain(fd) : tcsendbreak(fd, 0)));
+            return;
+        case 0x40087468u: {                /* TIOCGWINSZ (struct winsize) */
+            struct winsize ws;
+            if (!arg_addr || !irix_guest_ptr(rt, arg_addr, 8u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            if (ioctl(fd, TIOCGWINSZ, &ws) != 0) {
+                syscall_result(cpu, -1);
+                return;
+            }
+            irix_guest_write16be(rt, arg_addr, ws.ws_row);
+            irix_guest_write16be(rt, arg_addr + 2u, ws.ws_col);
+            irix_guest_write16be(rt, arg_addr + 4u, ws.ws_xpixel);
+            irix_guest_write16be(rt, arg_addr + 6u, ws.ws_ypixel);
+            syscall_result(cpu, 0);
+            return;
+        }
+        case 0x80087467u: {                /* TIOCSWINSZ */
+            struct winsize ws;
+            if (!arg_addr || !irix_guest_ptr(rt, arg_addr, 8u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            ws.ws_row = irix_guest_read16be(rt, arg_addr);
+            ws.ws_col = irix_guest_read16be(rt, arg_addr + 2u);
+            ws.ws_xpixel = irix_guest_read16be(rt, arg_addr + 4u);
+            ws.ws_ypixel = irix_guest_read16be(rt, arg_addr + 6u);
+            syscall_result(cpu, (int64_t)ioctl(fd, TIOCSWINSZ, &ws));
+            return;
+        }
+        default:
+            break;
+        }
+
         /*
          * Scalar/no-argument IRIX ioctls can be forwarded unchanged to the
          * IRIX spty module.  Pointer-bearing commands get explicit ABI
@@ -3858,6 +4060,41 @@ exec_syscall_failed:
         return;
     case SYS_sysmp: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
+        return;
+    case SYS_sysget: { /* sysget(name, buf, buflen, flags, cookie) */
+        int err = irix_compat_sysget(rt, cpu);
+        if (err) {
+            errno = err;
+            syscall_result(cpu, -1);
+        } else {
+            syscall_result(cpu, 0);
+        }
+        return;
+    }
+    case SYS_times: { /* times(struct tms *): four 32-bit tick counts */
+        IrixGuestAddr out = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        struct tms t;
+        clock_t r = times(&t);
+        if (r == (clock_t)-1) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (out) {
+            if (!irix_guest_ptr(rt, out, 16u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            irix_guest_write32be(rt, out, (uint32_t)t.tms_utime);
+            irix_guest_write32be(rt, out + 4u, (uint32_t)t.tms_stime);
+            irix_guest_write32be(rt, out + 8u, (uint32_t)t.tms_cutime);
+            irix_guest_write32be(rt, out + 12u, (uint32_t)t.tms_cstime);
+        }
+        syscall_result(cpu, (int64_t)(uint32_t)r);
+        return;
+    }
+    case SYS_pagelock: /* pagelock(addr, len, op): pin pages; nothing to do */
+        syscall_result(cpu, 0);
         return;
     case SYS_utssys: { /* utssys(buf, mv, type): libc uname() is type 0 */
         IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
