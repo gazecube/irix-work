@@ -259,6 +259,44 @@
       "kind": "runtime",
       "path": "usr/bin/X11/reaper",
       "shared_components": []
+    },
+    {
+      "name": "clogin",
+      "prefix": "clogin",
+      "kind": "runtime",
+      "path": "usr/Cadmin/bin/clogin",
+      "shared_components": [
+        {
+          "prefix": "imdUtil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdUtil.so"
+        },
+        {
+          "prefix": "imdXutil",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdXutil.so"
+        },
+        {
+          "prefix": "imdModel",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdModel.so"
+        },
+        {
+          "prefix": "imdIconPanel",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdIconPanel.so"
+        },
+        {
+          "prefix": "imdFtrDB",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdFtrDB.so"
+        },
+        {
+          "prefix": "imdFtrIcon",
+          "kind": "internal",
+          "path": "usr/lib32/internal/libimdFtrIcon.so"
+        }
+      ]
     }
   ],
   "shared_components": [
