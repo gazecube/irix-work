@@ -36,6 +36,8 @@
 #include <wchar.h>
 #include <wctype.h>
 
+static IrixGuestAddr guest_alloc(IrixGuestRuntime *rt, uint32_t n);
+
 static const char *gcs(IrixGuestRuntime *rt, uint32_t a)
 {
     return a ? irix_guest_cstr(rt, a, 65536u) : 0;
@@ -246,8 +248,32 @@ static void b_sysfs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     else FAIL(EINVAL);
 }
 
+/* syslog/vsyslog: format with the guest printf engine and write the line to
+ * stderr (there is no syslogd).  syslog(pri, fmt, ...) has exactly the
+ * register layout of sprintf(buf, fmt, ...), vsyslog the one of vsprintf. */
+IrixGuestFunction irix_clib_extra_bridge_lookup_base(const char *name);
+
+static void syslog_emit(IrixGuestRuntime *rt, IrixGuestCpu *cpu, const char *via)
+{
+    IrixGuestFunction f = irix_clib_extra_bridge_lookup_base(via);
+    IrixGuestAddr buf;
+    IrixGuestCpu c;
+    const char *msg;
+    if (!f) return;
+    buf = guest_alloc(rt, 2048u);
+    if (!buf) return;
+    c = *cpu;
+    c.gpr[4] = buf;
+    f(rt, &c);
+    msg = irix_guest_cstr(rt, buf, 2048u);
+    if (msg) fprintf(stderr, "syslog(%u): %s\n", ARG(0), msg);
+}
+
 static void b_syslog(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{ (void)rt; RET(0); }
+{ syslog_emit(rt, cpu, "sprintf"); RET(0); }
+
+static void b_vsyslog(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ syslog_emit(rt, cpu, "vsprintf"); RET(0); }
 
 static void b_sigset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {   /* sigset(sig, handler): handler dispositions SIG_DFL=0, SIG_IGN=1 only */
@@ -414,7 +440,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "utime", b_utime }, { "mkfifo", b_mkfifo }, { "mknod", b_mknod },
         { "lockf", b_lockf }, { "getrlimit", b_getrlimit },
         { "statfs", b_statfs }, { "statvfs", b_statvfs }, { "fstatvfs64", b_fstatvfs64 },
-        { "sysfs", b_sysfs }, { "syslog", b_syslog }, { "sigset", b_sigset },
+        { "sysfs", b_sysfs }, { "syslog", b_syslog }, { "vsyslog", b_vsyslog }, { "sigset", b_sigset },
         { "inet_addr", b_inet_addr }, { "inet_ntoa", b_inet_ntoa },
         { "getspnam", b_getspnam }, { "getspent", b_getspent }, { "endspent", b_endspent },
         { "setuid", b_setuid }, { "setgid", b_setgid }, { "seteuid", b_seteuid },
