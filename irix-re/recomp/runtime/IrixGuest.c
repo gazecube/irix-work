@@ -2262,7 +2262,8 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     if (trace_syscalls < 0)
         trace_syscalls = getenv("IRIX_TRACE_SYSCALLS") != 0;
-    if (trace_syscalls && number == 1001u) {
+    if (trace_syscalls && (number == 1001u ||
+                           (number == 1004u && getenv("IRIX_RING_ALL")))) {
         unsigned k;
         fprintf(stderr, "EXITSTACK status=%d:", (int)(int32_t)cpu->gpr[4]);
         for (k = 0; k < 96; ++k) {
@@ -2279,8 +2280,13 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             fprintf(stderr, "PCRING (oldest..newest, 0x1000xxxx only):");
             for (q = 0; q < 8192; ++q) {
                 uint32_t v = irix_pc_ring[(irix_pc_ring_pos + q) & 8191u];
-                if (v >= 0x10000000u && v < 0x10100000u)
-                    fprintf(stderr, " %08x", v);
+                if (getenv("IRIX_RING_ALL") || (v >= 0x10000000u && v < 0x10100000u)) {
+                    if (getenv("IRIX_RING_ALL"))
+                        fprintf(stderr, " %08x:%08x", v,
+                                irix_guest_read32be(rt, v));
+                    else
+                        fprintf(stderr, " %08x", v);
+                }
             }
             fputc('\n', stderr);
         }
