@@ -113,13 +113,13 @@ static int confirm(const char *display, const char *root)
     setenv("IRIX_XT_XM_STABILITY", "0", 0);
     snprintf(xconfirm, sizeof(xconfirm), "%s/usr/bin/X11/xconfirm", root);
     reply[0] = '\0';
-    rc = run(a1, reply, sizeof(reply), 2);
+    rc = run(a1, reply, sizeof(reply), 1);
     logf_("xconfirm rc=%d reply=[%.120s]", rc, reply);
     if (rc >= 0 && rc != 126 && rc != 127 && rc != 255) {
         /* xconfirm ran and the user answered (or dismissed it: empty reply,
          * which is "no").  Never ask a second question. */
-        /* The answer arrives on stderr, next to the runner's own status
-         * line, so look for a line that is exactly the button label. */
+        /* xconfirm prints the pressed button's label on stdout; look for a
+         * line that is exactly "Yes". */
         char *line = reply, *nl;
         int yes = 0;
         while (line && *line) {
