@@ -382,6 +382,30 @@ static void bridge_fcntl(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          */
         rc = fcntl(fd, F_SETFL, host_status_flags_from_irix(arg));
         break;
+    case 14: case 6: case 7:        /* F_GETLK, F_SETLK, F_SETLKW */
+    case 33: case 34: case 35: {    /* F_GETLK64, F_SETLK64, F_SETLKW64 */
+        /* N32 struct flock: short type, short whence, off_t start @8,
+         * off_t len @16, long sysid @24, pid_t pid @28.  SVR4 lock types
+         * RDLCK=1 WRLCK=2 UNLCK=3 map onto Linux 0/1/2. */
+        struct flock fl;
+        int op = (cmd == 14 || cmd == 33) ? F_GETLK
+               : (cmd == 6 || cmd == 34) ? F_SETLK : F_SETLKW;
+        uint16_t t = irix_guest_read16be(rt, arg);
+        memset(&fl, 0, sizeof(fl));
+        fl.l_type = t == 1 ? F_RDLCK : t == 2 ? F_WRLCK : F_UNLCK;
+        fl.l_whence = (short)irix_guest_read16be(rt, arg + 2u);
+        fl.l_start = (off_t)(int64_t)irix_guest_read64be(rt, arg + 8u);
+        fl.l_len = (off_t)(int64_t)irix_guest_read64be(rt, arg + 16u);
+        rc = fcntl(fd, op, &fl);
+        if (rc == 0 && op == F_GETLK) {
+            irix_guest_write16be(rt, arg, fl.l_type == F_RDLCK ? 1u
+                                 : fl.l_type == F_WRLCK ? 2u : 3u);
+            irix_guest_write64be(rt, arg + 8u, (uint64_t)fl.l_start);
+            irix_guest_write64be(rt, arg + 16u, (uint64_t)fl.l_len);
+            irix_guest_write32be(rt, arg + 28u, (uint32_t)fl.l_pid);
+        }
+        break;
+    }
     default:
         errno = EINVAL;
         rc = -1;

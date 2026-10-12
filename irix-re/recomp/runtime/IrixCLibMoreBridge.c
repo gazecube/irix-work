@@ -146,7 +146,14 @@ static void b_mknod(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 static void b_lockf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{ (void)rt; RET(lockf((int)ARG(0), (int)ARG(1), (off_t)(int32_t)ARG(2))); }
+{
+    int r;
+    (void)rt;
+    r = lockf((int)ARG(0), (int)ARG(1), (off_t)(int32_t)ARG(2));
+    if (r) fprintf(stderr, "lockf(fd=%d, cmd=%d, len=%d) failed: %s\n",
+                   (int)ARG(0), (int)ARG(1), (int)ARG(2), strerror(errno));
+    RET(r);
+}
 
 static void b_getrlimit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
