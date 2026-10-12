@@ -13,6 +13,7 @@ add_library(irix_recomp_runtime SHARED
     runtime/IrixMipsInterp.c
     runtime/IrixMipsJit.c
     runtime/IrixCompat.c
+    runtime/IrixKernelInfo.c
     runtime/IrixElf.c
 )
 

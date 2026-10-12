@@ -1,5 +1,6 @@
 #include "IrixCompat.h"
 #include "IrixSyssgiNumbers.h"
+#include "IrixKernelInfo.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -265,6 +266,47 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         compat_result(cpu, disallow ? 1 : 0);
         return;
     }
+
+    case SGI_INVENT: { /* hardware inventory (libc getinvent) */
+        uint32_t sub = (uint32_t)cpu->gpr[5];
+        const uint32_t isize = 24u;   /* N32 inventory_t */
+        if (sub == 1u) {              /* SGI_INV_SIZEOF */
+            compat_result(cpu, (int64_t)isize);
+            return;
+        }
+        if (sub == 2u) {              /* SGI_INV_READ(buf, bytes) */
+            IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+            uint32_t bytes = (uint32_t)cpu->gpr[7];
+            IrixKinfoInvent recs[32];
+            size_t have = irix_kinfo_inventory(recs, 32u), i;
+            uint32_t written = 0;
+            for (i = 0; i < have && bytes - written >= isize; ++i) {
+                IrixGuestAddr a = buf + written;
+                if (!irix_guest_ptr(rt, a, isize)) {
+                    errno = EFAULT;
+                    compat_result(cpu, -1);
+                    return;
+                }
+                irix_guest_write32be(rt, a + 0u, 0u);   /* inv_next */
+                irix_guest_write32be(rt, a + 4u, (uint32_t)recs[i].inv_class);
+                irix_guest_write32be(rt, a + 8u, (uint32_t)recs[i].inv_type);
+                irix_guest_write32be(rt, a + 12u, (uint32_t)recs[i].inv_controller);
+                irix_guest_write32be(rt, a + 16u, (uint32_t)recs[i].inv_unit);
+                irix_guest_write32be(rt, a + 20u, (uint32_t)recs[i].inv_state);
+                written += isize;
+            }
+            compat_result(cpu, (int64_t)written);
+            return;
+        }
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
+    }
+
+    case 102: /* SGI_GET_EVCONF: Everest configuration; not an Everest */
+        errno = EINVAL;
+        compat_result(cpu, -1);
+        return;
 
     case SGI_TOSSTSAVE: /* SGI_TOSSTSAVE */
         compat_result(cpu, 0);

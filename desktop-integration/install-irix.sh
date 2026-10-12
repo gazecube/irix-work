@@ -81,6 +81,7 @@ done
 install -m755 "$recomp/irix-guest-exec" "$prefix/bin/irix-guest-exec"
 install -m755 "$recomp/quick/irix-session" "$prefix/bin/irix-session"
 install -m755 "$here/xsession/irix-claude" "$prefix/bin/irix-claude"
+install -m755 "$here/irix-run" "$prefix/bin/irix-run"
 
 cat >"$prefix/libexec/irix-desktop-session" <<EOF
 #!/bin/sh

@@ -1,0 +1,47 @@
+#!/bin/sh
+# Run an original IRIX program from a normal host shell.
+#
+#   irix-run /sbin/hinv [args...]
+#
+# The program is looked up by its IRIX path.  A native runner under
+# $IRIX_RECOMP_ROOT is used when one exists; otherwise the original MIPS
+# image is executed through the generic guest runner.
+#
+# Environment: IRIX_RECOMP_ROOT, IRIX_RUNTIME_TREE, IRIX_GUEST_EXEC_RUNNER
+# (defaults are found relative to this script's prefix or the build tree),
+# IRIX_EXEC_BACKEND (default: interp).
+set -u
+self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+bindir="$(dirname "$self")"
+prefix="$(cd "$bindir/.." && pwd)"
+if [ -d "$prefix/root" ] && [ -d "$prefix/tree" ]; then
+    : "${IRIX_RECOMP_ROOT:=$prefix/root}"
+    : "${IRIX_RUNTIME_TREE:=$prefix/tree}"
+    : "${IRIX_GUEST_EXEC_RUNNER:=$prefix/bin/irix-guest-exec}"
+    LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+else
+    here="$(cd "$bindir/.." && pwd)"
+    build="${IRIX_BUILD_DIR:-$here/build-irix-re}/recomp"
+    : "${IRIX_RECOMP_ROOT:=$build/root}"
+    : "${IRIX_RUNTIME_TREE:=$here/IRIX-TREE}"
+    : "${IRIX_GUEST_EXEC_RUNNER:=$build/irix-guest-exec}"
+fi
+export IRIX_RECOMP_ROOT IRIX_RUNTIME_TREE IRIX_GUEST_EXEC_RUNNER
+[ $# -ge 1 ] || { echo "usage: irix-run /irix/path [args...]" >&2; exit 2; }
+prog=$1; shift
+if [ -x "$IRIX_RECOMP_ROOT$prog" ]; then
+    exec "$IRIX_RECOMP_ROOT$prog" "$@"
+fi
+IRIX_EXEC_BACKEND="${IRIX_EXEC_BACKEND:-interp}"
+IRIX_GUEST_EXEC_PATH="$prog"
+export IRIX_EXEC_BACKEND IRIX_GUEST_EXEC_PATH
+# The generic runner is chatty on stderr; drop its status lines but keep real
+# messages, and keep the program's own stdout and exit status.
+rcfile="$(mktemp)"
+{
+    { "$IRIX_GUEST_EXEC_RUNNER" "$prog" "$@"; echo $? >"$rcfile"; } 2>&1 1>&3 |
+        grep -v '^IRIX generic XFontSet bridge\|^IRIX guest exec path\|^IRIX guest-exec PT_INTERP\|^IRIX generic guest mode\|^IRIX MIPS interpreter: memory/trap failure pc=0fa36344' >&2
+} 3>&1
+rc=$(cat "$rcfile" 2>/dev/null); rm -f "$rcfile"
+exit "${rc:-1}"
