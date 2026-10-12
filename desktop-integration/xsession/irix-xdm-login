@@ -1,0 +1,11 @@
+#!/bin/sh
+# loginProgram for the original IRIX xdm: run the recompiled Clogin greeter.
+# xdm starts this through the host shell (its system() is not tree-relative),
+# so it cannot be the stock /var/X11/xdm/Xlogin script, which names guest
+# paths.  It does what that script ends in: `clogin -f $DISPLAY`.
+here="$(cd "$(dirname "$0")" && pwd)"
+R="${IRIX_WORK:-$(cd "$here/../.." && pwd)}"
+BUILD="${IRIX_BUILD:-build-irix-re}"
+d="${1:-$DISPLAY}"
+IRIX_GUEST_DISPLAY="$d" IRIX_RUNTIME_TREE="${IRIX_RUNTIME_TREE:-$R/IRIX-TREE}" \
+    exec "$R/$BUILD/recomp/root/usr/Cadmin/bin/clogin" -f "$d"
