@@ -191,6 +191,9 @@ static void bridge_ungetc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }
 
+long irix_stdio_write_stream(IrixGuestRuntime *rt, IrixGuestAddr handle,
+                             const char *buf, size_t n);
+
 static void bridge_fputc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr handle = (uint32_t)cpu->gpr[5];
@@ -228,7 +231,13 @@ static void bridge_fwrite(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     FILE *f = file_from_guest(rt, handle);
     uint64_t total = (uint64_t)size * count;
     const void *src = total <= SIZE_MAX ? irix_guest_ptr(rt, src_addr, (size_t)total) : 0;
-    size_t r = (f && (total == 0 || src)) ? fwrite(src, size, count, f) : 0;
+    size_t r;
+    if (!f && src && total) {  /* real guest FILE (guest libc iob) */
+        long w = irix_stdio_write_stream(rt, handle, (const char *)src, (size_t)total);
+        cpu->gpr[2] = (uint64_t)(w > 0 && size ? (size_t)w / size : 0);
+        return;
+    }
+    r = (f && (total == 0 || src)) ? fwrite(src, size, count, f) : 0;
     sync_file_by_addr(rt, handle);
     cpu->gpr[2] = (uint64_t)r;
 }
@@ -276,7 +285,14 @@ static void bridge_fputs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *s = guest_cstr(rt, (uint32_t)cpu->gpr[4]);
     IrixGuestAddr handle = (uint32_t)cpu->gpr[5];
     FILE *f = file_from_guest(rt, handle);
-    int r = (f && s) ? fputs(s, f) : EOF;
+    int r;
+    if (!f && s) {  /* real guest FILE (guest libc iob) */
+        size_t n = strlen(s);
+        r = irix_stdio_write_stream(rt, handle, s, n) == (long)n ? 0 : EOF;
+        cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
+        return;
+    }
+    r = (f && s) ? fputs(s, f) : EOF;
     sync_file_by_addr(rt, handle);
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }
@@ -285,7 +301,25 @@ static void bridge_fflush(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr handle = (uint32_t)cpu->gpr[4];
     FILE *f = file_from_guest(rt, handle);
-    int r = f ? fflush(f) : fflush(0);
+    int r;
+    if (!f && handle && irix_guest_ptr(rt, handle, 16u)) {
+        /* Real guest FILE (guest libc iob): the inlined putc macros store
+         * straight into its buffer; write out what is pending and reset the
+         * buffer (layout: _cnt@0, _ptr@4, _base@8, _file@14). */
+        uint32_t cnt = irix_guest_read32be(rt, handle);
+        uint32_t ptr = irix_guest_read32be(rt, handle + 4u);
+        uint32_t base = irix_guest_read32be(rt, handle + 8u);
+        if (base && ptr > base && ptr - base < (1u << 20)) {
+            const char *p = (const char *)irix_guest_ptr(rt, base, ptr - base);
+            if (p)
+                (void)irix_stdio_write_stream(rt, handle, p, ptr - base);
+            irix_guest_write32be(rt, handle + 4u, base);
+            irix_guest_write32be(rt, handle, cnt + (ptr - base));
+        }
+        cpu->gpr[2] = 0;
+        return;
+    }
+    r = f ? fflush(f) : fflush(0);
     if (f) sync_file_by_addr(rt, handle);
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
 }

@@ -6645,6 +6645,15 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
             irix_mips_interp_push_translated(&translated_frame, address,
                                               entry->size, caller_ra);
+        {
+            static int trace_calls = -1;
+            if (trace_calls < 0) trace_calls = getenv("IRIX_TRACE_CALLS") != 0;
+            if (trace_calls && !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED))
+                fprintf(stderr, "CALL %s a0=%08x a1=%08x a2=%08x\n",
+                        entry->name ? entry->name : "?",
+                        (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5],
+                        (unsigned)cpu->gpr[6]);
+        }
         entry->function(rt, cpu);
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
             irix_mips_interp_pop_translated(&translated_frame);
