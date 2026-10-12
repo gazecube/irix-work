@@ -3859,6 +3859,34 @@ exec_syscall_failed:
     case SYS_sysmp: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
+    case SYS_utssys: { /* utssys(buf, mv, type): libc uname() is type 0 */
+        IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        uint32_t type = (uint32_t)cpu->gpr[6];
+        if (type == 0u) { /* UTS_UNAME: same identity as the uname bridge */
+            enum { NMLN = 257, FIELDS = 14 };
+            char host[NMLN];
+            unsigned char *p = (unsigned char *)irix_guest_ptr(
+                rt, buf, (size_t)NMLN * FIELDS);
+            if (!p) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            if (gethostname(host, sizeof(host)) != 0 || !host[0])
+                strcpy(host, "IRIS");
+            memset(p, 0, (size_t)NMLN * FIELDS);
+            strncpy((char *)p + 0 * NMLN, "IRIX", NMLN - 1);
+            strncpy((char *)p + 1 * NMLN, host, NMLN - 1);
+            strncpy((char *)p + 2 * NMLN, "6.5", NMLN - 1);
+            strncpy((char *)p + 3 * NMLN, "6.5.7", NMLN - 1);
+            strncpy((char *)p + 4 * NMLN, "IP30", NMLN - 1);
+            syscall_result(cpu, 0);
+            return;
+        }
+        errno = EINVAL;
+        syscall_result(cpu, -1);
+        return;
+    }
     case SYS_setregid: { /* setregid */
         gid_t rgid = (gid_t)(uint32_t)cpu->gpr[4];
         gid_t egid = (gid_t)(uint32_t)cpu->gpr[5];
@@ -6338,6 +6366,32 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
 {
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
+
+    if (getenv("IRIX_TRACE_FPRINTF")) {
+        IrixGuestAddr fmt = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr fmt2 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        const char *f = irix_guest_ptr(rt, fmt, 8u) ? irix_guest_cstr(rt, fmt, 128u) : 0;
+        const char *f2 = irix_guest_ptr(rt, fmt2, 8u) ? irix_guest_cstr(rt, fmt2, 128u) : 0;
+        if ((f && strstr(f, "[ %s%s =")) || (f2 && strstr(f2, "[ %s%s ="))) {
+            uint32_t sp = (uint32_t)cpu->gpr[29];
+            {
+                unsigned r;
+                for (r = 6; r <= 11; ++r) {
+                    IrixGuestAddr pa = (IrixGuestAddr)(uint32_t)cpu->gpr[r];
+                    const char *ps = irix_guest_ptr(rt, pa, 4u) ? irix_guest_cstr(rt, pa, 40u) : 0;
+                    fprintf(stderr, "  arg r%u=%08x [%s]\n", r, (unsigned)pa, ps ? ps : "");
+                }
+            }
+            fprintf(stderr, "FPRINTF target=%08x caller=%08x a0=%llx a2=%llx a3=%llx a4=%llx a5=%llx a6=%llx a7=%llx sp=%08x slot0=%016llx slot1=%016llx\n",
+                    (unsigned)address, (unsigned)caller,
+                    (unsigned long long)cpu->gpr[4], (unsigned long long)cpu->gpr[6],
+                    (unsigned long long)cpu->gpr[7], (unsigned long long)cpu->gpr[8],
+                    (unsigned long long)cpu->gpr[9], (unsigned long long)cpu->gpr[10],
+                    (unsigned long long)cpu->gpr[11], sp,
+                    (unsigned long long)irix_guest_read64be(rt, sp),
+                    (unsigned long long)irix_guest_read64be(rt, sp + 8u));
+        }
+    }
     
     
     irix_guest_profile_hit(rt, caller, address, entry);

@@ -711,7 +711,6 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     uint32_t cmd = (uint32_t)cpu->gpr[4];
     long n;
 
-    (void)rt;
     switch (cmd) {
     case 1u: /* MP_NPROCS */
         n = sysconf(_SC_NPROCESSORS_CONF);
@@ -728,6 +727,70 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     case 14u: /* MP_PGSIZE */
         compat_result(cpu, 16384);
         return;
+
+    case 21u: { /* MP_STAT(struct pda_stat *): processor status */
+        IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        int ncpu = irix_kinfo_nprocs(), i;
+        for (i = 0; i < ncpu; ++i) {
+            IrixGuestAddr a = buf + (IrixGuestAddr)(i * 8);
+            /* PDAF_MASTER|PDAF_CLOCK on cpu 0, PDAF_ENABLED everywhere */
+            uint32_t flags = 0x4u | (i == 0 ? 0x3u : 0u);
+            if (!irix_guest_ptr(rt, a, 8u)) {
+                errno = EFAULT;
+                compat_result(cpu, -1);
+                return;
+            }
+            irix_guest_write32be(rt, a, (uint32_t)i);
+            irix_guest_write32be(rt, a + 4u, flags);
+        }
+        compat_result(cpu, 0);
+        return;
+    }
+
+    case 9u: { /* MP_SASZ(sub): size of a system-activity record */
+        size_t sz = irix_kinfo_sa_size((int)(int32_t)cpu->gpr[5]);
+        if (!sz) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        compat_result(cpu, (int64_t)sz);
+        return;
+    }
+
+    case 10u:   /* MP_SAGET(sub, buf, size): summed over all processors */
+    case 15u: { /* MP_SAGET1(sub, buf, size, cpu): one processor */
+        int sub = (int)(int32_t)cpu->gpr[5];
+        IrixGuestAddr buf = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        uint32_t size = (uint32_t)cpu->gpr[7];
+        int which = cmd == 15u ? (int)(int32_t)cpu->gpr[8] : -1;
+        size_t need = irix_kinfo_sa_size(sub), i;
+        uint32_t words[128];
+        if (!need || need > sizeof(words) || size < need) {
+            errno = need ? EINVAL : EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        if (cmd == 15u && which < 0) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        if (irix_kinfo_sa_get(sub, which, words, need / 4u) != 0) {
+            errno = EINVAL;
+            compat_result(cpu, -1);
+            return;
+        }
+        if (!irix_guest_ptr(rt, buf, need)) {
+            errno = EFAULT;
+            compat_result(cpu, -1);
+            return;
+        }
+        for (i = 0; i < need / 4u; ++i)
+            irix_guest_write32be(rt, buf + (IrixGuestAddr)(i * 4u), words[i]);
+        compat_result(cpu, 0);
+        return;
+    }
 
     default:
         fprintf(stderr,
