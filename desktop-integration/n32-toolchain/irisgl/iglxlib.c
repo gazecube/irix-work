@@ -269,11 +269,11 @@ static void init_cmap(void)
         int g = (i * 255) / 255;
         cmap[i] = rgb_pixel(g, g, g);
     }
-    cmap[34] = rgb_pixel(0xf0, 0xf0, 0xf0);   /* hands */
+    cmap[34] = rgb_pixel(0x1c, 0x1c, 0x1c);   /* hand shadow (drawn first, offset) */
     cmap[37] = rgb_pixel(0x3a, 0x3a, 0x3a);   /* face */
-    cmap[42] = rgb_pixel(0xc0, 0xc0, 0xc0);   /* hand highlight */
+    cmap[42] = rgb_pixel(0xd0, 0xd0, 0xd0);   /* hand fill */
     cmap[52] = rgb_pixel(0xe8, 0xe8, 0xe8);   /* tick marks */
-    cmap[54] = rgb_pixel(0x78, 0x78, 0x78);   /* hand shadow */
+    cmap[54] = rgb_pixel(0xf8, 0xf8, 0xf8);   /* hand outline */
 }
 
 void color(Colorindex c)
@@ -395,9 +395,9 @@ void recti(Icoord a, Icoord b, Icoord c, Icoord d) { rectf((Coord)a, (Coord)b, (
 
 void bgnpolygon(void) {
 TR("bgnpolygon");  mode = M_POLY; nv = 0; }
-void endpolygon(void) { if (mode == M_POLY) fill_poly(vx, vy, nv); mode = M_NONE; nv = 0; }
-void bgnclosedline(void) { mode = M_LINE; nv = 0; }
-void bgnline(void) { mode = M_LINE; nv = 0; }
+void endpolygon(void) { TR("endpolygon"); if (mode == M_POLY) fill_poly(vx, vy, nv); mode = M_NONE; nv = 0; }
+void bgnclosedline(void) { TR("bgnclosedline"); mode = M_LINE; nv = 0; }
+void bgnline(void) { TR("bgnline"); mode = M_LINE; nv = 0; }
 static void draw_line(int closed)
 {
     XPoint p[MAXV + 1];
@@ -411,11 +411,11 @@ static void draw_line(int closed)
     if (closed) { p[nv] = p[0]; XDrawLines(dpy, target(), gc, p, nv + 1, CoordModeOrigin); }
     else XDrawLines(dpy, target(), gc, p, nv, CoordModeOrigin);
 }
-void endclosedline(void) { if (mode == M_LINE) draw_line(1); mode = M_NONE; nv = 0; }
-void endline(void) { if (mode == M_LINE) draw_line(0); mode = M_NONE; nv = 0; }
-void bgntmesh(void) { mode = M_TMESH; tcount = 0; tswap = 0; }
-void endtmesh(void) { mode = M_NONE; tcount = 0; }
-void swaptmesh(void) { tswap = 1; }
+void endclosedline(void) { TR("endclosedline"); if (mode == M_LINE) draw_line(1); mode = M_NONE; nv = 0; }
+void endline(void) { TR("endline"); if (mode == M_LINE) draw_line(0); mode = M_NONE; nv = 0; }
+void bgntmesh(void) { TR("bgntmesh"); mode = M_TMESH; tcount = 0; tswap = 0; }
+void endtmesh(void) { TR("endtmesh"); mode = M_NONE; tcount = 0; }
+void swaptmesh(void) { TR("swaptmesh"); tswap = 1; }
 
 static void add_vertex(float x, float y)
 {
