@@ -1670,6 +1670,9 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             int rc = exec_simple(rt, cpu, pc, insn);
             if (rc != 0) {
                 if (rt->trapped) {
+                    /* exit()/exit_group() unwind through a trap; only a real
+                     * failure is worth printing (IRIX_VERBOSE shows all). */
+                    if (rt->trap_code != 0xeeee23ffu || getenv("IRIX_VERBOSE"))
                     fprintf(stderr,
                             "IRIX MIPS interpreter: memory/trap failure "
                             "pc=%08x insn=%08x op=%02x fn=%02x fault=%08x\n",

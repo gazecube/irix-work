@@ -3065,7 +3065,11 @@ exec_syscall_failed:
         unsigned char *host_buffer;
         long got;
         size_t in_offset = 0, out_offset = 0, n;
-        if (capacity && !irix_guest_ptr(rt, out_addr, capacity)) {
+        /* The buffer may legitimately span two guest segments (executable
+         * bss and the brk heap); entries are written byte-wise, so only the
+         * first and last bytes need to be mapped. */
+        if (capacity && (!irix_guest_ptr(rt, out_addr, 1u) ||
+                         !irix_guest_ptr(rt, out_addr + (IrixGuestAddr)(capacity - 1u), 1u))) {
             errno = EFAULT;
             syscall_result(cpu, -1);
             return;
@@ -3122,7 +3126,8 @@ exec_syscall_failed:
         unsigned char *host_buffer;
         long got;
         size_t in_offset = 0, out_offset = 0, n;
-        if ((capacity && !irix_guest_ptr(rt, out_addr, capacity)) ||
+        if ((capacity && (!irix_guest_ptr(rt, out_addr, 1u) ||
+                          !irix_guest_ptr(rt, out_addr + (IrixGuestAddr)(capacity - 1u), 1u))) ||
             (count_addr && !irix_guest_ptr(rt, count_addr, 4u))) {
             errno = EFAULT;
             syscall_result(cpu, -1);

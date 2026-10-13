@@ -221,6 +221,11 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         compat_result(cpu, 0);
         return;
 
+    case SGI_GETPGID: /* SGI_GETPGID: SVR4 getpgid(pid) */
+        result = (int64_t)getpgid((pid_t)(int32_t)cpu->gpr[5]);
+        compat_result(cpu, result);
+        return;
+
     case SGI_GETSID: /* SGI_GETSID */
         result = (int64_t)getsid((pid_t)(int32_t)cpu->gpr[5]);
         compat_result(cpu, result);

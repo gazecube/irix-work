@@ -939,7 +939,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "failed to load original IRIX app %s\n", relative);
             return 1;
         }
-        fprintf(stderr, "IRIX guest exec path: /%s\n", relative);
+        if (getenv("IRIX_VERBOSE"))
+            fprintf(stderr, "IRIX guest exec path: /%s\n", relative);
     }
     have_app_elf = 1;
     if (app_elf.interp[0]) {
@@ -950,9 +951,10 @@ int main(int argc, char **argv)
             return 1;
         }
         have_interp_elf = 1;
-        fprintf(stderr,
-                "IRIX guest-exec PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
-                app_elf.interp, interp_elf.entry, interp_elf.gp_value);
+        if (getenv("IRIX_VERBOSE"))
+            fprintf(stderr,
+                    "IRIX guest-exec PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
+                    app_elf.interp, interp_elf.entry, interp_elf.gp_value);
     }
     if (load_elf(&rt, IRIX_RUNTIME_TREE_PATH(), "lib32/rld", &rld_elf) == 0)
         have_rld_elf = 1;
@@ -1198,16 +1200,18 @@ int main(int argc, char **argv)
                 xfontset_imports[i].name);
             if (fn && irix_guest_register_function(
                           &rt, xfontset_imports[i].address, fn,
-                          xfontset_imports[i].name) == 0)
+                          xfontset_imports[i].name) == 0 &&
+                getenv("IRIX_VERBOSE"))
                 fprintf(stderr,
                         "IRIX generic XFontSet bridge: %s at %08x\n",
                         xfontset_imports[i].name,
                         xfontset_imports[i].address);
         }
     }
-    fprintf(stderr,
-            "IRIX generic guest mode: original IRIX images; app-specific "
-            "translated registries and native DSO overrides disabled\n");
+    if (getenv("IRIX_VERBOSE"))
+        fprintf(stderr,
+                "IRIX generic guest mode: original IRIX images; app-specific "
+                "translated registries and native DSO overrides disabled\n");
 #endif
 
 #ifdef IRIX_DIRECT_MAIN
@@ -1387,8 +1391,9 @@ int main(int argc, char **argv)
     if (irix_guest_call(&rt, &cpu, entry) != 0 || rt.trapped) {
         if (rt.trapped && rt.trap_code == 0xeeee23ffu) {
             int status = (int)(rt.fault_addr & 0xffu);
-            fprintf(stderr, "IRIX %s exited: status=%d\n",
-                    IRIX_APP_NAME, status);
+            if (getenv("IRIX_VERBOSE"))
+                fprintf(stderr, "IRIX %s exited: status=%d\n",
+                        IRIX_APP_NAME, status);
             irix_guest_runtime_destroy(&rt);
             return status;
         }
