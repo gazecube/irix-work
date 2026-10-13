@@ -888,31 +888,32 @@ static FmFont *fm_make(const char *name, double size)
     return f;
 }
 
-long gl_islocal(void) { return 1; }
-void gl_beginstring(void) { }
-void gl_endstring(void) { }
-void gl_drawbitmap(void) { }
+long gl_islocal(void) { TR("gl_islocal");  return 1; }
+void gl_beginstring(void) { TR("gl_beginstring");  }
+void gl_endstring(void) { TR("gl_endstring");  }
+void gl_drawbitmap(long a, long b, long c, long d, long e, long f, long g, long h)
+{ TR("gl_drawbitmap(%ld,%ld,%ld,%ld,%ld,%ld,%lx,%lx)", a, b, c, d, e, f, g, h); }
 
-void gl_d_fminit(void) { TR("fminit"); ensure_dpy(); }
+void gl_d_fminit(void) { TR("gl_d_fminit");  TR("fminit"); ensure_dpy(); }
 fmfonthandle gl_d_fmfindfont(const char *name)
-{
+{ TR("gl_d_fmfindfont"); 
     TR("fmfindfont(%s)", name ? name : "(null)");
     return (fmfonthandle)fm_make(name, 12.0);
 }
 fmfonthandle gl_d_fmscalefont(fmfonthandle h, double size)
-{
+{ TR("gl_d_fmscalefont"); 
     FmFont *o = (FmFont *)h;
     TR("fmscalefont(%g)", size);
     return o ? (fmfonthandle)fm_make(o->name, size) : NULL;
 }
 fmfonthandle gl_d_fmmakefont(fmfonthandle h, double m[3][2])
-{
+{ TR("gl_d_fmmakefont"); 
     FmFont *o = (FmFont *)h;
     double s = m[1][1] != 0 ? (m[1][1] < 0 ? -m[1][1] : m[1][1]) : 1.0;
     return o ? (fmfonthandle)fm_make(o->name, o->size * s) : NULL;
 }
 void gl_d_fmfreefont(fmfonthandle h)
-{
+{ TR("gl_d_fmfreefont"); 
     FmFont *f = (FmFont *)h;
     if (!f) return;
     if (f->xf && dpy) XFreeFont(dpy, f->xf);
@@ -920,14 +921,14 @@ void gl_d_fmfreefont(fmfonthandle h)
     free(f);
 }
 void gl_d_fmsetfont(fmfonthandle h)
-{
+{ TR("gl_d_fmsetfont"); 
     FmFont *f = (FmFont *)h;
     TR("fmsetfont");
     fm_cur = f;
     if (f && f->xf && gc) XSetFont(dpy, gc, f->xf->fid);
 }
 int gl_d_fmprstr(const char *s)
-{
+{ TR("gl_d_fmprstr"); 
     XFontStruct *xf = fm_cur ? fm_cur->xf : NULL;
     TR("fmprstr(%s)", s ? s : "(null)");
     if (!dpy || !win || !s) return 0;
@@ -937,7 +938,7 @@ int gl_d_fmprstr(const char *s)
     return (int)strlen(s);
 }
 int gl_d_fmfprstr(fmfonthandle h, unsigned char *s, short len, int x, int y)
-{
+{ TR("gl_d_fmfprstr"); 
     FmFont *f = (FmFont *)h;
     if (!dpy || !win || !s) return 0;
     if (f && f->xf && gc) XSetFont(dpy, gc, f->xf->fid);
@@ -945,20 +946,20 @@ int gl_d_fmfprstr(fmfonthandle h, unsigned char *s, short len, int x, int y)
     return len;
 }
 long gl_d_fmgetstrwidth(fmfonthandle h, const char *s)
-{
+{ TR("gl_d_fmgetstrwidth"); 
     FmFont *f = (FmFont *)h;
     if (!f || !f->xf || !s) return 0;
     return XTextWidth(f->xf, s, (int)strlen(s));
 }
 long gl_d_fmgetchrwidth(fmfonthandle h, const unsigned char c)
-{
+{ TR("gl_d_fmgetchrwidth"); 
     FmFont *f = (FmFont *)h;
     char ch = (char)c;
     if (!f || !f->xf) return 0;
     return XTextWidth(f->xf, &ch, 1);
 }
 long gl_d_fmoutchar(fmfonthandle h, const unsigned int c)
-{
+{ TR("gl_d_fmoutchar"); 
     FmFont *f = (FmFont *)h;
     char ch = (char)c;
     if (!dpy || !win || !f || !f->xf) return 0;
@@ -968,7 +969,7 @@ long gl_d_fmoutchar(fmfonthandle h, const unsigned int c)
     return 0;
 }
 int gl_d_fmgetfontinfo(fmfonthandle h, fmfontinfo *i)
-{
+{ TR("gl_d_fmgetfontinfo"); 
     FmFont *f = (FmFont *)h;
     memset(i, 0, sizeof(*i));
     if (!f || !f->xf) return -1;
@@ -987,77 +988,131 @@ int gl_d_fmgetfontinfo(fmfonthandle h, fmfontinfo *i)
     return 0;
 }
 int gl_d_fmgetfontname(fmfonthandle h, int len, char *buf)
-{
+{ TR("gl_d_fmgetfontname"); 
     FmFont *f = (FmFont *)h;
     if (!f || len <= 0) return -1;
     strncpy(buf, f->name, (size_t)len - 1); buf[len - 1] = 0;
     return (int)strlen(buf);
 }
-int gl_d_fmgetcomment(fmfonthandle h, int n, char *buf) { (void)h; (void)n; if (buf) buf[0] = 0; return 0; }
+int gl_d_fmgetcomment(fmfonthandle h, int n, char *buf) { TR("gl_d_fmgetcomment");  (void)h; (void)n; if (buf) buf[0] = 0; return 0; }
 void gl_d_fmenumerate(void (*cb)(char *))
-{
+{ TR("gl_d_fmenumerate"); 
     static char n1[] = "Helvetica", n2[] = "Helvetica-Bold", n3[] = "Times-Roman",
                 n4[] = "Courier";
     if (cb) { cb(n1); cb(n2); cb(n3); cb(n4); }
 }
-void gl_d_fmcacheenable(void) { }
-void gl_d_fmcachedisable(void) { }
-int gl_d_fmgetcacheused(void) { return 0; }
-void gl_d_fmsetcachelimit(int n) { (void)n; }
-int gl_d_fmcachelimit(void) { return 1 << 20; }
-void gl_d_fmsetpath(const char *p) { (void)p; }
-void gl_d_fmprintermatch(int m) { (void)m; }
-void gl_d_fminitpagematrix(void) { }
-void gl_d_fmconcatpagematrix(double m[3][2]) { (void)m; }
+void gl_d_fmcacheenable(void) { TR("gl_d_fmcacheenable");  }
+void gl_d_fmcachedisable(void) { TR("gl_d_fmcachedisable");  }
+int gl_d_fmgetcacheused(void) { TR("gl_d_fmgetcacheused");  return 0; }
+void gl_d_fmsetcachelimit(int n) { TR("gl_d_fmsetcachelimit");  (void)n; }
+int gl_d_fmcachelimit(void) { TR("gl_d_fmcachelimit");  return 1 << 20; }
+void gl_d_fmsetpath(const char *p) { TR("gl_d_fmsetpath");  (void)p; }
+void gl_d_fmprintermatch(int m) { TR("gl_d_fmprintermatch");  (void)m; }
+void gl_d_fminitpagematrix(void) { TR("gl_d_fminitpagematrix");  }
+void gl_d_fmconcatpagematrix(double m[3][2]) { TR("gl_d_fmconcatpagematrix");  (void)m; }
 void gl_d_fmgetpagematrix(double m[3][2])
-{ m[0][0] = m[1][1] = 1; m[0][1] = m[1][0] = m[2][0] = m[2][1] = 0; }
-void gl_d_fmsetpagematrix(double m[3][2]) { (void)m; }
-void gl_d_fmrotatepagematrix(double a) { (void)a; }
-void gl_d_fmscalepagematrix(double s) { (void)s; }
+{ TR("gl_d_fmgetpagematrix");  m[0][0] = m[1][1] = 1; m[0][1] = m[1][0] = m[2][0] = m[2][1] = 0; }
+void gl_d_fmsetpagematrix(double m[3][2]) { TR("gl_d_fmsetpagematrix");  (void)m; }
+void gl_d_fmrotatepagematrix(double a) { TR("gl_d_fmrotatepagematrix");  (void)a; }
+void gl_d_fmscalepagematrix(double s) { TR("gl_d_fmscalepagematrix");  (void)s; }
 /* internals reached by libfm for point-size conversion and whole-font metrics */
-long gl_d_fm_pointsize_to_pixels_int(long p) { return p; }
-long gl_d_fm_pixels_to_pointsize_int(long p) { return p; }
-char *gl_d_fm_fontpath_int(void) { static char p[] = "/usr/lib/DPS/outline/base"; return p; }
+long gl_d_fm_pointsize_to_pixels_int(long p) { TR("gl_d_fm_pointsize_to_pixels_int");  return p; }
+long gl_d_fm_pixels_to_pointsize_int(long p) { TR("gl_d_fm_pixels_to_pointsize_int");  return p; }
+char *gl_d_fm_fontpath_int(void) { TR("gl_d_fm_fontpath_int");  static char p[] = "/usr/lib/DPS/outline/base"; return p; }
 long gl_d_fm_getwholemetrics_int(fmfonthandle h, fmglyphinfo *g)
-{ (void)h; (void)g; return 0; }
+{ TR("gl_d_fm_getwholemetrics_int");  (void)h; (void)g; return 0; }
 
 /* window-font-manager (wfm) entry points: map onto the plain GL calls */
-void gl_d_wfm_charstr(const char *s) { charstr((String)s); }
+void gl_d_wfm_charstr(const char *s) { TR("gl_d_wfm_charstr");  charstr((String)s); }
 void gl_d_wfm_charstrl(const char *s, long n)
-{ if (dpy && win && s) { XDrawString(dpy, target(), gc, charx, chary, s, (int)n); charx += xfont ? XTextWidth(xfont, s, (int)n) : (int)n * 6; } }
-void gl_d_wfm_charstrn(const char *s, long n) { gl_d_wfm_charstrl(s, n); }
-void gl_d_wfm_cmov(Coord x, Coord y, Coord z) { cmov(x, y, z); }
-void gl_d_wfm_cmov2(Coord x, Coord y) { cmov2(x, y); }
-void gl_d_wfm_cmov2i(Icoord x, Icoord y) { cmov2i(x, y); }
-void gl_d_wfm_cmov2s(Scoord x, Scoord y) { cmov2s(x, y); }
-void gl_d_wfm_cmovi(Icoord x, Icoord y, Icoord z) { cmovi(x, y, z); }
-void gl_d_wfm_cmovs(Scoord x, Scoord y, Scoord z) { cmovs(x, y, z); }
-void gl_d_wfm_color(Colorindex c) { color(c); }
-void gl_d_wfm_cpack(unsigned long c) { cpack(c); }
-void gl_d_wfm_aacolor(Colorindex c) { color(c); }
-void gl_d_wfm_aacpack(unsigned long c) { cpack(c); }
-long gl_d_wfm_strwidth(const char *s) { return strwidth((String)s); }
+{ TR("gl_d_wfm_charstrl");  if (dpy && win && s) { XDrawString(dpy, target(), gc, charx, chary, s, (int)n); charx += xfont ? XTextWidth(xfont, s, (int)n) : (int)n * 6; } }
+void gl_d_wfm_charstrn(const char *s, long n) { TR("gl_d_wfm_charstrn");  gl_d_wfm_charstrl(s, n); }
+void gl_d_wfm_cmov(Coord x, Coord y, Coord z) { TR("gl_d_wfm_cmov");  cmov(x, y, z); }
+void gl_d_wfm_cmov2(Coord x, Coord y) { TR("gl_d_wfm_cmov2");  cmov2(x, y); }
+void gl_d_wfm_cmov2i(Icoord x, Icoord y) { TR("gl_d_wfm_cmov2i");  cmov2i(x, y); }
+void gl_d_wfm_cmov2s(Scoord x, Scoord y) { TR("gl_d_wfm_cmov2s");  cmov2s(x, y); }
+void gl_d_wfm_cmovi(Icoord x, Icoord y, Icoord z) { TR("gl_d_wfm_cmovi");  cmovi(x, y, z); }
+void gl_d_wfm_cmovs(Scoord x, Scoord y, Scoord z) { TR("gl_d_wfm_cmovs");  cmovs(x, y, z); }
+void gl_d_wfm_color(Colorindex c) { TR("gl_d_wfm_color");  color(c); }
+void gl_d_wfm_cpack(unsigned long c) { TR("gl_d_wfm_cpack");  cpack(c); }
+void gl_d_wfm_aacolor(Colorindex c) { TR("gl_d_wfm_aacolor");  color(c); }
+void gl_d_wfm_aacpack(unsigned long c) { TR("gl_d_wfm_aacpack");  cpack(c); }
+long gl_d_wfm_strwidth(const char *s) { TR("gl_d_wfm_strwidth");  return strwidth((String)s); }
 long gl_d_wfm_strnwidth(const char *s, long n)
-{ return (xfont && s) ? XTextWidth(xfont, s, (int)n) : 0; }
-void gl_d_wfm_init(void) { ensure_dpy(); }
-void gl_d_wfm_enumerate(void (*cb)(char *)) { gl_d_fmenumerate(cb); }
-void gl_d_wfm_font(long f) { (void)f; }
-void gl_d_wfm_fontpath(const char *p) { (void)p; }
-void gl_d_wfm_setfontpath(const char *p) { (void)p; }
-void gl_d_wfm_fontunits(long u) { (void)u; }
-void gl_d_wfm_freefont(long f) { (void)f; }
-long gl_d_wfm_getfont(void) { return 0; }
-long gl_d_wfm_getfontinfo(long f, void *i) { (void)f; (void)i; return 0; }
-void gl_d_wfm_hint(long h) { (void)h; }
-long gl_d_wfm_makefont_int(long f, void *m) { (void)f; (void)m; return 0; }
-void gl_d_wfm_makefontmat(void *m) { (void)m; }
-void gl_d_wfm_outchar(long c) { (void)c; }
-void gl_d_wfm_pos(Coord x, Coord y) { cmov2(x, y); }
-void gl_d_wfm_rpos(Coord x, Coord y) { charx += (int)x; chary -= (int)y; }
-void gl_d_wfm_skipspace(void) { }
-void gl_d_wfm_sizeenumerate(long f, void *cb) { (void)f; (void)cb; }
-void gl_d_wfm_strbounds(const char *s, void *b) { (void)s; (void)b; }
-void gl_d_wfm_strnbounds(const char *s, long n, void *b) { (void)s; (void)n; (void)b; }
-void gl_d_wfm_getcbbox(long c, void *b) { (void)c; (void)b; }
-void gl_d_wfm_getcharmetrics_int(long c, void *m) { (void)c; (void)m; }
-void gl_d_wfm_getcoutline(long c, void *o) { (void)c; (void)o; }
+{ TR("gl_d_wfm_strnwidth");  return (xfont && s) ? XTextWidth(xfont, s, (int)n) : 0; }
+void gl_d_wfm_init(void) { TR("gl_d_wfm_init");  ensure_dpy(); }
+void gl_d_wfm_enumerate(void (*cb)(char *)) { TR("gl_d_wfm_enumerate");  gl_d_fmenumerate(cb); }
+void gl_d_wfm_font(long f) { TR("gl_d_wfm_font");  (void)f; }
+void gl_d_wfm_fontpath(const char *p) { TR("gl_d_wfm_fontpath");  (void)p; }
+void gl_d_wfm_setfontpath(const char *p) { TR("gl_d_wfm_setfontpath");  (void)p; }
+void gl_d_wfm_fontunits(long u) { TR("gl_d_wfm_fontunits");  (void)u; }
+void gl_d_wfm_freefont(long f) { TR("gl_d_wfm_freefont");  (void)f; }
+long gl_d_wfm_getfont(void) { TR("gl_d_wfm_getfont");  return 0; }
+long gl_d_wfm_getfontinfo(long f, void *i) { TR("gl_d_wfm_getfontinfo");  (void)f; (void)i; return 0; }
+void gl_d_wfm_hint(long h) { TR("gl_d_wfm_hint");  (void)h; }
+long gl_d_wfm_makefont_int(long f, void *m) { TR("gl_d_wfm_makefont_int");  (void)f; (void)m; return 0; }
+void gl_d_wfm_makefontmat(void *m) { TR("gl_d_wfm_makefontmat");  (void)m; }
+void gl_d_wfm_outchar(long c) { TR("gl_d_wfm_outchar");  (void)c; }
+void gl_d_wfm_pos(Coord x, Coord y) { TR("gl_d_wfm_pos");  cmov2(x, y); }
+void gl_d_wfm_rpos(Coord x, Coord y) { TR("gl_d_wfm_rpos");  charx += (int)x; chary -= (int)y; }
+void gl_d_wfm_skipspace(void) { TR("gl_d_wfm_skipspace");  }
+void gl_d_wfm_sizeenumerate(long f, void *cb) { TR("gl_d_wfm_sizeenumerate");  (void)f; (void)cb; }
+void gl_d_wfm_strbounds(const char *s, void *b) { TR("gl_d_wfm_strbounds");  (void)s; (void)b; }
+void gl_d_wfm_strnbounds(const char *s, long n, void *b) { TR("gl_d_wfm_strnbounds");  (void)s; (void)n; (void)b; }
+void gl_d_wfm_getcbbox(long c, void *b) { TR("gl_d_wfm_getcbbox");  (void)c; (void)b; }
+void gl_d_wfm_getcharmetrics_int(long c, void *m) { TR("gl_d_wfm_getcharmetrics_int");  (void)c; (void)m; }
+void gl_d_wfm_getcoutline(long c, void *o) { TR("gl_d_wfm_getcoutline");  (void)c; (void)o; }
+
+/*
+ * Export the public Font Manager names from libgl as well.  gr_osview/ical
+ * link libgl.so before libfm.so, so these win and the program draws text with
+ * the X-font implementation above instead of libfm's own glyph renderer
+ * (which needs the IRIS GL gl_drawbitmap hardware path).
+ */
+#define FMALIAS(ret, name, args) ret name args __attribute__((alias("gl_d_" #name)))
+FMALIAS(void, fminit, (void));
+FMALIAS(fmfonthandle, fmfindfont, (const char *));
+FMALIAS(fmfonthandle, fmscalefont, (fmfonthandle, double));
+FMALIAS(fmfonthandle, fmmakefont, (fmfonthandle, double[3][2]));
+FMALIAS(void, fmfreefont, (fmfonthandle));
+FMALIAS(void, fmsetfont, (fmfonthandle));
+FMALIAS(int, fmprstr, (const char *));
+FMALIAS(int, fmfprstr, (fmfonthandle, unsigned char *, short, int, int));
+FMALIAS(long, fmgetstrwidth, (fmfonthandle, const char *));
+FMALIAS(long, fmgetchrwidth, (fmfonthandle, const unsigned char));
+FMALIAS(long, fmoutchar, (fmfonthandle, const unsigned int));
+FMALIAS(int, fmgetfontinfo, (fmfonthandle, fmfontinfo *));
+FMALIAS(int, fmgetfontname, (fmfonthandle, int, char *));
+FMALIAS(int, fmgetcomment, (fmfonthandle, int, char *));
+FMALIAS(void, fmenumerate, (void (*)(char *)));
+FMALIAS(void, fmcacheenable, (void));
+FMALIAS(void, fmcachedisable, (void));
+FMALIAS(int, fmgetcacheused, (void));
+FMALIAS(void, fmsetcachelimit, (int));
+FMALIAS(int, fmcachelimit, (void));
+FMALIAS(void, fmsetpath, (const char *));
+FMALIAS(void, fmprintermatch, (int));
+FMALIAS(void, fminitpagematrix, (void));
+FMALIAS(void, fmconcatpagematrix, (double[3][2]));
+FMALIAS(void, fmgetpagematrix, (double[3][2]));
+FMALIAS(void, fmsetpagematrix, (double[3][2]));
+FMALIAS(void, fmrotatepagematrix, (double));
+FMALIAS(void, fmscalepagematrix, (double));
+
+long fmgetwholemetrics(fmfonthandle h, fmglyphinfo *g)
+{
+    FmFont *f = (FmFont *)h;
+    int c;
+    TR("fmgetwholemetrics");
+    if (!f || !f->xf || !g) return -1;
+    for (c = 0; c < 256; ++c) {
+        char ch = (char)c;
+        memset(&g[c], 0, sizeof(g[c]));
+        g[c].xsize = f->xf->max_bounds.width;
+        g[c].ysize = f->xf->ascent + f->xf->descent;
+        g[c].yorig = f->xf->descent;
+        g[c].xmove = (float)XTextWidth(f->xf, &ch, 1);
+        g[c].gtype = FMBITMAPGLYPH;
+    }
+    return 0;
+}
