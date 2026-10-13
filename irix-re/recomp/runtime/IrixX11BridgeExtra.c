@@ -10,6 +10,7 @@
 #include <X11/Xutil.h>
 #ifdef IRIX_HAVE_XEXT
 #include <X11/extensions/shape.h>
+#include <X11/extensions/Xdbe.h>
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -1861,16 +1862,96 @@ static uint32_t shape_arg32(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
 }
 
 /*
- * X Double Buffer extension: Status XdbeQueryExtension(dpy, &major, &minor).
- * None of the DBE request builders are bridged, and the guest libXext
- * implementation would walk the Display shadow, which has no extension
- * table.  Report the extension as unavailable; clients fall back to
- * single-buffered drawing.
+ * X Double Buffer extension (host libXext).  Guest struct layouts (N32, all
+ * XIDs and pointers 32-bit):
+ *   XdbeVisualInfo       { VisualID visual; int depth; int perflevel; }   12
+ *   XdbeScreenVisualInfo { int count; XdbeVisualInfo *visinfo; }           8
+ *   XdbeSwapInfo         { Window swap_window; XdbeSwapAction action; }    8
+ * The file manager (ImdViewPanel) uses these for flicker-free icon scaling.
  */
 static void bridge_XdbeQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr maj = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr min = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    int major = 0, minor = 0;
+    Status st = d ? XdbeQueryExtension(d, &major, &minor) : 0;
+    if (st) {
+        wr32(rt, maj, (uint32_t)major);
+        wr32(rt, min, (uint32_t)minor);
+    }
+    cpu->gpr[2] = (uint32_t)st;
+}
+
+static void bridge_XdbeAllocateBackBufferName(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    XdbeSwapAction act = (XdbeSwapAction)(cpu->gpr[6] & 0xffu);
     (void)rt;
+    cpu->gpr[2] = d ? (uint32_t)XdbeAllocateBackBufferName(d, w, act) : 0u;
+}
+
+static void bridge_XdbeDeallocateBackBufferName(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    (void)rt;
+    cpu->gpr[2] = d ? (uint32_t)XdbeDeallocateBackBufferName(d, (XdbeBackBuffer)(uint32_t)cpu->gpr[5]) : 0u;
+}
+
+static void bridge_XdbeSwapBuffers(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr info = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    int n = (int)(int32_t)cpu->gpr[6], i;
+    XdbeSwapInfo sw[16];
+    if (!d || !info || n < 1 || n > 16) { cpu->gpr[2] = 0; return; }
+    for (i = 0; i < n; ++i) {
+        IrixGuestAddr e = info + (IrixGuestAddr)(i * 8);
+        unsigned char *b = (unsigned char *)irix_guest_ptr(rt, e + 4u, 1u);
+        sw[i].swap_window = (Window)irix_guest_read32be(rt, e);
+        sw[i].swap_action = (XdbeSwapAction)(b ? *b : XdbeUndefined);
+    }
+    cpu->gpr[2] = (uint32_t)XdbeSwapBuffers(d, sw, n);
+}
+
+static void bridge_XdbeGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    IrixGuestAddr specs = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+    IrixGuestAddr numa = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+    Drawable specv[16];
+    int num = numa ? (int)irix_guest_read32be(rt, numa) : 1, i, j;
+    XdbeScreenVisualInfo *r;
+    IrixGuestAddr out, arr;
     cpu->gpr[2] = 0;
+    if (!d || num < 1 || num > 16) return;
+    for (i = 0; i < num; ++i)
+        specv[i] = specs ? (Drawable)irix_guest_read32be(rt, specs + (IrixGuestAddr)(i * 4))
+                         : RootWindow(d, 0);
+    r = XdbeGetVisualInfo(d, specv, &num);
+    if (!r) return;
+    arr = tmp_alloc((uint32_t)num * 8u);
+    for (i = 0; arr && i < num; ++i) {
+        IrixGuestAddr vi = tmp_alloc((uint32_t)r[i].count * 12u + 4u);
+        wr32(rt, arr + (IrixGuestAddr)(i * 8), (uint32_t)r[i].count);
+        wr32(rt, arr + (IrixGuestAddr)(i * 8) + 4u, vi);
+        for (j = 0; vi && j < r[i].count; ++j) {
+            IrixGuestAddr e = vi + (IrixGuestAddr)(j * 12);
+            wr32(rt, e, (uint32_t)r[i].visinfo[j].visual);
+            wr32(rt, e + 4u, (uint32_t)r[i].visinfo[j].depth);
+            wr32(rt, e + 8u, (uint32_t)r[i].visinfo[j].perflevel);
+        }
+    }
+    XdbeFreeVisualInfo(r);
+    out = arr;
+    wr32(rt, numa, (uint32_t)num);
+    cpu->gpr[2] = (uint32_t)out;
+}
+
+static void bridge_XdbeFreeVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt; (void)cpu;    /* guest copy lives in the bridge scratch arena */
 }
 
 static void bridge_XShapeQueryExtension(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -2034,7 +2115,8 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
     MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
 #ifdef IRIX_HAVE_XEXT
-    MAP(XdbeQueryExtension);
+    MAP(XdbeQueryExtension); MAP(XdbeAllocateBackBufferName); MAP(XdbeDeallocateBackBufferName);
+    MAP(XdbeSwapBuffers); MAP(XdbeGetVisualInfo); MAP(XdbeFreeVisualInfo);
     MAP(XShapeQueryExtension); MAP(XShapeSelectInput); MAP(XShapeQueryExtents);
     MAP(XShapeCombineShape); MAP(XShapeCombineRectangles); MAP(XShapeCombineMask);
 #endif
