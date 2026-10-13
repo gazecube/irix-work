@@ -186,6 +186,27 @@ freeze_on_config="${IRIX_4DWM_FREEZE_ON_CONFIG:-true}"
 # currently traps in XtScreenDatabase/XrmEnumerateDatabase for screen 1.
 multiscreen=
 [ "${IRIX_4DWM_MULTISCREEN:-0}" = 1 ] && multiscreen=-multiscreen
+# On a multi-screen server Xt builds each non-default screen database from
+# that root's RESOURCE_MANAGER only, so the -xrm values below never reach
+# 4Dwm's lookups (no granite background, blinking outlines).  Publish them on
+# every screen root as well.
+if command -v xrdb >/dev/null 2>&1; then
+    xdisp="${DISPLAY%.*}"
+    xscr=0
+    while [ "$xscr" -lt 8 ]; do
+        # What Xsession.dt does: ~/.Xresources replaces the database, else
+        # ~/.Sgiresources (saved Desktop preferences) is merged.
+        if [ -r "$HOME/.Xresources" ]; then
+            xrdb -display "$xdisp.$xscr" -load "$HOME/.Xresources" 2>/dev/null
+        elif [ -r "$HOME/.Sgiresources" ]; then
+            xrdb -display "$xdisp.$xscr" -merge "$HOME/.Sgiresources" 2>/dev/null
+        fi
+        printf '%s\n' '*SG_UseBackgrounds: True' \
+            "*freezeOnConfig: $freeze_on_config" |
+            xrdb -display "$xdisp.$xscr" -merge 2>/dev/null || break
+        xscr=$((xscr + 1))
+    done
+fi
 IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch $multiscreen \
     -xrm '*SG_UseBackgrounds: True' \
     -xrm "*freezeOnConfig: $freeze_on_config" &
@@ -221,6 +242,21 @@ fi
 echo "IRIX session: 4Dwm ready; starting Toolchest"
 guest_exec "$toolchest" &
 toolchest_pid=$!
+
+# Traditional multihead: the Toolchest is the only way to launch things from
+# the GUI, so give every further screen its own copy (and the per-screen
+# icon/colour setup the first one got).
+xdisp="${DISPLAY%.*}"
+xscr=1
+while [ "$xscr" -lt 8 ] && xdpyinfo -display "$xdisp.$xscr" >/dev/null 2>&1; do
+    (
+        DISPLAY="$xdisp.$xscr"; export DISPLAY
+        guest_exec "$makeicons" >/dev/null 2>&1
+        guest_exec "$prealloc" >/dev/null 2>&1
+        exec "$root$toolchest"
+    ) &
+    xscr=$((xscr + 1))
+done
 
 echo "IRIX session: starting desktop File Manager"
 guest_exec "$fm" -b &
