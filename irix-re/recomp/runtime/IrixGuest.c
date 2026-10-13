@@ -58,6 +58,9 @@ typedef struct IrixKernelSigAction {
 } IrixKernelSigAction;
 
 static IrixKernelSigAction g_kernel_sigactions[IRIX_NSIG];
+/* setitimer(ITIMER_REAL) reload period, 0 = one-shot (kept out of
+ * IrixGuestRuntime: the prebuilt runners share that struct's layout). */
+static uint64_t g_alarm_interval_ns;
 
 static uint64_t monotonic_time_ns(void)
 {
@@ -82,8 +85,8 @@ int irix_guest_poll_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     /* alarm() is one-shot even when its guest handler rearms it; an
      * interval timer reloads from its period. */
-    rt->alarm_deadline_ns = rt->alarm_interval_ns
-        ? now + rt->alarm_interval_ns : 0;
+    rt->alarm_deadline_ns = g_alarm_interval_ns
+        ? now + g_alarm_interval_ns : 0;
     handler = g_kernel_sigactions[IRIX_SIGALRM].handler;
     if (handler == 1u) /* SIG_IGN */
         return 0;
@@ -3760,16 +3763,16 @@ exec_syscall_failed:
             uint64_t val = (uint64_t)irix_guest_read32be(rt, nv + 8u) * 1000000000ull
                          + (uint64_t)irix_guest_read32be(rt, nv + 12u) * 1000ull;
             if (ov && irix_guest_ptr(rt, ov, 16u)) {
-                irix_guest_write32be(rt, ov, (uint32_t)(rt->alarm_interval_ns / 1000000000ull));
-                irix_guest_write32be(rt, ov + 4u, (uint32_t)((rt->alarm_interval_ns % 1000000000ull) / 1000ull));
+                irix_guest_write32be(rt, ov, (uint32_t)(g_alarm_interval_ns / 1000000000ull));
+                irix_guest_write32be(rt, ov + 4u, (uint32_t)((g_alarm_interval_ns % 1000000000ull) / 1000ull));
                 irix_guest_write32be(rt, ov + 8u, (uint32_t)(left / 1000000000ull));
                 irix_guest_write32be(rt, ov + 12u, (uint32_t)((left % 1000000000ull) / 1000ull));
             }
-            rt->alarm_interval_ns = iv;
+            g_alarm_interval_ns = iv;
             rt->alarm_deadline_ns = (val && now) ? now + val : 0;
         } else if (!set && nv && irix_guest_ptr(rt, nv, 16u)) {
-            irix_guest_write32be(rt, nv, (uint32_t)(rt->alarm_interval_ns / 1000000000ull));
-            irix_guest_write32be(rt, nv + 4u, (uint32_t)((rt->alarm_interval_ns % 1000000000ull) / 1000ull));
+            irix_guest_write32be(rt, nv, (uint32_t)(g_alarm_interval_ns / 1000000000ull));
+            irix_guest_write32be(rt, nv + 4u, (uint32_t)((g_alarm_interval_ns % 1000000000ull) / 1000ull));
             irix_guest_write32be(rt, nv + 8u, (uint32_t)(left / 1000000000ull));
             irix_guest_write32be(rt, nv + 12u, (uint32_t)((left % 1000000000ull) / 1000ull));
         }
