@@ -80,8 +80,10 @@ int irix_guest_poll_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (!now || now < rt->alarm_deadline_ns)
         return 0;
 
-    /* An alarm is one-shot even when its guest handler rearms it. */
-    rt->alarm_deadline_ns = 0;
+    /* alarm() is one-shot even when its guest handler rearms it; an
+     * interval timer reloads from its period. */
+    rt->alarm_deadline_ns = rt->alarm_interval_ns
+        ? now + rt->alarm_interval_ns : 0;
     handler = g_kernel_sigactions[IRIX_SIGALRM].handler;
     if (handler == 1u) /* SIG_IGN */
         return 0;
@@ -3738,6 +3740,39 @@ exec_syscall_failed:
             }
         }
         rt->program_break = requested;
+        syscall_result(cpu, 0);
+        return;
+    }
+    case SYS_setitimer:   /* setitimer(which, new, old): ITIMER_REAL only */
+    case SYS_getitimer: { /* getitimer(which, cur) */
+        int which = (int)(int32_t)cpu->gpr[4];
+        int set = (cpu->gpr[2] == SYS_setitimer || (uint32_t)cpu->gpr[2] == SYS_setitimer);
+        IrixGuestAddr nv = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        IrixGuestAddr ov = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        uint64_t now = monotonic_time_ns(), left = 0;
+        if (which != 0) { errno = EINVAL; syscall_result(cpu, -1); return; }
+        if (rt->alarm_deadline_ns && now && rt->alarm_deadline_ns > now)
+            left = rt->alarm_deadline_ns - now;
+        /* struct itimerval: it_interval, it_value as {32-bit sec, 32-bit usec} */
+        if (set && nv && irix_guest_ptr(rt, nv, 16u)) {
+            uint64_t iv = (uint64_t)irix_guest_read32be(rt, nv) * 1000000000ull
+                        + (uint64_t)irix_guest_read32be(rt, nv + 4u) * 1000ull;
+            uint64_t val = (uint64_t)irix_guest_read32be(rt, nv + 8u) * 1000000000ull
+                         + (uint64_t)irix_guest_read32be(rt, nv + 12u) * 1000ull;
+            if (ov && irix_guest_ptr(rt, ov, 16u)) {
+                irix_guest_write32be(rt, ov, (uint32_t)(rt->alarm_interval_ns / 1000000000ull));
+                irix_guest_write32be(rt, ov + 4u, (uint32_t)((rt->alarm_interval_ns % 1000000000ull) / 1000ull));
+                irix_guest_write32be(rt, ov + 8u, (uint32_t)(left / 1000000000ull));
+                irix_guest_write32be(rt, ov + 12u, (uint32_t)((left % 1000000000ull) / 1000ull));
+            }
+            rt->alarm_interval_ns = iv;
+            rt->alarm_deadline_ns = (val && now) ? now + val : 0;
+        } else if (!set && nv && irix_guest_ptr(rt, nv, 16u)) {
+            irix_guest_write32be(rt, nv, (uint32_t)(rt->alarm_interval_ns / 1000000000ull));
+            irix_guest_write32be(rt, nv + 4u, (uint32_t)((rt->alarm_interval_ns % 1000000000ull) / 1000ull));
+            irix_guest_write32be(rt, nv + 8u, (uint32_t)(left / 1000000000ull));
+            irix_guest_write32be(rt, nv + 12u, (uint32_t)((left % 1000000000ull) / 1000ull));
+        }
         syscall_result(cpu, 0);
         return;
     }

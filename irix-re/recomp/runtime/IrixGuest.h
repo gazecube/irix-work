@@ -75,6 +75,7 @@ typedef struct IrixGuestRuntime {
     const char *rootfs;
     IrixGuestAddr program_break;
     uint64_t alarm_deadline_ns;
+    uint64_t alarm_interval_ns;   /* setitimer(ITIMER_REAL) reload, 0 = one-shot */
     IrixGuestAddr compat_alloc_cur;
     IrixGuestQuarkifyEncoded xrm_quarkify_encoded;
     IrixGuestFunctionEntry functions[IRIX_GUEST_MAX_FUNCTIONS];
