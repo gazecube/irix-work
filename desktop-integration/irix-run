@@ -11,9 +11,9 @@
 # (defaults are found relative to this script's prefix or the build tree),
 # IRIX_EXEC_BACKEND (default: interp).
 set -u
-self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-bindir="$(dirname "$self")"
-prefix="$(cd "$bindir/.." && pwd)"
+self=`/usr/bin/readlink -f "$0" 2>/dev/null || echo "$0"`
+bindir=`/usr/bin/dirname "$self"`
+prefix=`cd "$bindir/.." && pwd`
 if [ -d "$prefix/root" ] && [ -d "$prefix/tree" ]; then
     : "${IRIX_RECOMP_ROOT:=$prefix/root}"
     : "${IRIX_RUNTIME_TREE:=$prefix/tree}"
@@ -21,7 +21,7 @@ if [ -d "$prefix/root" ] && [ -d "$prefix/tree" ]; then
     LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export LD_LIBRARY_PATH
 else
-    here="$(cd "$bindir/.." && pwd)"
+    here=`cd "$bindir/.." && pwd`
     build="${IRIX_BUILD_DIR:-$here/build-irix-re}/recomp"
     : "${IRIX_RECOMP_ROOT:=$build/root}"
     : "${IRIX_RUNTIME_TREE:=$here/IRIX-TREE}"
