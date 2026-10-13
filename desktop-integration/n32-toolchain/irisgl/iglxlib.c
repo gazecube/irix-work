@@ -271,6 +271,14 @@ static void init_cmap(void)
         if (g > 255) g = 255;
         cmap[i] = rgb_pixel(g, g, g);
     }
+    /* Entries of the IRIX system colormap that individual programs use by
+     * index, matched against real screenshots (the rest follow the ramp).
+     * ical/cal: 53 background, 43 rule, 56 text, 216 month, 88 year/today. */
+    cmap[53]  = rgb_pixel(0xe1, 0xe1, 0xe1);
+    cmap[43]  = rgb_pixel(0x7b, 0x7b, 0x7b);
+    cmap[56]  = rgb_pixel(0x00, 0x00, 0x00);
+    cmap[216] = rgb_pixel(0x00, 0x00, 0xff);
+    cmap[88]  = rgb_pixel(0xff, 0x00, 0x00);
 }
 
 void color(Colorindex c)
@@ -284,6 +292,7 @@ void color(Colorindex c)
 
 void mapcolor(Colorindex i, short r, short g, short b)
 {
+    TR("mapcolor(%d,%d,%d,%d)", (int)i, (int)r, (int)g, (int)b);
     ensure_dpy();
     init_cmap();
     cmap[i & 255] = rgb_pixel(r, g, b);
