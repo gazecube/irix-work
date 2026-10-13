@@ -1922,13 +1922,19 @@ static void bridge_XdbeGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr numa = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
     Drawable specv[16];
     int num = numa ? (int)irix_guest_read32be(rt, numa) : 1, i, j;
+    int all = (specs == 0);   /* NULL specifiers: every screen of the display */
     XdbeScreenVisualInfo *r;
     IrixGuestAddr out, arr;
     cpu->gpr[2] = 0;
-    if (!d || num < 1 || num > 16) return;
+    if (!d) return;
+    if (all) {
+        num = ScreenCount(d);
+        if (num > 16) num = 16;
+    }
+    if (num < 1 || num > 16) return;
     for (i = 0; i < num; ++i)
-        specv[i] = specs ? (Drawable)irix_guest_read32be(rt, specs + (IrixGuestAddr)(i * 4))
-                         : RootWindow(d, 0);
+        specv[i] = all ? RootWindow(d, i)
+                       : (Drawable)irix_guest_read32be(rt, specs + (IrixGuestAddr)(i * 4));
     r = XdbeGetVisualInfo(d, specv, &num);
     if (!r) return;
     arr = tmp_alloc((uint32_t)num * 8u);
