@@ -402,19 +402,52 @@ static void bridge_common_XmbDrawImageString(IrixGuestRuntime *rt,IrixGuestCpu *
 }
 static void bridge_common_XmbTextEscapement(IrixGuestRuntime *rt,IrixGuestCpu *cpu){XFontSet fs=irix_x11_window_fontset_from_guest((uint32_t)cpu->gpr[4]);const char*s=common_cstr(rt,(uint32_t)cpu->gpr[5]);cpu->gpr[2]=(uint64_t)(int64_t)((fs&&s)?XmbTextEscapement(fs,s,(int)cpu->gpr[6]):0);}
 
-static void bridge_common_XGrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
-    Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
-    Window confine=(Window)common_stack32(rt,cpu,0u);
-    Cursor cursor=(Cursor)common_stack32(rt,cpu,1u);
-    int result=d?XGrabButton(d,(unsigned)cpu->gpr[5],(unsigned)cpu->gpr[6],
-        (Window)(uint32_t)cpu->gpr[7],(Bool)cpu->gpr[8],(unsigned)cpu->gpr[9],
-        (int)cpu->gpr[10],(int)cpu->gpr[11],confine,cursor):0;
-    
-    cpu->gpr[2]=(uint32_t)result;
+struct lock_grab_ctx {
+    Display *d; unsigned int a; Window w; Bool owner; unsigned int mask;
+    int pm, km; Window confine; Cursor cursor; int result; int kind;
+};
+static void lock_grab_cb(void *p, unsigned int st)
+{
+    struct lock_grab_ctx *c = (struct lock_grab_ctx *)p;
+    switch (c->kind) {
+    case 0: c->result = XGrabButton(c->d, c->a, st, c->w, c->owner, c->mask, c->pm, c->km, c->confine, c->cursor); break;
+    case 1: c->result = XUngrabButton(c->d, c->a, st, c->w); break;
+    case 2: c->result = XGrabKey(c->d, (int)c->a, st, c->w, c->owner, c->pm, c->km); break;
+    default: c->result = XUngrabKey(c->d, (int)c->a, st, c->w); break;
+    }
 }
-static void bridge_common_XUngrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUngrabButton(d,(unsigned)cpu->gpr[5],(unsigned)cpu->gpr[6],(Window)(uint32_t)cpu->gpr[7]):0;(void)rt;}
-static void bridge_common_XGrabKey(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XGrabKey(d,(int)cpu->gpr[5],(unsigned)cpu->gpr[6],(Window)(uint32_t)cpu->gpr[7],(Bool)cpu->gpr[8],(int)cpu->gpr[9],(int)cpu->gpr[10]):0;(void)rt;}
-static void bridge_common_XUngrabKey(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUngrabKey(d,(int)cpu->gpr[5],(unsigned)cpu->gpr[6],(Window)(uint32_t)cpu->gpr[7]):0;(void)rt;}
+static void bridge_common_XGrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
+    struct lock_grab_ctx c; memset(&c, 0, sizeof(c));
+    c.d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
+    c.confine=(Window)common_stack32(rt,cpu,0u);
+    c.cursor=(Cursor)common_stack32(rt,cpu,1u);
+    c.a=(unsigned)cpu->gpr[5]; c.w=(Window)(uint32_t)cpu->gpr[7]; c.owner=(Bool)cpu->gpr[8];
+    c.mask=(unsigned)cpu->gpr[9]; c.pm=(int)cpu->gpr[10]; c.km=(int)cpu->gpr[11]; c.kind=0;
+    if (c.d) irix_x11_for_each_lock_combo(c.d,(unsigned)cpu->gpr[6],lock_grab_cb,&c);
+    cpu->gpr[2]=(uint32_t)c.result;
+}
+static void bridge_common_XUngrabButton(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
+    struct lock_grab_ctx c; memset(&c, 0, sizeof(c)); (void)rt;
+    c.d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
+    c.a=(unsigned)cpu->gpr[5]; c.w=(Window)(uint32_t)cpu->gpr[7]; c.kind=1;
+    if (c.d) irix_x11_for_each_lock_combo(c.d,(unsigned)cpu->gpr[6],lock_grab_cb,&c);
+    cpu->gpr[2]=(uint32_t)c.result;
+}
+static void bridge_common_XGrabKey(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
+    struct lock_grab_ctx c; memset(&c, 0, sizeof(c)); (void)rt;
+    c.d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
+    c.a=(unsigned)cpu->gpr[5]; c.w=(Window)(uint32_t)cpu->gpr[7]; c.owner=(Bool)cpu->gpr[8];
+    c.pm=(int)cpu->gpr[9]; c.km=(int)cpu->gpr[10]; c.kind=2;
+    if (c.d) irix_x11_for_each_lock_combo(c.d,(unsigned)cpu->gpr[6],lock_grab_cb,&c);
+    cpu->gpr[2]=(uint32_t)c.result;
+}
+static void bridge_common_XUngrabKey(IrixGuestRuntime *rt,IrixGuestCpu *cpu){
+    struct lock_grab_ctx c; memset(&c, 0, sizeof(c)); (void)rt;
+    c.d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
+    c.a=(unsigned)cpu->gpr[5]; c.w=(Window)(uint32_t)cpu->gpr[7]; c.kind=3;
+    if (c.d) irix_x11_for_each_lock_combo(c.d,(unsigned)cpu->gpr[6],lock_grab_cb,&c);
+    cpu->gpr[2]=(uint32_t)c.result;
+}
 static void bridge_common_XGrabKeyboard(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XGrabKeyboard(d,(Window)(uint32_t)cpu->gpr[5],(Bool)cpu->gpr[6],(int)cpu->gpr[7],(int)cpu->gpr[8],(Time)(uint32_t)cpu->gpr[9]):GrabNotViewable;(void)rt;}
 static void bridge_common_XUngrabKeyboard(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUngrabKeyboard(d,(Time)(uint32_t)cpu->gpr[5]):0;(void)rt;}
 static void bridge_common_XGrabPointer(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);Window conf=(Window)(uint32_t)cpu->gpr[10];Cursor cur=(Cursor)(uint32_t)cpu->gpr[11];Time t=(Time)common_stack32(rt,cpu,0u);cpu->gpr[2]=d?(uint32_t)XGrabPointer(d,(Window)(uint32_t)cpu->gpr[5],(Bool)cpu->gpr[6],(unsigned)cpu->gpr[7],(int)cpu->gpr[8],(int)cpu->gpr[9],conf,cur,t):GrabNotViewable;}

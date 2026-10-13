@@ -8,6 +8,7 @@
 #include <X11/cursorfont.h>
 #include <X11/Xresource.h>
 #include <X11/Xutil.h>
+#include <X11/keysym.h>
 #ifdef IRIX_HAVE_XEXT
 #include <X11/extensions/shape.h>
 #include <X11/extensions/Xdbe.h>
@@ -938,6 +939,47 @@ SIMPLE_DISPLAY0(bridge_XPending, XPending(d))
  * IRIX N32 XEvent uses 32-bit long/pointer fields.  Marshal the common
  * 24-byte header and the Key/Button/Motion payloads explicitly.
  */
+unsigned int irix_x11_lock_modifier_mask(Display *d)
+{
+    static unsigned int mask;
+    static int done;
+    XModifierKeymap *map;
+    KeyCode nl, sl;
+    int i, j;
+    if (done || !d) return mask;
+    done = 1;
+    nl = XKeysymToKeycode(d, XK_Num_Lock);
+    sl = XKeysymToKeycode(d, XK_Scroll_Lock);
+    map = XGetModifierMapping(d);
+    if (!map) return mask;
+    for (i = 0; i < 8; ++i)
+        for (j = 0; j < map->max_keypermod; ++j) {
+            KeyCode k = map->modifiermap[i * map->max_keypermod + j];
+            /* Never touch Shift/Lock/Control; those are real on IRIX too. */
+            if (k && i >= 3 && ((nl && k == nl) || (sl && k == sl)))
+                mask |= 1u << i;
+        }
+    XFreeModifiermap(map);
+    return mask;
+}
+
+unsigned int irix_x11_strip_lock_modifiers(Display *d, unsigned int state)
+{
+    return state & ~irix_x11_lock_modifier_mask(d);
+}
+
+void irix_x11_for_each_lock_combo(Display *d, unsigned int state,
+                                  void (*fn)(void *ctx, unsigned int state),
+                                  void *ctx)
+{
+    unsigned int lock = irix_x11_lock_modifier_mask(d), sub = 0;
+    if (state == AnyModifier) { fn(ctx, state); return; }
+    do {
+        fn(ctx, state | sub);
+        sub = (sub - lock) & lock;      /* next subset of the lock bits */
+    } while (sub);
+}
+
 static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
 {
     if (!a || !e || !irix_guest_ptr(rt, a, IRIX_XEVENT_SIZE)) return 0;
@@ -958,7 +1000,7 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 36u, (uint32_t)e->xkey.y);
         wr32(rt, a + 40u, (uint32_t)e->xkey.x_root);
         wr32(rt, a + 44u, (uint32_t)e->xkey.y_root);
-        wr32(rt, a + 48u, (uint32_t)e->xkey.state);
+        wr32(rt, a + 48u, irix_x11_strip_lock_modifiers(e->xany.display, e->xkey.state));
         wr32(rt, a + 52u, (uint32_t)e->xkey.keycode);
         wr32(rt, a + 56u, (uint32_t)e->xkey.same_screen);
         break;
@@ -971,7 +1013,7 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 36u, (uint32_t)e->xbutton.y);
         wr32(rt, a + 40u, (uint32_t)e->xbutton.x_root);
         wr32(rt, a + 44u, (uint32_t)e->xbutton.y_root);
-        wr32(rt, a + 48u, (uint32_t)e->xbutton.state);
+        wr32(rt, a + 48u, irix_x11_strip_lock_modifiers(e->xany.display, e->xbutton.state));
         wr32(rt, a + 52u, (uint32_t)e->xbutton.button);
         wr32(rt, a + 56u, (uint32_t)e->xbutton.same_screen);
         break;
@@ -983,7 +1025,7 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 36u, (uint32_t)e->xmotion.y);
         wr32(rt, a + 40u, (uint32_t)e->xmotion.x_root);
         wr32(rt, a + 44u, (uint32_t)e->xmotion.y_root);
-        wr32(rt, a + 48u, (uint32_t)e->xmotion.state);
+        wr32(rt, a + 48u, irix_x11_strip_lock_modifiers(e->xany.display, e->xmotion.state));
         irix_guest_write8(rt, a + 52u, (uint8_t)e->xmotion.is_hint);
         wr32(rt, a + 56u, (uint32_t)e->xmotion.same_screen);
         break;
@@ -1000,7 +1042,7 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 52u, (uint32_t)e->xcrossing.detail);
         wr32(rt, a + 56u, (uint32_t)e->xcrossing.same_screen);
         wr32(rt, a + 60u, (uint32_t)e->xcrossing.focus);
-        wr32(rt, a + 64u, (uint32_t)e->xcrossing.state);
+        wr32(rt, a + 64u, irix_x11_strip_lock_modifiers(e->xany.display, e->xcrossing.state));
         break;
     case FocusIn:
     case FocusOut:
@@ -1377,6 +1419,18 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         (Window)(uint32_t)cpu->gpr[10], (Cursor)(uint32_t)cpu->gpr[11],
         (Time)time) : GrabNotViewable;
         
+        if (getenv("IRIX_TRACE_GRAB")) {
+            unsigned k;
+            fprintf(stderr, "GRAB win=%08x owner=%u mask=%08x pm=%d km=%d confine=%08x cursor=%08x time=%u result=%d sp=%08x stack:",
+                    (unsigned)cpu->gpr[5], (unsigned)cpu->gpr[6], (unsigned)cpu->gpr[7],
+                    (int)cpu->gpr[8], (int)cpu->gpr[9], (unsigned)cpu->gpr[10], (unsigned)cpu->gpr[11],
+                    time, result, (unsigned)sp);
+            for (k = 0; k < 10; ++k) {
+                uint8_t *q = (uint8_t *)irix_guest_ptr(rt, sp + k * 8u, 8u);
+                if (q) fprintf(stderr, " %02x%02x%02x%02x%02x%02x%02x%02x", q[0],q[1],q[2],q[3],q[4],q[5],q[6],q[7]);
+            }
+            fprintf(stderr, "\n");
+        }
         cpu->gpr[2] = (uint32_t)result;
     }
 }

@@ -317,6 +317,7 @@ static void bridge_XQueryPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     wr32(rt,(uint32_t)cpu->gpr[6],(uint32_t)root); wr32(rt,(uint32_t)cpu->gpr[7],(uint32_t)child);
     wr32(rt,(uint32_t)cpu->gpr[8],(uint32_t)rx); wr32(rt,(uint32_t)cpu->gpr[9],(uint32_t)ry);
     wr32(rt,(uint32_t)cpu->gpr[10],(uint32_t)wx); wr32(rt,(uint32_t)cpu->gpr[11],(uint32_t)wy);
+    if(d) mask=irix_x11_strip_lock_modifiers(d,mask);
     wr32(rt,mask_return,mask); cpu->gpr[2]=ok?1u:0u;
 }
 

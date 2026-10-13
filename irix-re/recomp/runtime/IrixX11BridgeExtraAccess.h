@@ -18,4 +18,19 @@ int irix_x11_primary_free_gc(IrixGuestRuntime *rt,
                              IrixGuestAddr display_addr,
                              IrixGuestAddr guest_gc);
 
+/*
+ * IRIX's X server never reports NumLock/ScrollLock as modifiers, so Motif and
+ * Xt programs match modifier state exactly.  Linux XKB puts NumLock in Mod2,
+ * which would make every click look like Button+Mod2 and miss the bindings.
+ * The bridges hide the lock modifiers from the guest (event/query state) and
+ * duplicate passive grabs across every lock combination so the server still
+ * matches them.
+ */
+unsigned int irix_x11_lock_modifier_mask(Display *d);
+unsigned int irix_x11_strip_lock_modifiers(Display *d, unsigned int state);
+/* Calls fn(state) for `state` and each combination of lock modifiers added. */
+void irix_x11_for_each_lock_combo(Display *d, unsigned int state,
+                                  void (*fn)(void *ctx, unsigned int state),
+                                  void *ctx);
+
 #endif
