@@ -832,3 +832,232 @@ void noborder(void) { }
 void minsize(long x, long y) { (void)x; (void)y; }
 void winpop(void) { if (dpy && win) XRaiseWindow(dpy, win); }
 long qgetfd(void) { ensure_dpy(); return dpy ? ConnectionNumber(dpy) : -1; }
+
+/* ---- cursor movement variants ------------------------------------------- */
+void cmov(Coord x, Coord y, Coord z) { (void)z; cmov2i((Icoord)x, (Icoord)y); }
+void cmovi(Icoord x, Icoord y, Icoord z) { (void)z; cmov2i(x, y); }
+void cmovs(Scoord x, Scoord y, Scoord z) { (void)z; cmov2i((Icoord)x, (Icoord)y); }
+void cmov2s(Scoord x, Scoord y) { cmov2i((Icoord)x, (Icoord)y); }
+void dither(long m) { (void)m; }
+long getdisplaymode(void) { return 1; }          /* DMRGBDOUBLE-ish: unused */
+
+/* ---- Font Manager over X core fonts -------------------------------------- */
+/*
+ * libfm.so is a thin wrapper: fmfindfont() etc. call gl_d_fmfindfont() when
+ * gl_islocal() is true, with the signatures of <fmclient.h>.  Fonts are
+ * mapped to X core fonts by family/weight/slant and point size (1 pt = 1 px).
+ */
+#include <fmclient.h>
+
+typedef struct { char name[64]; double size; XFontStruct *xf; } FmFont;
+static FmFont *fm_cur;
+
+static XFontStruct *fm_load(const char *name, double size)
+{
+    char low[64], pat[160];
+    const char *fam = "helvetica", *wt = "medium", *sl = "r";
+    int px = size > 1.0 ? (int)(size + 0.5) : 12, i;
+    XFontStruct *f;
+
+    ensure_dpy();
+    for (i = 0; name && name[i] && i < 63; ++i)
+        low[i] = (char)((name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32 : name[i]);
+    low[i] = 0;
+    if (strstr(low, "courier") || strstr(low, "mono")) fam = "courier";
+    else if (strstr(low, "times") || strstr(low, "roman") || strstr(low, "serif")) fam = "times";
+    else if (strstr(low, "symbol")) fam = "symbol";
+    if (strstr(low, "bold")) wt = "bold";
+    if (strstr(low, "oblique") || strstr(low, "italic")) sl = (strcmp(fam, "times") == 0) ? "i" : "o";
+    snprintf(pat, sizeof(pat), "-*-%s-%s-%s-normal--%d-*-*-*-*-*-iso8859-1", fam, wt, sl, px);
+    f = XLoadQueryFont(dpy, pat);
+    if (!f) {
+        snprintf(pat, sizeof(pat), "-*-%s-%s-%s-*-*-%d-*-*-*-*-*-*-*", fam, wt, sl, px);
+        f = XLoadQueryFont(dpy, pat);
+    }
+    if (!f) f = XLoadQueryFont(dpy, "fixed");
+    return f;
+}
+
+static FmFont *fm_make(const char *name, double size)
+{
+    FmFont *f = (FmFont *)calloc(1, sizeof(*f));
+    if (!f) return NULL;
+    strncpy(f->name, name ? name : "Helvetica", sizeof(f->name) - 1);
+    f->size = size;
+    f->xf = fm_load(f->name, size);
+    return f;
+}
+
+long gl_islocal(void) { return 1; }
+void gl_beginstring(void) { }
+void gl_endstring(void) { }
+void gl_drawbitmap(void) { }
+
+void gl_d_fminit(void) { TR("fminit"); ensure_dpy(); }
+fmfonthandle gl_d_fmfindfont(const char *name)
+{
+    TR("fmfindfont(%s)", name ? name : "(null)");
+    return (fmfonthandle)fm_make(name, 12.0);
+}
+fmfonthandle gl_d_fmscalefont(fmfonthandle h, double size)
+{
+    FmFont *o = (FmFont *)h;
+    TR("fmscalefont(%g)", size);
+    return o ? (fmfonthandle)fm_make(o->name, size) : NULL;
+}
+fmfonthandle gl_d_fmmakefont(fmfonthandle h, double m[3][2])
+{
+    FmFont *o = (FmFont *)h;
+    double s = m[1][1] != 0 ? (m[1][1] < 0 ? -m[1][1] : m[1][1]) : 1.0;
+    return o ? (fmfonthandle)fm_make(o->name, o->size * s) : NULL;
+}
+void gl_d_fmfreefont(fmfonthandle h)
+{
+    FmFont *f = (FmFont *)h;
+    if (!f) return;
+    if (f->xf && dpy) XFreeFont(dpy, f->xf);
+    if (f == fm_cur) fm_cur = NULL;
+    free(f);
+}
+void gl_d_fmsetfont(fmfonthandle h)
+{
+    FmFont *f = (FmFont *)h;
+    TR("fmsetfont");
+    fm_cur = f;
+    if (f && f->xf && gc) XSetFont(dpy, gc, f->xf->fid);
+}
+int gl_d_fmprstr(const char *s)
+{
+    XFontStruct *xf = fm_cur ? fm_cur->xf : NULL;
+    TR("fmprstr(%s)", s ? s : "(null)");
+    if (!dpy || !win || !s) return 0;
+    if (xf && gc) XSetFont(dpy, gc, xf->fid);
+    XDrawString(dpy, target(), gc, charx, chary, s, (int)strlen(s));
+    charx += xf ? XTextWidth(xf, s, (int)strlen(s)) : (int)strlen(s) * 6;
+    return (int)strlen(s);
+}
+int gl_d_fmfprstr(fmfonthandle h, unsigned char *s, short len, int x, int y)
+{
+    FmFont *f = (FmFont *)h;
+    if (!dpy || !win || !s) return 0;
+    if (f && f->xf && gc) XSetFont(dpy, gc, f->xf->fid);
+    XDrawString(dpy, target(), gc, x, winh - 1 - y, (char *)s, len);
+    return len;
+}
+long gl_d_fmgetstrwidth(fmfonthandle h, const char *s)
+{
+    FmFont *f = (FmFont *)h;
+    if (!f || !f->xf || !s) return 0;
+    return XTextWidth(f->xf, s, (int)strlen(s));
+}
+long gl_d_fmgetchrwidth(fmfonthandle h, const unsigned char c)
+{
+    FmFont *f = (FmFont *)h;
+    char ch = (char)c;
+    if (!f || !f->xf) return 0;
+    return XTextWidth(f->xf, &ch, 1);
+}
+long gl_d_fmoutchar(fmfonthandle h, const unsigned int c)
+{
+    FmFont *f = (FmFont *)h;
+    char ch = (char)c;
+    if (!dpy || !win || !f || !f->xf) return 0;
+    XSetFont(dpy, gc, f->xf->fid);
+    XDrawString(dpy, target(), gc, charx, chary, &ch, 1);
+    charx += XTextWidth(f->xf, &ch, 1);
+    return 0;
+}
+int gl_d_fmgetfontinfo(fmfonthandle h, fmfontinfo *i)
+{
+    FmFont *f = (FmFont *)h;
+    memset(i, 0, sizeof(*i));
+    if (!f || !f->xf) return -1;
+    i->matrix00 = f->size; i->matrix11 = f->size;
+    i->type = FMBITMAPFONT;
+    i->encoding = FMISO88591;
+    i->xsize = f->xf->max_bounds.width;
+    i->ysize = f->xf->ascent + f->xf->descent;
+    i->height = i->ysize;
+    i->width = f->xf->max_bounds.width;
+    i->yorig = f->xf->descent;
+    i->nglyphs = 224;
+    i->firstcol = f->xf->min_char_or_byte2; i->lastcol = f->xf->max_char_or_byte2;
+    i->firstrow = 0; i->lastrow = 0;
+    i->resolution = 72;
+    return 0;
+}
+int gl_d_fmgetfontname(fmfonthandle h, int len, char *buf)
+{
+    FmFont *f = (FmFont *)h;
+    if (!f || len <= 0) return -1;
+    strncpy(buf, f->name, (size_t)len - 1); buf[len - 1] = 0;
+    return (int)strlen(buf);
+}
+int gl_d_fmgetcomment(fmfonthandle h, int n, char *buf) { (void)h; (void)n; if (buf) buf[0] = 0; return 0; }
+void gl_d_fmenumerate(void (*cb)(char *))
+{
+    static char n1[] = "Helvetica", n2[] = "Helvetica-Bold", n3[] = "Times-Roman",
+                n4[] = "Courier";
+    if (cb) { cb(n1); cb(n2); cb(n3); cb(n4); }
+}
+void gl_d_fmcacheenable(void) { }
+void gl_d_fmcachedisable(void) { }
+int gl_d_fmgetcacheused(void) { return 0; }
+void gl_d_fmsetcachelimit(int n) { (void)n; }
+int gl_d_fmcachelimit(void) { return 1 << 20; }
+void gl_d_fmsetpath(const char *p) { (void)p; }
+void gl_d_fmprintermatch(int m) { (void)m; }
+void gl_d_fminitpagematrix(void) { }
+void gl_d_fmconcatpagematrix(double m[3][2]) { (void)m; }
+void gl_d_fmgetpagematrix(double m[3][2])
+{ m[0][0] = m[1][1] = 1; m[0][1] = m[1][0] = m[2][0] = m[2][1] = 0; }
+void gl_d_fmsetpagematrix(double m[3][2]) { (void)m; }
+void gl_d_fmrotatepagematrix(double a) { (void)a; }
+void gl_d_fmscalepagematrix(double s) { (void)s; }
+/* internals reached by libfm for point-size conversion and whole-font metrics */
+long gl_d_fm_pointsize_to_pixels_int(long p) { return p; }
+long gl_d_fm_pixels_to_pointsize_int(long p) { return p; }
+char *gl_d_fm_fontpath_int(void) { static char p[] = "/usr/lib/DPS/outline/base"; return p; }
+long gl_d_fm_getwholemetrics_int(fmfonthandle h, fmglyphinfo *g)
+{ (void)h; (void)g; return 0; }
+
+/* window-font-manager (wfm) entry points: map onto the plain GL calls */
+void gl_d_wfm_charstr(const char *s) { charstr((String)s); }
+void gl_d_wfm_charstrl(const char *s, long n)
+{ if (dpy && win && s) { XDrawString(dpy, target(), gc, charx, chary, s, (int)n); charx += xfont ? XTextWidth(xfont, s, (int)n) : (int)n * 6; } }
+void gl_d_wfm_charstrn(const char *s, long n) { gl_d_wfm_charstrl(s, n); }
+void gl_d_wfm_cmov(Coord x, Coord y, Coord z) { cmov(x, y, z); }
+void gl_d_wfm_cmov2(Coord x, Coord y) { cmov2(x, y); }
+void gl_d_wfm_cmov2i(Icoord x, Icoord y) { cmov2i(x, y); }
+void gl_d_wfm_cmov2s(Scoord x, Scoord y) { cmov2s(x, y); }
+void gl_d_wfm_cmovi(Icoord x, Icoord y, Icoord z) { cmovi(x, y, z); }
+void gl_d_wfm_cmovs(Scoord x, Scoord y, Scoord z) { cmovs(x, y, z); }
+void gl_d_wfm_color(Colorindex c) { color(c); }
+void gl_d_wfm_cpack(unsigned long c) { cpack(c); }
+void gl_d_wfm_aacolor(Colorindex c) { color(c); }
+void gl_d_wfm_aacpack(unsigned long c) { cpack(c); }
+long gl_d_wfm_strwidth(const char *s) { return strwidth((String)s); }
+long gl_d_wfm_strnwidth(const char *s, long n)
+{ return (xfont && s) ? XTextWidth(xfont, s, (int)n) : 0; }
+void gl_d_wfm_init(void) { ensure_dpy(); }
+void gl_d_wfm_enumerate(void (*cb)(char *)) { gl_d_fmenumerate(cb); }
+void gl_d_wfm_font(long f) { (void)f; }
+void gl_d_wfm_fontpath(const char *p) { (void)p; }
+void gl_d_wfm_setfontpath(const char *p) { (void)p; }
+void gl_d_wfm_fontunits(long u) { (void)u; }
+void gl_d_wfm_freefont(long f) { (void)f; }
+long gl_d_wfm_getfont(void) { return 0; }
+long gl_d_wfm_getfontinfo(long f, void *i) { (void)f; (void)i; return 0; }
+void gl_d_wfm_hint(long h) { (void)h; }
+long gl_d_wfm_makefont_int(long f, void *m) { (void)f; (void)m; return 0; }
+void gl_d_wfm_makefontmat(void *m) { (void)m; }
+void gl_d_wfm_outchar(long c) { (void)c; }
+void gl_d_wfm_pos(Coord x, Coord y) { cmov2(x, y); }
+void gl_d_wfm_rpos(Coord x, Coord y) { charx += (int)x; chary -= (int)y; }
+void gl_d_wfm_skipspace(void) { }
+void gl_d_wfm_sizeenumerate(long f, void *cb) { (void)f; (void)cb; }
+void gl_d_wfm_strbounds(const char *s, void *b) { (void)s; (void)b; }
+void gl_d_wfm_strnbounds(const char *s, long n, void *b) { (void)s; (void)n; (void)b; }
+void gl_d_wfm_getcbbox(long c, void *b) { (void)c; (void)b; }
+void gl_d_wfm_getcharmetrics_int(long c, void *m) { (void)c; (void)m; }
+void gl_d_wfm_getcoutline(long c, void *o) { (void)c; (void)o; }
