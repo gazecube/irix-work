@@ -442,6 +442,94 @@ void irix_xrm_compat_init(IrixGuestRuntime *rt)
         g_xrm.value_cur = IRIX_XRM_COMPAT_VALUE_BASE;
 }
 
+/*
+ * XrmEnumerateDatabase(db, names, classes, mode, proc, closure): the guest's
+ * translated libX11 copy would dereference the bridged database handle as a
+ * pointer (Xt does this for every non-default screen).  Enumerate the host
+ * database and call the guest callback per entry.
+ *
+ * guest proc: Bool proc(XrmDatabase *db, XrmBindingList bindings,
+ *                       XrmQuarkList quarks, XrmRepresentation *type,
+ *                       XrmValue *value, XPointer closure)
+ */
+typedef struct {
+    IrixGuestRuntime *rt;
+    IrixGuestCpu *cpu;
+    IrixGuestAddr proc;
+    IrixGuestAddr closure;
+    IrixGuestAddr db_guest;
+} EnumCtx;
+
+static Bool enum_cb(XrmDatabase *db, XrmBindingList bindings, XrmQuarkList quarks,
+                    XrmRepresentation *type, XrmValue *value, XPointer arg)
+{
+    EnumCtx *c = (EnumCtx *)arg;
+    IrixGuestRuntime *rt = c->rt;
+    IrixGuestAddr save = g_xrm.value_cur;
+    IrixGuestAddr cell, gb, gq, gt, gv, gdata;
+    int n = 0, i;
+    IrixGuestCpu run;
+    Bool r;
+    (void)db;
+    while (quarks[n] != NULLQUARK && n < 128) ++n;
+    cell = value_alloc(4u);
+    gb = value_alloc((uint32_t)(n + 1) * 4u);
+    gq = value_alloc((uint32_t)(n + 1) * 4u);
+    gt = value_alloc(4u);
+    gv = value_alloc(8u);
+    gdata = value && value->addr && value->size
+                ? copy_bytes(value->addr, (uint32_t)value->size) : 0;
+    if (!cell || !gb || !gq || !gt || !gv) {
+        g_xrm.value_cur = save;
+        return False;
+    }
+    wr32(rt, cell, c->db_guest);
+    for (i = 0; i < n; ++i) {
+        wr32(rt, gb + 4u * (uint32_t)i, (uint32_t)bindings[i]);
+        wr32(rt, gq + 4u * (uint32_t)i, (uint32_t)quarks[i]);
+    }
+    wr32(rt, gq + 4u * (uint32_t)n, 0u);
+    wr32(rt, gt, type ? (uint32_t)*type : 0u);
+    wr32(rt, gv, value ? (uint32_t)value->size : 0u);
+    wr32(rt, gv + 4u, gdata);
+    run = *c->cpu;
+    run.gpr[4] = cell;
+    run.gpr[5] = gb;
+    run.gpr[6] = gq;
+    run.gpr[7] = gt;
+    run.gpr[8] = gv;
+    run.gpr[9] = c->closure;
+    run.gpr[25] = c->proc;
+    run.gpr[29] -= 128u;
+    r = (irix_guest_call(rt, &run, c->proc) == 0 &&
+         ((uint32_t)run.gpr[2] & 0xffu)) ? True : False;
+    g_xrm.value_cur = save;
+    return r;
+}
+
+static void bridge_XrmEnumerateDatabase(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dbg = (uint32_t)cpu->gpr[4];
+    XrmDatabase db = db_from_guest(dbg);
+    XrmQuark names[128], classes[128];
+    EnumCtx ctx;
+    Bool ok = False;
+    int mode = (int)(int32_t)cpu->gpr[7];
+    if (db) {
+        read_quarks(rt, (uint32_t)cpu->gpr[5], names, 128);
+        read_quarks(rt, (uint32_t)cpu->gpr[6], classes, 128);
+        ctx.rt = rt;
+        ctx.cpu = cpu;
+        ctx.db_guest = dbg;
+        ctx.proc = (uint32_t)cpu->gpr[8];
+        ctx.closure = (uint32_t)cpu->gpr[9];
+        if (ctx.proc)
+            ok = XrmEnumerateDatabase(db, names, classes, mode, enum_cb,
+                                      (XPointer)&ctx);
+    }
+    cpu->gpr[2] = ok ? 1u : 0u;
+}
+
 IrixGuestFunction irix_xrm_compat_lookup(const char *name)
 {
     if (!name) return 0;
@@ -462,6 +550,7 @@ IrixGuestFunction irix_xrm_compat_lookup(const char *name)
     MAP(XrmPutStringResource);
     MAP(XrmPutLineResource);
     MAP(XrmPutFileDatabase);
+    MAP(XrmEnumerateDatabase);
 #undef MAP
     return 0;
 }
