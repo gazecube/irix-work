@@ -263,17 +263,14 @@ static void init_cmap(void)
     done = 1;
     for (i = 0; i < 8; ++i)
         cmap[i] = rgb_pixel(base[i][0], base[i][1], base[i][2]);
-    /* 8..255: the desktop's default colormap is not available; use a gray
-     * ramp, with the entries the SGI clock draws with set explicitly. */
+    /* 8..255: the IRIX default colormap beyond the basic eight is a gray
+     * ramp, gray(i) = 4*(i-8)+1.  Measured from real gr_osview (backcolor 46
+     * -> #999999) and cal (#E1E1E1 -> 64) screenshots. */
     for (i = 8; i < 256; ++i) {
-        int g = (i * 255) / 255;
+        int g = 4 * (i - 8) + 1;
+        if (g > 255) g = 255;
         cmap[i] = rgb_pixel(g, g, g);
     }
-    cmap[34] = rgb_pixel(0x1c, 0x1c, 0x1c);   /* hand shadow (drawn first, offset) */
-    cmap[37] = rgb_pixel(0x3a, 0x3a, 0x3a);   /* face */
-    cmap[42] = rgb_pixel(0xd0, 0xd0, 0xd0);   /* hand fill */
-    cmap[52] = rgb_pixel(0xe8, 0xe8, 0xe8);   /* tick marks */
-    cmap[54] = rgb_pixel(0xf8, 0xf8, 0xf8);   /* hand outline */
 }
 
 void color(Colorindex c)
@@ -460,13 +457,14 @@ void swapbuffers(void)
 }
 
 /* ---- text -------------------------------------------------------------- */
-void cmov2i(Icoord x, Icoord y)
+static void cmov_f(float x, float y)
 {
     int ix, iy;
-    project((float)x, (float)y, 0, &ix, &iy);
+    project(x, y, 0, &ix, &iy);
     charx = ix; chary = iy;
 }
-void cmov2(Coord x, Coord y) { cmov2i((Icoord)x, (Icoord)y); }
+void cmov2i(Icoord x, Icoord y) { cmov_f((float)x, (float)y); }
+void cmov2(Coord x, Coord y) { cmov_f(x, y); }
 void charstr(String s)
 {
     if (!dpy || !win || !s) return;
@@ -834,7 +832,7 @@ void winpop(void) { if (dpy && win) XRaiseWindow(dpy, win); }
 long qgetfd(void) { ensure_dpy(); return dpy ? ConnectionNumber(dpy) : -1; }
 
 /* ---- cursor movement variants ------------------------------------------- */
-void cmov(Coord x, Coord y, Coord z) { (void)z; cmov2i((Icoord)x, (Icoord)y); }
+void cmov(Coord x, Coord y, Coord z) { (void)z; cmov_f(x, y); }
 void cmovi(Icoord x, Icoord y, Icoord z) { (void)z; cmov2i(x, y); }
 void cmovs(Scoord x, Scoord y, Scoord z) { (void)z; cmov2i((Icoord)x, (Icoord)y); }
 void cmov2s(Scoord x, Scoord y) { cmov2i((Icoord)x, (Icoord)y); }
