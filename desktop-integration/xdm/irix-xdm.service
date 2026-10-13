@@ -13,8 +13,9 @@ Type=simple
 Environment=IRIX_RUNTIME_TREE=/home/nekron/Projects/irix-work/IRIX-TREE
 ExecStartPre=-/usr/bin/rm -f /home/nekron/Projects/irix-work/IRIX-TREE/var/X11/xdm/xdm-pid
 ExecStart=/home/nekron/Projects/irix-work/build-irix-re/recomp/root/usr/bin/X11/xdm -nodaemon -config /var/X11/xdm/xdm-config.real
-Restart=on-failure
-RestartSec=3
+# Never restart on failure: every start brings up Xorg and switches the VT,
+# so a crash loop would take over the console.
+Restart=no
 StandardOutput=journal
 StandardError=journal
 

@@ -131,6 +131,7 @@ static void dispatch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             if (h > 2u && !rt->trapped) {
                 IrixGuestCpu c = *cpu;
                 c.gpr[4] = (uint64_t)s;
+                c.gpr[25] = (uint64_t)h;    /* PIC: $gp is derived from t9 */
                 c.gpr[5] = 0;
                 c.gpr[6] = 0;
                 c.gpr[29] -= 128u;      /* stay below the interrupted frame */
