@@ -96,10 +96,20 @@ static void b_lseek64(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint64_t)lseek((int)ARG(0), (off_t)(int64_t)cpu->gpr[5], (int)ARG(2));
 }
 
+/* IRIX wait options: WNOHANG 0100, WUNTRACED 004, WCONTINUED 010, WNOWAIT 0200 */
+static int host_wait_opts(uint32_t o)
+{
+    int h = 0;
+    if (o & 0100u) h |= WNOHANG;
+    if (o & 004u)  h |= WUNTRACED;
+    if (o & 010u)  h |= WCONTINUED;
+    return h;
+}
+
 static void b_waitpid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int st = 0;
-    pid_t r = waitpid((pid_t)(int32_t)ARG(0), &st, (int)ARG(2));
+    pid_t r = waitpid((pid_t)(int32_t)ARG(0), &st, host_wait_opts(ARG(2)));
     if (r > 0 && ARG(1)) irix_guest_write32be(rt, ARG(1), (uint32_t)st);
     RET(r);
 }
@@ -522,7 +532,7 @@ static void b_setpgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void b_wait3(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     int st = 0;
-    pid_t r = wait3(&st, (int)ARG(1), 0);
+    pid_t r = wait3(&st, host_wait_opts(ARG(1)), 0);
     if (r > 0 && ARG(0)) irix_guest_write32be(rt, ARG(0), (uint32_t)st);
     RET(r);
 }
