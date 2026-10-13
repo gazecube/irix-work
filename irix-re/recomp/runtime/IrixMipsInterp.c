@@ -993,6 +993,58 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             a = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] + (uint32_t)imm);
             irix_guest_write64be(rt, a, cpu->fpr[rtno]);
             break;
+        case 0x13: {
+            /* COP1X (MIPS IV): indexed FP loads/stores, fused multiply-add.
+             * rs = base (or fr), rt = index (or ft), rd = fs, sa = fd. */
+            unsigned fr = rs, ft = rtno, fs = rd, fd = sa;
+            IrixGuestAddr xa = (IrixGuestAddr)((uint32_t)cpu->gpr[rs] +
+                                               (uint32_t)cpu->gpr[rtno]);
+            switch (fn) {
+            case 0x00: /* LWXC1 */
+                irix_guest_fpr_set_s(cpu, fd, 0.0f);
+                cpu->fpr[fd] = (cpu->fpr[fd] & UINT64_C(0xffffffff00000000)) |
+                               irix_guest_read32be(rt, xa);
+                break;
+            case 0x01: /* LDXC1 */
+                cpu->fpr[fd] = irix_guest_read64be(rt, xa);
+                break;
+            case 0x08: /* SWXC1 */
+                irix_guest_write32be(rt, xa, (uint32_t)cpu->fpr[fs]);
+                break;
+            case 0x09: /* SDXC1 */
+                irix_guest_write64be(rt, xa, cpu->fpr[fs]);
+                break;
+            case 0x0f: /* PREFX */
+                break;
+            case 0x20: case 0x28: case 0x30: case 0x38: { /* *.S */
+                volatile float a = irix_guest_fpr_get_s(cpu, fs);
+                volatile float b = irix_guest_fpr_get_s(cpu, ft);
+                volatile float c = irix_guest_fpr_get_s(cpu, fr);
+                volatile float p = a * b, r;
+                if (fn == 0x20) r = p + c;           /* MADD */
+                else if (fn == 0x28) r = p - c;      /* MSUB */
+                else if (fn == 0x30) r = -(p + c);   /* NMADD */
+                else r = -(p - c);                   /* NMSUB */
+                irix_guest_fpr_set_s(cpu, fd, r);
+                break;
+            }
+            case 0x21: case 0x29: case 0x31: case 0x39: { /* *.D */
+                volatile double a = irix_guest_fpr_get_d(cpu, fs);
+                volatile double b = irix_guest_fpr_get_d(cpu, ft);
+                volatile double c = irix_guest_fpr_get_d(cpu, fr);
+                volatile double p = a * b, r;
+                if (fn == 0x21) r = p + c;
+                else if (fn == 0x29) r = p - c;
+                else if (fn == 0x31) r = -(p + c);
+                else r = -(p - c);
+                irix_guest_fpr_set_d(cpu, fd, r);
+                break;
+            }
+            default:
+                return 1;
+            }
+            break;
+        }
         case 0x11: {
             unsigned fmt = rs, ft = rtno, fs = rd, fd = sa, funct = fn;
             float sf, tf;

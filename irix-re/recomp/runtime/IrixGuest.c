@@ -6653,7 +6653,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             static int trace_calls = -1;
             if (trace_calls < 0) trace_calls = getenv("IRIX_TRACE_CALLS") != 0;
             if (trace_calls && !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED))
-                fprintf(stderr, "CALL %s a0=%08x a1=%08x a2=%08x\n",
+                fprintf(stderr, "CALL[%d] %s a0=%08x a1=%08x a2=%08x\n",
+                        (int)getpid(),
                         entry->name ? entry->name : "?",
                         (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5],
                         (unsigned)cpu->gpr[6]);
