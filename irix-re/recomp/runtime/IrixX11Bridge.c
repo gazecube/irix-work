@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "IrixX11Bridge.h"
 
 #include <X11/Xlib.h>
@@ -163,6 +164,34 @@ static void write_xrm_value(IrixGuestRuntime *rt, IrixGuestAddr out, const XrmVa
     write32(rt, out + 4, data);
 }
 
+
+/* IRIX_TRACE_XRM=<substr>: print Xt/Xrm lookup paths and the resource names
+ * matching <substr> (debug aid for resource-matching differences). */
+static void xrm_dbg_path(const char *what, const XrmQuark *n, const XrmQuark *c)
+{
+    static const char *want;
+    static int init;
+    int i;
+    if (!init) { want = getenv("IRIX_TRACE_XRM"); init = 1; }
+    if (!want) return;
+    fprintf(stderr, "XRM %s names:", what);
+    for (i = 0; n[i] && i < 32; ++i) fprintf(stderr, " %s", XrmQuarkToString(n[i]));
+    fprintf(stderr, "  classes:");
+    for (i = 0; c[i] && i < 32; ++i) fprintf(stderr, " %s", XrmQuarkToString(c[i]));
+    fprintf(stderr, "\n");
+}
+static void xrm_dbg_res(XrmQuark n, XrmQuark c)
+{
+    static const char *want;
+    static int init;
+    const char *ns, *cs;
+    if (!init) { want = getenv("IRIX_TRACE_XRM"); init = 1; }
+    if (!want || !n) return;
+    ns = XrmQuarkToString(n); cs = c ? XrmQuarkToString(c) : "";
+    if (strstr(ns, want) || strstr(cs, want))
+        fprintf(stderr, "XRM   resource %s class %s\n", ns, cs);
+}
+
 static void bridge_XrmQGetSearchList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     XrmDatabase db = database_from_guest((uint32_t)cpu->gpr[4]);
@@ -178,6 +207,7 @@ static void bridge_XrmQGetSearchList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (!db) { write32(rt, list_addr, 0); cpu->gpr[2] = 1; return; }
     read_quark_list(rt, names_addr, names, 128);
     read_quark_list(rt, classes_addr, classes, 128);
+    xrm_dbg_path("searchlist", names, classes);
     host_list = (XrmHashTable *)calloc((size_t)list_length, sizeof(*host_list));
     if (!host_list) { cpu->gpr[2] = 0; return; }
     ok = XrmQGetSearchList(db, names, classes, host_list, list_length);
@@ -207,6 +237,7 @@ static void bridge_XrmQGetSearchResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu
         if (!handle || !host_list[i]) break;
     }
     host_list[i] = 0;
+    xrm_dbg_res((XrmName)cpu->gpr[5], (XrmClass)cpu->gpr[6]);
     ok = XrmQGetSearchResource(host_list, (XrmName)cpu->gpr[5], (XrmClass)cpu->gpr[6], &type, &value);
     if ((uint32_t)cpu->gpr[7]) write32(rt, (uint32_t)cpu->gpr[7], (uint32_t)type);
     if ((uint32_t)cpu->gpr[8]) write_xrm_value(rt, (uint32_t)cpu->gpr[8], ok ? &value : 0);
@@ -228,6 +259,7 @@ static void bridge_XrmQGetResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (db) {
         read_quark_list(rt, names_addr, names, 128);
         read_quark_list(rt, classes_addr, classes, 128);
+        xrm_dbg_path("getresource", names, classes);
         ok = XrmQGetResource(db, names, classes, &type, &value);
     }
     if (type_addr) write32(rt, type_addr, ok ? (uint32_t)type : 0);
@@ -246,6 +278,8 @@ static void bridge_XrmGetResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     XrmValue value;
     Bool ok = False;
     memset(&value, 0, sizeof(value));
+    if (getenv("IRIX_TRACE_XRM") && name && class_name)
+        fprintf(stderr, "XRM getresource-str name=%s class=%s\n", name, class_name);
     if (db && name && class_name) ok = XrmGetResource(db, name, class_name, &type, &value);
     if (type_ptr_addr) {
         IrixGuestAddr guest_type = 0;
