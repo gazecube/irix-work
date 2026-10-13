@@ -22,3 +22,11 @@ Facts worth knowing:
   (`irix-xdm-session`) supplies `XDG_RUNTIME_DIR`/D-Bus for host apps.
 - Xorg picks up `/etc/X11/xorg.conf.d` (e.g. the Zaphod/radeon config).
 - The login program is `desktop-integration/xsession/irix-xdm-login`.
+
+## Trying it safely
+
+    sudo desktop-integration/xdm/irix-dm-try 180
+
+Run it from a text console with no other X server running.  It starts
+`irix-xdm`, waits, then stops it and starts Ly again, so a black screen or a
+hang cannot strand you.

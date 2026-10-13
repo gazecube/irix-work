@@ -1,0 +1,21 @@
+#!/bin/sh
+# Try the IRIX xdm display manager for a fixed time, then hand the console
+# back to Ly automatically.  Run from a text console (Ctrl+Alt+F3) after
+# quitting any other X session (only one X server can own the GPU):
+#
+#     sudo desktop-integration/xdm/irix-dm-try 180
+#
+secs="${1:-180}"
+if pgrep -x Xorg >/dev/null 2>&1 || pgrep -f /usr/lib/Xorg >/dev/null 2>&1; then
+    echo "irix-dm-try: another X server is running; quit it first." >&2
+    pgrep -a Xorg >&2
+    exit 1
+fi
+systemctl stop ly@tty2 2>/dev/null
+echo "irix-dm-try: starting irix-xdm for ${secs}s, then restoring Ly"
+systemctl start irix-xdm
+sleep "$secs"
+systemctl stop irix-xdm
+sleep 1
+systemctl start ly@tty2
+echo "irix-dm-try: Ly restored"
