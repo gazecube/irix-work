@@ -1359,11 +1359,11 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     /*
      * N32 has eight integer argument registers (a0..a7). XGrabPointer has
      * nine arguments, so Time is the first stack argument in the ninth
-     * 64-bit argument slot at sp+64. The old bridge incorrectly read t4.
+     * 64-bit stack slot at sp+0 (N32 keeps no home area for register args).
      */
     IrixGuestAddr sp = (uint32_t)cpu->gpr[29];
     uint32_t time = 0;
-    uint8_t *slot = (uint8_t *)irix_guest_ptr(rt, sp + 64u, 8u);
+    uint8_t *slot = (uint8_t *)irix_guest_ptr(rt, sp, 8u);
 
     if (slot)
         time = ((uint32_t)slot[4] << 24) | ((uint32_t)slot[5] << 16) |
