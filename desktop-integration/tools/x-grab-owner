@@ -22,28 +22,35 @@ cat >"$tmp/o.c" <<'C'
 #include <X11/X.h>
 #include "inputstr.h"
 #include "dixgrabs.h"
+#include "windowstr.h"
 int main(void){
-  printf("%zu %zu %zu %zu %zu\n", offsetof(InputInfo, pointer),
+  printf("%zu %zu %zu %zu %zu %zu %zu\n", offsetof(InputInfo, pointer),
          offsetof(DeviceIntRec, deviceGrab) + offsetof(GrabInfoRec, grab),
          offsetof(GrabRec, resource), offsetof(GrabRec, window),
-         offsetof(GrabRec, grabtype));
+         offsetof(GrabRec, grabtype), offsetof(GrabRec, eventMask),
+         offsetof(WindowRec, drawable.id));
   return 0; }
 C
 $cc -I/usr/include/xorg -I/usr/include/pixman-1 -o "$tmp/o" "$tmp/o.c" 2>/dev/null \
     || { echo "need xorg-server headers (xorg-server-devel)" >&2; exit 1; }
 set -- $("$tmp/o") "${1:-}"
-po=$1 go=$2 ro=$3 wo=$4; rel=${6:-}
+po=$1 go=$2 ro=$3 wo=$4 gt=$5 em=$6 wid=$7; rel=${8:-}
 out=$(gdb -p "$xpid" -batch \
   -ex "set \$ptr = *(void**)((char*)&inputInfo + $po)" \
   -ex "set \$grab = *(void**)((char*)\$ptr + $go)" \
   -ex 'printf "GRAB %p\n", $grab' \
-  -ex "printf \"RES 0x%x\n\", *(unsigned int*)((char*)\$grab + $ro)" 2>&1 || true)
+  -ex "printf \"RES 0x%x\n\", *(unsigned int*)((char*)\$grab + $ro)" \
+  -ex "set \$w = *(void**)((char*)\$grab + $wo)" \
+  -ex "printf \"WIN 0x%x\n\", *(unsigned int*)((char*)\$w + $wid)" \
+  -ex "printf \"TYPE %d\n\", *(unsigned char*)((char*)\$grab + $gt)" \
+  -ex "printf \"MASK 0x%x\n\", *(unsigned int*)((char*)\$grab + $em)" 2>&1 || true)
 grab=$(echo "$out" | sed -n 's/^GRAB //p')
 if [ -z "$grab" ] || [ "$grab" = "(nil)" ] || [ "$grab" = "0x0" ]; then
     echo "no active pointer grab"; rm -rf "$tmp"; exit 0
 fi
 res=$(echo "$out" | sed -n 's/^RES //p')
 base=$(( res & ~0x1fffff ))
+echo "  window $(echo "$out" | sed -n 's/^WIN //p')  grabtype $(echo "$out" | sed -n 's/^TYPE //p') (0=core 1=xi 2=xi2)  eventMask $(echo "$out" | sed -n 's/^MASK //p')"
 echo "pointer grab held by X client base $(printf 0x%x $base) (resource $res)"
 pid=$(DISPLAY=$disp python3 - "$base" <<'P'
 import sys

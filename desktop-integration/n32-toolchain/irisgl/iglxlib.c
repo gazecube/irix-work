@@ -752,3 +752,83 @@ long dopup(long id)
 
 /* misc */
 void sginap_stub(void) { }
+
+/* ---- additions for gr_osview / ical -------------------------------------- */
+static float penx, peny;
+
+void move(Coord x, Coord y, Coord z) { (void)z; penx = x; peny = y; }
+void movei(Icoord x, Icoord y, Icoord z) { (void)z; penx = (float)x; peny = (float)y; }
+void move2(Coord x, Coord y) { penx = x; peny = y; }
+void move2i(Icoord x, Icoord y) { penx = (float)x; peny = (float)y; }
+void draw(Coord x, Coord y, Coord z)
+{
+    int ax, ay, bx, by;
+    (void)z;
+    if (!dpy || !win) return;
+    project(penx, peny, 0, &ax, &ay);
+    project(x, y, 0, &bx, &by);
+    XDrawLine(dpy, target(), gc, ax, ay, bx, by);
+    penx = x; peny = y;
+}
+void drawi(Icoord x, Icoord y, Icoord z) { draw((Coord)x, (Coord)y, (Coord)z); }
+void draw2(Coord x, Coord y) { draw(x, y, 0); }
+void draw2i(Icoord x, Icoord y) { draw((Coord)x, (Coord)y, 0); }
+
+/* outline rectangle */
+void rect(Coord x1, Coord y1, Coord x2, Coord y2)
+{
+    float xs[4], ys[4];
+    int i, nvsave = nv;
+    TR("rect(%g,%g,%g,%g)", x1, y1, x2, y2);
+    (void)nvsave;
+    xs[0] = x1; ys[0] = y1; xs[1] = x2; ys[1] = y1;
+    xs[2] = x2; ys[2] = y2; xs[3] = x1; ys[3] = y2;
+    for (i = 0; i < 4; ++i) { vx[i] = xs[i]; vy[i] = ys[i]; }
+    nv = 4;
+    draw_line(1);
+    nv = 0;
+}
+void reci(Icoord a, Icoord b, Icoord c, Icoord d) { rect((Coord)a, (Coord)b, (Coord)c, (Coord)d); }
+
+void rectcopy(Screencoord x1, Screencoord y1, Screencoord x2, Screencoord y2,
+              Screencoord nx, Screencoord ny)
+{
+    int w, h, sx, sy, dx, dy;
+    if (!dpy || !win) return;
+    if (x2 < x1) { Screencoord t = x1; x1 = x2; x2 = t; }
+    if (y2 < y1) { Screencoord t = y1; y1 = y2; y2 = t; }
+    w = x2 - x1 + 1; h = y2 - y1 + 1;
+    sx = x1; sy = winh - 1 - y2;
+    dx = nx; dy = winh - 1 - (ny + h - 1);
+    XCopyArea(dpy, target(), target(), gc, sx, sy, (unsigned)w, (unsigned)h, dx, dy);
+}
+
+void linewidth(short w) { if (gc) XSetLineAttributes(dpy, gc, (unsigned)(w > 1 ? w : 0), LineSolid, CapButt, JoinMiter); }
+void shademodel(long m) { (void)m; }
+void getcpos(short *x, short *y) { *x = (short)charx; *y = (short)(winh - 1 - chary); }
+void getmatrix(Matrix m)
+{
+    int i, j;
+    for (i = 0; i < 4; ++i) for (j = 0; j < 4; ++j) m[i][j] = cur.m[j][i];
+}
+void ortho(Coord l, Coord r, Coord b, Coord t, Coord n, Coord f)
+{ (void)n; (void)f; ortho2(l, r, b, t); }
+void reshapeviewport(void)
+{
+    XWindowAttributes a;
+    if (!dpy || !win) return;
+    if (XGetWindowAttributes(dpy, win, &a)) {
+        if (a.width != winw || a.height != winh) {
+            winw = a.width; winh = a.height;
+            if (back) { XFreePixmap(dpy, back); back = 0; }
+        }
+    }
+    vpl = vpb = 0; vpw = winw; vph = winh;
+}
+void frontbuffer(Boolean b) { (void)b; }
+void backbuffer(Boolean b) { (void)b; }
+void foreground(void) { }
+void noborder(void) { }
+void minsize(long x, long y) { (void)x; (void)y; }
+void winpop(void) { if (dpy && win) XRaiseWindow(dpy, win); }
+long qgetfd(void) { ensure_dpy(); return dpy ? ConnectionNumber(dpy) : -1; }
