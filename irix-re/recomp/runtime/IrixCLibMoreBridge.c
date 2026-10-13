@@ -293,11 +293,10 @@ static void b_vsyslog(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { syslog_emit(rt, cpu, "vsprintf"); RET(0); }
 
 static void b_sigset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
-{   /* sigset(sig, handler): handler dispositions SIG_DFL=0, SIG_IGN=1 only */
+{   /* sigset(sig, handler): like signal(), handler may also be SIG_HOLD */
     (void)rt;
-    if (ARG(1) == 1u) { signal((int)ARG(0), SIG_IGN); RET(1); }
-    else if (ARG(1) == 0u) { signal((int)ARG(0), SIG_DFL); RET(0); }
-    else RET(0);
+    if (ARG(1) == 2u) { RET(0); return; }          /* SIG_HOLD: virtual */
+    RET(irix_signal_install((int)ARG(0), ARG(1)) == 0 ? 0 : -1);
 }
 
 /* ---- networking helpers ------------------------------------------------ */
@@ -551,12 +550,13 @@ static void b_sigsetmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     RET(m);
 }
 
+int irix_signal_suspend(void);
+int irix_signal_install(int irix_sig, uint32_t handler);
+
 static void b_sigsuspend(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    sigset_t mask;
     (void)rt;
-    sigemptyset(&mask);
-    (void)sigsuspend(&mask);
+    (void)irix_signal_suspend();
     FAIL(EINTR);
 }
 

@@ -23,6 +23,7 @@
 #define IRIX_SIGSET_WORDS 4u
 #define IRIX_SIGSET_BYTES (IRIX_SIGSET_WORDS * 4u)
 #define IRIX_SIGACTION_BYTES 32u
+int irix_signal_install(int irix_sig, uint32_t handler);
 #define IRIX_NSIG 128
 
 #define IRIX_F_DUPFD 0
@@ -268,6 +269,7 @@ static void bridge_sigaction(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             return;
         }
         g_irix_sigactions[signo] = next;
+        (void)irix_signal_install(signo, next.handler);
     }
     ret_i32(cpu, 0);
 }
@@ -1552,6 +1554,10 @@ static void bridge_putenv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, s ? putenv(s) : (errno = EFAULT, -1));
 }
 
+int irix_signal_install(int irix_sig, uint32_t handler);
+int irix_signal_to_host(int irix_sig);
+void irix_signal_bridge_init(void);
+
 static void bridge_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
@@ -1560,8 +1566,9 @@ static void bridge_alarm(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void bridge_kill(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    (void)rt;
-    ret_i32(cpu, kill((pid_t)(int32_t)cpu->gpr[4], (int)(int32_t)cpu->gpr[5]));
+    int sig = (int)(int32_t)cpu->gpr[5];
+    ret_i32(cpu, kill((pid_t)(int32_t)cpu->gpr[4],
+                      sig > 0 ? irix_signal_to_host(sig) : sig));
 }
 
 static void bridge_setsid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)

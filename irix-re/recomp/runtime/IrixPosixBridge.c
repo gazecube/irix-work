@@ -46,7 +46,7 @@ static struct {
  * IRIX sigset_t is four 32-bit words.  Keep the guest process mask here
  * instead of applying IRIX signal numbers to the Linux host process.
  */
-static uint32_t g_irix_sigmask[4];
+uint32_t g_irix_sigmask[4];
 
 static IrixGuestAddr tmp_alloc(uint32_t n)
 {
@@ -712,8 +712,11 @@ static void bridge_sigprocmask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     ret_i32(cpu, 0);
 }
 
+void irix_signal_bridge_init(void);
+
 void irix_posix_bridge_init(IrixGuestRuntime *rt)
 {
+    irix_signal_bridge_init();
     g_rt = rt;
     g_tmp_cur = IRIX_POSIX_TMP_BASE;
     memset(g_irix_sigmask, 0, sizeof(g_irix_sigmask));

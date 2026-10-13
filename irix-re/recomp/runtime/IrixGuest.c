@@ -2138,6 +2138,10 @@ static char **irix_guest_string_vector(IrixGuestRuntime *rt,
 }
 
 
+/* Pending guest signals (see IrixSignalBridge.c) */
+volatile int irix_guest_signals_pending;
+void (*irix_guest_signal_dispatch)(IrixGuestRuntime *, IrixGuestCpu *);
+
 /* ---- IRIX termio <-> Linux termios ------------------------------------ */
 
 #include <termios.h>
@@ -6655,6 +6659,9 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         (unsigned)cpu->gpr[6]);
         }
         entry->function(rt, cpu);
+        if (irix_guest_signals_pending && irix_guest_signal_dispatch &&
+            !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED))
+            irix_guest_signal_dispatch(rt, cpu);
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
             irix_mips_interp_pop_translated(&translated_frame);
 
