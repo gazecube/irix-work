@@ -1,3 +1,5 @@
+#define _GNU_SOURCE 1
+#include <sys/mman.h>
 #include "IrixCompat.h"
 #include "IrixSyssgiNumbers.h"
 #include "IrixKernelInfo.h"
@@ -851,6 +853,64 @@ int irix_compat_sysget(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     return 0;
 }
 
+
+/*
+ * Synthetic kernel memory for programs that read /dev/kmem at addresses they
+ * obtain from sysmp(MP_KERNADDR, MPKA_*) (gr_osview).  The image is small and
+ * served from a memfd; sysmp returns the offset into it (small and positive,
+ * so the syscall layer does not mistake it for an error).
+ */
+#define KMEM_IMAGE_SIZE 0x10000u
+#define KMEM_K0BASE     0x80000000u
+#define KMEM_OFF_PHYSMEM 0x100u
+#define KMEM_OFF_AVENRUN 0x300u
+#define KMEM_OFF_VAR     0x1000u
+#define KMEM_OFF_BUF     0x2000u
+#define KMEM_OFF_GENERIC 0x400u
+
+int irix_kmem_addr(int sel)
+{
+    switch (sel) {
+    case 1:  return (int)KMEM_OFF_BUF;       /* MPKA_BUF */
+    case 2:  return (int)KMEM_OFF_VAR;       /* MPKA_VAR */
+    case 19: return (int)KMEM_OFF_AVENRUN;
+    case 20: return (int)KMEM_OFF_PHYSMEM;
+    default:
+        if (sel > 0 && sel < 64)
+            return (int)(KMEM_OFF_GENERIC + 16u * (uint32_t)sel);
+        return -1;
+    }
+}
+
+static void kmem_put32(unsigned char *img, uint32_t off, uint32_t v)
+{
+    img[off] = (unsigned char)(v >> 24); img[off + 1] = (unsigned char)(v >> 16);
+    img[off + 2] = (unsigned char)(v >> 8); img[off + 3] = (unsigned char)v;
+}
+
+/* Returns a read-only fd holding the synthetic kernel image, or -1. */
+int irix_kmem_open(void)
+{
+    unsigned char *img = calloc(1, KMEM_IMAGE_SIZE);
+    long pages = sysconf(_SC_PHYS_PAGES), psz = sysconf(_SC_PAGESIZE);
+    uint64_t bytes;
+    int fd;
+    if (!img) return -1;
+    bytes = (pages > 0 && psz > 0) ? (uint64_t)pages * (uint64_t)psz : 1ULL << 30;
+    kmem_put32(img, KMEM_OFF_PHYSMEM, (uint32_t)(bytes / 16384u));
+    kmem_put32(img, KMEM_OFF_VAR, 1000u);            /* v_buf: buffer count */
+    fd = memfd_create("irix-kmem", 0);
+    if (fd >= 0) {
+        if (write(fd, img, KMEM_IMAGE_SIZE) != (ssize_t)KMEM_IMAGE_SIZE) {
+            close(fd); fd = -1;
+        } else {
+            lseek(fd, 0, SEEK_SET);
+        }
+    }
+    free(img);
+    return fd;
+}
+
 void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t cmd = (uint32_t)cpu->gpr[4];
@@ -868,6 +928,17 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         if (n < 1) n = 1;
         compat_result(cpu, (int64_t)n);
         return;
+
+    case 13u: /* MP_SCHED(...): scheduler control (e.g. realtime priority) */
+        compat_result(cpu, 0);
+        return;
+
+    case 8u: { /* MP_KERNADDR(sel): address of a kernel structure */
+        int a = irix_kmem_addr((int)(int32_t)cpu->gpr[5]);
+        if (a == -1) errno = EINVAL;
+        compat_result(cpu, (int64_t)a);
+        return;
+    }
 
     case 14u: /* MP_PGSIZE */
         compat_result(cpu, 16384);

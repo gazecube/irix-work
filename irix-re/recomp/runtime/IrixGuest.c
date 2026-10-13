@@ -3178,6 +3178,12 @@ exec_syscall_failed:
         IrixGuestAddr addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
         const void *p = irix_guest_ptr(rt, addr, count);
+        /* rld and libc write fatal diagnostics to /dev/console, which does
+         * not exist here (fd -1): show them on stderr instead of losing them. */
+        if ((int32_t)cpu->gpr[4] == -1 && p && count) {
+            fwrite(p, 1, count, stderr);
+            fflush(stderr);
+        }
         result = p || !count
             ? (int64_t)write((int)(int32_t)cpu->gpr[4], p, count)
             : irix_guest_write_fd(rt, (int)(int32_t)cpu->gpr[4], addr, count);
@@ -3266,6 +3272,11 @@ exec_syscall_failed:
             syscall_result(cpu, -1);
             return;
         }
+        if (!strcmp(guest_path, "/dev/kmem") || !strcmp(guest_path, "/dev/mem")) {
+            extern int irix_kmem_open(void);
+            syscall_result(cpu, (int64_t)irix_kmem_open());
+            return;
+        }
         path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
         if (!path) {
             syscall_result(cpu, -1);
@@ -3309,6 +3320,10 @@ exec_syscall_failed:
         syscall_result(cpu, (int64_t)unlink(path));
         return;
     }
+    case SYS_dup: /* dup(fd) */
+        result = (int64_t)dup((int)(int32_t)cpu->gpr[4]);
+        syscall_result(cpu, result);
+        return;
     case SYS_pipe: { /* pipe */
         int fds[2];
 
