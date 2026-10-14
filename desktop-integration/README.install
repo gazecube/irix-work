@@ -1,0 +1,82 @@
+install-native.sh
+=================
+
+Installs the recompiled (x86) IRIX runtime tree into a real root filesystem,
+file by file.  Default is a dry run; nothing is changed without --apply.
+
+    desktop-integration/install-native.sh              dry run, summary
+    VERBOSE=1 desktop-integration/install-native.sh    also list new files
+    desktop-integration/install-native.sh --apply      do it (sudo -n)
+
+Options
+-------
+
+    --src DIR        tree to install   (default: build-irix-re/recomp/root)
+    --dest DIR       target root       (default: /)
+    --manifest FILE  list of installed guest paths
+                     (default: <dest>/usr/lib/irix-recomp.manifest)
+
+What it does
+------------
+
+For every file or symlink under the source tree:
+
+  * Resolves the destination's parent directories first.  On a merged-usr
+    host /usr/sbin is a symlink to bin, so /usr/sbin/xwsh is installed as
+    /usr/bin/xwsh.  A symlink is never replaced, and an existing directory is
+    never chowned or chmoded; missing directories are created root:root 755.
+  * Skips files whose content is already identical.
+  * Overwrites an existing file only if the manifest lists it as ours.
+    Anything else that differs is reported as CONFLICT and left alone.
+  * Installs new files root:root, with the mode of the source file.
+  * Never touches the host-owned names listed under "Excluded".
+  * After --apply, rewrites the manifest.
+
+Excluded
+--------
+
+    /sbin/sh  /bin/sh  /usr/bin/sh  /usr/sbin/sh
+    /usr/local/bin/ksh  /usr/bin/ksh
+    /usr/lib32/libXt.so  libXext.so  libXi.so  libXmu.so  libGLU.so
+    /usr/include/X11/bitmaps/xm_*
+
+The IRIX tree has files with these names; on a Linux host they are the host's
+own shell, 32-bit libraries and Motif bitmaps.
+
+The manifest
+------------
+
+/usr/lib/irix-recomp.manifest holds one IRIX (guest) path per line, for
+example /usr/sbin/xwsh.  When IRIX_RECOMP_ROOT resolves to "/", the runtime
+only accepts a native file for a guest path that the manifest lists.  Any
+other path is looked up under IRIX_RECOMP_FALLBACK_ROOT (the build tree), so a
+guest exec or DSO load can never land on a host binary or library.
+
+IRIX_RECOMP_ROOT
+----------------
+
+Unless set in the environment, each runner finds its root by walking outward
+from its own executable until the remaining path starts with usr/, sbin/,
+bin/, lib*, etc/ or opt/ and the candidate directory contains usr/.  A runner
+in <build>/root/usr/bin/X11/4Dwm gets <build>/root; the same runner installed
+as /usr/bin/X11/4Dwm gets /.  irix-guest-exec lives outside a root and keeps
+the compiled-in path.
+
+Why file by file
+----------------
+
+    sudo rsync -a --files-from=LIST ./ /
+
+was tried once and must not be repeated.  It replaced the /usr/sbin symlink
+with a directory (removing /usr/sbin/zsh, the login shell) and changed the
+owner of /usr, /usr/bin, /usr/lib, /usr/lib32, /usr/include and about 150
+other directories to the invoking user.  If a plain tool has to be used,
+every one of --no-implied-dirs --keep-dirlinks --no-owner --no-group
+--no-perms is required, and a dry run (-n) must be read first.
+
+Updating
+--------
+
+Rebuild the runners, then run the script again.  Files listed in the manifest
+are updated in place; new files are added.  A CONFLICT line means a host file
+with that name exists and differs: decide by hand, nothing is overwritten.
