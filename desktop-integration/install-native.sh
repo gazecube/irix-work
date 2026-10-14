@@ -1,5 +1,33 @@
 #!/bin/bash
 set -u
+usage() {
+    cat <<'EOF'
+Usage: install-native.sh [ options ]
+DESCRIPTION
+  Installs the recompiled (x86) IRIX runtime tree into a root filesystem, one
+  file at a time. Without --apply nothing is changed; a summary is printed.
+    -     Parent directories are resolved first, so on a merged-usr host
+          /usr/sbin/xwsh is installed as /usr/bin/xwsh. A symlink is never
+          replaced and an existing directory is never chowned or chmoded.
+    -     Identical files are left alone. A differing file is overwritten only
+          if the manifest lists it; otherwise it is reported as CONFLICT.
+    -     New files are installed root:root with the mode of the source file.
+    -     The host's own sh, ksh, 32-bit libX*.so symlinks and xm_* bitmaps
+          are never touched.
+    -     After --apply the manifest of installed guest paths is rewritten.
+OPTIONS
+  --apply         Perform the installation (uses sudo -n unless run as root).
+  --src dir       Tree to install. The default is
+                  build-irix-re/recomp/root in this repository.
+  --dest dir      Root to install into. The default is /.
+  --manifest file List of installed guest paths. The default is
+                  usr/lib/irix-recomp.manifest below --dest.
+  -h, --help      Print this message.
+ENVIRONMENT
+  VERBOSE=1       List every new file in the dry run.
+EOF
+}
+
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 SRC="$repo/build-irix-re/recomp/root"
@@ -12,7 +40,7 @@ while [ $# -gt 0 ]; do
         --src) SRC="$2"; shift ;;
         --dest) DEST="$2"; shift ;;
         --manifest) MANIFEST="$2"; shift ;;
-        -h|--help) echo "usage: $0 [--apply] [--src DIR] [--dest DIR] [--manifest FILE]  (see README.install)"; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
