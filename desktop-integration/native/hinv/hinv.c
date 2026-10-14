@@ -180,19 +180,54 @@ static void print_cache(const char *label, long kb)
     }
 }
 
+
+static void clean_model(const char *in, char *out, size_t n)
+{
+    char tmp[256];
+    char *p, *w;
+    size_t i = 0;
+    snprintf(tmp, sizeof(tmp), "%s", in);
+    p = strstr(tmp, " @ ");
+    if (p) *p = 0;
+    w = out;
+    for (p = tmp; *p && (size_t)(w - out) + 1 < n; ) {
+        if (!strncmp(p, "(R)", 3) || !strncmp(p, "(TM)", 4) || !strncmp(p, "(tm)", 4)) {
+            p += (p[1] == 'R') ? 3 : 4;
+            continue;
+        }
+        if (!strncmp(p, " CPU", 4) && (p[4] == 0 || p[4] == ' ')) {
+            p += 4;
+            continue;
+        }
+        if (!strncmp(p, " Processor", 10) && (p[10] == 0 || p[10] == ' ')) {
+            p += 10;
+            continue;
+        }
+        *w++ = *p++;
+    }
+    *w = 0;
+    (void)i;
+    trim(out);
+}
+
 static void show_processors(const struct cpu_info *c, int verbose)
 {
-    printf("%d %.0f MHZ %s %s\n", c->logical, c->base_mhz, c->model,
+    char name[256];
+    clean_model(c->model, name, sizeof(name));
+    printf("%d %.0f MHZ %s %s\n", c->logical, c->base_mhz, name,
            c->logical > 1 ? "Processors" : "Processor");
-    if (verbose && c->cores > 0 && c->cores != c->logical)
-        printf("  %d physical cores, %d threads\n", c->cores, c->logical);
-    if (verbose && c->max_mhz > c->base_mhz)
-        printf("  maximum clock %.0f MHZ\n", c->max_mhz);
+    if (verbose) {
+        printf("  %s\n", c->model);
+        if (c->cores > 0 && c->cores != c->logical)
+            printf("  %d physical cores, %d threads\n", c->cores, c->logical);
+        if (c->max_mhz > c->base_mhz)
+            printf("  maximum clock %.0f MHZ\n", c->max_mhz);
+    }
     if (c->family >= 0)
-        printf("CPU: %s Revision: %d.%d.%d\n", c->model, c->family,
+        printf("CPU: %s Revision: %d.%d.%d\n", name, c->family,
                c->model_no, c->stepping);
     else
-        printf("CPU: %s\n", c->model);
+        printf("CPU: %s\n", name);
     printf("FPU: %s Floating Point Unit\n", c->vector);
 }
 
