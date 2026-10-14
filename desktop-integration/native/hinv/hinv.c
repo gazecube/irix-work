@@ -379,6 +379,91 @@ static void show_storage(int verbose)
     }
 }
 
+
+static const char *sys_block(void)
+{
+    const char *p = getenv("HINV_SYS_BLOCK");
+    return p && p[0] ? p : "/sys/block";
+}
+
+static void slave_list(const char *dev, char *out, size_t n, int *count)
+{
+    char p[PATH_MAX];
+    DIR *d;
+    struct dirent *e;
+    char names[32][32];
+    int k = 0, i, j;
+    out[0] = 0;
+    *count = 0;
+    snprintf(p, sizeof(p), "%s/%s/slaves", sys_block(), dev);
+    d = opendir(p);
+    if (!d) return;
+    while ((e = readdir(d)) != NULL && k < 32) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(names[k++], sizeof(names[0]), "%s", e->d_name);
+    }
+    closedir(d);
+    for (i = 0; i < k; ++i)
+        for (j = i + 1; j < k; ++j)
+            if (strcmp(names[i], names[j]) > 0) {
+                char t[32];
+                memcpy(t, names[i], 32); memcpy(names[i], names[j], 32); memcpy(names[j], t, 32);
+            }
+    for (i = 0; i < k; ++i) {
+        size_t l = strlen(out);
+        snprintf(out + l, n - l, "%s%s", i ? " " : "", names[i]);
+    }
+    *count = k;
+}
+
+static void show_raid(int verbose)
+{
+    DIR *d = opendir(sys_block());
+    struct dirent *e;
+    char names[64][32];
+    int n = 0, i, j, unit = 0;
+    if (!d) return;
+    while ((e = readdir(d)) != NULL && n < 64) {
+        if (!strncmp(e->d_name, "md", 2) && isdigit((unsigned char)e->d_name[2]))
+            snprintf(names[n++], sizeof(names[0]), "%s", e->d_name);
+        else if (!strncmp(e->d_name, "dm-", 3))
+            snprintf(names[n++], sizeof(names[0]), "%s", e->d_name);
+    }
+    closedir(d);
+    for (i = 0; i < n; ++i)
+        for (j = i + 1; j < n; ++j)
+            if (strcmp(names[i], names[j]) > 0) {
+                char t[32];
+                memcpy(t, names[i], 32); memcpy(names[i], names[j], 32); memcpy(names[j], t, 32);
+            }
+    for (i = 0; i < n; ++i) {
+        char p[PATH_MAX], t[128], slaves[256], level[32] = "", state[32] = "", dmname[128] = "";
+        int count, md = !strncmp(names[i], "md", 2);
+        long long sectors;
+        snprintf(p, sizeof(p), "%s/%s/size", sys_block(), names[i]);
+        read_file(p, t, sizeof(t));
+        sectors = atoll(t);
+        slave_list(names[i], slaves, sizeof(slaves), &count);
+        if (md) {
+            snprintf(p, sizeof(p), "%s/%s/md/level", sys_block(), names[i]);
+            read_file(p, level, sizeof(level));
+            snprintf(p, sizeof(p), "%s/%s/md/array_state", sys_block(), names[i]);
+            read_file(p, state, sizeof(state));
+            printf("  RAID lun: unit %d, %s %s", unit++, names[i], level[0] ? level : "md");
+        } else {
+            snprintf(p, sizeof(p), "%s/%s/dm/name", sys_block(), names[i]);
+            read_file(p, dmname, sizeof(dmname));
+            printf("  Logical volume: unit %d, %s", unit++, dmname[0] ? dmname : names[i]);
+        }
+        printf(", %d device%s", count, count == 1 ? "" : "s");
+        if (verbose && slaves[0]) printf(" (%s)", slaves);
+        if (sectors > 0) printf(", %.0f GB", (double)sectors * 512.0 / 1e9);
+        if (md && state[0] && (verbose || (strcmp(state, "clean") != 0 && strcmp(state, "active") != 0)))
+            printf(", %s", state);
+        printf("\n");
+    }
+}
+
 static void show_network(int verbose)
 {
     DIR *d = opendir("/sys/class/net");
@@ -527,7 +612,7 @@ static void show_audio(void)
 
 static void usage(const char *p)
 {
-    fprintf(stderr, "usage: %s [-v] [-m] [-c processor|memory|disk|network|graphics|audio]\n", p);
+    fprintf(stderr, "usage: %s [-v] [-m] [-c processor|memory|disk|raid|network|graphics|audio]\n", p);
     exit(2);
 }
 
@@ -559,6 +644,7 @@ int main(int argc, char **argv)
             return 0;
         }
         if (!strcmp(klass, "disk") || !strcmp(klass, "scsi")) { show_storage(verbose); return 0; }
+        if (!strcmp(klass, "raid")) { show_raid(verbose); return 0; }
         if (!strcmp(klass, "network")) { show_network(verbose); return 0; }
         if (!strcmp(klass, "graphics")) { show_graphics(verbose); return 0; }
         if (!strcmp(klass, "audio")) { show_audio(); return 0; }
@@ -569,6 +655,7 @@ int main(int argc, char **argv)
     show_cache(&cache);
     printf("Main memory size: %ld Mbytes\n", mem_mbytes());
     show_storage(verbose);
+    show_raid(verbose);
     show_network(verbose);
     show_graphics(verbose);
     show_audio();
