@@ -37,10 +37,13 @@ int sysmp(int cmd, ...)
         sub = va_arg(ap, int);
         va_end(ap);
         switch (sub) {
-        case 1:  return (int)KMEM_OFF_BUF;
         case 2:  return (int)KMEM_OFF_VAR;
         case 20: return (int)KMEM_OFF_PHYSMEM;
-        default: return -1;
+        case 27: return (int)KMEM_OFF_BUF;
+        default:
+            if (sub > 0 && sub < 64)
+                return (int)(0x400u + 16u * (unsigned)sub);
+            return -1;
         }
     case MP_SASZ:
         sub = va_arg(ap, int);

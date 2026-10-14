@@ -14,6 +14,12 @@ build:
 build/%.o: $(SRC)/%.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
+build/setup.c: $(SRC)/setup.c patches/setup-skip-missing-disk.patch | build
+	patch -s -o $@ $(SRC)/setup.c patches/setup-skip-missing-disk.patch
+
+build/setup.o: build/setup.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 build/drawbar.o: CFLAGS += -Dargs=ap
 
 build/shim.o: shim.c | build

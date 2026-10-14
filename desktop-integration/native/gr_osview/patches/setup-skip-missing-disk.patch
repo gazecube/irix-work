@@ -1,0 +1,15 @@
+--- setup.c	2026-10-13 21:06:52.456085617 -0700
++++ setup.c	2026-10-13 21:06:52.464276908 -0700
+@@ -724,8 +724,10 @@
+ 		bp->s_btype = bdisk;
+ 		if ((ntype = gettok(&s)) != TOK_ARG)
+ 			return(1);
+-		if ((bp->s_disk = diskinfo(s)) < 0)
+-			return(1);
++		if ((bp->s_disk = diskinfo(s)) < 0) {
++			fprintf(stderr, "%s: skipping disk \"%s\"\n", pname, s);
++			return(0);
++		}
+ 		bp->s_name = strdup(s);
+ 		lnkbar(bp);
+ 		return(0);
