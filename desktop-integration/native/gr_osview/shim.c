@@ -18,6 +18,11 @@
 
 int irix_native_ncpu_override;
 
+static void __attribute__((constructor)) irix_native_expose_cores(void)
+{
+    setenv("IRIX_NCPU", "host", 0);
+}
+
 int sysmp(int cmd, ...)
 {
     va_list ap;
