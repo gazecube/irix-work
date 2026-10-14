@@ -1,4 +1,5 @@
 #include "IrixGuest.h"
+#include <sys/stat.h>
 #include "IrixMipsJit.h"
 #include "IrixLibcBridge.h"
 #include "IrixPosixBridge.h"
@@ -66,7 +67,56 @@ static const char *irix_env_or(const char *name, const char *compiled)
     return (v && v[0]) ? v : compiled;
 }
 #define IRIX_RUNTIME_TREE_PATH() irix_env_or("IRIX_RUNTIME_TREE", IRIX_RUNTIME_TREE)
-#define IRIX_RECOMP_ROOT_PATH()  irix_env_or("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT)
+/*
+ * The reconstructed root is wherever this executable sits inside it: starting
+ * at the executable's own directory, travel outward until the remainder of its
+ * path is usr/..., sbin/..., bin/... or lib*\/...  The directory that
+ * precedes that remainder is the root (".../root" for a build tree, "/" once
+ * installed under /usr/...).  An explicit IRIX_RECOMP_ROOT still wins, and
+ * programs that do not live inside a root (the guest-exec runner in the build
+ * directory) fall back to the compiled-in path.
+ */
+static const char *irix_recomp_root_path(void)
+{
+    static char detected[4096];
+    static int done;
+    const char *env = getenv("IRIX_RECOMP_ROOT");
+    if (env && env[0])
+        return env;
+    if (!done) {
+        char exe[4096], probe[4200];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        done = 1;
+        if (n > 0) {
+            char *p, *deleted;
+            exe[n] = 0;
+            if ((deleted = strstr(exe, " (deleted)")) != 0) *deleted = 0;
+            /* innermost ancestor A with A/usr present whose remainder of the
+             * path starts with a top-level IRIX directory */
+            for (p = exe + strlen(exe); p > exe; --p) {
+                struct stat st;
+                const char *rest;
+                size_t len;
+                if (*p != '/') continue;
+                len = (size_t)(p - exe);
+                rest = p + 1;
+                if (strncmp(rest, "usr/", 4) && strncmp(rest, "sbin/", 5) &&
+                    strncmp(rest, "bin/", 4) && strncmp(rest, "lib", 3) &&
+                    strncmp(rest, "etc/", 4) && strncmp(rest, "opt/", 4))
+                    continue;
+                snprintf(probe, sizeof(probe), "%.*s/usr", (int)len, exe);
+                if (stat(probe, &st) != 0 || !S_ISDIR(st.st_mode))
+                    continue;
+                memcpy(detected, exe, len);
+                detected[len] = 0;
+                if (!len) strcpy(detected, "/");
+                break;
+            }
+        }
+    }
+    return detected[0] ? detected : IRIX_RECOMP_ROOT;
+}
+#define IRIX_RECOMP_ROOT_PATH()  irix_recomp_root_path()
 #ifndef IRIX_GUEST_EXEC_RUNNER
 #define IRIX_GUEST_EXEC_RUNNER ""
 #endif
@@ -274,7 +324,14 @@ static void register_native_dsos(IrixGuestRuntime *rt)
         /* Native translated DSOs live at their original IRIX paths inside
            the shared reconstructed root, not in an application-private lib
            directory. */
-        snprintf(path, sizeof(path), "%s/%s", IRIX_RECOMP_ROOT_PATH(), component->path);
+        {
+            char rel[4096];
+            snprintf(rel, sizeof(rel), "/%s", component->path);
+            if (irix_recomp_resolve(IRIX_RECOMP_ROOT_PATH(), rel, path,
+                                    sizeof(path)) != 0)
+                snprintf(path, sizeof(path), "%s/%s", IRIX_RECOMP_ROOT_PATH(),
+                         component->path);
+        }
         handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
         if (!handle) {
             fprintf(stderr, "failed to load translated DSO %s: %s\n",
@@ -876,6 +933,10 @@ int main(int argc, char **argv)
     /* Child execve calls use one generic runner for original guest images. */
     if (IRIX_RECOMP_ROOT_PATH()[0] != '\0' && !getenv("IRIX_RECOMP_ROOT"))
         setenv("IRIX_RECOMP_ROOT", IRIX_RECOMP_ROOT_PATH(), 0);
+    /* When the root detected above is the host's "/", files the host owns
+     * are looked up in the build tree instead (see irix_recomp_resolve). */
+    if (IRIX_RECOMP_ROOT[0] != '\0' && !getenv("IRIX_RECOMP_FALLBACK_ROOT"))
+        setenv("IRIX_RECOMP_FALLBACK_ROOT", IRIX_RECOMP_ROOT, 0);
     if (IRIX_GUEST_EXEC_RUNNER[0] != '\0' &&
         !getenv("IRIX_GUEST_EXEC_RUNNER"))
         setenv("IRIX_GUEST_EXEC_RUNNER", IRIX_GUEST_EXEC_RUNNER, 0);

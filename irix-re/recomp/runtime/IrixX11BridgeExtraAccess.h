@@ -46,6 +46,7 @@ void irix_x11_note_button_event(int press, unsigned int button,
 void irix_x11_after_pointer_grab(Display *d, Window grab_window,
                                  unsigned int event_mask, int result);
 
+void irix_x11_trace_event(const XEvent *e, const char *via);
 void irix_x11_trace_ungrab(const char *which, unsigned long time);
 
 #endif

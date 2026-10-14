@@ -30,6 +30,7 @@ static int write_n32_event(IrixGuestRuntime *rt, IrixGuestAddr g,
     p = irix_guest_ptr(rt, g, IRIX_N32_XEVENT_SIZE);
     if (!p) return 0;
     memset(p, 0, IRIX_N32_XEVENT_SIZE);
+    irix_x11_trace_event(e, "n32");
 
     ew32(rt,g+0u,(uint32_t)e->type);
     if (e->type == 0) return !rt->trapped;
@@ -54,20 +55,20 @@ static int write_n32_event(IrixGuestRuntime *rt, IrixGuestAddr g,
     case KeyPress: case KeyRelease:
         ew32(rt,g+20u,(uint32_t)e->xkey.root); ew32(rt,g+24u,(uint32_t)e->xkey.subwindow); ew32(rt,g+28u,(uint32_t)e->xkey.time);
         ew32(rt,g+32u,(uint32_t)e->xkey.x); ew32(rt,g+36u,(uint32_t)e->xkey.y); ew32(rt,g+40u,(uint32_t)e->xkey.x_root); ew32(rt,g+44u,(uint32_t)e->xkey.y_root);
-        ew32(rt,g+48u,(uint32_t)e->xkey.state); ew32(rt,g+52u,(uint32_t)e->xkey.keycode); ew32(rt,g+56u,(uint32_t)e->xkey.same_screen); break;
+        ew32(rt,g+48u,irix_x11_strip_lock_modifiers(e->xany.display,e->xkey.state)); ew32(rt,g+52u,(uint32_t)e->xkey.keycode); ew32(rt,g+56u,(uint32_t)e->xkey.same_screen); break;
     case ButtonPress: case ButtonRelease:
         ew32(rt,g+20u,(uint32_t)e->xbutton.root); ew32(rt,g+24u,(uint32_t)e->xbutton.subwindow); ew32(rt,g+28u,(uint32_t)e->xbutton.time);
         ew32(rt,g+32u,(uint32_t)e->xbutton.x); ew32(rt,g+36u,(uint32_t)e->xbutton.y); ew32(rt,g+40u,(uint32_t)e->xbutton.x_root); ew32(rt,g+44u,(uint32_t)e->xbutton.y_root);
-        ew32(rt,g+48u,(uint32_t)e->xbutton.state); ew32(rt,g+52u,(uint32_t)e->xbutton.button); ew32(rt,g+56u,(uint32_t)e->xbutton.same_screen); break;
+        ew32(rt,g+48u,irix_x11_strip_lock_modifiers(e->xany.display,e->xbutton.state)); ew32(rt,g+52u,(uint32_t)e->xbutton.button); ew32(rt,g+56u,(uint32_t)e->xbutton.same_screen); break;
     case MotionNotify:
         ew32(rt,g+20u,(uint32_t)e->xmotion.root); ew32(rt,g+24u,(uint32_t)e->xmotion.subwindow); ew32(rt,g+28u,(uint32_t)e->xmotion.time);
         ew32(rt,g+32u,(uint32_t)e->xmotion.x); ew32(rt,g+36u,(uint32_t)e->xmotion.y); ew32(rt,g+40u,(uint32_t)e->xmotion.x_root); ew32(rt,g+44u,(uint32_t)e->xmotion.y_root);
-        ew32(rt,g+48u,(uint32_t)e->xmotion.state); irix_guest_write8(rt,g+52u,(uint8_t)e->xmotion.is_hint); ew32(rt,g+56u,(uint32_t)e->xmotion.same_screen); break;
+        ew32(rt,g+48u,irix_x11_strip_lock_modifiers(e->xany.display,e->xmotion.state)); irix_guest_write8(rt,g+52u,(uint8_t)e->xmotion.is_hint); ew32(rt,g+56u,(uint32_t)e->xmotion.same_screen); break;
     case EnterNotify: case LeaveNotify:
         ew32(rt,g+20u,(uint32_t)e->xcrossing.root); ew32(rt,g+24u,(uint32_t)e->xcrossing.subwindow); ew32(rt,g+28u,(uint32_t)e->xcrossing.time);
         ew32(rt,g+32u,(uint32_t)e->xcrossing.x); ew32(rt,g+36u,(uint32_t)e->xcrossing.y); ew32(rt,g+40u,(uint32_t)e->xcrossing.x_root); ew32(rt,g+44u,(uint32_t)e->xcrossing.y_root);
         ew32(rt,g+48u,(uint32_t)e->xcrossing.mode); ew32(rt,g+52u,(uint32_t)e->xcrossing.detail); ew32(rt,g+56u,(uint32_t)e->xcrossing.same_screen);
-        ew32(rt,g+60u,(uint32_t)e->xcrossing.focus); ew32(rt,g+64u,(uint32_t)e->xcrossing.state); break;
+        ew32(rt,g+60u,(uint32_t)e->xcrossing.focus); ew32(rt,g+64u,irix_x11_strip_lock_modifiers(e->xany.display,e->xcrossing.state)); break;
     case FocusIn: case FocusOut: ew32(rt,g+20u,(uint32_t)e->xfocus.mode); ew32(rt,g+24u,(uint32_t)e->xfocus.detail); break;
     case KeymapNotify: memcpy((char *)p + 20, e->xkeymap.key_vector, 32u); break;
     case Expose: ew32(rt,g+20u,e->xexpose.x); ew32(rt,g+24u,e->xexpose.y); ew32(rt,g+28u,e->xexpose.width); ew32(rt,g+32u,e->xexpose.height); ew32(rt,g+36u,e->xexpose.count); break;

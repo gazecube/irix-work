@@ -2056,6 +2056,62 @@ static char **irix_merge_host_env(char *const base[], int host_env)
     return out;
 }
 
+static int irix_manifest_listed(const char *path)
+{
+    static char *data;
+    static int loaded;
+    const char *p;
+    size_t plen = strlen(path);
+    if (!loaded) {
+        FILE *f = fopen("/usr/lib/irix-recomp.manifest", "r");
+        loaded = 1;
+        if (f) {
+            long sz;
+            fseek(f, 0, SEEK_END);
+            sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (sz > 0 && (data = (char *)malloc((size_t)sz + 3u)) != 0) {
+                size_t got = fread(data + 1, 1, (size_t)sz, f);
+                data[0] = '\n';
+                data[got + 1] = '\n';
+                data[got + 2] = 0;
+            }
+            fclose(f);
+        }
+    }
+    if (!data) return 0;
+    /* lines are "\n<path>\n"; data[0] is a leading newline */
+    for (p = strstr(data, path); p; p = strstr(p + 1, path)) {
+        if (p[-1] == '\n' && (p[plen] == '\n' || p[plen] == 0))
+            return 1;
+    }
+    return 0;
+}
+
+int irix_recomp_resolve(const char *root, const char *path, char *out, size_t n)
+{
+    const char *fallback;
+    int w;
+    if (!root || !root[0] || !path || path[0] != '/')
+        return -1;
+    if (strcmp(root, "/") != 0) {
+        w = snprintf(out, n, "%s%s", root, path);
+        return (w > 0 && (size_t)w < n && access(out, F_OK) == 0) ? 0 : -1;
+    }
+    if (irix_manifest_listed(path)) {
+        w = snprintf(out, n, "%s", path);
+        if (w > 0 && (size_t)w < n && access(out, F_OK) == 0)
+            return 0;
+    }
+    fallback = getenv("IRIX_RECOMP_FALLBACK_ROOT");
+    if (fallback && fallback[0] && strcmp(fallback, "/") != 0) {
+        w = snprintf(out, n, "%s%s", fallback, path);
+        if (w > 0 && (size_t)w < n && access(out, F_OK) == 0)
+            return 0;
+    }
+    return -1;
+}
+
 /* Shared process replacement for syscall and libc entry points. */
 int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
                        char *const argv[], char *const envp[])
@@ -2072,9 +2128,8 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
     /* Installed x86 runners retain the guest pathname. Prefer one when
        available; a missing runner still uses the original IRIX image. */
     if (guest_path[0] == '/' && native_root && native_root[0]) {
-        int n = snprintf(native_path, sizeof(native_path), "%s%s",
-                         native_root, guest_path);
-        if (n > 0 && (size_t)n < sizeof(native_path) &&
+        if (irix_recomp_resolve(native_root, guest_path, native_path,
+                                sizeof(native_path)) == 0 &&
             access(native_path, X_OK) == 0)
             path = native_path;
     }

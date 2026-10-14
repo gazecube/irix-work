@@ -84,6 +84,16 @@ typedef struct IrixGuestRuntime {
     void *jit_state;
 } IrixGuestRuntime;
 
+/*
+ * Resolve an absolute IRIX path to the native (x86) file for it.  Under an
+ * ordinary reconstructed root that is root+path.  When the root is the real
+ * Linux "/" the host owns most of those names (/sbin/sh, /usr/lib32/libXt.so,
+ * ...), so a file only counts if /usr/lib/irix-recomp.manifest lists it;
+ * anything else is looked up in IRIX_RECOMP_FALLBACK_ROOT (the build tree).
+ * Returns 0 and fills out when the file exists, -1 otherwise.
+ */
+int irix_recomp_resolve(const char *root, const char *path, char *out, size_t n);
+
 int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
                        char *const argv[], char *const envp[]);
 

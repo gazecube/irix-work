@@ -1,0 +1,6 @@
+#ifndef IRIXCOMPAT_SGIDEFS_H
+#define IRIXCOMPAT_SGIDEFS_H
+#define _MIPS_SZINT 32
+#define _MIPS_SZLONG 32
+#define _MIPS_SZPTR 32
+#endif

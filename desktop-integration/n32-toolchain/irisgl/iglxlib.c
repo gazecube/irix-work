@@ -23,6 +23,7 @@ typedef __builtin_va_list iva_list;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -456,6 +457,38 @@ void pnt(Coord x, Coord y, Coord z)
     XDrawPoint(dpy, target(), gc, ix, iy);
 }
 
+static long swap_interval = 1;
+static long long swap_next_us;
+
+void swapinterval(short interval)
+{
+    swap_interval = interval < 1 ? 1 : interval;
+    swap_next_us = 0;
+}
+
+static long long swap_now_us(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000000LL + tv.tv_usec;
+}
+
+static void swap_pace(void)
+{
+    long long period = (1000000LL / 60LL) * swap_interval;
+    long long now = swap_now_us();
+    if (swap_next_us == 0 || now - swap_next_us > 4 * period)
+        swap_next_us = now;
+    swap_next_us += period;
+    if (swap_next_us > now) {
+        struct timeval tv;
+        long long d = swap_next_us - now;
+        tv.tv_sec = (long)(d / 1000000LL);
+        tv.tv_usec = (long)(d % 1000000LL);
+        select(0, NULL, NULL, NULL, &tv);
+    }
+}
+
 void swapbuffers(void)
 {
     TR("swapbuffers()");
@@ -463,6 +496,7 @@ void swapbuffers(void)
     if (dbuf && back)
         XCopyArea(dpy, back, win, gc, 0, 0, (unsigned)winw, (unsigned)winh, 0, 0);
     XFlush(dpy);
+    swap_pace();
 }
 
 /* ---- text -------------------------------------------------------------- */

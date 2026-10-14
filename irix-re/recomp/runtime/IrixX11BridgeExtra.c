@@ -994,9 +994,7 @@ void irix_x11_trace_ungrab(const char *which, unsigned long time)
 void irix_x11_note_button_event(int press, unsigned int button,
                                 unsigned long time)
 {
-    if (getenv("IRIX_TRACE_GRAB"))
-        fprintf(stderr, "EVENT %s button=%u time=%lu\n",
-                press ? "ButtonPress" : "ButtonRelease", button, time);
+
     if (press) { g_press_pending = 1; g_press_button = button; g_press_time = time; }
     else g_press_pending = 0;
 }
@@ -1039,8 +1037,37 @@ void irix_x11_after_pointer_grab(Display *d, Window grab_window,
     XFlush(d);
 }
 
+void irix_x11_trace_event(const XEvent *e, const char *via)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("IRIX_TRACE_GRAB") != 0;
+    if (!on || !e) return;
+    switch (e->type) {
+    case ButtonPress:
+    case ButtonRelease:
+        fprintf(stderr, "EV[%s] %s win=%08lx sub=%08lx button=%u state=%04x t=%lu\n", via,
+                e->type == ButtonPress ? "ButtonPress" : "ButtonRelease",
+                (unsigned long)e->xbutton.window, (unsigned long)e->xbutton.subwindow,
+                e->xbutton.button, e->xbutton.state, (unsigned long)e->xbutton.time);
+        break;
+    case MotionNotify:
+        fprintf(stderr, "EV[%s] Motion win=%08lx state=%04x t=%lu\n", via,
+                (unsigned long)e->xmotion.window, e->xmotion.state, (unsigned long)e->xmotion.time);
+        break;
+    case EnterNotify:
+    case LeaveNotify:
+        fprintf(stderr, "EV[%s] %s win=%08lx mode=%d detail=%d\n", via,
+                e->type == EnterNotify ? "Enter" : "Leave",
+                (unsigned long)e->xcrossing.window, e->xcrossing.mode, e->xcrossing.detail);
+        break;
+    default:
+        break;
+    }
+}
+
 static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
 {
+    irix_x11_trace_event(e, "xevent");
     if (!a || !e || !irix_guest_ptr(rt, a, IRIX_XEVENT_SIZE)) return 0;
     memset(irix_guest_ptr(rt, a, IRIX_XEVENT_SIZE), 0, IRIX_XEVENT_SIZE);
     wr32(rt, a + 0u, (uint32_t)e->xany.type);
