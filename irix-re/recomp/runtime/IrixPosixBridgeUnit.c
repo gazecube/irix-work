@@ -913,10 +913,38 @@ static void bridge_execvp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
 
-    if (file[0] == '/')
+    if (file[0] == '/' || strchr(file, '/')) {
         irix_guest_execve(rt, file, argv, NULL);
-    else
-        execvp(file, argv);
+    } else {
+        /*
+         * execvp PATH search.  The candidates are guest paths: each one has to
+         * go through irix_guest_execve so it resolves inside the IRIX tree
+         * (and to the native runner for translated programs), exactly like an
+         * absolute exec.  Host execvp would search the host's directories.
+         */
+        const char *path_env = getenv("PATH");
+        const char *p = path_env && *path_env ? path_env : "/usr/sbin:/usr/bsd:/sbin:/usr/bin";
+        int found_eacces = 0;
+        while (*p) {
+            const char *colon = strchr(p, ':');
+            size_t dlen = colon ? (size_t)(colon - p) : strlen(p);
+            char cand[4096];
+            if (dlen == 0)
+                snprintf(cand, sizeof(cand), "%s", file);
+            else
+                snprintf(cand, sizeof(cand), "%.*s/%s", (int)dlen, p, file);
+            if (cand[0] == '/') {
+                irix_guest_execve(rt, cand, argv, NULL);
+                if (errno == EACCES) found_eacces = 1;
+                else if (errno != ENOENT && errno != ENOTDIR && errno != ENODEV)
+                    break;
+            }
+            if (!colon) break;
+            p = colon + 1;
+        }
+        if (found_eacces && errno == ENOENT)
+            errno = EACCES;
+    }
 
 
     saved_errno = errno;

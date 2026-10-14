@@ -142,7 +142,7 @@ static void bridge_unit_XSetRegion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_unit_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = irix_x11_primary_display_from_guest((uint32_t)cpu->gpr[4]);
-    cpu->gpr[2] = d ? (uint32_t)XGrabPointer(
+    int r = d ? XGrabPointer(
         d,
         (Window)(uint32_t)cpu->gpr[5],
         (Bool)cpu->gpr[6],
@@ -152,6 +152,9 @@ static void bridge_unit_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         (Window)(uint32_t)cpu->gpr[10],
         (Cursor)(uint32_t)cpu->gpr[11],
         (Time)unit_arg32(rt, cpu, 8u)) : GrabNotViewable;
+    irix_x11_after_pointer_grab(d, (Window)(uint32_t)cpu->gpr[5],
+                                (unsigned int)cpu->gpr[7], r);
+    cpu->gpr[2] = (uint32_t)r;
 }
 
 static void bridge_unit_XOpenIM(IrixGuestRuntime *rt, IrixGuestCpu *cpu)

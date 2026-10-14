@@ -20,6 +20,8 @@
 #define SIG_SETMASK 2
 #endif
 #include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/sysmacros.h>
 #include <sys/time.h>
 #include <sys/select.h>
@@ -516,8 +518,11 @@ void irix_guest_runtime_destroy(IrixGuestRuntime *rt)
     size_t i;
     irix_guest_profile_destroy(rt);
     irix_mips_jit_shutdown(rt);
-    for (i = 0; i < rt->memory.count; ++i)
-        free(rt->memory.segments[i].host_base);
+    for (i = 0; i < rt->memory.count; ++i) {
+        IrixGuestSegment *seg = &rt->memory.segments[i];
+        /* Backing is page-aligned anonymous mmap (see irix_guest_map). */
+        munmap(seg->host_base, (((size_t)seg->size + 0xfffu) & ~(size_t)0xfffu) + 0x1000u);
+    }
     memset(rt, 0, sizeof(*rt));
 }
 
@@ -533,7 +538,13 @@ int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsi
         size_t alloc_size = ((size_t)size + 0xfffu) & ~(size_t)0xfffu;
         if (alloc_size < size)
             return -1;
-        seg->host_base = (uint8_t *)calloc(1, alloc_size);
+        /* Page-aligned anonymous memory (zero-filled), so sproc() can later
+         * turn a segment into shared memory in place. */
+        /* One extra zero page: translated code and bridges read/write whole
+         * words at the very end of a segment (calloc slack used to hide it). */
+        void *p = mmap(0, alloc_size + 0x1000u, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        seg->host_base = p == MAP_FAILED ? 0 : (uint8_t *)p;
     }
     if (!seg->host_base)
         return -1;
@@ -1926,7 +1937,16 @@ static char **irix_exec_environment(char *const base[], const char *guest_path)
     size_t backend_len;
     static const char exec_key[] = "IRIX_GUEST_EXEC_PATH=";
     const char *backend = getenv("IRIX_EXEC_BACKEND");
-    if (!backend || !backend[0]) backend = "jit";
+    /* Children must run on the same backend the parent effectively uses:
+     * unset means the interpreter (see irix_mips_jit_requested), and the JIT
+     * backend still fails on shell pipelines, so do not force "jit". */
+    if (!backend || !backend[0]) {
+#ifdef IRIX_DEFAULT_JIT
+        backend = "jit";
+#else
+        backend = "static";
+#endif
+    }
 
     if (base) while (base[count]) ++count;
     out = (char **)calloc(count + 3u, sizeof(*out));
@@ -1991,7 +2011,7 @@ static int irix_env_guest_only(const char *entry)
 static char **irix_merge_host_env(char *const base[], int host_env)
 {
     static const char *const keep[] = {
-        "DISPLAY", "XAUTHORITY", "HOME", "USER", "LOGNAME", "LANG",
+        "DISPLAY", "XAUTHORITY", "HOME", "USER", "LOGNAME", "LANG", "PATH",
         "XDG_RUNTIME_DIR", "IRIX_RECOMP_ROOT", "IRIX_SESSION_SCRIPT", 0
     };
     extern char **environ;
@@ -3027,6 +3047,107 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             cpu->gpr[7] = 0u;
             cpu->gpr[0] = 0u;
         }
+        return;
+    }
+    case SYS_ulimit: { /* ulimit(cmd, newlimit) */
+        int cmd = (int)(int32_t)cpu->gpr[4];
+        struct rlimit rl;
+        int64_t v;
+        switch (cmd) {
+        case 1: /* UL_GFILLIM: file size limit, 512-byte blocks */
+            if (getrlimit(RLIMIT_FSIZE, &rl) != 0) { syscall_result(cpu, -1); return; }
+            v = rl.rlim_cur == RLIM_INFINITY ? 0x7fffffff : (int64_t)(rl.rlim_cur / 512u);
+            break;
+        case 3: /* UL_GMEMLIM: maximum break value */
+            v = 0x7fffffff;
+            break;
+        case 4: /* UL_GDESLIM: descriptor limit */
+            if (getrlimit(RLIMIT_NOFILE, &rl) != 0) { syscall_result(cpu, -1); return; }
+            v = rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur > 0x7fffffff
+                    ? 0x7fffffff : (int64_t)rl.rlim_cur;
+            break;
+        case 2: /* UL_SFILLIM: accept, report the (unchanged) limit */
+            v = (int64_t)(int32_t)cpu->gpr[5];
+            break;
+        default:
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+            return;
+        }
+        syscall_result(cpu, v);
+        return;
+    }
+    case SYS_sproc: { /* sproc(entry, flags, arg): share-group child */
+        IrixGuestAddr entry = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        uint32_t flags = (uint32_t)cpu->gpr[5];
+        IrixGuestAddr arg = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        enum { CHILD_STACK = 0x00400000u, PR_SADDR_FLAG = 0x40u };
+        IrixGuestAddr stack_base = 0;
+        pid_t pid;
+        size_t i;
+
+        /*
+         * PR_SADDR children share the parent's address space.  The runtime
+         * keeps guest memory in anonymous host mappings, so convert every
+         * segment to MAP_SHARED in place (same host address) and fork: parent
+         * and child then really do see each other's stores, while each keeps
+         * its own interpreter state.  Segments created later (brk growth,
+         * mmap) stay private to their creator.
+         */
+        if (flags & PR_SADDR_FLAG) {
+            for (i = 0; i < rt->memory.count; ++i) {
+                IrixGuestSegment *seg = &rt->memory.segments[i];
+                size_t len = ((size_t)seg->size + 0xfffu) & ~(size_t)0xfffu;
+                int fd = memfd_create("irix-share", 0);
+                void *m;
+                if (fd < 0)
+                    break;
+                if (ftruncate(fd, (off_t)len) != 0 ||
+                    pwrite(fd, seg->host_base, len, 0) != (ssize_t)len ||
+                    (m = mmap(seg->host_base, len, PROT_READ | PROT_WRITE,
+                              MAP_SHARED | MAP_FIXED, fd, 0)) == MAP_FAILED) {
+                    close(fd);
+                    break;
+                }
+                close(fd);
+            }
+        }
+        /* Private stack for the child, placed below the main stack. */
+        {
+            IrixGuestAddr probe = 0x70000000u;
+            while (probe > 0x20000000u) {
+                if (irix_guest_map(rt, probe, CHILD_STACK, 3u) == 0) {
+                    stack_base = probe;
+                    break;
+                }
+                probe -= CHILD_STACK;
+            }
+        }
+        if (!stack_base) {
+            errno = ENOMEM;
+            syscall_result(cpu, -1);
+            return;
+        }
+        fflush(NULL);
+        pid = fork();
+        if (pid < 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        if (pid == 0) {
+            IrixGuestCpu child = *cpu;
+            int status;
+            child.gpr[29] = (uint64_t)(stack_base + CHILD_STACK - 0x100u);
+            child.gpr[4] = arg;                 /* entry(arg, stacksize) */
+            child.gpr[5] = CHILD_STACK;
+            child.gpr[7] = 0u;
+            status = irix_guest_call(rt, &child, entry);
+            fflush(NULL);
+            _exit(status == 0 && !rt->trapped ? 0 : 1);
+        }
+        cpu->gpr[2] = (uint64_t)(int64_t)pid;
+        cpu->gpr[3] = 0u;
+        cpu->gpr[7] = 0u;
         return;
     }
     case SYS_execve: { /* execve(path, argv, envp) */

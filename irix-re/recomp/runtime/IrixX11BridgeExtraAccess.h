@@ -33,4 +33,19 @@ void irix_x11_for_each_lock_combo(Display *d, unsigned int state,
                                   void (*fn)(void *ctx, unsigned int state),
                                   void *ctx);
 
+/*
+ * Lost-release recovery.  Xt/Motif apps start a drag on ButtonPress and only
+ * then XGrabPointer for the matching ButtonRelease.  When the release reaches
+ * the server before the (late) grab is installed it is delivered to nobody,
+ * and the app waits forever with the pointer grabbed and the button up.  If a
+ * press is still unreleased from the app's point of view but the server says
+ * every button is up, the release is synthesized into the new grab.
+ */
+void irix_x11_note_button_event(int press, unsigned int button,
+                                unsigned long time);
+void irix_x11_after_pointer_grab(Display *d, Window grab_window,
+                                 unsigned int event_mask, int result);
+
+void irix_x11_trace_ungrab(const char *which, unsigned long time);
+
 #endif

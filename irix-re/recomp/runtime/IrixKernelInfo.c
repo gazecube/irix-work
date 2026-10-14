@@ -16,10 +16,30 @@
 #define INV_SIDCACHE     8
 #define INV_MAIN_MB      9
 
-int irix_kinfo_nprocs(void)
+/*
+ * The guest machine is presented as a single-CPU system whose one processor
+ * reports the average of the host cores (one osview bar / log line instead of
+ * one per core).  IRIX_NCPU=<n> shows n processors and IRIX_NCPU=host mirrors
+ * the host core count, with each core reported individually.
+ */
+int irix_kinfo_host_ncpu(void)
 {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? (int)n : 1;
+}
+
+int irix_kinfo_nprocs(void)
+{
+    const char *v = getenv("IRIX_NCPU");
+    if (v && !strcmp(v, "host")) return irix_kinfo_host_ncpu();
+    if (v && atoi(v) > 0) return atoi(v);
+    return 1;
+}
+
+/* True when guest CPU 0 stands for the average of every host core. */
+static int kinfo_averaged(void)
+{
+    return irix_kinfo_nprocs() == 1 && irix_kinfo_host_ncpu() > 1;
 }
 
 static int host_cpu_mhz(void)
@@ -304,12 +324,21 @@ int irix_kinfo_sa_get(int sub, int cpu, uint32_t *w, size_t nwords)
     case IRIX_KINFO_MPSA_SINFO_CPU: {
         HostCpuTimes sel;
         int n = ncpu > 0 ? ncpu : 1;
-        if (cpu >= 0) {
+        if (cpu >= 0 && !kinfo_averaged()) {
             if (cpu >= n || (ncpu > 0 && !cpus[cpu].valid)) return -1;
             sel = cpus[cpu];
+        } else if (cpu > 0) {
+            return -1;                  /* only CPU 0 exists */
         } else {
             sel = total;
             if (!ncpu) memset(&sel, 0, sizeof(sel));
+            else if (kinfo_averaged()) {
+                /* one processor = mean of the host cores' tick counters */
+                unsigned long long d = (unsigned long long)ncpu;
+                sel.user /= d; sel.nice /= d; sel.system /= d;
+                sel.idle /= d; sel.iowait /= d; sel.irq /= d;
+                sel.softirq /= d; sel.steal /= d;
+            }
         }
         cpu_to_words(&sel, w);
         if (sub == IRIX_KINFO_MPSA_SINFO_CPU)

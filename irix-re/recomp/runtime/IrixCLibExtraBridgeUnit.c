@@ -1,3 +1,4 @@
+#include <sys/mman.h>
 #define irix_clib_extra_bridge_lookup irix_clib_extra_bridge_lookup_base
 #include "IrixCLibExtraBridge.c"
 #undef irix_clib_extra_bridge_lookup
@@ -428,7 +429,11 @@ static IrixGuestAddr guest_mmap_alloc(IrixGuestRuntime *rt, uint32_t size)
 
 static void guest_drop_segment(IrixGuestRuntime *rt, size_t index)
 {
-    free(rt->memory.segments[index].host_base);
+    /* Segments are page-aligned anonymous mappings plus one guard page
+     * (see irix_guest_map). */
+    munmap(rt->memory.segments[index].host_base,
+           (((size_t)rt->memory.segments[index].size + 0xfffu) & ~(size_t)0xfffu) +
+               0x1000u);
     if (index + 1u < rt->memory.count)
         memmove(&rt->memory.segments[index], &rt->memory.segments[index + 1u],
                 (rt->memory.count - index - 1u) * sizeof(rt->memory.segments[0]));

@@ -980,6 +980,65 @@ void irix_x11_for_each_lock_combo(Display *d, unsigned int state,
     } while (sub);
 }
 
+static unsigned int g_press_button;
+static unsigned long g_press_time;
+static int g_press_pending;
+
+void irix_x11_trace_ungrab(const char *which, unsigned long time)
+{
+    if (getenv("IRIX_TRACE_GRAB"))
+        fprintf(stderr, "UNGRAB pointer via=%s time=%lu press_pending=%d\n",
+                which, time, g_press_pending);
+}
+
+void irix_x11_note_button_event(int press, unsigned int button,
+                                unsigned long time)
+{
+    if (getenv("IRIX_TRACE_GRAB"))
+        fprintf(stderr, "EVENT %s button=%u time=%lu\n",
+                press ? "ButtonPress" : "ButtonRelease", button, time);
+    if (press) { g_press_pending = 1; g_press_button = button; g_press_time = time; }
+    else g_press_pending = 0;
+}
+
+void irix_x11_after_pointer_grab(Display *d, Window grab_window,
+                                 unsigned int event_mask, int result)
+{
+    Window root, child;
+    int rx, ry, wx, wy;
+    unsigned int mask = 0;
+    XEvent ev;
+    if (getenv("IRIX_TRACE_GRAB"))
+        fprintf(stderr, "GRAB pointer win=%08lx mask=%08x result=%d press_pending=%d last_button=%u\n",
+                (unsigned long)grab_window, event_mask, result, g_press_pending, g_press_button);
+    if (!d || result != GrabSuccess || !g_press_pending ||
+        !(event_mask & ButtonReleaseMask))
+        return;
+    if (!XQueryPointer(d, DefaultRootWindow(d), &root, &child,
+                       &rx, &ry, &wx, &wy, &mask))
+        return;
+    if (mask & (Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask))
+        return;                     /* button really still down */
+    memset(&ev, 0, sizeof(ev));
+    ev.xbutton.type = ButtonRelease;
+    ev.xbutton.display = d;
+    ev.xbutton.window = grab_window;
+    ev.xbutton.root = root;
+    ev.xbutton.subwindow = None;
+    ev.xbutton.time = CurrentTime;
+    ev.xbutton.x = wx; ev.xbutton.y = wy;
+    ev.xbutton.x_root = rx; ev.xbutton.y_root = ry;
+    ev.xbutton.state = 0;
+    ev.xbutton.button = g_press_button ? g_press_button : Button1;
+    ev.xbutton.same_screen = True;
+    g_press_pending = 0;
+    if (getenv("IRIX_TRACE_GRAB"))
+        fprintf(stderr, "GRAB lost release recovered: win=%08lx button=%u\n",
+                (unsigned long)grab_window, ev.xbutton.button);
+    XSendEvent(d, grab_window, False, ButtonReleaseMask, &ev);
+    XFlush(d);
+}
+
 static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
 {
     if (!a || !e || !irix_guest_ptr(rt, a, IRIX_XEVENT_SIZE)) return 0;
@@ -1016,6 +1075,9 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
         wr32(rt, a + 48u, irix_x11_strip_lock_modifiers(e->xany.display, e->xbutton.state));
         wr32(rt, a + 52u, (uint32_t)e->xbutton.button);
         wr32(rt, a + 56u, (uint32_t)e->xbutton.same_screen);
+        irix_x11_note_button_event(e->type == ButtonPress,
+                                   (unsigned int)e->xbutton.button,
+                                   (unsigned long)e->xbutton.time);
         break;
     case MotionNotify:
         wr32(rt, a + 20u, (uint32_t)e->xmotion.root);
@@ -1431,6 +1493,8 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             }
             fprintf(stderr, "\n");
         }
+        irix_x11_after_pointer_grab(d, (Window)(uint32_t)cpu->gpr[5],
+                                    (unsigned int)cpu->gpr[7], result);
         cpu->gpr[2] = (uint32_t)result;
     }
 }
@@ -1438,6 +1502,7 @@ static void bridge_XGrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void bridge_XUngrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
+    irix_x11_trace_ungrab("extra", (unsigned long)(uint32_t)cpu->gpr[5]);
     if (d) XUngrabPointer(d, (Time)(uint32_t)cpu->gpr[5]);
     cpu->gpr[2] = 0;
 }

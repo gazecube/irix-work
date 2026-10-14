@@ -720,7 +720,7 @@ void irix_compat_systeminfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         break;
     case 104u: /* _MIPS_SI_NUM_PROCESSORS */
     case 110u: /* _MIPS_SI_AVAIL_PROCESSORS */
-        ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        ncpu = irix_kinfo_nprocs();
         if (ncpu < 1) ncpu = 1;
         snprintf(scratch, sizeof(scratch), "%ld", ncpu);
         value = scratch;
@@ -923,14 +923,8 @@ void irix_compat_sysmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
     switch (cmd) {
     case 1u: /* MP_NPROCS */
-        n = sysconf(_SC_NPROCESSORS_CONF);
-        if (n < 1) n = 1;
-        compat_result(cpu, (int64_t)n);
-        return;
-
     case 2u: /* MP_NAPROCS */
-        n = sysconf(_SC_NPROCESSORS_ONLN);
-        if (n < 1) n = 1;
+        n = irix_kinfo_nprocs();
         compat_result(cpu, (int64_t)n);
         return;
 
