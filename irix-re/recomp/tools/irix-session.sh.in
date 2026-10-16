@@ -1,6 +1,17 @@
 #!/bin/sh
 set -u
 
+# Interactive-shell settings from the user's ~/.profile (ENV, HISTFILE, ...),
+# the way an Xsession does for sh users.  Only these variables are taken, so
+# PATH and the session's own settings are left alone.
+if [ -r "${HOME:-/nonexistent}/.profile" ]; then
+    for v in ENV HISTFILE HISTSIZE EDITOR VISUAL PAGER; do
+        val="$(sh -c '. "$HOME/.profile" >/dev/null 2>&1; eval "printf %s \"\${'$v'-}\""' 2>/dev/null)"
+        case "$val" in ''|*\'*) continue ;; esac
+        eval "$v='$val'; export $v"
+    done
+fi
+
 default_root="@IRIX_RECOMP_ROOT@"
 runtime="@IRIX_RUNTIME_TREE@"
 default_guest_runner="@CMAKE_CURRENT_BINARY_DIR@/irix-guest-exec"
