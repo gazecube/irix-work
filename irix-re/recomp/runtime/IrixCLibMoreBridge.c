@@ -49,6 +49,22 @@ static const char *gcs(IrixGuestRuntime *rt, uint32_t a)
 
 /* ---- no-ops / "not available" ------------------------------------------ */
 static void b_zero(IrixGuestRuntime *rt, IrixGuestCpu *cpu)  { (void)rt; RET(0); }
+
+/* pfmt(stream, flags, format, ...): behave like fprintf(stream, format, ...)
+ * by shifting the argument registers down one slot. */
+static void b_pfmt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestFunction fp = irix_stdio_bridge_lookup("fprintf");
+    if (!fp) { RET(-1); return; }
+    cpu->gpr[5] = cpu->gpr[6];
+    cpu->gpr[6] = cpu->gpr[7];
+    cpu->gpr[7] = cpu->gpr[8];
+    cpu->gpr[8] = cpu->gpr[9];
+    cpu->gpr[9] = cpu->gpr[10];
+    cpu->gpr[10] = cpu->gpr[11];
+    fp(rt, cpu);
+}
+
 static void b_one(IrixGuestRuntime *rt, IrixGuestCpu *cpu)   { (void)rt; RET(1); }
 static void b_enosys(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; FAIL(ENOSYS); }
 static void b_null(IrixGuestRuntime *rt, IrixGuestCpu *cpu)  { (void)rt; cpu->gpr[2] = 0; }
@@ -693,6 +709,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "pthread_cond_init", b_zero }, { "pthread_cond_signal", b_zero },
         { "pthread_cond_broadcast", b_zero }, { "pthread_cond_wait", b_zero },
         { "pthread_self", b_one },
+        { "setlabel", b_zero }, { "pfmt", b_pfmt }, { "lfmt", b_pfmt }, { "setcat", b_null }, { "addsev", b_zero },
         { "sproc", b_enosys }, { "blockproc", b_zero }, { "unblockproc", b_zero },
         { "__libc_threadbind", b_zero }, { "__libc_threadunbind", b_zero },
         { "mpin", b_zero }, { "munpin", b_zero },
