@@ -112,12 +112,25 @@ export IRIX_XT_XM_STABILITY="${IRIX_XT_XM_STABILITY:-0}"
 case "$display" in
     :*) export IRIX_GUEST_DISPLAY="unix/$display" ;;
 esac
+session_logdir="${IRIX_SESSION_LOGDIR:-${XDG_STATE_HOME:-$HOME/.local/state}/irix-session}"
+if mkdir -p "$session_logdir" 2>/dev/null; then
+    for old_log in "$session_logdir"/*.log; do
+        [ -f "$old_log" ] && mv -f "$old_log" "$old_log.1"
+    done
+else
+    session_logdir=
+fi
+
 guest_exec()
 {
     guest_path=$1
     shift
     runner="$root$guest_path"
-    "$runner" "$@"
+    if [ -n "$session_logdir" ]; then
+        "$runner" "$@" >>"$session_logdir/$(basename "$guest_path").log" 2>&1
+    else
+        "$runner" "$@"
+    fi
 }
 
 # "irix-session --end [-f]" is what the Toolchest Log Out entry runs.  The
@@ -264,6 +277,9 @@ while [ "$xscr" -lt 8 ] && xdpyinfo -display "$xdisp.$xscr" >/dev/null 2>&1; do
         DISPLAY="$xdisp.$xscr"; export DISPLAY
         guest_exec "$makeicons" >/dev/null 2>&1
         guest_exec "$prealloc" >/dev/null 2>&1
+        if [ -n "$session_logdir" ]; then
+            exec "$root$toolchest" >>"$session_logdir/toolchest.screen$xscr.log" 2>&1
+        fi
         exec "$root$toolchest"
     ) &
     xscr=$((xscr + 1))
