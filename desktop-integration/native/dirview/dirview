@@ -1,0 +1,15 @@
+#!/bin/sh
+# dirview: open a directory or URL in fm (replaces the IRIX binary)
+path=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) shift; [ $# -gt 0 ] && shift; [ $# -gt 0 ] && shift; continue ;;
+        -b|-A|-d|-p) ;;
+        -v) shift ;;
+        -*) ;;
+        *) path="$1" ;;
+    esac
+    shift
+done
+[ -n "$path" ] || path="${HOME:-/}"
+exec fm "$path"
