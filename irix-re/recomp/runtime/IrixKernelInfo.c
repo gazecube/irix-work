@@ -17,10 +17,10 @@
 #define INV_MAIN_MB      9
 
 /*
- * The guest machine is presented as a single-CPU system whose one processor
- * reports the average of the host cores (one osview bar / log line instead of
- * one per core).  IRIX_NCPU=<n> shows n processors and IRIX_NCPU=host mirrors
- * the host core count, with each core reported individually.
+ * The guest sees the host's real logical CPU count, as on IRIX where
+ * gr_osview/osview decide per-CPU or summed display from their own config.
+ * IRIX_NCPU=<n> shows n processors; IRIX_NCPU=avg (or 1) shows a single
+ * processor whose counters are the mean of the host cores.
  */
 int irix_kinfo_host_ncpu(void)
 {
@@ -31,9 +31,10 @@ int irix_kinfo_host_ncpu(void)
 int irix_kinfo_nprocs(void)
 {
     const char *v = getenv("IRIX_NCPU");
+    if (v && !strcmp(v, "avg")) return 1;
     if (v && !strcmp(v, "host")) return irix_kinfo_host_ncpu();
     if (v && atoi(v) > 0) return atoi(v);
-    return 1;
+    return irix_kinfo_host_ncpu();
 }
 
 /* True when guest CPU 0 stands for the average of every host core. */

@@ -20,6 +20,7 @@ typedef struct IrixGuestAllocation {
     uint32_t size;
     uint32_t capacity;
     int in_use;
+    uint32_t next_free;
 } IrixGuestAllocation;
 
 typedef struct IrixEnvCacheEntry {
@@ -41,6 +42,7 @@ typedef struct IrixLibcBridgeState {
     IrixGuestAddr getopt_sp_addr;
     IrixGuestAllocation allocs[IRIX_LIBC_MAX_ALLOCS];
     size_t alloc_count;
+    uint32_t free_head[33];
     IrixEnvCacheEntry env_cache[IRIX_ENV_CACHE_MAX];
     size_t env_cache_count;
 } IrixLibcBridgeState;
@@ -60,12 +62,40 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align);
 
 static IrixGuestAllocation *find_alloc(IrixGuestAddr addr)
 {
-    size_t i;
-    for (i = 0; i < g_libc.alloc_count; ++i)
-        if (g_libc.allocs[i].in_use &&
-            g_libc.allocs[i].addr == addr)
-            return &g_libc.allocs[i];
+    size_t lo = 0, hi = g_libc.alloc_count;
+
+    /* Records are appended at an increasing bump address, so the table is
+       sorted by addr. */
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2u;
+        if (g_libc.allocs[mid].addr < addr)
+            lo = mid + 1u;
+        else
+            hi = mid;
+    }
+    if (lo < g_libc.alloc_count && g_libc.allocs[lo].addr == addr &&
+        g_libc.allocs[lo].in_use)
+        return &g_libc.allocs[lo];
     return 0;
+}
+
+static unsigned size_bucket(uint32_t n)
+{
+    unsigned b = 0;
+    while (n > 1u) { n >>= 1; ++b; }
+    return b;
+}
+
+static void release_alloc(IrixGuestAllocation *a)
+{
+    unsigned b;
+    if (!a->in_use)
+        return;
+    a->in_use = 0;
+    a->size = 0u;
+    b = size_bucket(a->capacity ? a->capacity : 1u);
+    a->next_free = g_libc.free_head[b];
+    g_libc.free_head[b] = (uint32_t)(a - g_libc.allocs) + 1u;
 }
 
 uint32_t irix_libc_guest_allocation_size(IrixGuestAddr addr)
@@ -83,7 +113,7 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
 {
     IrixGuestAddr addr;
     uint32_t n = size ? size : 1u;
-    size_t i;
+    unsigned b;
 
     if (align < 1u)
         align = 1u;
@@ -103,13 +133,19 @@ static IrixGuestAddr alloc_guest(uint32_t size, uint32_t align)
      * allocator simple and deterministic while still eliminating the
      * pathological monotonic leak.
      */
-    for (i = 0; i < g_libc.alloc_count; ++i) {
-        IrixGuestAllocation *a = &g_libc.allocs[i];
-        if (!a->in_use && a->capacity >= n &&
-            (a->addr & (align - 1u)) == 0u) {
-            a->size = n;
-            a->in_use = 1;
-            return a->addr;
+    for (b = size_bucket(n); b < 33u && b <= size_bucket(n) + 3u; ++b) {
+        uint32_t *link = &g_libc.free_head[b];
+        unsigned tries;
+        for (tries = 0; *link && tries < 8u; ++tries) {
+            IrixGuestAllocation *a = &g_libc.allocs[*link - 1u];
+            if (a->capacity >= n && (a->addr & (align - 1u)) == 0u) {
+                *link = a->next_free;
+                a->next_free = 0;
+                a->size = n;
+                a->in_use = 1;
+                return a->addr;
+            }
+            link = &a->next_free;
         }
     }
 
@@ -378,7 +414,7 @@ static void bridge_realloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     if (!new_size) {
         if (old)
-            old->in_use = 0;
+            release_alloc(old);
         cpu->gpr[2] = 0;
         return;
     }
@@ -403,7 +439,7 @@ static void bridge_realloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (dst && src)
         memcpy(dst, src, copy_size);
     if (old)
-        old->in_use = 0;
+        release_alloc(old);
     cpu->gpr[2] = addr;
 }
 
@@ -426,10 +462,8 @@ static void bridge_free(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
 
     a = find_alloc(addr);
-    if (a) {
-        a->in_use = 0;
-        a->size = 0u;
-    }
+    if (a)
+        release_alloc(a);
 }
 
 static void bridge_strdup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)

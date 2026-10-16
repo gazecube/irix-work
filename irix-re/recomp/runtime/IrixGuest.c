@@ -416,13 +416,27 @@ static int write_irix_sigaction_n32(IrixGuestRuntime *rt, IrixGuestAddr addr,
 
 static IrixGuestSegment *find_segment(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size)
 {
+    static size_t recent[4];
+    static unsigned next_recent;
     size_t i;
     uint64_t end = (uint64_t)addr + (uint64_t)size;
+    for (i = 0; i < 4u; ++i) {
+        size_t r = recent[i];
+        if (r < rt->memory.count) {
+            IrixGuestSegment *seg = &rt->memory.segments[r];
+            uint64_t seg_end = (uint64_t)seg->guest_base + (uint64_t)seg->size;
+            if ((uint64_t)addr >= seg->guest_base && end <= seg_end &&
+                r == (size_t)(seg - rt->memory.segments))
+                return seg;
+        }
+    }
     for (i = 0; i < rt->memory.count; ++i) {
         IrixGuestSegment *seg = &rt->memory.segments[i];
         uint64_t seg_end = (uint64_t)seg->guest_base + (uint64_t)seg->size;
-        if ((uint64_t)addr >= seg->guest_base && end <= seg_end)
+        if ((uint64_t)addr >= seg->guest_base && end <= seg_end) {
+            recent[next_recent++ & 3u] = i;
             return seg;
+        }
     }
     return 0;
 }
@@ -1557,7 +1571,15 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuest
     }
 
     /* Interior-PC dispatch is recovery/fallback behavior.  Preserve the
-       smallest-containing-range rule for those uncommon transfers. */
+       smallest-containing-range rule for those uncommon transfers.  The
+       interpreter makes such transfers constantly, so remember the answer
+       (including "none") until the function table grows. */
+    static struct { IrixGuestRuntime *rt; size_t count; IrixGuestAddr addr;
+                    IrixGuestFunctionEntry *entry; } memo[1024];
+    size_t m = (address >> 2) & 1023u;
+    if (memo[m].rt == rt && memo[m].count == rt->function_count &&
+        memo[m].addr == address && memo[m].count)
+        return memo[m].entry;
     for (i = 0; i < rt->function_count; ++i) {
         IrixGuestFunctionEntry *entry = &rt->functions[i];
         if (entry->size && address > entry->address &&
@@ -1566,6 +1588,10 @@ IrixGuestFunctionEntry *irix_guest_find_function(IrixGuestRuntime *rt, IrixGuest
                 containing = entry;
         }
     }
+    memo[m].rt = rt;
+    memo[m].count = rt->function_count;
+    memo[m].addr = address;
+    memo[m].entry = containing;
     return containing;
 }
 
@@ -2112,6 +2138,30 @@ int irix_recomp_resolve(const char *root, const char *path, char *out, size_t n)
     return -1;
 }
 
+/* IRIX's Bourne shell is not what the host session wants to run scripts
+   with: SGI scripts and the desktop's f.exec.sh commands mix in modern syntax
+   and host tools.  Hand guest shell invocations to the host shell instead of
+   interpreting /bin/sh.  IRIX_GUEST_SH=guest restores the old behaviour.
+   Guest paths such as /var/X11 must exist on the host for this to work. */
+static int irix_guest_is_shell(const char *p)
+{
+    static const char *const names[] = {
+        "/bin/sh", "/sbin/sh", "/usr/bin/sh", "/usr/sbin/sh", "/bin/ksh",
+        "/usr/bin/ksh", "/usr/bin/bsh", "/sbin/bsh", 0 };
+    const char *mode = getenv("IRIX_GUEST_SH");
+    size_t i;
+    if (mode && !strcmp(mode, "guest")) return 0;
+    for (i = 0; names[i]; ++i)
+        if (!strcmp(p, names[i])) return 1;
+    return 0;
+}
+
+static const char *irix_host_shell(void)
+{
+    const char *sh = getenv("IRIX_HOST_SH");
+    return sh && sh[0] && !access(sh, X_OK) ? sh : "/bin/sh";
+}
+
 /* Shared process replacement for syscall and libc entry points. */
 int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
                        char *const argv[], char *const envp[])
@@ -2135,7 +2185,33 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
     }
     kind = irix_guest_exec_kind(path, interpreter, sizeof(interpreter),
                                 script_arg, sizeof(script_arg));
-    if (kind) {
+    if ((kind == 1 && irix_guest_is_shell(guest_path)) ||
+        (kind == 2 && irix_guest_is_shell(interpreter))) {
+        const char *sh = irix_host_shell();
+        if (kind == 2) {
+            while (argv[argc]) {
+                if (++argc >= 4096u) { errno = E2BIG; return -1; }
+            }
+            child_argv = (char **)calloc(argc + 4u, sizeof(*child_argv));
+            if (!child_argv) { errno = ENOMEM; return -1; }
+            child_argv[0] = "sh";
+            i = 1u;
+            if (script_arg[0]) child_argv[i++] = script_arg;
+            child_argv[i++] = (char *)path;
+            for (j = 1u; j < argc; ++j) child_argv[i++] = argv[j];
+        } else {
+            while (argv[argc]) {
+                if (++argc >= 4096u) { errno = E2BIG; return -1; }
+            }
+            child_argv = (char **)calloc(argc + 1u, sizeof(*child_argv));
+            if (!child_argv) { errno = ENOMEM; return -1; }
+            child_argv[0] = "sh";
+            for (j = 1u; j < argc; ++j) child_argv[j] = argv[j];
+        }
+        merged_env = irix_merge_host_env(envp ? envp : environ, 1);
+        execve(sh, child_argv, merged_env ? merged_env :
+               (envp ? envp : environ));
+    } else if (kind) {
         const char *runner = getenv("IRIX_GUEST_EXEC_RUNNER");
         const char *image = kind == 2 ? interpreter : guest_path;
         if (!runner || !runner[0] || access(runner, X_OK)) {
@@ -3149,6 +3225,36 @@ void irix_guest_syscall(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
          * its own interpreter state.  Segments created later (brk growth,
          * mmap) stay private to their creator.
          */
+        if (flags & 0x02u) {
+            /*
+             * PR_SFDS: the child shares the parent's descriptor table, which
+             * separate host processes cannot do.  Run the entry point to
+             * completion on the caller's thread (what the short helpers that
+             * use this do, e.g. gr_osview's setuid-dropping file opener) and
+             * hand back an already-finished child for wait().
+             */
+            IrixGuestCpu inl = *cpu;
+            pid_t fake = fork();
+            if (fake == 0)
+                _exit(0);
+            if (fake < 0) {
+                syscall_result(cpu, -1);
+                return;
+            }
+            inl.gpr[29] = (uint64_t)(((uint32_t)cpu->gpr[29] - 0x2000u) & ~0xfu);
+            inl.gpr[4] = arg;
+            inl.gpr[5] = 0x400000u;
+            inl.gpr[7] = 0u;
+            (void)irix_guest_call(rt, &inl, entry);
+            if (rt->trapped && rt->trap_code == 0xeeee23ffu) {
+                rt->trapped = 0;
+                rt->trap_code = 0;
+            }
+            cpu->gpr[2] = (uint64_t)(int64_t)fake;
+            cpu->gpr[3] = 0u;
+            cpu->gpr[7] = 0u;
+            return;
+        }
         if (flags & PR_SADDR_FLAG) {
             for (i = 0; i < rt->memory.count; ++i) {
                 IrixGuestSegment *seg = &rt->memory.segments[i];
@@ -3464,6 +3570,15 @@ exec_syscall_failed:
             return;
         }
         path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+        if (path) {
+            char followed[PATH_MAX];
+            const char *q = irix_guest_follow_link(rt, path, followed,
+                                                   sizeof(followed));
+            if (q != path && strlen(q) < sizeof(host_path)) {
+                strcpy(host_path, q);
+                path = host_path;
+            }
+        }
         if (!path) {
             syscall_result(cpu, -1);
             return;
@@ -6992,7 +7107,10 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
 
-    if (getenv("IRIX_TRACE_FPRINTF")) {
+    static int trace_fprintf = -1;
+    if (trace_fprintf < 0)
+        trace_fprintf = getenv("IRIX_TRACE_FPRINTF") != 0;
+    if (trace_fprintf) {
         static IrixGuestAddr pending_buf;
         static unsigned pending_n;
         if (pending_buf) {

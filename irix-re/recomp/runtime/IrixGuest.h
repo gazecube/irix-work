@@ -117,6 +117,8 @@ void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint32_t val
 void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr addr, uint64_t value);
 void irix_guest_set_errno_proxy(IrixGuestRuntime *rt, IrixGuestAddr addr);
 void irix_guest_set_rootfs(IrixGuestRuntime *rt, const char *rootfs);
+const char *irix_guest_follow_link(IrixGuestRuntime *rt, const char *host, char *buffer, size_t buffer_size);
+int irix_guest_realpath(IrixGuestRuntime *rt, const char *path, char *out);
 const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path,
                                     char *buffer, size_t buffer_size,
                                     const char *operation, int optional);

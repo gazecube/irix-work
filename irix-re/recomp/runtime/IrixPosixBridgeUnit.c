@@ -766,8 +766,12 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
-    if (!realpath(path, resolved))
+    if (path[0] == '/') {
+        if (irix_guest_realpath(rt, path, resolved) != 0)
+            return;
+    } else if (!realpath(path, resolved)) {
         return;
+    }
 
     n = strlen(resolved) + 1u;
     dst = (char *)irix_guest_ptr(rt, out_addr, n);
