@@ -32,7 +32,7 @@ static int path_is_current_home(const char *path)
 static int path_is_host_virtual(const char *path)
 {
     static const char *const roots[] = {
-        "/dev", "/proc", "/sys", "/tmp", "/run", "/var/run", 0
+        "/dev", "/proc", "/sys", "/tmp", "/var/tmp", "/run", "/var/run", 0
     };
     size_t i;
     for (i = 0; roots[i]; ++i)
