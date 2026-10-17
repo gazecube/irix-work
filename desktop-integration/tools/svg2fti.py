@@ -223,9 +223,125 @@ def path_subpaths(d, steps):
     return subs
 
 
+def area(p):
+    return sum(p[i][0] * p[(i + 1) % len(p)][1] - p[(i + 1) % len(p)][0] * p[i][1]
+               for i in range(len(p))) / 2.0
+
+
+def inside(pt, poly):
+    x, y = pt
+    c = False
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            c = not c
+        j = i
+    return c
+
+
+def merge_holes(subs):
+    """subs: list of (pts, closed). Fold contours nested at odd depth into
+    their parent as a bridged single polygon (even-odd rule)."""
+    closed = [(p, c) for p, c in subs if c and len(p) >= 3]
+    other = [(p, c) for p, c in subs if not (c and len(p) >= 3)]
+    if len(closed) < 2:
+        return subs
+    depth = []
+    parent = []
+    for i, (p, _) in enumerate(closed):
+        containers = [j for j, (q, _) in enumerate(closed)
+                      if j != i and inside(p[0], q)]
+        depth.append(len(containers))
+        parent.append(min(containers, key=lambda j: abs(area(closed[j][0])))
+                      if containers else None)
+    outers = {}
+    for i, (p, c) in enumerate(closed):
+        if depth[i] % 2 == 0:
+            outers[i] = [list(p)]
+    for i, (p, c) in enumerate(closed):
+        if depth[i] % 2 == 1:
+            root = parent[i]
+            while root is not None and depth[root] % 2 == 1:
+                root = parent[root]
+            if root in outers:
+                outers[root].append(list(p))
+    out = []
+    for i, polys in outers.items():
+        outer = polys[0]
+        if area(outer) < 0:
+            outer = outer[::-1]
+        for hole in polys[1:]:
+            if area(hole) > 0:
+                hole = hole[::-1]
+            best = None
+            for a, pa in enumerate(outer):
+                for b, pb in enumerate(hole):
+                    d = (pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2
+                    if best is None or d < best[0]:
+                        best = (d, a, b)
+            _, a, b = best
+            outer = (outer[:a + 1] + hole[b:] + hole[:b + 1] + [outer[a]]
+                     + outer[a + 1:])
+        out.append((outer, True))
+    return out + other
+
+
 def ellipse_pts(cx, cy, rx, ry, steps):
     return [(cx + rx * math.cos(2 * math.pi * k / steps),
              cy + ry * math.sin(2 * math.pi * k / steps)) for k in range(steps)]
+
+
+def stroke_polygons(pts, closed, w):
+    """Stroke as filled polygons: one quad per segment plus a disc at sharp
+    joins (flat colour, so overlaps are invisible)."""
+    out = []
+    n = len(pts)
+    h = w / 2.0
+    if closed and n >= 8:
+        dirs = []
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            ln = math.hypot(x1 - x0, y1 - y0) or 1.0
+            dirs.append(((x1 - x0) / ln, (y1 - y0) / ln))
+        smooth = all(dirs[i - 1][0] * dirs[i][0] + dirs[i - 1][1] * dirs[i][1]
+                     > math.cos(math.radians(35)) for i in range(n))
+        if smooth:
+            outer, inner = [], []
+            for i in range(n):
+                n1 = (-dirs[i - 1][1], dirs[i - 1][0])
+                n2 = (-dirs[i][1], dirs[i][0])
+                k = h / (1.0 + n1[0] * n2[0] + n1[1] * n2[1])
+                ox, oy = (n1[0] + n2[0]) * k, (n1[1] + n2[1]) * k
+                outer.append((pts[i][0] + ox, pts[i][1] + oy))
+                inner.append((pts[i][0] - ox, pts[i][1] - oy))
+            return [p for p, _ in merge_holes([(outer, True), (inner, True)])]
+    segs = [(pts[i], pts[(i + 1) % n]) for i in range(n if closed else n - 1)]
+    for (x0, y0), (x1, y1) in segs:
+        dx, dy = x1 - x0, y1 - y0
+        ln = math.hypot(dx, dy)
+        if ln == 0:
+            continue
+        nx, ny = -dy / ln * h, dx / ln * h
+        out.append([(x0 + nx, y0 + ny), (x1 + nx, y1 + ny),
+                    (x1 - nx, y1 - ny), (x0 - nx, y0 - ny)])
+    for i in range(n if closed else n):
+        if not closed and i in (0, n - 1):
+            sharp = True
+        else:
+            a, b, c = pts[i - 1], pts[i], pts[(i + 1) % n]
+            v1 = (b[0] - a[0], b[1] - a[1])
+            v2 = (c[0] - b[0], c[1] - b[1])
+            l1, l2 = math.hypot(*v1), math.hypot(*v2)
+            if not l1 or not l2:
+                continue
+            cosang = (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)
+            sharp = cosang < math.cos(math.radians(20))
+        if sharp:
+            out.append(ellipse_pts(pts[i][0], pts[i][1], h, h, 16))
+    return out
 
 
 def parse_style(el):
@@ -314,6 +430,7 @@ def gradient_colors(root):
 class Conv:
     def __init__(self, colors, steps, warn):
         self.grad = {}
+        self.vbmax = 100.0
         self.colors = colors
         self.names = {v: k for k, v in colors.items()}
         self.steps = steps
@@ -362,7 +479,19 @@ class Conv:
         f = lambda k, d=0.0: float(NUM.findall(el.get(k, str(d)))[0])
         if tag == "rect":
             x, y, w, h = f("x"), f("y"), f("width"), f("height")
-            subs = [([(x, y), (x + w, y), (x + w, y + h), (x, y + h)], True)]
+            rx = f("rx", f("ry")) if el.get("rx") or el.get("ry") else 0.0
+            ry = f("ry", rx) if el.get("ry") else rx
+            rx, ry = min(rx, w / 2), min(ry, h / 2)
+            if rx > 0 and ry > 0:
+                pts = []
+                for cx, cy, a0 in ((x + w - rx, y + ry, -90), (x + w - rx, y + h - ry, 0),
+                                   (x + rx, y + h - ry, 90), (x + rx, y + ry, 180)):
+                    for k in range(self.steps + 1):
+                        t = math.radians(a0 + 90.0 * k / self.steps)
+                        pts.append((cx + rx * math.cos(t), cy + ry * math.sin(t)))
+                subs = [(pts, True)]
+            else:
+                subs = [([(x, y), (x + w, y), (x + w, y + h), (x, y + h)], True)]
         elif tag == "circle":
             subs = [(ellipse_pts(f("cx"), f("cy"), f("r"), f("r"), self.steps * 4),
                      True)]
@@ -379,24 +508,53 @@ class Conv:
             subs = path_subpaths(el.get("d", ""), self.steps)
         else:
             return
-        try:
-            op = float(st.get("opacity", "1")) * float(st.get("fill-opacity", "1"))
-        except ValueError:
-            op = 1.0
-        if op < 0.5:
-            if op > 0.0:
-                self.warn("%s has opacity %.2f; shape skipped (the format has "
-                          "no transparency)" % (el.get("id") or tag, op))
-            return
+        def num(key, default=1.0):
+            try:
+                return float(st.get(key, default))
+            except ValueError:
+                return default
+
+        base = num("opacity")
         fill = self.resolve(st.get("fill", "#000000"))
         stroke = self.resolve(st.get("stroke"))
+        if base * num("fill-opacity") < 0.5:
+            fill = None
+        if base * num("stroke-opacity") < 0.5:
+            stroke = None
+        sw = 0.0
+        if stroke:
+            sw = num("stroke-width", 1.0) * math.sqrt(abs(m[0] * m[3] - m[1] * m[2]))
+        if not fill and not stroke:
+            return
+        subs = [([apply(m, x, y) for x, y in pts], closed) for pts, closed in subs]
+        fixed = []
         for pts, closed in subs:
-            pts = [apply(m, x, y) for x, y in pts]
+            if (len(pts) >= 4 and
+                    math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+                    < 1e-3 * self.vbmax):
+                pts, closed = pts[:-1], True
+            fixed.append((pts, closed))
+        subs = fixed
+        thick = stroke and sw > 0.02 * self.vbmax
+        if fill and (not stroke or thick):
+            filled = merge_holes(subs)
+        else:
+            filled = subs
+        if fill and stroke and not thick and len(subs) > 1:
+            self.warn("%s: holes with an outline are not merged" % (el.get("id") or tag))
+        for pts, closed in filled:
             if len(pts) >= 2 and pts[0] == pts[-1]:
                 pts = pts[:-1]
             if len(pts) < 2:
                 continue
-            self.shapes.append((el.get("id") or tag, pts, closed, fill, stroke))
+            self.shapes.append((el.get("id") or tag, pts, closed, fill,
+                                None if thick else stroke))
+        if thick:
+            for pts, closed in subs:
+                if len(pts) >= 2 and pts[0] == pts[-1]:
+                    pts = pts[:-1]
+                for q in stroke_polygons(pts, closed, sw):
+                    self.shapes.append((el.get("id") or tag, q, True, stroke, None))
 
     def emit(self, root):
         vb = [float(x) for x in NUM.findall(root.get("viewBox", ""))]
@@ -404,6 +562,7 @@ class Conv:
             w = float(NUM.findall(root.get("width", "100"))[0])
             h = float(NUM.findall(root.get("height", "100"))[0])
             vb = [0, 0, w, h]
+        self.vbmax = max(vb[2], vb[3])
         self.grad = gradient_colors(root)
         if any(e.tag.split("}")[-1] in ("mask", "clipPath", "filter")
                for e in root.iter()):
