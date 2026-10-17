@@ -261,13 +261,82 @@ def norm_color(v):
     return None
 
 
+def stop_props(ch):
+    props = {}
+    for part in (ch.get("style") or "").split(";"):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            props[k.strip()] = v.strip()
+    for k in ("stop-color", "stop-opacity"):
+        if ch.get(k) is not None:
+            props[k] = ch.get(k)
+    return props
+
+
+def gradient_colors(root):
+    grads = {}
+    for el in root.iter():
+        tag = el.tag.split("}")[-1]
+        if tag in ("linearGradient", "radialGradient"):
+            stops = []
+            for ch in el:
+                if ch.tag.split("}")[-1] == "stop":
+                    p = stop_props(ch)
+                    c = norm_color(p.get("stop-color", "#000000"))
+                    try:
+                        a = float(p.get("stop-opacity", "1"))
+                    except ValueError:
+                        a = 1.0
+                    if c:
+                        stops.append((c, a))
+            href = el.get("{http://www.w3.org/1999/xlink}href") or el.get("href")
+            grads[el.get("id")] = (stops, href[1:] if href else None)
+    out = {}
+    for gid in grads:
+        stops, href = grads[gid]
+        seen = set()
+        while not stops and href and href not in seen and href in grads:
+            seen.add(href)
+            stops, href = grads[href]
+        if stops:
+            n = len(stops)
+            alpha = sum(a for _, a in stops) / n
+            tot = sum(a for _, a in stops) or 1.0
+            r = int(sum(int(c[1:3], 16) * a for c, a in stops) / tot)
+            g = int(sum(int(c[3:5], 16) * a for c, a in stops) / tot)
+            b = int(sum(int(c[5:7], 16) * a for c, a in stops) / tot)
+            if min(a for _, a in stops) != max(a for _, a in stops):
+                alpha = 0.0
+            out[gid] = ("#%02x%02x%02x" % (r, g, b), alpha)
+    return out
+
+
 class Conv:
     def __init__(self, colors, steps, warn):
+        self.grad = {}
         self.colors = colors
         self.names = {v: k for k, v in colors.items()}
         self.steps = steps
         self.shapes = []
         self.warn = warn
+
+    def resolve(self, v):
+        c = norm_color(v)
+        if c is None and v and v.strip().startswith("url("):
+            gid = re.match(r"url\(\s*#([^)\s]+)", v.strip())
+            gid = gid.group(1) if gid else None
+            c = None
+            if gid in self.grad:
+                c, alpha = self.grad[gid]
+                if alpha < 0.5:
+                    self.warn("gradient #%s fades or is transparent (a shading "
+                              "overlay); shape skipped" % gid)
+                    return None
+                self.warn("gradient #%s flattened to its average colour %s"
+                          % (gid, c))
+            else:
+                self.warn("fill %s not supported; shape skipped" % v)
+        return c
 
     def color_ref(self, hexv):
         if hexv in self.names:
@@ -310,8 +379,17 @@ class Conv:
             subs = path_subpaths(el.get("d", ""), self.steps)
         else:
             return
-        fill = norm_color(st.get("fill", "#000000"))
-        stroke = norm_color(st.get("stroke"))
+        try:
+            op = float(st.get("opacity", "1")) * float(st.get("fill-opacity", "1"))
+        except ValueError:
+            op = 1.0
+        if op < 0.5:
+            if op > 0.0:
+                self.warn("%s has opacity %.2f; shape skipped (the format has "
+                          "no transparency)" % (el.get("id") or tag, op))
+            return
+        fill = self.resolve(st.get("fill", "#000000"))
+        stroke = self.resolve(st.get("stroke"))
         for pts, closed in subs:
             pts = [apply(m, x, y) for x, y in pts]
             if len(pts) >= 2 and pts[0] == pts[-1]:
@@ -326,6 +404,11 @@ class Conv:
             w = float(NUM.findall(root.get("width", "100"))[0])
             h = float(NUM.findall(root.get("height", "100"))[0])
             vb = [0, 0, w, h]
+        self.grad = gradient_colors(root)
+        if any(e.tag.split("}")[-1] in ("mask", "clipPath", "filter")
+               for e in root.iter()):
+            self.warn("mask/clipPath/filter are ignored; flatten them to "
+                      "plain paths in Inkscape (Path > Intersection/Difference)")
         self.walk(root, ident(), {})
         s = 100.0 / max(vb[2], vb[3])
         ox = (100.0 - vb[2] * s) / 2
