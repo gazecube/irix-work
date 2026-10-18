@@ -1,0 +1,20 @@
+{
+  "/dev/dsk/dks0d0vol": "/dev/sda",
+  "/dev/rdsk/dks0d0vol": "/dev/sda",
+  "/dev/scsi/sc0d0l0": "/dev/sg2",
+  "/dev/dsk/dks1d0vol": "/dev/sdb",
+  "/dev/rdsk/dks1d0vol": "/dev/sdb",
+  "/dev/scsi/sc1d0l0": "/dev/sg3",
+  "/dev/dsk/dks2d0vol": "/dev/sdc",
+  "/dev/rdsk/dks2d0vol": "/dev/sdc",
+  "/dev/scsi/sc2d0l0": "/dev/sg4",
+  "/dev/dsk/dks3d0vol": "/dev/sdd",
+  "/dev/rdsk/dks3d0vol": "/dev/sdd",
+  "/dev/scsi/sc3d0l0": "/dev/sg5",
+  "/dev/dsk/dks4d0vol": "/dev/sr0",
+  "/dev/rdsk/dks4d0vol": "/dev/sr0",
+  "/dev/scsi/sc4d0l0": "/dev/sg0",
+  "/dev/dsk/dks5d0vol": "/dev/sr1",
+  "/dev/rdsk/dks5d0vol": "/dev/sr1",
+  "/dev/scsi/sc5d0l0": "/dev/sg1"
+}

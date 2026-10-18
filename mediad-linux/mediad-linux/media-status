@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Read a snapshot from the ported IRIX mediad media-monitor protocol."""
+import argparse,json,os,socket,struct
+class XDR:
+    def __init__(self,data): self.data=data;self.i=0
+    def u(self):
+        if self.i+4>len(self.data): raise ValueError('truncated XDR')
+        n=struct.unpack_from('>I',self.data,self.i)[0];self.i+=4;return n
+    def integer(self):
+        n=self.u();return n if n<2**31 else n-2**32
+    def text(self):
+        n=self.u()
+        if n>len(self.data)-self.i: raise ValueError('truncated string')
+        s=self.data[self.i:self.i+n].decode('utf-8','replace');self.i+=(n+3)&~3;return s
+    def indexes(self): return [self.u() for _ in range(self.count())]
+    def count(self):
+        n=self.u()
+        if n>100000: raise ValueError('unreasonable array size')
+        return n
+    def wide(self): return (self.u()<<32)|self.u()
+def exact(s,n):
+    b=b''
+    while len(b)<n:
+        p=s.recv(n-len(b))
+        if not p:raise EOFError('monitor disconnected')
+        b+=p
+    return b
+def record(s):
+    b=b''
+    while True:
+        mark=struct.unpack('>I',exact(s,4))[0];n=mark&0x7fffffff
+        if n+len(b)>16*1024*1024:raise ValueError('oversized XDR record')
+        b+=exact(s,n)
+        if mark>>31:return b
+def snapshot(data):
+    x=XDR(data);nv,nd,np=x.count(),x.count(),x.count()
+    event=dict(type=x.integer(),volume=x.integer(),device=x.integer())
+    vs=[];ds=[];ps=[]
+    assert x.count()==nv
+    for _ in range(nv):
+        v={k:x.text() for k in ['label','device','directory','filesystem','subformat','options']}
+        v.update(mounted=x.integer(),exported=x.u(),partitions=x.indexes());vs.append(v)
+    assert x.count()==nd
+    for _ in range(nd):
+        d={k:x.text() for k in ['name','full_name','filetype','device']}
+        d['inventory']={k:x.integer() for k in ['class','type','controller','target','state']}
+        d.update(monitored=x.integer(),media_present=x.u(),write_protected=x.u(),shared=x.u(),partitions=x.indexes());ds.append(d)
+    assert x.count()==np
+    for _ in range(np):
+        ps.append(dict(device=x.u(),format=x.text(),index=x.integer(),sector_size=x.u(),start=x.wide(),sectors=x.wide()))
+    if x.i!=len(data):raise ValueError('trailing XDR data')
+    return dict(event=event,volumes=vs,devices=ds,partitions=ps)
+def main():
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--state',default=os.environ.get('MEDIAD_STATE'));ap.add_argument('--watch',action='store_true');a=ap.parse_args()
+    if not a.state:ap.error('--state is required')
+    with socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(10);s.connect(a.state+'/monitor.sock')
+        while True:
+            print(json.dumps(snapshot(record(s)),indent=2),flush=True)
+            if not a.watch:return
+            s.settimeout(None)
+if __name__=='__main__':main()

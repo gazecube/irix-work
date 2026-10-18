@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""IRIX device namespace for Linux. Never changes device contents."""
+import argparse, fcntl, json, os, pathlib, re, tempfile, time
+P = pathlib.Path
+
+def read(p):
+    try: return P(p).read_text().strip()
+    except (OSError, UnicodeError): return ''
+
+def atomic(path, text):
+    path = P(path); path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name)
+    try:
+        with os.fdopen(fd,'w') as f: f.write(text); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+
+def discover(sysroot='/sys', devroot='/dev', udevroot='/run/udev/data'):
+    result = []
+    for b in sorted((P(sysroot)/'class/block').iterdir()):
+        if (b/'partition').exists() or re.match(r'^(loop|ram|zram|dm-|md)',b.name): continue
+        props = dict(line[2:].split('=',1) for line in read(P(udevroot)/('b'+read(b/'dev'))).splitlines() if line.startswith('E:') and '=' in line)
+        serial = props.get('ID_WWN_WITH_EXTENSION') or props.get('ID_WWN') or props.get('ID_SERIAL') or read(b/'device/wwid') or read(b/'device/serial') or read(b/'wwid')
+        model = read(b/'device/model') or props.get('ID_MODEL','')
+        identity = 'id:'+serial if serial else 'path:'+str((b/'device').resolve())
+        sgdir = b/'device/scsi_generic'
+        sg = sorted(sgdir.iterdir()) if sgdir.is_dir() else []
+        hctl = (b/'device').resolve().name
+        parts = [{'number':int(read(p/'partition')), 'target':str(P(devroot)/p.name)} for p in sorted(b.iterdir()) if (p/'partition').exists()]
+        result.append(dict(identity=identity, identity_quality='serial' if serial else 'physical-path', name=b.name, target=str(P(devroot)/b.name), scsi=str(P(devroot)/sg[0].name) if sg else '', hctl=hctl if re.fullmatch(r'\d+:\d+:\d+:\d+',hctl) else '', model=model, optical=b.name.startswith('sr'), removable=read(b/'removable')=='1', partitions=parts))
+    # A duplicate serial must never silently alias two different disks.
+    counts = {}
+    for d in result: counts[d['identity']] = counts.get(d['identity'],0)+1
+    for d in result:
+        if counts[d['identity']]>1:
+            d['identity'] += '|path:'+str((P(sysroot)/'class/block'/d['name']/'device').resolve())
+            d['identity_quality']='serial-and-path'
+    return result
+
+def generate(devices, registry, slices):
+    entries = registry.setdefault('identities',{})
+    next_controller = max([v['controller'] for v in entries.values()]+[-1])+1
+    aliases = {}
+    for d in devices:
+        if d['identity'] not in entries:
+            entries[d['identity']] = dict(controller=next_controller, target=0, lun=0)
+            next_controller += 1
+        d['address']=entries[d['identity']]
+        a=d['address']; stem=f"dks{a['controller']}d{a['target']}"
+        d['irix_block']='/dev/dsk/'+stem+'vol'
+        d['irix_raw']='/dev/rdsk/'+stem+'vol'
+        d['irix_scsi']=f"/dev/scsi/sc{a['controller']}d{a['target']}l{a['lun']}" if d['scsi'] else ''
+        for kind in ['dsk','rdsk']: aliases[f'/dev/{kind}/{stem}vol']=d['target']
+        if d['scsi']: aliases[d['irix_scsi']]=d['scsi']
+        # Slice meanings require an explicit mapping. Linux partition numbers
+        # are deliberately NOT guessed to be IRIX slice numbers.
+        for sl, part in slices.get(d['identity'],{}).items():
+            if sl not in ['vh']+[f's{i}' for i in range(16)]: raise ValueError('invalid IRIX slice: '+sl)
+            match = [p for p in d['partitions'] if p['number']==part]
+            if not match: raise ValueError(f'{d["name"]}: Linux partition {part} is absent')
+            for kind in ['dsk','rdsk']: aliases[f'/dev/{kind}/{stem}{sl}']=match[0]['target']
+    return aliases
+
+def reconcile(root, aliases):
+    root=P(root).absolute(); root.mkdir(parents=True,exist_ok=True)
+    # Ownership ledger prevents deleting aliases or files created by others.
+    ledger=root/'.irix-device-links.json'
+    old=json.loads(read(ledger) or '{}')
+    for name,target in aliases.items():
+        dest=root/name.lstrip('/')
+        dest.parent.mkdir(parents=True,exist_ok=True)
+        if dest.is_symlink() and os.readlink(dest)==target: continue
+        if dest.exists() or dest.is_symlink():
+            if old.get(name)!=os.readlink(dest) if dest.is_symlink() else True:
+                raise RuntimeError('refusing to replace unmanaged path: '+str(dest))
+            dest.unlink()
+        dest.symlink_to(target)
+    for name,target in old.items():
+        dest=root/name.lstrip('/')
+        if name not in aliases and dest.is_symlink() and os.readlink(dest)==target: dest.unlink()
+    atomic(ledger,json.dumps(aliases,indent=2)+'\n')
+
+def refresh(args):
+    state=P(args.state).absolute(); state.mkdir(parents=True,exist_ok=True)
+    with open(state/'lock','w') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        reg=json.loads(read(state/'identities.json') or '{"version":1}')
+        ds=discover(args.sysroot,args.devroot,args.udevroot)
+        slices=json.loads(read(args.slices) or '{}') if args.slices else {}
+        aliases=generate(ds,reg,slices)
+        # Save identity assignments before publishing aliases; never reuse an ID.
+        atomic(state/'identities.json',json.dumps(reg,indent=2)+'\n')
+        if args.root: reconcile(args.root,aliases)
+        atomic(state/'devices.json',json.dumps(dict(version=1,devices=ds,aliases=aliases),indent=2)+'\n')
+        rows=[]
+        for d in ds:
+            a=d['address']
+            vals=[str(a['controller']),str(a['target']),str(a['lun']),'cdrom' if d['optical'] else 'disk',d['target'],d['scsi'] or '-',d['irix_raw'],d['identity']]
+            if any('\t' in v or '\n' in v for v in vals): raise ValueError('invalid manifest field')
+            rows.append('\t'.join(vals))
+        atomic(state/'devices.tsv','\n'.join(rows)+'\n')
+        atomic(state/'aliases.tsv',''.join(f'{k}\t{v}\n' for k,v in sorted(aliases.items())))
+        lines=[]
+        for name,target in sorted(aliases.items()): lines.append(f'{name} -> {target}')
+        if not args.quiet: print('\n'.join(lines))
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--state',required=True,help='persistent identity and manifest directory')
+    ap.add_argument('--root',help='namespace staging root; aliases created under ROOT/dev')
+    ap.add_argument('--sysroot',default='/sys'); ap.add_argument('--devroot',default='/dev'); ap.add_argument('--udevroot',default='/run/udev/data')
+    ap.add_argument('--slices',help='JSON mapping stable device identity to {s0: Linux-partition-number, ...}')
+    ap.add_argument('--watch',action='store_true',help='reconcile device additions/removals every two seconds')
+    ap.add_argument('--quiet',action='store_true')
+    args=ap.parse_args()
+    if args.root and P(args.root).resolve()==P('/'):
+        ap.error('use an isolated root; host /dev deployment is not implemented')
+    while True:
+        refresh(args)
+        if not args.watch: return
+        time.sleep(2)
+if __name__=='__main__': main()
