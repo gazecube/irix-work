@@ -13,5 +13,6 @@ Status (2026-10-18)
 - -m64: links but crashes in that test (X11R5 assumes long/pointer == 32 bits in places) -
   needs an LP64 port.
 - Motif 1.2 (UnixWare lib/Xm): native-libs/build-motif.sh builds all 113 files for -m32; tests/xm-subclass-test.c (push button, callback, native XmPrimitive subclass) passes. Used as the oracle for the static-recomp Motif.
+- N32 corpus: native-libs/build-motif-n32.sh compiles the same Motif sources for N32 big-endian (clang, DWARF 4) into libXm_n32.so with full type information for the data-swap work.
 - Not yet covered: SGI extensions present in the IRIX libraries
   (libXt SGIScheme, SGI look in libXm, libSgm).
