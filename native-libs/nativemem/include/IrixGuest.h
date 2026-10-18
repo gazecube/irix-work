@@ -38,7 +38,13 @@ static inline uint16_t irix_guest_read16be(IrixGuestRuntime *rt, IrixGuestAddr a
 { (void)rt; return NM_LD(uint16_t, a); }
 static inline uint32_t irix_guest_read32be(IrixGuestRuntime *rt, IrixGuestAddr a)
 { (void)rt; return NM_LD(uint32_t, a); }
+/* 64-bit integer loads/stores keep the big-endian ABI slot layout: the high word
+   first, each word native-endian. A 32-bit access at +4 then sees the low half of
+   a 64-bit slot, as N32 argument passing and varargs expect. Doubles use the *ne
+   (fully native) pair below. */
 static inline uint64_t irix_guest_read64be(IrixGuestRuntime *rt, IrixGuestAddr a)
+{ (void)rt; return ((uint64_t)NM_LD(uint32_t, a) << 32) | NM_LD(uint32_t, a + 4u); }
+static inline uint64_t irix_guest_read64ne(IrixGuestRuntime *rt, IrixGuestAddr a)
 { (void)rt; return NM_LD(uint64_t, a); }
 static inline void irix_guest_write8(IrixGuestRuntime *rt, IrixGuestAddr a, uint8_t v)
 { (void)rt; NM_ST(uint8_t, a, v); }
@@ -47,6 +53,8 @@ static inline void irix_guest_write16be(IrixGuestRuntime *rt, IrixGuestAddr a, u
 static inline void irix_guest_write32be(IrixGuestRuntime *rt, IrixGuestAddr a, uint32_t v)
 { (void)rt; NM_ST(uint32_t, a, v); }
 static inline void irix_guest_write64be(IrixGuestRuntime *rt, IrixGuestAddr a, uint64_t v)
+{ (void)rt; NM_ST(uint32_t, a, (uint32_t)(v >> 32)); NM_ST(uint32_t, a + 4u, (uint32_t)v); }
+static inline void irix_guest_write64ne(IrixGuestRuntime *rt, IrixGuestAddr a, uint64_t v)
 { (void)rt; NM_ST(uint64_t, a, v); }
 
 static inline float irix_guest_fpr_get_s(const IrixGuestCpu *cpu, unsigned reg)

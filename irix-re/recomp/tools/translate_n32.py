@@ -146,27 +146,34 @@ def native_unaligned(op, rs, rt, imm):
                     'unsigned sh = 8u * (3u - n); uint32_t m = sh ? ~((UINT32_C(1) << sh) - 1u) : 0xffffffffu; '
                     'uint32_t v = (uint32_t)%s; v = (v & ~m) | ((w << sh) & m); ' % r)
         return ['{ IrixGuestAddr a = %s; %s%s = (uint64_t)(int64_t)(int32_t)v; }' % (a, body, r)]
-    if op in (0x1a, 0x1b):  # ldl, ldr
+    if op in (0x1a, 0x1b):  # ldl, ldr: bytewise on the ld/sd layout (high word first, words native-endian)
+        sh = '(k < 4u ? 32u + 8u * k : 8u * (k - 4u))'
         if op == 0x1a:
-            body = ('uint32_t n = a & 7u; uint64_t w = irix_guest_read64be(rt, a & ~7u); '
-                    'uint64_t m = n ? ((UINT64_C(1) << (8u * (8u - n))) - 1u) : ~UINT64_C(0); '
-                    'uint64_t v = %s; v = (v & ~m) | ((w >> (8u * n)) & m); ' % r)
+            body = ('unsigned n = a & 7u, k; uint64_t v = %s; for (k = 0; k < 8u - n; k++) '
+                    '{ unsigned sh = %s; v = (v & ~(UINT64_C(0xff) << sh)) | ((uint64_t)irix_guest_read8(rt, a + k) << sh); } ' % (r, sh))
         else:
-            body = ('uint32_t n = a & 7u; uint64_t w = irix_guest_read64be(rt, a & ~7u); '
-                    'unsigned sh = 8u * (7u - n); uint64_t m = sh ? ~((UINT64_C(1) << sh) - 1u) : ~UINT64_C(0); '
-                    'uint64_t v = %s; v = (v & ~m) | ((w << sh) & m); ' % r)
+            body = ('unsigned n = a & 7u, m, k; uint64_t v = %s; for (m = 0; m <= n; m++) '
+                    '{ k = 7u - n + m; unsigned sh = %s; v = (v & ~(UINT64_C(0xff) << sh)) | ((uint64_t)irix_guest_read8(rt, (a & ~7u) + m) << sh); } ' % (r, sh))
         return ['{ IrixGuestAddr a = %s; %s%s = v; }' % (a, body, r)]
-    # stores: swl/swr (4 bytes) and sdl/sdr (8 bytes) as byte loops
+    # stores: swl/swr (4 bytes, native little-endian composition) and sdl/sdr (8 bytes, ld/sd layout)
     size = 4 if op in (0x2a, 0x2e) else 8
     left = op in (0x2a, 0x2c)
     mask = size - 1
-    if left:
-        loop = ('unsigned n = a & %du; unsigned k; for (k = 0; k < %du - n; k++) '
-                'irix_guest_write8(rt, a + k, (uint8_t)((uint64_t)%s >> (8u * k))); ' % (mask, size, r))
+    if size == 4:
+        if left:
+            loop = ('unsigned n = a & 3u; unsigned k; for (k = 0; k < 4u - n; k++) '
+                    'irix_guest_write8(rt, a + k, (uint8_t)((uint64_t)%s >> (8u * k))); ' % r)
+        else:
+            loop = ('unsigned n = a & 3u; unsigned k; for (k = 0; k <= n; k++) '
+                    'irix_guest_write8(rt, (a & ~3u) + k, (uint8_t)((uint64_t)%s >> (8u * (3u - n + k)))); ' % r)
     else:
-        loop = ('unsigned n = a & %du; unsigned k; for (k = 0; k <= n; k++) '
-                'irix_guest_write8(rt, (a & ~%du) + k, (uint8_t)((uint64_t)%s >> (8u * (%du - n + k)))); '
-                % (mask, mask, r, mask))
+        sh = '(k < 4u ? 32u + 8u * k : 8u * (k - 4u))'
+        if left:
+            loop = ('unsigned n = a & 7u, k; for (k = 0; k < 8u - n; k++) '
+                    'irix_guest_write8(rt, a + k, (uint8_t)((uint64_t)%s >> %s)); ' % (r, sh))
+        else:
+            loop = ('unsigned n = a & 7u, m, k; for (m = 0; m <= n; m++) '
+                    '{ k = 7u - n + m; irix_guest_write8(rt, (a & ~7u) + m, (uint8_t)((uint64_t)%s >> %s)); } ' % (r, sh))
     return ['{ IrixGuestAddr a = %s; %s}' % (a, loop)]
 
 
@@ -278,8 +285,8 @@ def decode(addr, insn):
     if op==0x0c: return ['%s = %s & 0x%xu;'%(reg(rt),reg(rs),immu)],None
     if op==0x0e: return ['%s = %s ^ 0x%xu;'%(reg(rt),reg(rs),immu)],None
     if op==0x0f: return ['%s = %s;'%(reg(rt),sx32_expr('0x%08xu'%((immu<<16)&0xffffffff)))],None
-    if op==0x35: return ['cpu->fpr[%d] = irix_guest_read64be(rt, %s);'%(rt,mem_addr(rs,imm))],None
-    if op==0x3d: return ['irix_guest_write64be(rt, %s, cpu->fpr[%d]);'%(mem_addr(rs,imm),rt)],None
+    if op==0x35: return [('cpu->fpr[%d] = irix_guest_read64'+('ne' if NATIVE_MEM else 'be')+'(rt, %s);')%(rt,mem_addr(rs,imm))],None
+    if op==0x3d: return [('irix_guest_write64'+('ne' if NATIVE_MEM else 'be')+'(rt, %s, cpu->fpr[%d]);')%(mem_addr(rs,imm),rt)],None
     if op==0x39: return ['irix_guest_write32be(rt, %s, (uint32_t)cpu->fpr[%d]);'%(mem_addr(rs,imm),rt)],None
     if op==0x21: return ['%s = (uint64_t)(int64_t)(int16_t)irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None
     if op==0x25: return ['%s = irix_guest_read16be(rt, %s);'%(reg(rt),mem_addr(rs,imm))],None

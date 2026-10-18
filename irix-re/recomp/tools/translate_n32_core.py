@@ -44,6 +44,31 @@ def decode(addr, insn):
             lines += ['else {', '    pc += 4;', '}']
         return lines, 'control'
 
+    # MIPS III forms clang emits that the SGI compiler did not: 64-bit
+    # variable shifts and add/subtract, and the remaining COP1 compare
+    # conditions (existing eq/lt/le encodings stay with the base decoder).
+    if op == 0 and fn in (0x14, 0x16, 0x17, 0x2c, 0x2d, 0x2e, 0x2f):
+        rd = (insn >> 11) & 31
+        exprs = {
+            0x14: '(uint64_t)%s << (%s & 63u)' % (_base.reg(rt), _base.reg(rs)),
+            0x16: '(uint64_t)%s >> (%s & 63u)' % (_base.reg(rt), _base.reg(rs)),
+            0x17: '(uint64_t)((int64_t)%s >> (%s & 63u))' % (_base.reg(rt), _base.reg(rs)),
+            0x2c: '%s + %s' % (_base.reg(rs), _base.reg(rt)),
+            0x2d: '%s + %s' % (_base.reg(rs), _base.reg(rt)),
+            0x2e: '%s - %s' % (_base.reg(rs), _base.reg(rt)),
+            0x2f: '%s - %s' % (_base.reg(rs), _base.reg(rt)),
+        }
+        return ['%s = %s;' % (_base.reg(rd), exprs[fn])], None
+    if op == 0x11 and rs in (0x10, 0x11) and fn >= 0x30 and fn not in (0x32, 0x3c, 0x3e):
+        ft = rt
+        fs = (insn >> 11) & 31
+        cond = fn & 15
+        get = 'irix_guest_fpr_get_s' if rs == 0x10 else 'irix_guest_fpr_get_d'
+        ty = 'float' if rs == 0x10 else 'double'
+        return ['{ %s a = %s(cpu, %d), b = %s(cpu, %d); int un = (a != a) || (b != b);' % (ty, get, fs, get, ft),
+                '  int hit = (((%d) & 4) && !un && a < b) || (((%d) & 2) && !un && a == b) || (((%d) & 1) && un);' % (cond, cond, cond),
+                '  if (hit) cpu->fcr31 |= (1u << 23); else cpu->fcr31 &= ~(1u << 23); }'], None
+
     return _base_decode(addr, insn)
 
 

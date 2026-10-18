@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse,json,struct,sys
+import argparse,json,os,struct,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parent))
 from extract_ar import members
@@ -55,6 +55,9 @@ def sgi_c_locale_ctype():
  assert len(out)==2064
  return bytes(out)
 
+# clang-built objects reference these IRIX libc data symbols without an object type
+FORCED_DATA_IMPORTS={'__libc_attr':128,'__iob':64,'errno':8,'__us_rsthread_stdio':64}
+
 class Obj:
  def __init__(self,archive,name,data):
   self.archive=archive; self.name=name; self.data=data; self.sec=[]; self.syms=[]; self.base={}; self.image={}; self.gp0=0
@@ -75,7 +78,9 @@ class Obj:
   for s in self.sec:
    if s['name']=='.reginfo' and s['size']>=24:
     self.gp0=struct.unpack_from('>I',data,s['off']+20)[0]
-  if not self.gp0: self.gp0=0x7ff0
+  # SGI objects without a recorded gp use the conventional 0x7ff0; clang-built
+  # objects (identified by .MIPS.abiflags) define GP-relative values against the final _gp.
+  if not self.gp0 and not any(s['name']=='.MIPS.abiflags' for s in self.sec): self.gp0=0x7ff0
  def alloc_section(self,s,addr):
   self.base[s['no']]=addr
   self.image[s['no']]=bytearray(s['size']) if s['type']==SHT_NOBITS else bytearray(self.data[s['off']:s['off']+s['size']])
@@ -86,7 +91,7 @@ class Obj:
 
 class StackLink:
  def __init__(self,base=0x50000000,small_base=0x60000000,import_base=0x70000000):
-  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.support_members=[]; self.globals={}; self.imports={}; self.data_imports={}; self.synthetic_data={}; self.got={}; self.duplicates=[]
+  self.base=base; self.small_base=small_base; self.import_base=import_base; self.objs=[]; self.support_members=[]; self.globals={}; self.imports={}; self.data_imports={}; self.synthetic_data={}; self.got={}; self.import_slots=[]; self.duplicates=[]
  def add_archive(self,p):
   for name,data in members(Path(p).read_bytes()):
    if data.startswith(b'\x7fELF\x01\x02'): self.objs.append(Obj(str(p),name,data))
@@ -154,9 +159,10 @@ class StackLink:
   # import-stub path.
   for o in self.objs:
    for s in o.syms:
-    if s['shndx']!=SHN_UNDEF or s['type']!=STT_OBJECT or not s['name'] or s['bind'] not in (STB_GLOBAL,STB_WEAK): continue
+    forced=s['name'] in FORCED_DATA_IMPORTS if os.environ.get('NATIVE_MEM') else False
+    if s['shndx']!=SHN_UNDEF or (s['type']!=STT_OBJECT and not forced) or not s['name'] or s['bind'] not in (STB_GLOBAL,STB_WEAK): continue
     if s['name'] in self.globals or s['name'] in self.data_imports: continue
-    size=max(s['size'],8)
+    size=max(s['size'],FORCED_DATA_IMPORTS.get(s['name'],8) if forced else 8)
     a=align(main,8)
     self.data_imports[s['name']]=(a,size,o.name)
     main=a+size
@@ -179,7 +185,8 @@ class StackLink:
   # GP sits at +0x8000 from small region base. GOT grows after small data.
   self.gp=self.small_base+0x8000; self.nextgot=align(self.small_data_end,4)
  def import_addr(self,name):
-  if name not in self.imports: self.imports[name]=self.import_base+len(self.imports)*8
+  # NATIVE_MEM: one 64 KiB page per import so page-based GOT entries (%got_page) are per symbol.
+  if name not in self.imports: self.imports[name]=self.import_base+len(self.imports)*(0x10000 if os.environ.get('NATIVE_MEM') else 8)
   return self.imports[name]
  def symaddr(self,o,s):
   a=o.local_addr(s)
@@ -206,7 +213,9 @@ class StackLink:
    ro,ri=struct.unpack_from('>II',o.data,q); rows.append((ro,ri>>8,ri&255))
   for ro,sn,typ in rows:
    sym=o.syms[sn]; S=self.symaddr(o,sym); word=u32(b,ro)
-   if typ==R_MIPS_32: p32(b,ro,S+word)
+   if typ==R_MIPS_32:
+    if sym['shndx']==SHN_UNDEF and sym['name']: self.import_slots.append((o.base[ts['no']]+ro,sym['name'],word))
+    p32(b,ro,S+word)
    elif typ==R_MIPS_26:
     A=(word&0x03ffffff)<<2; p32(b,ro,(word&0xfc000000)|(((S+A)>>2)&0x03ffffff))
    elif typ==R_MIPS_HI16:
@@ -270,6 +279,7 @@ class StackLink:
    elif typ==R_MIPS_GPREL32:
     p32(b,ro,S+A-self.gp)
    elif typ==R_MIPS_32:
+    if sym['shndx']==SHN_UNDEF and sym['name']: self.import_slots.append((o.base[ts['no']]+ro,sym['name'],A))
     p32(b,ro,S+A)
    elif typ==R_MIPS_26:
     p32(b,ro,(u32(b,ro)&0xfc000000)|(((S+A)>>2)&0x03ffffff))
@@ -300,7 +310,7 @@ class StackLink:
   for a,b in self.synthetic_data.items(): main[a-self.base:a-self.base+len(b)]=b
   for _,(a,v) in self.got.items(): p32(small,a-self.small_base,v)
   (out/'main.bin').write_bytes(main); (out/'small.bin').write_bytes(small)
-  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'data_imports':{k:[a,z,owner] for k,(a,z,owner) in self.data_imports.items()},'synthetic_data':{hex(a):len(b) for a,b in self.synthetic_data.items()},'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates}
+  mani={'base':self.base,'main_end':self.main_end,'small_base':self.small_base,'small_end':self.nextgot,'gp':self.gp,'import_base':self.import_base,'relocations':self.relocations,'objects':[], 'globals':{k:v[0] for k,v in self.globals.items()},'imports':self.imports,'data_imports':{k:[a,z,owner] for k,(a,z,owner) in self.data_imports.items()},'synthetic_data':{hex(a):len(b) for a,b in self.synthetic_data.items()},'got':{str(k):[a,v] for k,(a,v) in self.got.items()},'duplicates':self.duplicates,'import_slots':self.import_slots}
   for o in self.objs: mani['objects'].append({'archive':o.archive,'member':o.name,'gp0':o.gp0,'sections':{o.sec[n]['name']:a for n,a in o.base.items()}})
   (out/'link.json').write_text(json.dumps(mani,indent=2)+'\n')
 

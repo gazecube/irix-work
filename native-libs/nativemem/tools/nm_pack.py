@@ -32,21 +32,32 @@ for name, v in sorted(link['globals'].items()):
     'nm_main_blob_size: .long nm_main_end - nm_main_blob\nnm_small_blob_size: .long nm_small_end - nm_small_blob\n'
     '.section .note.GNU-stack,"",@progbits\n' % (gen / 'image' / 'main.bin', gen / 'image' / 'small.bin'))
 
+dimps = link.get('data_imports', {})
+dimp_rows = ''.join('    { "%s", 0x%x },\n' % (n, v[0] if isinstance(v, list) else v) for n, v in sorted(dimps.items()))
+islot_rows = ''.join('    { 0x%x, "%s", %d },\n' % (s, n, a) for s, n, a in link.get('import_slots', []))
 (work / 'init.c').write_text('''
 #include "nm_rt.h"
 extern const unsigned char nm_main_blob[], nm_small_blob[];
 extern const unsigned nm_main_blob_size, nm_small_blob_size;
 static void __attribute__((constructor)) nm_ctor(void)
 {
-    NmImage img = { 0x%x, 0x%x, 0x%x, nm_main_blob, nm_small_blob, nm_main_blob_size, nm_small_blob_size };
+    static const NmDataImport dimps[] = {
+%s    { 0, 0 } };
+    static const NmImportSlot islots[] = {
+%s    { 0, 0, 0 } };
+    NmImage img = { 0x%x, 0x%x, 0x%x, nm_main_blob, nm_small_blob, nm_main_blob_size, nm_small_blob_size,
+                    dimps, sizeof dimps / sizeof dimps[0] - 1, islots, sizeof islots / sizeof islots[0] - 1 };
     nm_init(&img);
 }
-''' % (link['base'], link['small_base'], link['gp']))
+''' % (dimp_rows, islot_rows, link['base'], link['small_base'], link['gp']))
 
 objs = []
 srcs = sorted(gen.glob('c/*/recomp_*.c')) + [gen / 'registry.c', here / 'rt' / 'nm_rt.c', work / 'init.c']
 for s in srcs:
     o = work / (s.parent.name + '_' + s.stem + '.o')
+    deps = [s, here / 'include' / 'IrixGuest.h', here / 'rt' / 'nm_rt.h']
+    if o.exists() and all(o.stat().st_mtime >= d.stat().st_mtime for d in deps) and not __import__('os').environ.get('NM_REBUILD'):
+        objs.append(str(o)); continue
     subprocess.run(cc + (['-g', '-O0'] if __import__('os').environ.get('NM_DEBUG') else ['-O1']) + ['-fPIC', '-w', '-std=gnu11', '-I', str(here / 'include'), '-I', str(here / 'rt'),
                          '-c', str(s), '-o', str(o)], check=True)
     objs.append(str(o))
@@ -54,5 +65,6 @@ for s in ('exports', 'image'):
     o = work / (s + '.o')
     subprocess.run(cc + ['-c', str(work / (s + '.S')), '-o', str(o)], check=True)
     objs.append(str(o))
-subprocess.run(cc + ['-shared', '-o', str(out)] + objs + ['-ldl'], check=True)
+extra = sys.argv[3:]
+subprocess.run(cc + ['-shared', '-o', str(out)] + objs + extra + ['-ldl'], check=True)
 print('built', out)

@@ -24,6 +24,7 @@ def write(self, outdir):
     nm_swap.apply(self, so)
     orig_write(self, outdir)
     nm_swap.swap_got(self, str(Path(outdir) / 'small.bin'))
+    nm_swap.swap_synthetic(self, str(Path(outdir) / 'main.bin'))
 
 
 L.StackLink.write = write

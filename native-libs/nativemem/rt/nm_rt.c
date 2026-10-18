@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <signal.h>
 #include "IrixGuest.h"
 #include "nm_rt.h"
 
@@ -18,6 +19,27 @@ static IrixGuestRuntime g_rt;
 static uint32_t g_gp;
 static uint32_t g_sp;
 static void *g_pending_native;
+typedef struct { uint32_t from, to; } NmPatch;
+static NmPatch *g_patch; static size_t g_np, g_npcap;
+static void nm_patch_add(uint32_t from, uint32_t to)
+{
+    if (g_np == g_npcap) { g_npcap = g_npcap ? g_npcap * 2 : 512; g_patch = realloc(g_patch, g_npcap * sizeof *g_patch); }
+    g_patch[g_np++] = (NmPatch){ from, to };
+}
+static int nm_pcmp(const void *x, const void *y)
+{ uint32_t a = ((const NmPatch *)x)->from, b = ((const NmPatch *)y)->from; return a < b ? -1 : a > b; }
+static void nm_patch_region(uint32_t base, size_t size)
+{
+    uint32_t *w = NM_PTR(base);
+    size_t i, n = size / 4;
+    for (i = 0; i < n; i++) {
+        size_t lo = 0, hi = g_np;
+        uint32_t v = w[i];
+        if (v < g_patch[0].from || v > g_patch[g_np - 1].from) continue;
+        while (lo < hi) { size_t mid = lo + (hi - lo) / 2; if (g_patch[mid].from < v) lo = mid + 1; else hi = mid; }
+        if (lo < g_np && g_patch[lo].from == v) w[i] = g_patch[lo].to;
+    }
+}
 static const NmImage *g_img;
 
 static void nm_add(IrixGuestAddr a, IrixGuestFunction fn, void *native, const char *name)
@@ -59,7 +81,7 @@ static void nm_import_marker(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt
 void irix_guest_register_function(IrixGuestRuntime *rt, IrixGuestAddr a, IrixGuestFunction fn, const char *name)
 {
     (void)rt;
-    if (fn == nm_import_marker) nm_add(a, NULL, g_pending_native, name);
+    if (fn == nm_import_marker) { nm_add(a, NULL, g_pending_native, name); nm_patch_add(a, (uint32_t)(uintptr_t)g_pending_native); }
     else nm_add(a, fn, NULL, name);
 }
 void irix_guest_register_recompiled_function(IrixGuestRuntime *rt, IrixGuestAddr a, IrixGuestFunction fn, const char *name)
@@ -73,7 +95,8 @@ IrixGuestFunction nm_resolver(const char *name)
     return nm_import_marker;
 }
 
-typedef uint32_t (*nm_fn8)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+typedef uint32_t (*nm_fn8)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
+                           uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
 int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr a)
 {
@@ -87,9 +110,14 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr a)
         uint32_t saved = g_sp;
         g_sp = (uint32_t)cpu->gpr[29] - 256u;
         uint64_t r;
+        /* N32 stack arguments: 8-byte slots from sp+0, an int in the low half (+4) */
+        const uint32_t sp = (uint32_t)cpu->gpr[29];
+#define NM_SARG(k) NM_LD(uint32_t, sp + 8u * (k) + 4u)
         uint32_t lo = ((nm_fn8)native)((uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
                                        (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[8], (uint32_t)cpu->gpr[9],
-                                       (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11]);
+                                       (uint32_t)cpu->gpr[10], (uint32_t)cpu->gpr[11],
+                                       NM_SARG(0), NM_SARG(1), NM_SARG(2), NM_SARG(3),
+                                       NM_SARG(4), NM_SARG(5), NM_SARG(6), NM_SARG(7));
         r = lo;
         g_sp = saved;
         cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)r;
@@ -108,6 +136,7 @@ uint64_t nm_enter(uint32_t index, const uint32_t *args)
     cpu.gpr[28] = g_gp;
     cpu.gpr[25] = g_ent[index].addr;   /* PIC prologue derives $gp from $t9 */
     cpu.gpr[29] = g_sp;
+    for (i = 8; i < 16; i++) NM_ST(uint32_t, g_sp + 8u * (i - 8) + 4u, args[i]);  /* stack args */
     cpu.pc = g_ent[index].addr;
     g_rt.trapped = 0;
     g_ent[index].fn(&g_rt, &cpu);
@@ -126,10 +155,25 @@ static void *nm_map(uint32_t addr, size_t size)
     return p;
 }
 
+static void nm_segv(int sig, siginfo_t *si, void *uc)
+{
+    IrixGuestFunctionEntry *fe = irix_guest_find_function(&g_rt, g_rt.current_pc);
+    (void)uc;
+    fprintf(stderr, "nativemem: signal %d fault address %p, guest pc 0x%08x%s%s\n", sig, si->si_addr,
+            g_rt.current_pc, fe && fe->name ? " in " : "", fe && fe->name ? fe->name : "");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 void nm_init(const NmImage *img)
 {
     size_t i, stub_bytes;
     uint8_t *stubs, *s;
+    {   struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = nm_segv; sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+        sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    }
     g_img = img;
     g_gp = img->gp;
     nm_map(img->main_base, (img->main_size + 0xfff) & ~0xfffu);
@@ -140,6 +184,28 @@ void nm_init(const NmImage *img)
                                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0) + (1u << 20) - 64u;
     irix_register_recompiled_stack(&g_rt);
     irix_register_recompiled_stack_imports(&g_rt, nm_resolver);
+    {   /* Xt class records and other native data: rewrite pointer slots */
+        static const char *const keep_guest[] = { "errno", "__iob", "__libc_attr", "__us_rsthread_stdio", NULL };
+        size_t k;
+        for (k = 0; k < img->ndimps; k++) {
+            int skip = 0, j;
+            void *p;
+            for (j = 0; keep_guest[j]; j++) if (!strcmp(keep_guest[j], img->dimps[k].name)) skip = 1;
+            if (skip) continue;
+            p = dlsym(RTLD_DEFAULT, img->dimps[k].name);
+            if (p) nm_patch_add(img->dimps[k].addr, (uint32_t)(uintptr_t)p);
+            else fprintf(stderr, "nativemem: unresolved data import %s\n", img->dimps[k].name);
+        }
+        if (g_np) {
+            qsort(g_patch, g_np, sizeof *g_patch, nm_pcmp);
+            nm_patch_region(img->main_base, img->main_size);
+            nm_patch_region(img->small_base, img->small_size & ~3u);
+        }
+        for (k = 0; k < img->nislots; k++) {
+            void *p = dlsym(RTLD_DEFAULT, img->islots[k].name);
+            if (p) NM_ST(uint32_t, img->islots[k].slot, (uint32_t)(uintptr_t)p + (uint32_t)img->islots[k].addend);
+        }
+    }
     qsort(g_ent, g_n, sizeof *g_ent, nm_cmp);
     stub_bytes = g_n * 32u;
     stubs = mmap(NULL, stub_bytes, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -147,14 +213,21 @@ void nm_init(const NmImage *img)
     for (i = 0; i < g_n; i++) {
         uint8_t *at;
         int32_t rel;
-        if (!g_ent[i].fn) continue;
-        /* stub: lea 4(%esp),%edx; push %edx; push $i; call nm_enter; add $8,%esp; ret */
+        if (!g_ent[i].fn || g_ent[i].addr < img->main_base || g_ent[i].addr >= img->main_base + img->main_size) continue;
+        /* stub (keeps the i386 ABI 16-byte stack alignment for everything called below):
+           lea 4(%esp),%edx; push %ebp; mov %esp,%ebp; and $-16,%esp; sub $8,%esp;
+           push %edx; push $i; call nm_enter; mov %ebp,%esp; pop %ebp; ret */
         at = s;
         *s++ = 0x8d; *s++ = 0x54; *s++ = 0x24; *s++ = 0x04;
+        *s++ = 0x55;
+        *s++ = 0x89; *s++ = 0xe5;
+        *s++ = 0x83; *s++ = 0xe4; *s++ = 0xf0;
+        *s++ = 0x83; *s++ = 0xec; *s++ = 0x08;
         *s++ = 0x52;
         *s++ = 0x68; memcpy(s, &(uint32_t){ (uint32_t)i }, 4); s += 4;
         *s++ = 0xe8; rel = (int32_t)((uint8_t *)nm_enter - (s + 4)); memcpy(s, &rel, 4); s += 4;
-        *s++ = 0x83; *s++ = 0xc4; *s++ = 0x08;
+        *s++ = 0x89; *s++ = 0xec;
+        *s++ = 0x5d;
         *s++ = 0xc3;
         s = (uint8_t *)(((uintptr_t)s + 15u) & ~15u);
         /* patch jmp rel32 at the guest function address */

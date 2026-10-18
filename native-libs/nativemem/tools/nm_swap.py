@@ -105,7 +105,12 @@ class Dwarf:
             out.add((base, 4))
         elif tag in ('base_type', 'enumeration_type'):
             s = self.size(t)
-            if s > 1:
+            is_float = 'float' in n['a'].get('encoding', '')
+            if s == 8 and not is_float:
+                # 64-bit integers keep big-endian word order (see IrixGuest.h)
+                out.add((base, 4))
+                out.add((base + 4, 4))
+            elif s > 1:
                 out.add((base, s))
         elif tag in ('structure_type', 'class_type'):
             for k in n['kids']:
@@ -211,3 +216,18 @@ def swap_got(linker, small_path):
     for _, (a, _v) in linker.got.items():
         swap_range(data, a - linker.small_base, 4)
     open(small_path, 'wb').write(data)
+
+
+def swap_synthetic(linker, main_path):
+    """Swap the linker's synthetic data (the SGI C-locale ctype table and __libc_attr)."""
+    data = bytearray(open(main_path, 'rb').read())
+    for addr, blob in linker.synthetic_data.items():
+        off = addr - linker.base
+        if len(blob) == 2064:          # __ctype_t: 257 uint32, 257 int16, 257 int16, 8 bytes
+            for i in range(257):
+                swap_range(data, off + 4 * i, 4)
+            for i in range(514):
+                swap_range(data, off + 1028 + 2 * i, 2)
+        else:                           # __libc_attr: word 0 is the ctype table pointer
+            swap_range(data, off, 4)
+    open(main_path, 'wb').write(data)
