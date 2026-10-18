@@ -5,6 +5,8 @@
 #include <X11/Xlib.h>
 
 Display *irix_x11_primary_display_from_guest(IrixGuestAddr addr);
+Screen *irix_x11_primary_screen_from_guest(IrixGuestAddr display_addr,
+                                            IrixGuestAddr screen_addr);
 GC irix_x11_primary_gc_from_guest(IrixGuestAddr addr);
 XFontStruct *irix_x11_primary_font_from_guest(IrixGuestAddr addr);
 IrixGuestAddr irix_x11_primary_font_to_guest(IrixGuestRuntime *rt, XFontStruct *font);
@@ -17,6 +19,11 @@ IrixGuestAddr irix_x11_primary_create_gc(IrixGuestRuntime *rt,
 int irix_x11_primary_free_gc(IrixGuestRuntime *rt,
                              IrixGuestAddr display_addr,
                              IrixGuestAddr guest_gc);
+
+IrixGuestAddr irix_x11_primary_acquire_xt_gc(IrixGuestRuntime *rt,
+    IrixGuestAddr display, uint32_t drawable, uint32_t mask,
+    IrixGuestAddr values, int share);
+int irix_x11_primary_release_xt_gc(IrixGuestRuntime *rt, IrixGuestAddr guest_gc);
 
 /*
  * IRIX's X server never reports NumLock/ScrollLock as modifiers, so Motif and

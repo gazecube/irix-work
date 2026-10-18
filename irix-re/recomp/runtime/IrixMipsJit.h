@@ -9,6 +9,7 @@ extern "C" {
 
 int irix_mips_jit_available(void);
 int irix_mips_jit_requested(void);
+int irix_mips_jit_set_thread_disabled(int disabled);
 int irix_mips_jit_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                        IrixGuestAddr address);
 void irix_mips_jit_shutdown(IrixGuestRuntime *rt);

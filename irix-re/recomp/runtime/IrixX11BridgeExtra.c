@@ -40,6 +40,13 @@ typedef struct {
     size_t display_count;
     GC gcs[IRIX_X11_MAX_GCS];
     size_t gc_count;
+    struct {
+        unsigned refs;
+        int share;
+        IrixGuestAddr display;
+        uint32_t drawable, mask;
+        XGCValues key;
+    } xt_gcs[IRIX_X11_MAX_GCS];
     XFontStruct *fonts[IRIX_X11_MAX_FONTS];
     IrixGuestAddr font_guest[IRIX_X11_MAX_FONTS];
     size_t font_count;
@@ -508,7 +515,90 @@ IrixGuestAddr irix_x11_primary_create_gc(IrixGuestRuntime *rt,
         values_ptr = &values;
     }
     gc = XCreateGC(d, (Drawable)drawable, (unsigned long)mask, values_ptr);
-    return gc_to_guest(gc);
+    {
+        IrixGuestAddr guest = gc_to_guest(gc);
+        if (!guest && gc) XFreeGC(d, gc);
+        return guest;
+    }
+}
+
+/* XtGetGC resources are immutable and shared; XtAllocateGC resources may be
+ * changed by their owner. Track both so XtReleaseGC balances our native path
+ * rather than looking in the original Xt cache, which never saw these GCs. */
+IrixGuestAddr irix_x11_primary_acquire_xt_gc(IrixGuestRuntime *rt,
+    IrixGuestAddr display, uint32_t drawable, uint32_t mask,
+    IrixGuestAddr values_addr, int share)
+{
+    XGCValues values, key;
+    IrixGuestAddr guest;
+    size_t i;
+    memset(&key, 0, sizeof(key));
+    if (mask) {
+        if (!read_xgcvalues(rt, values_addr, &values)) return 0;
+        if (mask & GCFunction) key.function = values.function;
+        if (mask & GCPlaneMask) key.plane_mask = values.plane_mask;
+        if (mask & GCForeground) key.foreground = values.foreground;
+        if (mask & GCBackground) key.background = values.background;
+        if (mask & GCLineWidth) key.line_width = values.line_width;
+        if (mask & GCLineStyle) key.line_style = values.line_style;
+        if (mask & GCCapStyle) key.cap_style = values.cap_style;
+        if (mask & GCJoinStyle) key.join_style = values.join_style;
+        if (mask & GCFillStyle) key.fill_style = values.fill_style;
+        if (mask & GCFillRule) key.fill_rule = values.fill_rule;
+        if (mask & GCArcMode) key.arc_mode = values.arc_mode;
+        if (mask & GCTile) key.tile = values.tile;
+        if (mask & GCStipple) key.stipple = values.stipple;
+        if (mask & GCTileStipXOrigin) key.ts_x_origin = values.ts_x_origin;
+        if (mask & GCTileStipYOrigin) key.ts_y_origin = values.ts_y_origin;
+        if (mask & GCFont) key.font = values.font;
+        if (mask & GCSubwindowMode) key.subwindow_mode = values.subwindow_mode;
+        if (mask & GCGraphicsExposures) key.graphics_exposures = values.graphics_exposures;
+        if (mask & GCClipXOrigin) key.clip_x_origin = values.clip_x_origin;
+        if (mask & GCClipYOrigin) key.clip_y_origin = values.clip_y_origin;
+        if (mask & GCClipMask) key.clip_mask = values.clip_mask;
+        if (mask & GCDashOffset) key.dash_offset = values.dash_offset;
+        if (mask & GCDashList) key.dashes = values.dashes;
+    }
+    if (share) {
+        for (i = 0; i < g_x11.gc_count; ++i) {
+            if (g_x11.gcs[i] && g_x11.xt_gcs[i].refs &&
+                g_x11.xt_gcs[i].share &&
+                g_x11.xt_gcs[i].display == display &&
+                g_x11.xt_gcs[i].drawable == drawable &&
+                g_x11.xt_gcs[i].mask == mask &&
+                !memcmp(&g_x11.xt_gcs[i].key, &key, sizeof(key))) {
+                ++g_x11.xt_gcs[i].refs;
+                return IRIX_X11_GC_BASE + (IrixGuestAddr)i * IRIX_X11_GC_STRIDE;
+            }
+        }
+    }
+    guest = irix_x11_primary_create_gc(rt, display, drawable, mask, values_addr);
+    if (!guest) return 0;
+    i = (guest - IRIX_X11_GC_BASE) / IRIX_X11_GC_STRIDE;
+    g_x11.xt_gcs[i].refs = 1u;
+    g_x11.xt_gcs[i].share = share;
+    g_x11.xt_gcs[i].display = display;
+    g_x11.xt_gcs[i].drawable = drawable;
+    g_x11.xt_gcs[i].mask = mask;
+    g_x11.xt_gcs[i].key = key;
+    return guest;
+}
+
+/* Return whether this handle belongs to the native Xt allocation path. */
+int irix_x11_primary_release_xt_gc(IrixGuestRuntime *rt, IrixGuestAddr guest)
+{
+    uint32_t off;
+    size_t i;
+    if (guest < IRIX_X11_GC_BASE ||
+        guest >= IRIX_X11_GC_BASE + IRIX_X11_GC_SHADOW_SIZE) return 0;
+    off = guest - IRIX_X11_GC_BASE;
+    if (off % IRIX_X11_GC_STRIDE) return 0;
+    i = off / IRIX_X11_GC_STRIDE;
+    if (i >= g_x11.gc_count || !g_x11.gcs[i] || !g_x11.xt_gcs[i].refs)
+        return 0;
+    if (--g_x11.xt_gcs[i].refs == 0u)
+        (void)irix_x11_primary_free_gc(rt, g_x11.xt_gcs[i].display, guest);
+    return 1;
 }
 
 int irix_x11_primary_free_gc(IrixGuestRuntime *rt,
@@ -530,6 +620,7 @@ int irix_x11_primary_free_gc(IrixGuestRuntime *rt,
             i = off / IRIX_X11_GC_STRIDE;
             if (i < g_x11.gc_count) {
                 g_x11.gcs[i] = 0;
+                memset(&g_x11.xt_gcs[i], 0, sizeof(g_x11.xt_gcs[i]));
                 if (irix_guest_ptr(rt, guest_gc, 112u))
                     memset(irix_guest_ptr(rt, guest_gc, 112u), 0, 112u);
             }
@@ -1747,6 +1838,7 @@ static void bridge_XFreeGC(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             i = off / IRIX_X11_GC_STRIDE;
             if (i < g_x11.gc_count) {
                 g_x11.gcs[i] = 0;
+                memset(&g_x11.xt_gcs[i], 0, sizeof(g_x11.xt_gcs[i]));
                 if (irix_guest_ptr(rt, guest, 112u))
                     memset(irix_guest_ptr(rt, guest, 112u), 0, 112u);
             }
@@ -1889,7 +1981,9 @@ static void bridge_XCreateFontCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (d && !cursor) {
         cursor = XCreateFontCursor(d, shape);
     }
-    (void)rt;
+    if (getenv("IRIX_X11_TRACE_CURSOR"))
+        fprintf(stderr, "IRIX X cursor trace: CreateFontCursor shape=%u cursor=%08lx pc=%08x\n",
+                shape, (unsigned long)cursor, rt->current_pc);
     
     /* 4Dwm's pointerColor resource creates/recolors its normal pointer but
        the SGI startup path never defines that cursor on the root window.
@@ -1944,7 +2038,9 @@ static void bridge_XDefineCursor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     Window w = (Window)(uint32_t)cpu->gpr[5];
     Cursor cursor = (Cursor)(uint32_t)cpu->gpr[6];
     int rc = d ? XDefineCursor(d, w, cursor) : 0;
-    (void)rt;
+    if (getenv("IRIX_X11_TRACE_CURSOR"))
+        fprintf(stderr, "IRIX X cursor trace: DefineCursor win=%08lx cursor=%08lx pc=%08x\n",
+                (unsigned long)w, (unsigned long)cursor, rt->current_pc);
     
     if (d) XFlush(d);
     cpu->gpr[2] = (uint32_t)rc;

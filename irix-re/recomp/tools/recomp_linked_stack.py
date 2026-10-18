@@ -98,6 +98,19 @@ def static_cfg_entries(decoded, start, end_addr):
   elif ctl is None:
    ret=(addr+8)&0xffffffff
    if start<=ret<end_addr: entries.add(ret)
+ # Switch statements commonly lower to `jr $reg` through a data table.  The
+ # table targets are not encoded in the branch instruction, so in strict
+ # native32 mode they must be valid local-dispatch entries before runtime.
+ # Treat every non-delay-slot instruction as a possible basic-block target;
+ # this keeps dispatch ahead-of-time and still rejects unaligned/out-of-range
+ # targets through the generated switch default.
+ if any(control and (static_control_info(addr,word) or {}).get('kind')=='jump_indirect'
+        for addr,word,_lines,control in decoded):
+  for idx,(addr,_word,_lines,_control) in enumerate(decoded):
+   is_delay_slot=(idx>0 and decoded[idx-1][3] and
+                  decoded[idx-1][0]+4==addr)
+   if not is_delay_slot and start<=addr<end_addr:
+    entries.add(addr)
  return entries
 
 def static_block_labels(decoded,start,end_addr):
@@ -112,7 +125,7 @@ def static_block_labels(decoded,start,end_addr):
    labels.add(decoded[idx+2][0])
  return labels
 
-def render_function(cname, source, name, start, words):
+def render_function(cname, source, name, start, words, no_interpreter_fallback=False):
  w=io.StringIO(); p=lambda x='': print(x,file=w)
  decoded=[]
  for i,word in enumerate(words):
@@ -174,7 +187,10 @@ def render_function(cname, source, name, start, words):
   for addr in sorted(cfg_entries):
    p(f'    case 0x{addr:08x}u: goto L_{addr:08x};')
   p('    default:')
-  p('        (void)irix_mips_interp_call(rt, cpu, pc);')
+  if no_interpreter_fallback:
+   p('        irix_guest_trap(rt, cpu, 0xeeee0004u);')
+  else:
+   p('        (void)irix_mips_interp_call(rt, cpu, pc);')
   p('        return;')
   p('    }')
   p()
@@ -193,7 +209,10 @@ def render_function(cname, source, name, start, words):
   ctl_here=ctl_raw if has_native_delay else None
   branch_cond=static_branch_condition(addr,word) if ctl_here else None
   if control and ctl_raw is not None and not has_native_delay:
-   p('    (void)irix_mips_interp_call(rt, cpu, pc);')
+   if no_interpreter_fallback:
+    p('    irix_guest_trap(rt, cpu, 0xeeee0004u);')
+   else:
+    p('    (void)irix_mips_interp_call(rt, cpu, pc);')
    p('    return;')
   elif ctl_here and 'target' in ctl_here:
    kind=ctl_here.get('kind')
@@ -337,7 +356,7 @@ def render_function(cname, source, name, start, words):
  return w.getvalue()
 
 def main():
- ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('--support-archive',action='append',default=[]); ap.add_argument('-o','--output',required=True); a=ap.parse_args()
+ ap=argparse.ArgumentParser(); ap.add_argument('archives',nargs='+'); ap.add_argument('--support-archive',action='append',default=[]); ap.add_argument('-o','--output',required=True); ap.add_argument('--no-interpreter-fallback',action='store_true',help='emit a guest trap instead of calling the runtime interpreter for unsupported control flow'); a=ap.parse_args()
  out=Path(a.output); out.mkdir(parents=True,exist_ok=True)
  L=StackLink()
  for p in a.archives:L.add_archive(p)
@@ -354,7 +373,7 @@ def main():
    start=o.base[s['shndx']]+s['value']; b=o.image[s['shndx']][s['value']:s['value']+s['size']]; words=struct.unpack('>%dI'%(len(b)//4),b)
    cname=f'irix_recomp_o{oi:04d}_s{si:04d}_{ident(s["name"])}'
    try:
-    body=render_function(cname,f'{Path(o.archive).name}:{o.name}',s['name'],start,words)
+    body=render_function(cname,f'{Path(o.archive).name}:{o.name}',s['name'],start,words,a.no_interpreter_fallback)
    except Exception as exc: failed.append({'object':o.name,'name':s['name'],'address':start,'error':str(exc)}); continue
    marker=body.find('void '+cname)
    if marker<0: failed.append({'object':o.name,'name':s['name'],'address':start,'error':'generated body marker missing'}); continue

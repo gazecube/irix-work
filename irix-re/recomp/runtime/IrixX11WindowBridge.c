@@ -415,6 +415,10 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             cpu->gpr[2] = 0;
             return;
         }
+        if (getenv("IRIX_X11_TRACE_CURSOR") && (valuemask & CWCursor))
+            fprintf(stderr, "IRIX X cursor trace: CreateWindow guest_parent=%08lx cursor=%08lx pc=%08x\n",
+                    (unsigned long)parent, (unsigned long)attrs.cursor,
+                    rt->current_pc);
         attrs_ptr = &attrs;
     }
 
@@ -441,6 +445,11 @@ static void bridge_XChangeWindowAttributes(IrixGuestRuntime *rt, IrixGuestCpu *c
         cpu->gpr[2] = 0;
         return;
     }
+
+    if (getenv("IRIX_X11_TRACE_CURSOR") && (valuemask & CWCursor))
+        fprintf(stderr, "IRIX X cursor trace: ChangeWindowAttributes win=%08lx guest_attrs=%08x cursor=%08lx pc=%08x\n",
+                (unsigned long)w, guest_attrs, (unsigned long)attrs.cursor,
+                rt->current_pc);
 
     rc = XChangeWindowAttributes(dpy, w, valuemask, &attrs);
     XFlush(dpy);

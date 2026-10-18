@@ -27,6 +27,26 @@ static uint64_t sx32(uint32_t v)
     return (uint64_t)(int64_t)(int32_t)v;
 }
 
+/* Compute a 64 x 64 -> 128 bit product without host __int128.  The runtime
+ * also needs to build as 32-bit x86 for the Linux Motif ABI bridge.
+ */
+static void mul64wide(uint64_t a, uint64_t b,
+                      uint64_t *high, uint64_t *low)
+{
+    uint64_t a0 = (uint32_t)a;
+    uint64_t a1 = a >> 32;
+    uint64_t b0 = (uint32_t)b;
+    uint64_t b1 = b >> 32;
+    uint64_t p00 = a0 * b0;
+    uint64_t p01 = a0 * b1;
+    uint64_t p10 = a1 * b0;
+    uint64_t p11 = a1 * b1;
+    uint64_t middle = (p00 >> 32) + (uint32_t)p01 + (uint32_t)p10;
+
+    *low = (middle << 32) | (uint32_t)p00;
+    *high = p11 + (p01 >> 32) + (p10 >> 32) + (middle >> 32);
+}
+
 static int16_t sx16(uint16_t v)
 {
     return (int16_t)v;
@@ -360,18 +380,17 @@ static int exec_simple(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             break;
         }
         case 0x1c: { /* DMULT */
-            __int128 product = (__int128)(int64_t)cpu->gpr[rs] *
-                               (__int128)(int64_t)cpu->gpr[rtno];
-            cpu->lo = (uint64_t)product;
-            cpu->hi = (uint64_t)((unsigned __int128)product >> 64);
+            uint64_t a = cpu->gpr[rs];
+            uint64_t b = cpu->gpr[rtno];
+            mul64wide(a, b, &cpu->hi, &cpu->lo);
+            if (a >> 63)
+                cpu->hi -= b;
+            if (b >> 63)
+                cpu->hi -= a;
             break;
         }
         case 0x1d: { /* DMULTU */
-            unsigned __int128 product =
-                (unsigned __int128)cpu->gpr[rs] *
-                (unsigned __int128)cpu->gpr[rtno];
-            cpu->lo = (uint64_t)product;
-            cpu->hi = (uint64_t)(product >> 64);
+            mul64wide(cpu->gpr[rs], cpu->gpr[rtno], &cpu->hi, &cpu->lo);
             break;
         }
         case 0x1e: { /* DDIV */

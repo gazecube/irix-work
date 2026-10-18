@@ -14,6 +14,15 @@ def decode(addr, insn):
     op = insn >> 26
     rt = (insn >> 16) & 31
     rs = (insn >> 21) & 31
+    fn = insn & 63
+
+    # N32 keeps 64-bit GPRs and HI/LO state.  These transfers are emitted by
+    # native MIPS III objects (including the Microline build) and must preserve
+    # the full register value.
+    if op == 0 and fn == 0x11:  # MTHI
+        return ['cpu->hi = %s;' % _base.reg(rs)], None
+    if op == 0 and fn == 0x13:  # MTLO
+        return ['cpu->lo = %s;' % _base.reg(rs)], None
 
     # Correct BLTZAL/BGEZAL and branch-likely link variants. The base decoder
     # historically handled only BGEZAL and could lose $ra on likely branches.

@@ -139,6 +139,51 @@ static int read_quarks(IrixGuestRuntime *rt, IrixGuestAddr addr, XrmQuark *out, 
     return cap - 1;
 }
 
+static void bridge_XrmQPutResource(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr dbp = (uint32_t)cpu->gpr[4];
+    IrixGuestAddr bindings_addr = (uint32_t)cpu->gpr[5];
+    IrixGuestAddr quarks_addr = (uint32_t)cpu->gpr[6];
+    IrixGuestAddr value_addr = (uint32_t)cpu->gpr[8];
+    XrmBinding bindings[128];
+    XrmQuark quarks[128];
+    XrmDatabase db;
+    XrmValue value;
+    IrixGuestAddr value_data;
+    uint32_t value_size;
+    int count, i;
+
+    cpu->gpr[2] = 0;
+    if (!dbp || !bindings_addr || !quarks_addr || !value_addr ||
+        !irix_guest_ptr(rt, dbp, 4u) ||
+        !irix_guest_ptr(rt, value_addr, 8u))
+        return;
+
+    count = read_quarks(rt, quarks_addr, quarks,
+                        (int)(sizeof(quarks) / sizeof(quarks[0])));
+    if (count <= 0 || !irix_guest_ptr(rt, bindings_addr,
+                                      (size_t)count * 4u))
+        return;
+    for (i = 0; i < count; ++i)
+        bindings[i] = (XrmBinding)rd32(rt,
+            bindings_addr + (IrixGuestAddr)(i * 4));
+
+    value_size = rd32(rt, value_addr);
+    value_data = rd32(rt, value_addr + 4u);
+    memset(&value, 0, sizeof(value));
+    value.size = value_size;
+    if (value_size) {
+        value.addr = (XPointer)irix_guest_ptr(rt, value_data, value_size);
+        if (!value.addr)
+            return;
+    }
+
+    db = db_from_guest(rd32(rt, dbp));
+    XrmQPutResource(&db, bindings, quarks,
+                    (XrmRepresentation)(uint32_t)cpu->gpr[7], &value);
+    wr32(rt, dbp, db_to_guest(db));
+}
+
 static Display *compat_display(void)
 {
     if (!g_xrm.display) g_xrm.display = XOpenDisplay(NULL);
@@ -579,6 +624,7 @@ IrixGuestFunction irix_xrm_compat_lookup(const char *name)
     MAP(XrmMergeDatabases);
     MAP(XrmCombineDatabase);
     MAP(XrmCombineFileDatabase);
+    MAP(XrmQPutResource);
     MAP(XrmQGetResource);
     MAP(XrmGetResource);
     MAP(XrmQGetSearchList);

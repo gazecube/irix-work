@@ -5,6 +5,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__GNUC__)
+static __thread int g_irix_mips_jit_thread_disabled;
+#else
+static _Thread_local int g_irix_mips_jit_thread_disabled;
+#endif
+
+int irix_mips_jit_set_thread_disabled(int disabled)
+{
+    int previous = g_irix_mips_jit_thread_disabled;
+    g_irix_mips_jit_thread_disabled = disabled != 0;
+    return previous;
+}
+
 #ifdef IRIX_HAVE_UNICORN
 #include <unicorn/unicorn.h>
 
@@ -681,6 +694,8 @@ int irix_mips_jit_available(void)
 
 int irix_mips_jit_requested(void)
 {
+    if (g_irix_mips_jit_thread_disabled)
+        return 0;
     const char *v = getenv("IRIX_EXEC_BACKEND");
     if (v && *v) {
         if (!strcmp(v, "static") || !strcmp(v, "recomp") ||
@@ -1257,6 +1272,8 @@ int irix_mips_jit_available(void)
 
 int irix_mips_jit_requested(void)
 {
+    if (g_irix_mips_jit_thread_disabled)
+        return 0;
     const char *v = getenv("IRIX_EXEC_BACKEND");
     if (v && *v) {
         if (!strcmp(v, "static") || !strcmp(v, "recomp") ||

@@ -7,6 +7,13 @@
 #include "IrixX11BridgeExtraAccess.h"
 #include "IrixXrmQuarkBridge.h"
 
+/* Older native runners embed an earlier X11 bridge. Keep the shared runtime
+ * usable with them while individual runners are relinked and installed. */
+extern IrixGuestAddr irix_x11_primary_acquire_xt_gc(IrixGuestRuntime *,
+    IrixGuestAddr, uint32_t, uint32_t, IrixGuestAddr, int) __attribute__((weak));
+extern int irix_x11_primary_release_xt_gc(IrixGuestRuntime *, IrixGuestAddr)
+    __attribute__((weak));
+
 #include <errno.h>
 #include <elf.h>
 #include <stdio.h>
@@ -4985,9 +4992,9 @@ static int irix_native_xt_gc_alloc(IrixGuestRuntime *rt,
      * XtAllocateGC(widget, depth, value_mask, values,
      *              dynamic_mask, unused_mask)
      *
-     * The dynamic/unused masks control Xt's private cache behavior.  The
-     * direct compatibility path deliberately does not cache, so only the
-     * actual XGCValues mask is relevant to XCreateGC.
+     * XtGetGC shares immutable resources by their selected values. Keep
+     * XtAllocateGC resources separate because their owner may change the
+     * dynamic fields. Both are released through the paired native path.
      */
     if (allocate_form) {
         mask = (uint32_t)cpu->gpr[6];
@@ -4997,7 +5004,11 @@ static int irix_native_xt_gc_alloc(IrixGuestRuntime *rt,
         values = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
     }
 
-    gc = irix_x11_primary_create_gc(rt, display, drawable, mask, values);
+    if (irix_x11_primary_acquire_xt_gc)
+        gc = irix_x11_primary_acquire_xt_gc(
+            rt, display, drawable, mask, values, !allocate_form);
+    else
+        gc = irix_x11_primary_create_gc(rt, display, drawable, mask, values);
     
 
     cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)gc;
@@ -5783,7 +5794,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     
 
     /*
-     * Stability-first Xt GC cache bypass.
+     * Native Xt GC ownership for the static hybrid path.
      *
      * SGI Xt's private GC-cache list is corrupted in the hybrid runtime
      * before first desktop realization.  This host Xlib bridge is only valid
@@ -5801,6 +5812,16 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         strcmp(getenv("IRIX_EXEC_BACKEND"), "static") == 0) { /* XtAllocateGC */
         
         return irix_native_xt_gc_alloc(rt, cpu, 1);
+    }
+
+    if (address == 0x0f61e158u &&
+        getenv("IRIX_EXEC_BACKEND") &&
+        strcmp(getenv("IRIX_EXEC_BACKEND"), "static") == 0 &&
+        irix_x11_primary_release_xt_gc &&
+        irix_x11_primary_release_xt_gc(rt, (uint32_t)cpu->gpr[5])) {
+        cpu->gpr[2] = 0u;
+        cpu->gpr[0] = 0u;
+        return 0;
     }
 
     /*
@@ -5826,7 +5847,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * initialization, then keep the later ObjectClassExtension lookup guarded
      * as well.
      */
-    if (entry && entry->name &&
+    if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        entry && entry->name &&
         strcmp(entry->name, "XtInitializeWidgetClass") == 0) {
         IrixGuestAddr init_cls =
             (IrixGuestAddr)(uint32_t)cpu->gpr[4];
@@ -5933,7 +5955,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
          * XtInitializeWidgetClass.  Keep the original SGI Object initialize
          * wrapper alive for CallInitialize in that case as well.
          */
-        (void)irix_guest_restore_sg_motif_root_wrappers(rt, create_cls);
+        if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI))
+            (void)irix_guest_restore_sg_motif_root_wrappers(rt, create_cls);
         irix_guest_repair_motif_accepts_objects(
             rt, (IrixGuestAddr)(uint32_t)cpu->gpr[6]);
     }
@@ -5964,7 +5987,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * never bypass a legitimate InitializePrehook: it owns Motif secondary
      * object/cache setup that later InitializePosthook code must finalize.
      */
-    if (address == 0x501c00d4u) {
+    if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        address == 0x501c00d4u) {
         IrixGuestAddr a0 =
             (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         IrixGuestAddr a1 =
@@ -6275,6 +6299,24 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             ((d - 0x72400000u) & 0xfffu) == 0u &&
             irix_guest_ptr(rt, d, 176u);
 
+        if (getenv("IRIX_HOST_ABI_DEBUG_PER_DISPLAY")) {
+            static unsigned debug_count;
+            if (debug_count++ < 512u) {
+                IrixGuestAddr original_head =
+                    irix_guest_read32be(rt, 0x0f698b60u);
+                IrixGuestAddr original_first = original_head
+                    ? irix_guest_read32be(rt, original_head) : 0u;
+                IrixGuestAddr translated_head =
+                    irix_guest_read32be(rt, 0x50010fb0u);
+                IrixGuestAddr translated_first = translated_head
+                    ? irix_guest_read32be(rt, translated_head) : 0u;
+                fprintf(stderr,
+                    "IRIX Xt per-display trace: address=%08x arg=%08x valid=%d original=%08x/%08x translated=%08x/%08x\n",
+                    address, d, valid_display, original_head, original_first,
+                    translated_head, translated_first);
+            }
+        }
+
         if (valid_display) {
             last_xt_display = d;
         } else if (last_xt_display &&
@@ -6351,7 +6393,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * only the registrar's process-global Xt converter-table side effects are
      * wanted here.
      */
-    if (!motif_converters_forced && entry && entry->name &&
+    if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        !motif_converters_forced && entry && entry->name &&
         strcmp(entry->name, "_XtConvert") == 0 &&
         irix_guest_ptr(rt, 0x0b2b766cu, 4u)) {
         IrixGuestCpu saved_cpu = *cpu;
@@ -6390,7 +6433,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * coherent Xt/Motif/application state universe while retaining native
      * bridge entries and translated-only helpers.
      */
-    if (entry && entry->name &&
+    if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        entry && entry->name &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
         address >= 0x50000000u &&
         getenv("IRIX_EXEC_BACKEND") &&
@@ -6438,7 +6482,60 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
      * Once the desktop is reliably usable, individual libraries/functions can
      * be moved back to generated C with regression tests around each boundary.
      */
-    if (entry && entry->name &&
+    /*
+     * Native host-ABI clients use the translated Xt/Motif state universe.
+     * Calls made through an original DSO's function pointer can otherwise
+     * re-enter the mapped MIPS copy even though the public entry point came
+     * from the translated archive.  Resolve those calls back to the matching
+     * translated entry so the host bridge context never splits Xt globals
+     * across the original and synthetic images.  The desktop runner retains
+     * its separate original-MIPS stability policy below.
+     */
+    if ((rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        entry && entry->name &&
+        !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
+        address < 0x20000000u &&
+        (!strncmp(entry->name, "Xt", 2) ||
+         !strncmp(entry->name, "_Xt", 3) ||
+         !strncmp(entry->name, "Xm", 2) ||
+         !strncmp(entry->name, "_Xm", 3))) {
+        size_t xi;
+        for (xi = 0; xi < rt->function_count; ++xi) {
+            IrixGuestFunctionEntry *xe = &rt->functions[xi];
+            uint64_t saved_gp;
+            IrixGuestAddr target_gp;
+            int rc;
+
+            if (xe == entry || !xe->name ||
+                strcmp(xe->name, entry->name) != 0 ||
+                xe->address < 0x50000000u ||
+                (xe->flags & (IRIX_GUEST_FUNCTION_NATIVE |
+                              IRIX_GUEST_FUNCTION_INTERIOR)))
+                continue;
+
+            if (getenv("IRIX_HOST_ABI_DEBUG_PER_DISPLAY")) {
+                static unsigned redirect_count;
+                if (redirect_count++ < 64u)
+                    fprintf(stderr,
+                        "IRIX host ABI Xt/Xm redirect: %s %08x -> %08x\n",
+                        entry->name, address, xe->address);
+            }
+            saved_gp = cpu->gpr[28];
+            target_gp = irix_guest_gp_for_address(xe->address);
+            if (target_gp)
+                cpu->gpr[28] =
+                    (uint64_t)(int64_t)(int32_t)target_gp;
+            cpu->gpr[25] =
+                (uint64_t)(int64_t)(int32_t)xe->address;
+            rc = irix_guest_call(rt, cpu, xe->address);
+            if (!rt->trapped)
+                cpu->gpr[28] = saved_gp;
+            return rc;
+        }
+    }
+
+    if (!(rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) &&
+        entry && entry->name &&
         !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE) &&
         (!strncmp(entry->name, "Xt", 2) ||
          !strncmp(entry->name, "_Xt", 3) ||
@@ -7107,6 +7204,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
 
+    if (getenv("IRIX_HOST_ABI_DEBUG_PER_DISPLAY") &&
+        address >= 0x0f600000u && address < 0x0f6a0000u) {
+        static unsigned xt_dso_call_count;
+        if (xt_dso_call_count++ < 512u)
+            fprintf(stderr,
+                "IRIX host ABI Xt DSO call: target=%08x caller=%08x entry=%s flags=%x ra=%08x\n",
+                address, caller,
+                entry && entry->name ? entry->name : "<interior>",
+                entry ? entry->flags : 0u, (uint32_t)cpu->gpr[31]);
+    }
+
     static int trace_fprintf = -1;
     if (trace_fprintf < 0)
         trace_fprintf = getenv("IRIX_TRACE_FPRINTF") != 0;
@@ -7133,6 +7241,17 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         IrixGuestAddr fmt2 = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         const char *f = irix_guest_ptr(rt, fmt, 8u) ? irix_guest_cstr(rt, fmt, 128u) : 0;
         const char *f2 = irix_guest_ptr(rt, fmt2, 8u) ? irix_guest_cstr(rt, fmt2, 128u) : 0;
+        if (f && strcmp(f, "%sError: %s") == 0) {
+            IrixGuestAddr prefix_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+            IrixGuestAddr message_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[7];
+            const char *prefix = irix_guest_ptr(rt, prefix_addr, 1u)
+                ? irix_guest_cstr(rt, prefix_addr, 256u) : NULL;
+            const char *message = irix_guest_ptr(rt, message_addr, 1u)
+                ? irix_guest_cstr(rt, message_addr, 512u) : NULL;
+            fprintf(stderr, "IRIX formatted error: prefix=[%s] message=[%s]\n",
+                    prefix ? prefix : "<invalid>",
+                    message ? message : "<invalid>");
+        }
         if ((f && strstr(f, "[ %s%s =")) || (f2 && strstr(f2, "[ %s%s ="))) {
             uint32_t sp = (uint32_t)cpu->gpr[29];
             {

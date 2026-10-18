@@ -7,7 +7,7 @@ from extract_ar import members
 SHT_PROGBITS=1; SHT_SYMTAB=2; SHT_RELA=4; SHT_NOBITS=8; SHT_REL=9
 SHF_ALLOC=2; SHN_UNDEF=0; SHN_ABS=0xfff1; SHN_COMMON=0xfff2
 STB_LOCAL=0; STB_GLOBAL=1; STB_WEAK=2; STT_OBJECT=1; STT_FUNC=2; STT_SECTION=3
-R_MIPS_32=2; R_MIPS_26=4; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11
+R_MIPS_32=2; R_MIPS_26=4; R_MIPS_HI16=5; R_MIPS_LO16=6; R_MIPS_GPREL16=7; R_MIPS_CALL16=11; R_MIPS_GPREL32=12
 R_MIPS_GOT_DISP=19; R_MIPS_GOT_PAGE=20; R_MIPS_GOT_OFST=21; R_MIPS_SUB=24; R_MIPS_SCN_DISP=32; R_MIPS_JALR=37
 SMALL={'.srdata','.sdata','.sbss','.lit4','.lit8'}
 
@@ -234,6 +234,8 @@ class StackLink:
     if sym['bind']==STB_LOCAL and sym['type']==STT_SECTION: v=A+S+o.gp0-self.gp
     else: v=A+S-self.gp
     self.check16(v,'GPREL16 '+(sym['name'] or '<section>')); p16(b,ro+2,v)
+   elif typ==R_MIPS_GPREL32:
+    p32(b,ro,S+word-self.gp)
    else: raise ValueError(f'unsupported runtime REL type {typ} {o.name}:{ts["name"]}+{ro:#x}')
    count+=1
   if pending_hi:
@@ -263,6 +265,10 @@ class StackLink:
     page=(S+A+0x8000)&~0xffff; G=self.gotaddr(('page',page),page); d=self.check16(G-self.gp,'GOT_PAGE '+sym['name']); p16(b,ro+2,d)
    elif typ==R_MIPS_GOT_OFST:
     page=(S+A+0x8000)&~0xffff; p16(b,ro+2,S+A-page)
+   elif typ==R_MIPS_CALL16:
+    G=self.gotaddr(('sym',sym['name'],S),S); d=self.check16(G+A-self.gp,'CALL16 '+sym['name']); p16(b,ro+2,d)
+   elif typ==R_MIPS_GPREL32:
+    p32(b,ro,S+A-self.gp)
    elif typ==R_MIPS_32:
     p32(b,ro,S+A)
    elif typ==R_MIPS_26:

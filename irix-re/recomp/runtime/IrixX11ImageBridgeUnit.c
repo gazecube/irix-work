@@ -235,3 +235,17 @@ IrixGuestFunction irix_x11_image_bridge_lookup(const char *name)
 #undef MAP
     return irix_x11_image_bridge_lookup_base(name);
 }
+
+/* Shared with native host-ABI callbacks; keep the N32 event layout in one place. */
+int irix_x11_image_read_n32_event(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                 Display *display, XEvent *event)
+{
+    return read_n32_event(rt, address, display, event);
+}
+
+int irix_x11_image_write_n32_event(IrixGuestRuntime *rt, IrixGuestAddr address,
+                                  IrixGuestAddr guest_display,
+                                  const XEvent *event)
+{
+    return write_n32_event(rt, address, guest_display, event);
+}

@@ -1055,6 +1055,29 @@ static void bridge_exit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     uint32_t status = (uint32_t)cpu->gpr[4] & 0xffu;
 
+    if ((rt->runtime_flags & IRIX_GUEST_RUNTIME_HOST_ABI) && status) {
+        uint32_t addr[3] = {
+            (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6],
+            (uint32_t)cpu->gpr[7]
+        };
+        unsigned i;
+        fprintf(stderr, "libirixhostabi: guest exit(%u) from pc=%08x ra=%08x",
+                status, rt->current_pc, (uint32_t)cpu->gpr[31]);
+        for (i = 0; i < 3; ++i) {
+            char text[160];
+            unsigned j;
+            fprintf(stderr, " a%u=%08x", i + 1u, addr[i]);
+            if (!addr[i] || !irix_guest_ptr(rt, addr[i], 1u)) continue;
+            for (j = 0; j + 1u < sizeof(text); ++j) {
+                text[j] = (char)irix_guest_read8(rt, addr[i] + j);
+                if (!text[j]) break;
+            }
+            text[j] = '\0';
+            fprintf(stderr, " [%s]", text);
+        }
+        fputc('\n', stderr);
+    }
+
     /* Match the SYS_exit path so AppRunner reports the guest exit cleanly. */
     cpu->gpr[2] = status;
     cpu->gpr[7] = 0;

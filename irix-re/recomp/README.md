@@ -31,7 +31,61 @@ python3 tools/build_core_stack.py /path/to/irix-development-tree \
 It expects the N32 development archives at their normal IRIX locations:
 `usr/lib32/libXt.a` and `usr/Motif-1.2/lib32/{libXm,libSgm,libvk,libMrm,libUil}.a`.
 It generates relocated C, compiles it with `-Wall -Wextra -Werror`, and writes
-`libirix_recompiled_stack.a`.
+`libirix_recompiled_stack.a` plus library-shaped ELF shared objects:
+`libXt.so`, `libXm.so`, `libSgm.so`, `libvk.so`, `libMrm.so`, and `libUil.so`.
+The shared objects are built from the same cached PIC objects as the archive,
+so the split adds link steps without translating and compiling the source a
+second time. They preserve the IRIX library boundaries, but their translated
+entry points are exported under their original global IRIX function names so
+native linkers can resolve them. This is a temporary link-only alias layer:
+the functions still use the recomp runtime's guest-CPU calling convention,
+and translated global data is not exposed as host data. They are not yet
+callable drop-in host-ABI replacements for native Xt/Motif libraries. This
+describes the legacy generated-core outputs; the native32 outputs omit those
+unsafe aliases and need real host-C-ABI entry points in each owning DSO.
+See [HOST_ABI_BRIDGE.md](HOST_ABI_BRIDGE.md) for the verified ABI boundary and
+the staged work required to turn these aliases into native-callable wrappers.
+
+For a separate i386 build, configure with a 32-bit toolchain and
+`-DIRIX_BUILD_NATIVE32_CORE=ON`, then build `irix_native32_recompiled_core`.
+This writes to `generated-core-native32/` and explicitly compiles and links
+with `-m32`; the normal generated core and existing runners are left alone.
+MIPS instructions are lowered ahead of time into x86 C and compiled to i386,
+and unsupported control-flow fallbacks trap rather than invoking the MIPS
+interpreter. This is a static-execution milestone, not yet a host-ABI Xt or
+Motif implementation: translated functions still use guest CPU/memory helpers
+and `libirixre` for IRIX address-space semantics. Host pointer, structure,
+byte-order, and callback conversion remains required before native
+applications can call the API safely. The native32 DSOs intentionally do not
+export translated API names as link-only aliases. They now contain host-C-ABI
+entry points: Xt wrappers and shared state are in `libXt.so`, while `libXm.so`
+exports Motif entry points through i386 GOT-based tail thunks to the shared
+context owned by `libXt.so`; there is no separate ABI-context DSO. The Motif
+factory wrappers now cover the common arrow, cascade, drawn, file-selection,
+form, frame, label, message, option, prompt, push, question, radio, row-column,
+scale, scrolled, separator, and toggle constructors. A native 32-bit
+shell/label client links directly to these DSOs and successfully creates,
+realizes, and destroys its widgets. A relink of Netscape's existing i386 XFE
+objects with no `libirixhostabi` dependency currently stops at 110 unresolved
+Motif imports; that link experiment is the active API-coverage checklist, not a
+successful browser build. This wrapper path still uses `libirixre`
+to marshal calls into the translated core, and Xt translation-table operations
+currently take a MIPS compatibility fallback, so this is not yet fully
+runtime-free execution. The build check guarantees generated functions contain
+no direct interpreter-call relocation; it does not remove runtime dispatch or
+those explicitly retained compatibility paths.
+
+The same option also builds `irix_native32_instruction_probe`: a fail-closed
+MIPS-to-i386 assembly emitter for `ADDU`, `SUBU`, `ADDIU`, `LUI`, `ORI`, `LW`,
+`SW`, `LBU`, `SB`, `BEQ`, `BNE`, `JR $ra`, and `NOP`. Its 32-bit executable
+checks arithmetic, N32 sign extension, guest big-endian word loads/stores,
+byte accesses, both outcomes of `BEQ` and `BNE`, and execution of each branch's
+delay slot on either outcome. This is an instruction-level backend proof, not
+yet a translator for the full library corpus. Unsupported opcodes are rejected
+by the emitter rather than routed to runtime decoding.
+See [N32_TO_I386_LOWERING.md](N32_TO_I386_LOWERING.md) for the architecture
+mapping, the distinction between semantic C lowering and the assembly probe,
+and the corpus-coverage check performed by the native32 build.
 
 The 6.5 desktop side is generated separately from `/usr/sbin/desktop` plus the
 N32 internal IMD libraries (`libimdApp`, `libimdUtil`, `libimdXutil`,

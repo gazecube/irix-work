@@ -18,3 +18,39 @@
 - Netscape session management: flag enabled in the launcher only; not verified end to end.
 - Runners other than fm, toolchest, iconcatalog, guest-exec still have the old allocator/realpath code; full rebuild + install-native.sh --apply + relog.
 - desktop-integration/icons/generic.exec.closed.svg was edited in Inkscape (uncommitted).
+
+
+## fm graphics-resource fix (2026-10-16, Codex)
+- Reproduced folder-opening failures on a private Xvfb display with a temporary HOME.
+  The first failure was the native static-path XtGetGC replacement filling the
+  X11 bridge's 1024-slot GC table. It allocated one GC per request, but original
+  XtReleaseGC did not own those allocations. A failed GC request then unwound
+  widget creation; outer import wrappers sometimes continued with NULL/partial
+  objects, explaining the later NULL-parent errors and path text in pointer fields.
+- Added native Xt GC ownership: share immutable XtGetGC requests by display/root,
+  mask and selected values; keep XtAllocateGC allocations separate; reference-count
+  releases through the matching static-path XtReleaseGC hook; recycle released
+  handle slots. Failed primary GC registration also frees its host GC.
+- New shared-runtime interfaces are weak/optional, so older statically linked X11
+  bridges retain their prior path until their runners are relinked. No allocator,
+  translator, JIT, or interpreted-path changes are included.
+- Added IrixXtGcLifetimeTest: 4097 simultaneous identical acquisitions, selected
+  versus unselected value matching, distinct mutable allocations, last-reference
+  release, 4096 allocation/release cycles, ordinary Xlib ownership, and the actual
+  recomp GetGC/ReleaseGC dispatcher hooks. This and five existing runtime tests pass.
+- Candidate native fm completed 40 folder open/close cycles and opened a temporary
+  dumpster directory. Updated fmprefs/iconcatalog/toolchest launched; an unchanged
+  older fmprefs runner also launched with the updated shared runtime.
+- Rebuilt build-irix-re runtime and X11 bridge, then relinked the normal root/usr/sbin/fm
+  using its CMake-generated link command. Existing libirixcore.so was preserved;
+  the GC fix does not require regenerating the translated core.
+- Final normal build-tree fm passed another 12 open/close checks, including the
+  temporary dumpster directory, with an empty error log.
+- install-native.sh dry run identifies /usr/bin/fm for update. It also reports an
+  existing font update and Netscape symlink conflict; no install was applied.
+- Separate limits observed: keeping about two dozen distinct folder windows open
+  exhausted the existing 65536 allocation-record table at ~4.35 MiB guest heap
+  consumption (heap budget 64 MiB). The record table itself is 1.25 MiB. This is an
+  explicit compatibility-allocator cap, not an N32 ABI/16-bit counter limit.
+  A FAM responsiveness warning appeared during the sustained multi-app test;
+  this change does not modify FAM.

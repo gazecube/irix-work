@@ -231,6 +231,12 @@ static void bridge_fprintf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     IrixGuestAddr stream = (uint32_t)cpu->gpr[4];
     n = format_guest(rt, cpu, (uint32_t)cpu->gpr[5], 6u,
                      (uint32_t)cpu->gpr[29], buf, sizeof(buf));
+    if (n >= 0 && getenv("IRIX_TRACE_FPRINTF")) {
+        const char *format = irix_guest_cstr(
+            rt, (IrixGuestAddr)(uint32_t)cpu->gpr[5], 128u);
+        if (format && strstr(format, "%sError: %s"))
+            fprintf(stderr, "IRIX guest fprintf: %s", buf);
+    }
     if (n >= 0)
         (void)irix_stdio_write_stream(rt, stream, buf, strlen(buf));
     cpu->gpr[2] = (uint64_t)(int64_t)n;

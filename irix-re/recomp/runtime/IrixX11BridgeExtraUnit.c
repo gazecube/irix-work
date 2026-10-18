@@ -101,6 +101,25 @@ Display *irix_x11_primary_display_from_guest(IrixGuestAddr addr)
     return display_from_guest(addr);
 }
 
+Screen *irix_x11_primary_screen_from_guest(IrixGuestAddr display_addr,
+                                           IrixGuestAddr screen_addr)
+{
+    Display *display = display_from_guest(display_addr);
+    IrixGuestAddr screens;
+    uint32_t count, index;
+    if (!display || !g_x11.rt || !display_addr || !screen_addr)
+        return NULL;
+    count = irix_guest_read32be(g_x11.rt, display_addr + 136u);
+    screens = irix_guest_read32be(g_x11.rt, display_addr + 140u);
+    if (g_x11.rt->trapped || screen_addr < screens ||
+        (screen_addr - screens) % 80u != 0u)
+        return NULL;
+    index = (screen_addr - screens) / 80u;
+    if (index >= count || index >= (uint32_t)ScreenCount(display))
+        return NULL;
+    return ScreenOfDisplay(display, (int)index);
+}
+
 GC irix_x11_primary_gc_from_guest(IrixGuestAddr addr)
 {
     return gc_from_guest(addr);

@@ -66,9 +66,34 @@ def main():
                     help='native libirixre shared runtime to link generated DSOs against')
     ap.add_argument('-j', '--jobs', type=int, default=max(1, os.cpu_count() or 1))
     ap.add_argument('--generate-only', action='store_true')
+    ap.add_argument('--native-32', action='store_true',
+                    help='compile a distinct i386 static-recompilation output with -m32')
+    ap.add_argument('--no-interpreter-fallback', action='store_true',
+                    help='trap on unsupported control flow instead of invoking the MIPS interpreter')
     ap.add_argument('--skip-shared', action='store_true',
                     help='stop after building the monolithic translated core archive')
+    ap.add_argument('--host-wrapper', action='append', default=[],
+                    metavar='LIB=SOURCE',
+                    help='compile a host-C-ABI wrapper source into its owning DSO')
+    ap.add_argument('--host-wrapper-cflag', action='append', default=[],
+                    help='extra compiler argument for host wrapper units')
+    ap.add_argument('--host-wrapper-link-arg', action='append', default=[],
+                    metavar='LIB=ARG',
+                    help='extra linker argument for one wrapper-bearing DSO')
     a = ap.parse_args()
+
+    host_wrappers = {label: [] for label, _ in LIBS}
+    host_wrapper_link_args = {label: [] for label, _ in LIBS}
+    for spec in a.host_wrapper:
+        label, sep, source = spec.partition('=')
+        if not sep or label not in host_wrappers or not source:
+            raise SystemExit(f'invalid --host-wrapper {spec!r}; expected LIB=SOURCE')
+        host_wrappers[label].append(Path(source).resolve())
+    for spec in a.host_wrapper_link_arg:
+        label, sep, argument = spec.partition('=')
+        if not sep or label not in host_wrapper_link_args or not argument:
+            raise SystemExit(f'invalid --host-wrapper-link-arg {spec!r}; expected LIB=ARG')
+        host_wrapper_link_args[label].append(argument)
 
     here = Path(__file__).resolve().parent
     root = a.development_tree.resolve()
@@ -90,6 +115,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     print(f'core archives: primary={len(archives)} support_candidates={len(support_archives)}', flush=True)
     cmd = [sys.executable, here / 'recomp_linked_stack.py', *archives]
+    if a.no_interpreter_fallback:
+        cmd += ['--no-interpreter-fallback']
     for p in support_archives:
         cmd += ['--support-archive', p]
     cmd += ['-o', gen]
@@ -112,7 +139,7 @@ def main():
     sources.append(gen / 'registry.c')
     inc = here.parent / 'runtime'
     header = inc / 'IrixGuest.h'
-    compile_flags = '-std=c11 -O0 -march=native -mtune=native -pipe -Wall -Wextra -Werror -fPIC\n'
+    compile_flags = '-std=c11 -O0 -march=native -mtune=native -pipe -Wall -Wextra -Werror -fPIC' + (' -m32' if a.native_32 else '') + '\n'
     flags_stamp = out / 'compile_flags.txt'
     if not flags_stamp.is_file() or flags_stamp.read_text() != compile_flags:
         flags_stamp.write_text(compile_flags)
@@ -125,7 +152,10 @@ def main():
         dst = object_path(src, base)
         if dst.is_file() and dst.stat().st_mtime_ns >= max(src.stat().st_mtime_ns, header.stat().st_mtime_ns, flags_stamp.stat().st_mtime_ns):
             return src, dst, None
-        cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native', '-pipe', '-Wall', '-Wextra', '-Werror', '-fPIC',
+        cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native', '-pipe', '-Wall', '-Wextra', '-Werror', '-fPIC']
+        if a.native_32:
+            cmd.append('-m32')
+        cmd += [
                '-I', str(inc), '-c', str(src), '-o', str(dst)]
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         return src, dst, p
@@ -150,9 +180,63 @@ def main():
             if i % 10 == 0 or i == len(futures):
                 print(f'processed {i}/{len(futures)} rebuilt={rebuilt} reused={reused}', flush=True)
 
+    host_wrapper_objects = {label: [] for label, _ in LIBS}
+    for label, wrapper_sources in host_wrappers.items():
+        for index, src in enumerate(wrapper_sources):
+            if not src.is_file():
+                raise SystemExit(f'missing {label} host wrapper source: {src}')
+            dst = shared_obj / 'host-wrappers' / label / f'{index:04d}_{src.stem}.o'
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            wrapper_flags_stamp = dst.parent / 'compile_flags.txt'
+            wrapper_flags = '\n'.join([a.cc, compile_flags,
+                                        *a.host_wrapper_cflag]) + '\n'
+            if (not wrapper_flags_stamp.is_file() or
+                    wrapper_flags_stamp.read_text() != wrapper_flags):
+                wrapper_flags_stamp.write_text(wrapper_flags)
+            wrapper_dependencies = [src, header, flags_stamp,
+                                    wrapper_flags_stamp]
+            wrapper_dependencies.extend(src.parent.glob('IrixHostAbi*.inc'))
+            newest_input = max(path.stat().st_mtime_ns
+                               for path in wrapper_dependencies)
+            if not dst.is_file() or dst.stat().st_mtime_ns < newest_input:
+                cmd = [a.cc, '-std=c11', '-O0', '-march=native', '-mtune=native',
+                       '-pipe', '-Wall', '-Wextra', '-Werror', '-fPIC']
+                if a.native_32:
+                    cmd.append('-m32')
+                cmd += a.host_wrapper_cflag
+                cmd += ['-I', str(inc), '-c', str(src), '-o', str(dst)]
+                run(cmd)
+            host_wrapper_objects[label].append(dst)
+
     runtime_lib = a.runtime_lib.resolve() if a.runtime_lib else None
     if runtime_lib is not None and not runtime_lib.is_file():
         raise SystemExit(f'missing shared recomp runtime: {runtime_lib}')
+    global_symbols = json.loads((gen / 'image' / 'link.json').read_text()).get('globals', {})
+    link_image = json.loads((gen / 'image' / 'link.json').read_text())
+
+    # The host-ABI bridge needs the same synthetic import slots as the normal
+    # runners, but must not depend on an app-specific generated bundle.
+    host_imports = out / 'host_imports.c'
+    import_rows = sorted(link_image.get('imports', {}).items(), key=lambda item: item[1])
+    host_import_text = [
+        '#include "IrixGuest.h"\n',
+        '#include <stdio.h>\n',
+        'typedef IrixGuestFunction (*IrixHostImportResolver)(const char *);\n',
+        'static void host_missing_import(IrixGuestRuntime *rt, IrixGuestCpu *cpu) {\n',
+        '  IrixGuestFunctionEntry *e = irix_guest_find_function(rt, cpu->pc);\n',
+        '  fprintf(stderr, "MISSING HOST ABI CORE IMPORT pc=0x%08x %s\\n", cpu->pc, e && e->name ? e->name : "?");\n',
+        '  irix_guest_trap(rt, cpu, 0xeeee1003u);\n',
+        '}\n',
+        'void irix_host_abi_register_core_imports(IrixGuestRuntime *rt, IrixHostImportResolver resolver) {\n',
+        '  IrixGuestFunction fn;\n',
+    ]
+    for name, address in import_rows:
+        host_import_text.append(
+            f'  fn = resolver ? resolver({json.dumps(name)}) : 0; '
+            f'irix_guest_register_function(rt, 0x{address:08x}u, '
+            f'fn ? fn : host_missing_import, {json.dumps(name)});\n')
+    host_import_text.append('}\n')
+    write_if_changed(host_imports, ''.join(host_import_text))
 
     # Keep the monolithic archive as a bootstrap/debug artifact for the current
     # runners. The canonical library-shaped outputs below are PIC ELF DSOs.
@@ -212,9 +296,29 @@ def main():
             raise SystemExit(f'compile failed: {reg_src}')
 
         dso = out / f'lib{label}.so'
-        dso_objects = [source_objects[src] for src in unique_sources] + [reg_obj]
-        link_cmd = [a.cc, '-shared', f'-Wl,-soname,lib{label}.so',
+        dso_objects = ([source_objects[src] for src in unique_sources] +
+                       [reg_obj] + host_wrapper_objects[label])
+        link_cmd = [a.cc]
+        if a.native_32:
+            link_cmd.append('-m32')
+        link_cmd += ['-shared', f'-Wl,-soname,lib{label}.so',
                     '-Wl,-z,defs', '-o', dso, *dso_objects]
+        # The older generated core retains its historical link-only aliases.
+        # Native32 must fail closed here: exporting these names with the
+        # internal (runtime, cpu) signature makes a host linker accept calls
+        # that will corrupt the caller at runtime. Native32 API names will be
+        # exported by real host-C-ABI thunks compiled into their owning DSO.
+        aliases = {}
+        if not a.native_32:
+            for row in rows:
+                name = row['name']
+                if (global_symbols.get(name) == row['address'] and
+                        re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name)):
+                    aliases[name] = row['c_name']
+        link_cmd.extend(f'-Wl,--defsym,{name}={target}'
+                        for name, target in sorted(aliases.items()))
+        if host_wrapper_objects[label]:
+            link_cmd += host_wrapper_link_args[label]
         if runtime_lib is not None:
             # Use the exact build-tree runtime and record a stable DT_NEEDED
             # identity (libirixre.so.1), not an accidental executable export.
@@ -222,6 +326,7 @@ def main():
         link_cmd += ['-lm']
         run(link_cmd)
         shared_outputs.append(dso)
+        print(f'lib{label}.so: exported {len(aliases)} original IRIX function names')
 
     print(f'archive rebuilt from PIC objects: rebuilt={rebuilt} reused={reused}')
     print(lib)

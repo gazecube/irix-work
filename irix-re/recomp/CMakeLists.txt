@@ -1,10 +1,13 @@
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(UNICORN QUIET IMPORTED_TARGET unicorn)
-endif()
-if(NOT TARGET PkgConfig::UNICORN)
-    find_path(UNICORN_INCLUDE_DIR NAMES unicorn/unicorn.h)
-    find_library(UNICORN_LIBRARY NAMES unicorn)
+option(IRIX_ENABLE_UNICORN "Enable the optional Unicorn MIPS JIT backend" ON)
+if(IRIX_ENABLE_UNICORN)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(UNICORN QUIET IMPORTED_TARGET unicorn)
+    endif()
+    if(NOT TARGET PkgConfig::UNICORN)
+        find_path(UNICORN_INCLUDE_DIR NAMES unicorn/unicorn.h)
+        find_library(UNICORN_LIBRARY NAMES unicorn)
+    endif()
 endif()
 
 add_library(irix_recomp_runtime SHARED
@@ -12,6 +15,7 @@ add_library(irix_recomp_runtime SHARED
     runtime/IrixPath.c
     runtime/IrixMipsInterp.c
     runtime/IrixMipsJit.c
+    runtime/IrixN32Abi.c
     runtime/IrixCompat.c
     runtime/IrixKernelInfo.c
     runtime/IrixElf.c
@@ -23,7 +27,9 @@ target_include_directories(irix_recomp_runtime PUBLIC
 
 target_link_libraries(irix_recomp_runtime PRIVATE m)
 
-if(TARGET PkgConfig::UNICORN)
+if(NOT IRIX_ENABLE_UNICORN)
+    message(STATUS "IRIX MIPS JIT: disabled by IRIX_ENABLE_UNICORN")
+elseif(TARGET PkgConfig::UNICORN)
     message(STATUS "IRIX MIPS JIT: using Unicorn via pkg-config")
     target_compile_definitions(irix_recomp_runtime PRIVATE IRIX_HAVE_UNICORN=1 IRIX_DEFAULT_JIT=1)
     target_link_libraries(irix_recomp_runtime PRIVATE PkgConfig::UNICORN)
@@ -45,6 +51,13 @@ set_target_properties(irix_recomp_runtime PROPERTIES
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME irix_native32_lowering_test
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native32_lowering.py")
+    endif()
+
     add_executable(irix_guest_path_test
         tests/IrixGuestPathTest.c
         runtime/IrixPath.c
@@ -77,6 +90,28 @@ if(BUILD_TESTING)
         m
     )
     add_test(NAME irix_guest_memory_io_test COMMAND irix_guest_memory_io_test)
+
+    add_executable(irix_n32_abi_arguments_test tests/IrixN32AbiArgumentsTest.c)
+    target_link_libraries(irix_n32_abi_arguments_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        m
+    )
+    add_test(NAME irix_n32_abi_arguments_test COMMAND irix_n32_abi_arguments_test)
+
+    add_executable(irix_xt_gc_lifetime_test tests/IrixXtGcLifetimeTest.c)
+    target_link_libraries(irix_xt_gc_lifetime_test PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime X11::X11 m)
+    add_test(NAME irix_xt_gc_lifetime_test COMMAND irix_xt_gc_lifetime_test)
+    set_tests_properties(irix_xt_gc_lifetime_test PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(irix_mips_call_boundary_test tests/IrixMipsCallBoundaryTest.c)
     target_link_libraries(irix_mips_call_boundary_test PRIVATE
@@ -150,15 +185,32 @@ set_target_properties(irix_recomp_libc_bridge PROPERTIES
 
 find_package(X11)
 find_path(XPM_INCLUDE_DIR X11/xpm.h)
-find_library(XPM_LIBRARY NAMES Xpm)
+# Resolve host-side GUI libraries for the selected host pointer width. The
+# translated guest libraries are always N32, but native clients may be 32-bit.
+if(CMAKE_C_SIZEOF_DATA_PTR EQUAL 4)
+    set(IRIX_HOST_GUI_LIBRARY_DIRS
+        /usr/lib32
+        /usr/lib/i386-linux-gnu
+        /lib32
+        /usr/lib
+    )
+else()
+    set(IRIX_HOST_GUI_LIBRARY_DIRS
+        /usr/lib64
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib
+    )
+endif()
+unset(XPM_LIBRARY CACHE)
+find_library(XPM_LIBRARY NAMES Xpm
+    PATHS ${IRIX_HOST_GUI_LIBRARY_DIRS}
+    NO_DEFAULT_PATH
+)
 # The hybrid Xt bridge must use the host distro libXt; keep this lookup
 # deliberately rooted in /usr so a stale cached path cannot leak in.
 unset(IRIX_HOST_XT_LIBRARY CACHE)
 find_library(IRIX_HOST_XT_LIBRARY NAMES Xt
-    PATHS
-        /usr/lib
-        /usr/lib64
-        /usr/lib/x86_64-linux-gnu
+    PATHS ${IRIX_HOST_GUI_LIBRARY_DIRS}
     NO_DEFAULT_PATH
 )
 if(X11_FOUND)
@@ -222,11 +274,17 @@ endif()
 set(IRIX_DEV_TREE "" CACHE PATH "Path to an extracted IRIX development tree")
 set(IRIX_RUNTIME_TREE "" CACHE PATH "Path to an extracted IRIX runtime tree")
 set(IRIX_INTERNAL_TREE "" CACHE PATH "Path to a tree containing usr/lib32/internal")
+option(IRIX_BUILD_NATIVE32_CORE
+    "Build a separate i386 static-recompilation core with no interpreter fallback"
+    OFF)
+set(IRIX_NATIVE32_HOST_WRAPPERS "" CACHE STRING
+    "Semicolon-separated LIB=SOURCE host-ABI wrapper units linked into native32 IRIX DSOs")
 
 if(IRIX_DEV_TREE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     set(IRIX_RECOMP_CORE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-core")
     set(IRIX_RECOMP_CORE_LIB "${IRIX_RECOMP_CORE_DIR}/libirix_recompiled_stack.a")
+    set(IRIX_RECOMP_CORE_HOST_IMPORTS "${IRIX_RECOMP_CORE_DIR}/host_imports.c")
     set(IRIX_RECOMP_CORE_DSOS
         "${IRIX_RECOMP_CORE_DIR}/libXt.so"
         "${IRIX_RECOMP_CORE_DIR}/libXm.so"
@@ -237,7 +295,8 @@ if(IRIX_DEV_TREE)
     )
 
     add_custom_command(
-        OUTPUT "${IRIX_RECOMP_CORE_LIB}"
+        OUTPUT "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS}
+               "${IRIX_RECOMP_CORE_HOST_IMPORTS}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_RECOMP_CORE_DIR}"
         COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_core_stack.py"
@@ -245,7 +304,6 @@ if(IRIX_DEV_TREE)
                 -o "${IRIX_RECOMP_CORE_DIR}"
                 --cc "${CMAKE_C_COMPILER}"
                 --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
-                --skip-shared
         DEPENDS
             irix_recomp_runtime
             tools/build_core_stack.py
@@ -260,8 +318,148 @@ if(IRIX_DEV_TREE)
 
     # Static recompilation is opt-in. The JIT/original-binary bring-up
     # path must never trigger the expensive generated-core build implicitly.
+    # When requested, emit the IRIX library-shaped DSOs alongside the archive
+    # in the same translation/compile pass so all formats share cached objects.
     add_custom_target(irix_recompiled_core
-        DEPENDS "${IRIX_RECOMP_CORE_LIB}")
+        DEPENDS "${IRIX_RECOMP_CORE_LIB}" ${IRIX_RECOMP_CORE_DSOS})
+    add_custom_target(irix_recompiled_core_libraries
+        DEPENDS ${IRIX_RECOMP_CORE_DSOS})
+
+    # A separate i386 output for native 32-bit clients. The generated MIPS
+    # instructions are lowered before runtime; unsupported control-flow edges
+    # trap instead of entering the MIPS interpreter. Keep this opt-in and
+    # isolated from the existing runners and their generated artifacts.
+    if(IRIX_BUILD_NATIVE32_CORE)
+        # This project can have a 64-bit C++ compiler alongside a 32-bit C
+        # toolchain. The generated core and runtime use C, so validate that
+        # ABI width rather than CMake's project-wide (possibly C++) width.
+        if(NOT CMAKE_C_SIZEOF_DATA_PTR EQUAL 4)
+            message(FATAL_ERROR
+                "IRIX_BUILD_NATIVE32_CORE requires a 32-bit C toolchain (-m32)")
+        endif()
+        set(IRIX_NATIVE32_CORE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated-core-native32")
+        set(IRIX_NATIVE32_CORE_LIB "${IRIX_NATIVE32_CORE_DIR}/libirix_recompiled_stack.a")
+        set(IRIX_NATIVE32_CORE_DSOS)
+        foreach(_name Xt Xm Sgm vk Mrm Uil)
+            list(APPEND IRIX_NATIVE32_CORE_DSOS "${IRIX_NATIVE32_CORE_DIR}/lib${_name}.so")
+        endforeach()
+        set(IRIX_NATIVE32_HOST_WRAPPER_ARGS)
+        set(IRIX_NATIVE32_HOST_WRAPPER_SOURCES)
+        foreach(_wrapper IN LISTS IRIX_NATIVE32_HOST_WRAPPERS)
+            string(REGEX MATCH "^[^=]+=(.*)$" _wrapper_match "${_wrapper}")
+            if(NOT _wrapper_match OR NOT CMAKE_MATCH_1)
+                message(FATAL_ERROR
+                    "Invalid IRIX_NATIVE32_HOST_WRAPPERS entry '${_wrapper}'; expected LIB=/path/to/source.c")
+            endif()
+            list(APPEND IRIX_NATIVE32_HOST_WRAPPER_ARGS --host-wrapper "${_wrapper}")
+            list(APPEND IRIX_NATIVE32_HOST_WRAPPER_SOURCES "${CMAKE_MATCH_1}")
+        endforeach()
+        set(IRIX_NATIVE32_HOST_ABI_SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/runtime/IrixHostAbiContext.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/runtime/IrixNative32XmExports.c"
+            "${IRIX_NATIVE32_CORE_DIR}/host_imports.c")
+        set(IRIX_NATIVE32_HOST_ABI_ARGS
+            --host-wrapper "Xt=${CMAKE_CURRENT_SOURCE_DIR}/runtime/IrixHostAbiContext.c"
+            --host-wrapper "Xt=${IRIX_NATIVE32_CORE_DIR}/host_imports.c"
+            --host-wrapper "Xm=${CMAKE_CURRENT_SOURCE_DIR}/runtime/IrixNative32XmExports.c"
+            --host-wrapper-cflag=-DIRIX_NATIVE32_DSO_BUILD=1
+            --host-wrapper-cflag=-DIRIX_HAVE_FAST_QUARKS=1
+            --host-wrapper-cflag=-I${CMAKE_CURRENT_BINARY_DIR}/generated-ecosystem
+            --host-wrapper-cflag=-DIRIX_HOST_ABI_CORE_IMAGE_DIR=\"${IRIX_NATIVE32_CORE_DIR}/generated/image\"
+            --host-wrapper-cflag=-DIRIX_HOST_ABI_RUNTIME_TREE=\"${IRIX_RUNTIME_TREE}\"
+            --host-wrapper-link-arg=Xt=-Wl,--whole-archive
+            --host-wrapper-link-arg=Xt=$<TARGET_FILE:irix_recomp_libc_bridge>
+            --host-wrapper-link-arg=Xt=$<TARGET_FILE:irix_recomp_x11_bridge>
+            --host-wrapper-link-arg=Xt=-Wl,--no-whole-archive
+            --host-wrapper-link-arg=Xt=${IRIX_HOST_XT_LIBRARY}
+            --host-wrapper-link-arg=Xt=${X11_X11_LIB}
+            --host-wrapper-link-arg=Xt=${X11_Xext_LIB}
+            --host-wrapper-link-arg=Xt=${XPM_LIBRARY}
+            --host-wrapper-link-arg=Xt=-ldl
+            --host-wrapper-link-arg=Xt=-lpthread
+            --host-wrapper-link-arg=Xt=-lcrypt
+            --host-wrapper-link-arg=Xm=${IRIX_NATIVE32_CORE_DIR}/libXt.so
+        )
+        add_custom_command(
+            OUTPUT "${IRIX_NATIVE32_CORE_LIB}" ${IRIX_NATIVE32_CORE_DSOS}
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_NATIVE32_CORE_DIR}"
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_core_stack.py"
+                    "${IRIX_DEV_TREE}"
+                    -o "${IRIX_NATIVE32_CORE_DIR}"
+                    --cc "${CMAKE_C_COMPILER}"
+                    --runtime-lib "$<TARGET_FILE:irix_recomp_runtime>"
+                    --native-32
+                    --no-interpreter-fallback
+                    ${IRIX_NATIVE32_HOST_WRAPPER_ARGS}
+                    ${IRIX_NATIVE32_HOST_ABI_ARGS}
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_native32_core.py"
+                    --sources "${IRIX_NATIVE32_CORE_DIR}/generated/c"
+                    ${IRIX_NATIVE32_CORE_DSOS}
+            DEPENDS
+                irix_recomp_runtime
+                tools/build_core_stack.py
+                tools/recomp_linked_stack.py
+                tools/verify_native32_core.py
+                tools/link_stack_n32.py
+                tools/translate_n32.py
+                tools/translate_n32_core.py
+                tools/extract_ar.py
+                runtime/IrixGuest.h
+                ${IRIX_NATIVE32_HOST_WRAPPER_SOURCES}
+                runtime/IrixHostAbiContext.c
+                runtime/IrixNative32XmExports.c
+                runtime/IrixHostAbiDropSite.inc
+                runtime/IrixHostAbiFonts.inc
+                runtime/IrixHostAbiNativeClass.inc
+                "${CMAKE_CURRENT_BINARY_DIR}/generated-ecosystem/irix_fast_quarks.inc"
+            VERBATIM
+        )
+        add_custom_target(irix_native32_recompiled_core
+            DEPENDS "${IRIX_NATIVE32_CORE_LIB}" ${IRIX_NATIVE32_CORE_DSOS})
+
+        set(IRIX_NATIVE32_PROBE_DIR "${CMAKE_CURRENT_BINARY_DIR}/native32-probe")
+        set(IRIX_NATIVE32_PROBE_ASM "${IRIX_NATIVE32_PROBE_DIR}/probe.S")
+        set(IRIX_NATIVE32_PROBE_EXE "${IRIX_NATIVE32_PROBE_DIR}/probe")
+        add_custom_command(
+            OUTPUT "${IRIX_NATIVE32_PROBE_ASM}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_NATIVE32_PROBE_DIR}"
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/translate_n32_i386_probe.py"
+                    --output "${IRIX_NATIVE32_PROBE_ASM}"
+                    0x00224021 0x2509ffff 0x2405ffff 0x00413023
+                    0x3c0a1122 0x354a3344 0xacea0004
+                    0x8ce30004 0x90e40004 0xa0e40008
+                    0x10eb0002 0x258c0001 0x25ad0001
+                    0x14eb0002 0x25ce0001 0x25ef0001
+                    0x03e00008 0x00000000
+            DEPENDS tools/translate_n32_i386_probe.py
+            VERBATIM
+        )
+        add_custom_command(
+            OUTPUT "${IRIX_NATIVE32_PROBE_EXE}"
+            COMMAND "${CMAKE_C_COMPILER}" -m32 -Wall -Wextra -Werror
+                    "${IRIX_NATIVE32_PROBE_ASM}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/Native32InstructionProbe.c"
+                    -o "${IRIX_NATIVE32_PROBE_EXE}"
+            DEPENDS "${IRIX_NATIVE32_PROBE_ASM}"
+                    tests/Native32InstructionProbe.c
+            VERBATIM
+        )
+        add_custom_target(irix_native32_instruction_probe
+            DEPENDS "${IRIX_NATIVE32_PROBE_EXE}")
+        add_dependencies(irix_native32_recompiled_core
+            irix_native32_instruction_probe)
+        add_dependencies(irix_native32_recompiled_core
+            irix_native32_instruction_probe)
+        if(BUILD_TESTING)
+            add_test(NAME irix_native32_instruction_probe
+                     COMMAND "${IRIX_NATIVE32_PROBE_EXE}")
+        endif()
+    endif()
+
+    add_dependencies(irix_recompiled_core_libraries irix_recompiled_core)
     add_library(irix_recompiled_stack STATIC IMPORTED GLOBAL)
     set_target_properties(irix_recompiled_stack PROPERTIES IMPORTED_LOCATION "${IRIX_RECOMP_CORE_LIB}")
     add_dependencies(irix_recompiled_stack irix_recompiled_core)
@@ -300,6 +498,109 @@ if(IRIX_DEV_TREE)
             IMPORTED_LOCATION "${IRIX_RECOMP_CORE_DIR}/lib${_irix_core_name}.so")
         add_dependencies(irix_recompiled_${_irix_core_name}_so irix_recompiled_core)
     endforeach()
+
+    # Link surface for native consumers of the translated core and host wrappers.
+    add_library(irix_recompiled_native_core INTERFACE)
+    # Native clients compile against host Xt/Motif layouts. Guest IRIX headers
+    # describe N32 marshalling inputs and must not propagate to host clients.
+    # Process-local guest state shared by the forthcoming host-ABI wrappers.
+    # Keep this separate from AppRunner: native clients need the translated
+    # Xt/Motif state without inheriting an application runner's startup policy.
+    # Legacy x86-64 host-ABI library: IrixHostAbiContext.c now targets the
+    # native32 (-m32) build, so keep this out of the default build. Build it
+    # explicitly (make irix_host_abi_context) once the file builds for 64-bit.
+    add_library(irix_host_abi_context SHARED EXCLUDE_FROM_ALL
+        runtime/IrixHostAbiContext.c
+        "${IRIX_RECOMP_CORE_HOST_IMPORTS}"
+    )
+    target_include_directories(irix_host_abi_context PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+    )
+    target_compile_definitions(irix_host_abi_context PRIVATE
+        IRIX_HOST_ABI_CORE_IMAGE_DIR="${IRIX_RECOMP_CORE_DIR}/generated/image"
+        IRIX_HOST_ABI_RUNTIME_TREE="${IRIX_RUNTIME_TREE}"
+    )
+    target_link_libraries(irix_host_abi_context PRIVATE
+        -Wl,--whole-archive
+        irix_recomp_libc_bridge
+        irix_recomp_x11_bridge
+        -Wl,--no-whole-archive
+        irix_recomp_runtime
+        X11::X11
+        ${CMAKE_DL_LIBS}
+        m
+    )
+    set_target_properties(irix_host_abi_context PROPERTIES
+        OUTPUT_NAME irixhostabi
+        VERSION 1.0.0
+        SOVERSION 1
+    )
+    add_dependencies(irix_host_abi_context irix_recompiled_core)
+    # Exported host-ABI wrappers must precede the translated Motif DSOs in
+    # ELF lookup order; otherwise identically named guest-entry aliases win
+    # symbol resolution and receive native pointers/calling conventions.
+    target_link_libraries(irix_recompiled_native_core INTERFACE
+        irix_host_abi_context
+        irix_recompiled_Xt_so
+        irix_recompiled_Xm_so
+        irix_recompiled_Sgm_so
+        irix_recompiled_vk_so
+        irix_recompiled_Mrm_so
+        irix_recompiled_Uil_so
+        "-Wl,--whole-archive"
+        irix_recomp_libc_bridge
+    )
+    if(TARGET irix_recomp_x11_bridge)
+        target_link_libraries(irix_recompiled_native_core INTERFACE
+            irix_recomp_x11_bridge
+            "-Wl,--no-whole-archive"
+        )
+    else()
+        target_link_libraries(irix_recompiled_native_core INTERFACE
+            "-Wl,--no-whole-archive"
+        )
+    endif()
+    target_link_libraries(irix_recompiled_native_core INTERFACE
+        irix_recomp_runtime
+        m
+    )
+    if(BUILD_TESTING)
+        add_executable(irix_host_abi_context_test EXCLUDE_FROM_ALL
+            tests/IrixHostAbiContextTest.c)
+        target_compile_definitions(irix_host_abi_context PRIVATE
+            IRIX_HOST_ABI_TESTING=1)
+        target_link_libraries(irix_host_abi_context_test PRIVATE
+            irix_recompiled_native_core
+        )
+        add_test(NAME irix_host_abi_context_test
+                 COMMAND irix_host_abi_context_test)
+    endif()
+
+    # Native-i386 libraries are the public link surface.  Do not insert a
+    # separate ABI-context DSO here: each IRIX-named DSO must export its own
+    # native Xt/Motif entry points.  The temporary host-context prototype is
+    # intentionally not linked into native consumers.
+    if(IRIX_BUILD_NATIVE32_CORE)
+        foreach(_name Xt Xm Sgm vk Mrm Uil)
+            add_library(irix_native32_${_name}_so SHARED IMPORTED GLOBAL)
+            set_target_properties(irix_native32_${_name}_so PROPERTIES
+                IMPORTED_LOCATION
+                    "${IRIX_NATIVE32_CORE_DIR}/lib${_name}.so")
+            add_dependencies(irix_native32_${_name}_so
+                irix_native32_recompiled_core)
+        endforeach()
+
+        add_library(irix_recompiled_native32_core INTERFACE)
+        target_link_libraries(irix_recompiled_native32_core INTERFACE
+            irix_native32_Xt_so
+            irix_native32_Xm_so
+            irix_native32_Sgm_so
+            irix_native32_vk_so
+            irix_native32_Mrm_so
+            irix_native32_Uil_so
+            X11::X11
+        )
+    endif()
 
     if(IRIX_RUNTIME_TREE AND IRIX_INTERNAL_TREE)
         set(IRIX_RECOMP_CORE_LINK "${IRIX_RECOMP_CORE_DIR}/generated/image/link.json")
@@ -353,6 +654,14 @@ if(IRIX_DEV_TREE)
                     VERBATIM
                 )
                 add_custom_target(irix_fast_quarks DEPENDS "${IRIX_FAST_QUARK_INC}")
+                if(TARGET irix_native32_recompiled_core)
+                    add_dependencies(irix_native32_recompiled_core irix_fast_quarks)
+                endif()
+                add_dependencies(irix_host_abi_context irix_fast_quarks)
+                target_compile_definitions(irix_host_abi_context PRIVATE
+                    IRIX_HAVE_FAST_QUARKS=1)
+                target_include_directories(irix_host_abi_context PRIVATE
+                    "${IRIX_ECOSYSTEM_DIR}")
             else()
                 message(WARNING "No IRIX libX11 found; SGI FAST_QUARKS support will be disabled")
             endif()

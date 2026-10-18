@@ -17,6 +17,8 @@ extern "C" {
 #define IRIX_GUEST_FUNCTION_RECOMPILED 0x00000002u
 #define IRIX_GUEST_FUNCTION_INTERIOR   0x00000004u
 
+#define IRIX_GUEST_RUNTIME_HOST_ABI    0x00000001u
+
 typedef uint32_t IrixGuestAddr;
 
 typedef struct IrixGuestElfInfo {
@@ -82,6 +84,7 @@ typedef struct IrixGuestRuntime {
     size_t function_count;
     void *profile_state;
     void *jit_state;
+    uint32_t runtime_flags;
 } IrixGuestRuntime;
 
 /*
@@ -100,6 +103,7 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
 void irix_guest_runtime_init(IrixGuestRuntime *rt);
 void irix_guest_runtime_destroy(IrixGuestRuntime *rt);
 int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsigned flags);
+IrixGuestAddr irix_guest_xt_compat_alloc(IrixGuestRuntime *rt, uint32_t size);
 void *irix_guest_ptr(IrixGuestRuntime *rt, IrixGuestAddr addr, size_t size);
 int64_t irix_guest_read_fd(IrixGuestRuntime *rt, int fd,
                            IrixGuestAddr addr, size_t count);
