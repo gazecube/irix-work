@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "IrixKernelInfo.h"
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -392,6 +393,64 @@ static void b_usmalloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { cpu->gpr[2] = guest_alloc(rt, ARG(0)); }
 static void b_usnop1(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(1); }
 
+/* ---- hardware inventory (libc setinvent/getinvent/endinvent) ------------ */
+/* The state block is {next index, count, records}; records are N32
+ * inventory_t (24 bytes, inv_next always NULL) materialised in guest memory
+ * from the same host-derived list the syssgi(SGI_INVENT) path serves. */
+static IrixGuestAddr inventory_open(IrixGuestRuntime *rt)
+{
+    IrixKinfoInvent recs[64];
+    size_t n = irix_kinfo_inventory(recs, 64u), i;
+    IrixGuestAddr st = guest_alloc(rt, 12u);
+    IrixGuestAddr base = guest_alloc(rt, (uint32_t)(n ? n : 1u) * 24u);
+    if (!st || !base) return 0;
+    for (i = 0; i < n; ++i) {
+        IrixGuestAddr r = base + (uint32_t)i * 24u;
+        irix_guest_write32be(rt, r + 0u, 0u);
+        irix_guest_write32be(rt, r + 4u, (uint32_t)recs[i].inv_class);
+        irix_guest_write32be(rt, r + 8u, (uint32_t)recs[i].inv_type);
+        irix_guest_write32be(rt, r + 12u, (uint32_t)recs[i].inv_controller);
+        irix_guest_write32be(rt, r + 16u, (uint32_t)recs[i].inv_unit);
+        irix_guest_write32be(rt, r + 20u, (uint32_t)recs[i].inv_state);
+    }
+    irix_guest_write32be(rt, st + 0u, 0u);
+    irix_guest_write32be(rt, st + 4u, (uint32_t)n);
+    irix_guest_write32be(rt, st + 8u, base);
+    return st;
+}
+static IrixGuestAddr inventory_next(IrixGuestRuntime *rt, IrixGuestAddr st)
+{
+    uint32_t idx, n;
+    if (!st) return 0;
+    idx = irix_guest_read32be(rt, st + 0u);
+    n = irix_guest_read32be(rt, st + 4u);
+    if (idx >= n) return 0;
+    irix_guest_write32be(rt, st + 0u, idx + 1u);
+    return irix_guest_read32be(rt, st + 8u) + idx * 24u;
+}
+static IrixGuestAddr g_inventory_global_state;
+static void b_setinvent_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr statep = (IrixGuestAddr)(uint32_t)ARG(0);
+    IrixGuestAddr st = inventory_open(rt);
+    if (!st || !statep) { RET(-1); return; }
+    irix_guest_write32be(rt, statep, st);
+    RET(0);
+}
+static void b_getinvent_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ cpu->gpr[2] = inventory_next(rt, (IrixGuestAddr)(uint32_t)ARG(0)); }
+static void b_endinvent_r(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; (void)cpu; }
+static void b_setinvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ g_inventory_global_state = inventory_open(rt); RET(g_inventory_global_state ? 0 : -1); }
+static void b_getinvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (!g_inventory_global_state) g_inventory_global_state = inventory_open(rt);
+    cpu->gpr[2] = inventory_next(rt, g_inventory_global_state);
+}
+static void b_endinvent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; (void)cpu; g_inventory_global_state = 0; }
+
 /* ---- shadow database and credentials: host pass-through ---------------- */
 /* Real host calls, so they work when the session is run as root exactly as
  * on IRIX.  N32 struct spwd: sp_namp, sp_pwdp, then lstchg, min, max, warn,
@@ -699,6 +758,9 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "lckpwdf", b_zero }, { "ulckpwdf", b_zero },
         { "putpwent", b_enosys }, { "putspent", b_enosys },
         { "fdopen", b_fdopen }, { "popen", b_popen },
+        { "setinvent_r", b_setinvent_r }, { "getinvent_r", b_getinvent_r },
+        { "endinvent_r", b_endinvent_r }, { "setinvent", b_setinvent },
+        { "getinvent", b_getinvent }, { "endinvent", b_endinvent },
         { "usinit", b_usinit }, { "usnewsema", b_usnewsema }, { "usmalloc", b_usmalloc },
         { "usconfig", b_zero }, { "usdetach", b_zero }, { "usfree", b_zero },
         { "usfreesema", b_zero }, { "uspsema", b_usnop1 }, { "uscpsema", b_usnop1 },
@@ -746,6 +808,8 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
     };
     size_t i;
     if (!name) return 0;
+    /* dlsym is implemented in IrixPosixBridgeUnit.c (bundle symbol lookup). */
+    if (!strcmp(name, "dlsym")) return 0;
     for (i = 0; i < sizeof(t) / sizeof(t[0]); ++i)
         if (!strcmp(name, t[i].n)) return t[i].f;
     return 0;

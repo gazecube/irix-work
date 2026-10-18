@@ -547,6 +547,23 @@ void irix_guest_runtime_destroy(IrixGuestRuntime *rt)
     memset(rt, 0, sizeof(*rt));
 }
 
+/* True if [base, base+size) intersects any mapped segment.  Segments of
+ * prelinked DSOs legitimately share 16 KiB pages, so irix_guest_map() itself
+ * allows overlap; heap growth must not. */
+static int guest_range_overlaps_segment(IrixGuestRuntime *rt, IrixGuestAddr base,
+                                        uint32_t size)
+{
+    uint64_t nend = (uint64_t)base + (uint64_t)size;
+    size_t k;
+    for (k = 0; k < rt->memory.count; ++k) {
+        const IrixGuestSegment *o = &rt->memory.segments[k];
+        if ((uint64_t)base < (uint64_t)o->guest_base + o->size &&
+            (uint64_t)o->guest_base < nend)
+            return 1;
+    }
+    return 0;
+}
+
 int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsigned flags)
 {
     IrixGuestSegment *seg;
@@ -554,20 +571,6 @@ int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsi
         return -1;
     if (find_segment(rt, base, size))
         return -1;
-    {
-        /* find_segment() only matches a range wholly inside one segment, so a
-         * partial overlap used to create a second, shadowing segment: the
-         * first brk() maps the heap from the start of the executable's 16 KiB
-         * data page and zeroed/hid its .got (bgicons, FLtoPopDB). */
-        uint64_t nend = (uint64_t)base + (uint64_t)size;
-        size_t k;
-        for (k = 0; k < rt->memory.count; ++k) {
-            const IrixGuestSegment *o = &rt->memory.segments[k];
-            if ((uint64_t)base < (uint64_t)o->guest_base + o->size &&
-                (uint64_t)o->guest_base < nend)
-                return -1;
-        }
-    }
     seg = &rt->memory.segments[rt->memory.count];
     {
         size_t alloc_size = ((size_t)size + 0xfffu) & ~(size_t)0xfffu;
@@ -4108,7 +4111,7 @@ exec_syscall_failed:
             request_page = (requested + page_size - 1u) & ~(page_size - 1u);
             if (request_page > heap_page) {
                 uint32_t grow = (uint32_t)(request_page - heap_page);
-                if (!irix_guest_ptr(rt, heap_page, grow) &&
+                if (guest_range_overlaps_segment(rt, heap_page, grow) ||
                     irix_guest_map(rt, heap_page, grow, 3u) != 0) {
                     /*
                      * A partial overlap is common at the executable's final
@@ -4143,7 +4146,8 @@ exec_syscall_failed:
         new_page = (requested + page_size - 1u) & ~(page_size - 1u);
         if (new_page > old_page) {
             uint32_t grow = (uint32_t)(new_page - old_page);
-            if (irix_guest_map(rt, old_page, grow, 3u) != 0) {
+            if (guest_range_overlaps_segment(rt, old_page, grow) ||
+                irix_guest_map(rt, old_page, grow, 3u) != 0) {
                 /*
                  * The requested range may already be backed by a loader
                  * segment.  Accept it only when the complete growth range is

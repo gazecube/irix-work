@@ -10,7 +10,14 @@
       "name": "fm",
       "prefix": "fm",
       "kind": "runtime",
-      "path": "usr/sbin/fm"
+      "path": "usr/sbin/fm",
+      "extra_dsos": [
+        {
+          "prefix": "SaRemovableMediaClass",
+          "kind": "runtime",
+          "path": "usr/sysadm/adminclass/SaRemovableMediaClass.so"
+        }
+      ]
     },
     {
       "name": "fmserv",

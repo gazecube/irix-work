@@ -1172,29 +1172,92 @@ static void bridge_socketpair(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static char g_irix_dlerror_message[512];
 
+/* The app bundle (generated app_components.c) lists every DSO that was
+ * translated into it.  dlopen() of such a DSO needs no loading: it is mapped
+ * and registered at start-up.  Weak so runners without a bundle still link. */
+typedef struct BridgeAppComponent {
+    int kind;
+    int role;
+    const char *path;
+} BridgeAppComponent;
+extern const BridgeAppComponent irix_app_guest_components[] __attribute__((weak));
+extern const size_t irix_app_guest_component_count __attribute__((weak));
+
+#define BRIDGE_DL_HANDLE_BASE 0x00d10000u
+
+static int bridge_dl_same_file(const char *a, const char *b)
+{
+    char ra[PATH_MAX], rb[PATH_MAX];
+    if (!realpath(a, ra) || !realpath(b, rb)) return 0;
+    return strcmp(ra, rb) == 0;
+}
+
 static void bridge_dlopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr guest_path = (uint32_t)cpu->gpr[4];
     const char *path = guest_path ? irix_guest_cstr(rt, guest_path, 4096u) : NULL;
+    const char *tree = getenv("IRIX_RUNTIME_TREE");
+    static const char *const dirs[] = {
+        "/usr/lib32/imdModels/", "/usr/lib32/", "/usr/lib32/internal/",
+        "/lib32/", "/opt/lib32/", 0
+    };
 
-    /* IRIX DSOs are N32 guest images and cannot be handed to the host loader.
-       Components in the active application bundle are already registered by
-       the runner; an unbundled runtime load must fail as dlopen normally does
-       for an unavailable object, rather than trapping the entire guest. */
+    if (!guest_path) { /* dlopen(NULL): the main program */
+        ret_i32(cpu, (int32_t)BRIDGE_DL_HANDLE_BASE);
+        return;
+    }
+    if (path && tree && irix_app_guest_components) {
+        char cand[PATH_MAX], file[PATH_MAX], comp[PATH_MAX];
+        size_t i, d;
+        for (d = 0; ; ++d) {
+            if (path[0] == '/') {
+                if (d) break;
+                snprintf(cand, sizeof(cand), "%s", path);
+            } else {
+                if (!dirs[d]) break;
+                snprintf(cand, sizeof(cand), "%s%s", dirs[d], path);
+            }
+            snprintf(file, sizeof(file), "%s%s", tree, cand);
+            for (i = 0; i < irix_app_guest_component_count; ++i) {
+                if (irix_app_guest_components[i].role != 0) continue;
+                snprintf(comp, sizeof(comp), "%s/%s", tree,
+                         irix_app_guest_components[i].path);
+                if (bridge_dl_same_file(file, comp)) {
+                    ret_i32(cpu, (int32_t)(BRIDGE_DL_HANDLE_BASE + (uint32_t)i));
+                    return;
+                }
+            }
+        }
+    }
     snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
-             "IRIX N32 dynamic loading is unavailable for %s",
-             path ? path : "<invalid path>");
-    
+             "%s: cannot open shared object file", path ? path : "<invalid path>");
+    ret_i32(cpu, 0);
+}
+
+static void bridge_dlsym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr guest_name = (uint32_t)cpu->gpr[5];
+    const char *name = guest_name ? irix_guest_cstr(rt, guest_name, 1024u) : NULL;
+    size_t i;
+
+    if (name) {
+        for (i = 0; i < rt->function_count; ++i) {
+            const IrixGuestFunctionEntry *e = &rt->functions[i];
+            if (e->name && strcmp(e->name, name) == 0) {
+                ret_i32(cpu, (int32_t)e->address);
+                return;
+            }
+        }
+    }
+    snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
+             "undefined symbol: %s", name ? name : "<invalid>");
     ret_i32(cpu, 0);
 }
 
 static void bridge_dlclose(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
-    (void)cpu;
-    snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
-             "dlclose called for an unavailable guest DSO");
-    ret_i32(cpu, -1);
+    ret_i32(cpu, 0);
 }
 
 static void bridge_dlerror(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -1863,6 +1926,7 @@ IrixGuestFunction irix_posix_bridge_lookup(const char *name)
     if (!strcmp(name, "socket")) return bridge_socket;
     if (!strcmp(name, "socketpair")) return bridge_socketpair;
     if (!strcmp(name, "dlopen")) return bridge_dlopen;
+    if (!strcmp(name, "dlsym")) return bridge_dlsym;
     if (!strcmp(name, "dlclose")) return bridge_dlclose;
     if (!strcmp(name, "dlerror")) return bridge_dlerror;
     if (!strcmp(name, "connect")) return bridge_connect;
