@@ -1626,6 +1626,28 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 }
             }
         }
+        {
+            /* IRIX_WATCH_WORD=<addr>: report every change of that guest word
+             * together with the pc about to execute (GOT/data hunting). */
+            static int winit;
+            static IrixGuestAddr waddr;
+            static uint32_t wlast;
+            if (!winit) {
+                const char *e = getenv("IRIX_WATCH_WORD");
+                unsigned a = 0;
+                winit = 1;
+                if (e && sscanf(e, "%x", &a) == 1) waddr = a;
+            }
+            if (waddr && irix_guest_ptr(rt, waddr, 4u)) {
+                uint32_t now = irix_guest_read32be(rt, waddr);
+                if (now != wlast) {
+                    fprintf(stderr, "WATCHWORD %08x %08x -> %08x before pc=%08x ra=%08x a0-a3=%08x,%08x,%08x,%08x t9=%08x\n",
+                            waddr, wlast, now, pc, (uint32_t)cpu->gpr[31],
+                            (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[25]);
+                    wlast = now;
+                }
+            }
+        }
         insn = irix_guest_read32be(rt, pc);
         if (rt->trapped)
             break;

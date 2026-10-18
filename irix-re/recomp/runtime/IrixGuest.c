@@ -6835,6 +6835,13 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     irix_guest_read32be(rt, address + 16u));
         }
         
+        if (getenv("IRIX_DEBUG_GOT")) {
+            uint32_t g = (uint32_t)cpu->gpr[28], i;
+            fprintf(stderr, "\n  GOT@gp-0x7ff0:");
+            for (i = 0; i < 80u && irix_guest_ptr(rt, g - 0x7ff0u + i * 4u, 4u); ++i)
+                fprintf(stderr, "%s%08x", (i % 8u) ? " " : "\n   ",
+                        irix_guest_read32be(rt, g - 0x7ff0u + i * 4u));
+        }
         report_nearest_functions(rt, address);
         if (s4 && irix_guest_ptr(rt, s4, 28u)) {
             fprintf(stderr,
