@@ -386,6 +386,13 @@ def main():
         validate_component(row, f'app {a.app} shared component {i}')
     seed_rows = [app] + list(shared_components)
 
+    # DSOs the app loads with dlopen() at run time (e.g. IMD model factories
+    # named by data) are not DT_NEEDED, so list them in the manifest and pull
+    # their closure into the bundle.
+    for i, row in enumerate(app.get('extra_dsos', [])):
+        validate_component(row, f'app {a.app} extra DSO {i}')
+        seed_rows.append(dict(row))
+
     # PT_INTERP is not DT_NEEDED.  For IRIX N32 executables this is normally
     # /usr/lib32/libc.so.1, whose entry point is the actual kernel transfer
     # target.  Seed it explicitly so the runner can enter the original

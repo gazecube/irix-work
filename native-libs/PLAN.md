@@ -36,3 +36,21 @@ Goal: every IRIX library the desktop links against is a standalone native librar
 3. Add the native-memory mode to the translator and make that corpus pass the oracle's tests.
 4. Apply to the IRIX libXm/libSgm binaries; reconcile the SGI deltas against the oracle.
 5. x86_64: repeat from N64 once i386 works; port Xt to LP64.
+
+## Status after milestone 3 (2026-10-18)
+- Pipeline works end to end on i386: the UnixWare Motif 1.2 sources compiled for N32 big-endian
+  (clang, DWARF), translated with native memory, linked against the from-source Xt, run the oracle
+  client (form, push button, callback, native XmPrimitive subclass) correctly.
+- Open correctness problem (the risk named in the plan): mixed-width accesses. Big-endian code may
+  write a word and read part of it (bitfields, unions, punning), which is consistent in big-endian
+  memory but not in little-endian memory. Seen in Motif's optimized XmString segments
+  (`XmStringExtent` returns 774 instead of 30). `NM_SHADOW=1 nm_pack.py` builds a detector that
+  reports mixed-width read sites with their guest PC (84 sites in the small oracle test; many are
+  likely raw struct copies and benign, which needs value-level analysis to confirm).
+- Things that did not fix it: `-ffine-grained-bitfield-accesses` (different crash, optimized flag read
+  wrongly), XOR addressing (breaks every string shared with native code).
+- Milestone 4 (IRIX binaries) is blocked on the same problem plus missing types for SGI-built objects.
+- Candidate directions: (a) decide per hazard site using the detector and patch the translation;
+  (b) treat Motif bitfield containers specially (XmString, text line table, DnD status);
+  (c) use the oracle (native from source) as the primary x86 library and translate only SGI-only
+  libraries (libSgm etc.), measuring their hazard count with the detector.

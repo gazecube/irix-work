@@ -238,3 +238,40 @@ void nm_init(const NmImage *img)
         }
     }
 }
+
+#ifdef NM_SHADOW
+/* Mixed-width access detector: remembers the width of the last guest-code write to
+   each byte and reports reads at a different width (endianness hazards). */
+static uint8_t *g_shadow[1u << 20];
+typedef struct { uint32_t pc, addr; uint8_t rw, ww; } NmHaz;
+static NmHaz g_haz[4096]; static unsigned g_nhaz;
+static void nm_shadow_report(void)
+{
+    unsigned i;
+    fprintf(stderr, "nativemem: %u distinct mixed-width read sites\n", g_nhaz);
+    for (i = 0; i < g_nhaz; i++) {
+        IrixGuestFunctionEntry *fe = irix_guest_find_function(&g_rt, g_haz[i].pc);
+        fprintf(stderr, "  pc %08x addr %08x read %u last-write %u %s\n", g_haz[i].pc, g_haz[i].addr,
+                g_haz[i].rw, g_haz[i].ww, fe && fe->name ? fe->name : "");
+    }
+}
+void nm_shadow(IrixGuestRuntime *rt, IrixGuestAddr a, unsigned w, int is_write)
+{
+    static int reg;
+    unsigned i;
+    if (!reg) { reg = 1; atexit(nm_shadow_report); }
+    if (a >= 0xf0000000u) return;
+    for (i = 0; i < w; i++) {
+        uint32_t ad = a + i;
+        uint8_t *pg = g_shadow[ad >> 12];
+        if (!pg) { if (!is_write) continue; pg = g_shadow[ad >> 12] = calloc(4096, 1); }
+        if (is_write) pg[ad & 0xfff] = (uint8_t)w;
+        else if (pg[ad & 0xfff] && pg[ad & 0xfff] != w && g_nhaz < 4096) {
+            unsigned j;
+            for (j = 0; j < g_nhaz; j++) if (g_haz[j].pc == rt->current_pc) break;
+            if (j == g_nhaz) g_haz[g_nhaz++] = (NmHaz){ rt->current_pc, a, (uint8_t)w, pg[ad & 0xfff] };
+            return;
+        }
+    }
+}
+#endif

@@ -12,7 +12,7 @@ from pathlib import Path
 here = Path(__file__).resolve().parent.parent
 gen = Path(sys.argv[1])
 out = Path(sys.argv[2])
-cc = ['gcc', '-m32']
+cc = ['gcc', '-m32'] + (['-DNM_SHADOW=1'] if __import__('os').environ.get('NM_SHADOW') else [])
 link = json.load(open(gen / 'image' / 'link.json'))
 funcs = json.load(open(gen / 'functions.json'))
 fnames = {f['name'] for f in funcs['functions']}
