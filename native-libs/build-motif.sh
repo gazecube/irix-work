@@ -9,7 +9,7 @@ OUT="${2:-$here/build/xm32}"
 SRC="${UW7_SRC:-$HOME/uw7-src}/usr/src/common/X11R5/lib/Xm"
 [ -d "$SRC" ] && [ -f "$XT/libXt.so.6" ] || { usage; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT/src" "$OUT/obj" "$OUT/inc/Xm"
-cp "$SRC"/* "$OUT/src/"
+cp "$SRC"/*.c "$SRC"/*.h "$OUT/src/"
 cp "$here/patches/Xm/uw7_compat.h" "$OUT/src/"
 (cd "$OUT/src" && patch -s -p1 < "$here/patches/Xm/List.c.patch")
 for h in "$OUT"/src/*.h; do ln -sf "$h" "$OUT/inc/Xm/$(basename "$h")"; done
