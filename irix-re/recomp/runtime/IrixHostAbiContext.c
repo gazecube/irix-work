@@ -112,6 +112,7 @@
 #define XmCreateFileSelectionBox irix_hostabi_impl_XmCreateFileSelectionBox
 #define XmCreateFormDialog irix_hostabi_impl_XmCreateFormDialog
 #define XmCreateFrame irix_hostabi_impl_XmCreateFrame
+#define XmCreateDragIcon irix_hostabi_impl_XmCreateDragIcon
 #define XmCreateInformationDialog irix_hostabi_impl_XmCreateInformationDialog
 #define XmCreateLabelGadget irix_hostabi_impl_XmCreateLabelGadget
 #define XmCreateMessageDialog irix_hostabi_impl_XmCreateMessageDialog
@@ -4622,6 +4623,8 @@ static Widget host_xm_create_widget(const char *constructor, Widget parent,
         class_symbol = "xmToggleButtonWidgetClass";
     else if (!strcmp(constructor, "XmCreateFrame"))
         class_symbol = "xmFrameWidgetClass";
+    else if (!strcmp(constructor, "XmCreateDragIcon"))
+        class_symbol = "xmDragIconObjectClass";
     else if (!strcmp(constructor, "XmCreateFileSelectionBox"))
         class_symbol = "xmFileSelectionBoxWidgetClass";
     else if (!strcmp(constructor, "XmCreateOptionMenu") ||
@@ -4875,6 +4878,7 @@ IRIX_HOST_XM_CREATE_WRAPPER(XmCreateDrawnButton)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateFileSelectionBox)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateFormDialog)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateFrame)
+IRIX_HOST_XM_CREATE_WRAPPER(XmCreateDragIcon)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateInformationDialog)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateLabelGadget)
 IRIX_HOST_XM_CREATE_WRAPPER(XmCreateMessageDialog)
@@ -5613,6 +5617,73 @@ done:
     context_arena_rewind(context, mark);
     pthread_mutex_unlock(&g_host_handle_mutex);
     return text ? True : False;
+}
+
+XmStringComponentType XmStringGetNextComponent(
+    XmStringContext string_context, char **text_out,
+    XmStringCharSet *charset_out, XmStringDirection *direction_out,
+    XmStringComponentType *unknown_tag_out, unsigned short *unknown_length_out,
+    unsigned char **unknown_value_out)
+{
+    IrixHostAbiContext *context;
+    HostXmStringContext *item;
+    IrixGuestAddr mark, out, guest_text = 0, guest_charset = 0;
+    IrixGuestAddr guest_value = 0;
+    uint8_t zero[24] = {0};
+    uint32_t args[7], result = XmSTRING_COMPONENT_END;
+    uint32_t direction = 0, tag = 0, length = 0;
+    char *text = NULL, *charset = NULL;
+    unsigned char *value = NULL;
+    if (text_out) *text_out = NULL;
+    if (charset_out) *charset_out = NULL;
+    if (direction_out) *direction_out = XmSTRING_DIRECTION_L_TO_R;
+    if (unknown_tag_out) *unknown_tag_out = XmSTRING_COMPONENT_UNKNOWN;
+    if (unknown_length_out) *unknown_length_out = 0;
+    if (unknown_value_out) *unknown_value_out = NULL;
+    if (!text_out || !charset_out || !direction_out || !unknown_tag_out ||
+        !unknown_length_out || !unknown_value_out ||
+        !context_default(&context)) return XmSTRING_COMPONENT_END;
+    pthread_mutex_lock(&g_host_handle_mutex);
+    item = host_xm_string_context(string_context);
+    mark = context_arena_mark(context);
+    if (!item || irix_host_abi_context_copy_bytes(context, zero, sizeof(zero),
+            &out)) goto done;
+    /* text, charset, direction(1 byte), tag(1 byte), length(2 bytes), value */
+    args[0] = item->guest; args[1] = out; args[2] = out + 4u;
+    args[3] = out + 8u; args[4] = out + 12u; args[5] = out + 16u;
+    args[6] = out + 20u;
+    if (irix_host_abi_context_call(context, "XmStringGetNextComponent", args,
+            7, &result)) { result = XmSTRING_COMPONENT_END; goto done; }
+    result &= 0xffu;
+    if (irix_host_abi_context_read32be(context, out, &guest_text) ||
+        irix_host_abi_context_read32be(context, out + 4u, &guest_charset) ||
+        irix_host_abi_context_read32be(context, out + 8u, &direction) ||
+        irix_host_abi_context_read32be(context, out + 12u, &tag) ||
+        irix_host_abi_context_read32be(context, out + 16u, &length) ||
+        irix_host_abi_context_read32be(context, out + 20u, &guest_value)) {
+        result = XmSTRING_COMPONENT_END; goto done;
+    }
+    /* The guest stores narrow outputs at the start of their slots, so the
+       big-endian word read leaves them in the top bytes. */
+    direction >>= 24; tag >>= 24; length >>= 16;
+    text = host_guest_string_copy(context, guest_text);
+    charset = host_guest_string_copy(context, guest_charset);
+    if (guest_value && length) {
+        const unsigned char *src = (const unsigned char *)
+            irix_guest_ptr(&context->runtime, guest_value, length);
+        if (src && (value = (unsigned char *)XtMalloc(length))) {
+            memcpy(value, src, length);
+        }
+    }
+    *text_out = text; *charset_out = charset;
+    *direction_out = (XmStringDirection)direction;
+    *unknown_tag_out = (XmStringComponentType)tag;
+    *unknown_length_out = (unsigned short)length;
+    *unknown_value_out = value;
+done:
+    context_arena_rewind(context, mark);
+    pthread_mutex_unlock(&g_host_handle_mutex);
+    return (XmStringComponentType)result;
 }
 
 void XmStringFreeContext(XmStringContext string_context)
