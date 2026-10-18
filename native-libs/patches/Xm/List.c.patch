@@ -1,0 +1,12 @@
+--- a/List.c	2026-10-17 20:32:15.493914661 -0700
++++ b/List.c	2026-10-18 13:18:02.703653541 -0700
+@@ -8493,8 +8493,7 @@
+     XmParentInputActionRec  p_event ;
+     int		i;
+     
+-    if (!lw->list.itemCount || !lw->list.items ||
+-	LPART(wid).itemCount <= FIRST_ITEM(wid)) return;
++    if (!lw->list.itemCount || !lw->list.items) return;
+ 
+     lw->list.AppendInProgress = FALSE;
+ 
