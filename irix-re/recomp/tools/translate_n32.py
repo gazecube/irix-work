@@ -125,6 +125,52 @@ def mem_addr(rs, imm):
     return '(IrixGuestAddr)((uint32_t)(%s) + (uint32_t)(int32_t)%d)' % (reg(rs), imm)
 
 
+# NATIVE_MEM: memory is native (little-endian) and addresses are host
+# addresses. The unaligned load/store halves keep the byte significance the
+# MIPS pair has in big-endian order mapped onto little-endian memory: an
+# unaligned LWL/LWR (or SWL/SWR) pair behaves as one unaligned native access.
+import os as _os
+NATIVE_MEM = bool(_os.environ.get('NATIVE_MEM'))
+
+
+def native_unaligned(op, rs, rt, imm):
+    a = mem_addr(rs, imm)
+    r = reg(rt)
+    if op in (0x22, 0x26):  # lwl, lwr
+        if op == 0x22:
+            body = ('uint32_t n = a & 3u; uint32_t w = irix_guest_read32be(rt, a & ~3u); '
+                    'uint32_t m = n ? ((UINT32_C(1) << (8u * (4u - n))) - 1u) : 0xffffffffu; '
+                    'uint32_t v = (uint32_t)%s; v = (v & ~m) | ((w >> (8u * n)) & m); ' % r)
+        else:
+            body = ('uint32_t n = a & 3u; uint32_t w = irix_guest_read32be(rt, a & ~3u); '
+                    'unsigned sh = 8u * (3u - n); uint32_t m = sh ? ~((UINT32_C(1) << sh) - 1u) : 0xffffffffu; '
+                    'uint32_t v = (uint32_t)%s; v = (v & ~m) | ((w << sh) & m); ' % r)
+        return ['{ IrixGuestAddr a = %s; %s%s = (uint64_t)(int64_t)(int32_t)v; }' % (a, body, r)]
+    if op in (0x1a, 0x1b):  # ldl, ldr
+        if op == 0x1a:
+            body = ('uint32_t n = a & 7u; uint64_t w = irix_guest_read64be(rt, a & ~7u); '
+                    'uint64_t m = n ? ((UINT64_C(1) << (8u * (8u - n))) - 1u) : ~UINT64_C(0); '
+                    'uint64_t v = %s; v = (v & ~m) | ((w >> (8u * n)) & m); ' % r)
+        else:
+            body = ('uint32_t n = a & 7u; uint64_t w = irix_guest_read64be(rt, a & ~7u); '
+                    'unsigned sh = 8u * (7u - n); uint64_t m = sh ? ~((UINT64_C(1) << sh) - 1u) : ~UINT64_C(0); '
+                    'uint64_t v = %s; v = (v & ~m) | ((w << sh) & m); ' % r)
+        return ['{ IrixGuestAddr a = %s; %s%s = v; }' % (a, body, r)]
+    # stores: swl/swr (4 bytes) and sdl/sdr (8 bytes) as byte loops
+    size = 4 if op in (0x2a, 0x2e) else 8
+    left = op in (0x2a, 0x2c)
+    mask = size - 1
+    if left:
+        loop = ('unsigned n = a & %du; unsigned k; for (k = 0; k < %du - n; k++) '
+                'irix_guest_write8(rt, a + k, (uint8_t)((uint64_t)%s >> (8u * k))); ' % (mask, size, r))
+    else:
+        loop = ('unsigned n = a & %du; unsigned k; for (k = 0; k <= n; k++) '
+                'irix_guest_write8(rt, (a & ~%du) + k, (uint8_t)((uint64_t)%s >> (8u * (%du - n + k)))); '
+                % (mask, mask, r, mask))
+    return ['{ IrixGuestAddr a = %s; %s}' % (a, loop)]
+
+
+
 def decode(addr, insn):
     op = insn >> 26
     rs = (insn >> 21) & 31
@@ -134,6 +180,8 @@ def decode(addr, insn):
     fn = insn & 63
     immu = insn & 0xffff
     imm = sx16(immu)
+    if NATIVE_MEM and op in (0x1a, 0x1b, 0x22, 0x26, 0x2a, 0x2e, 0x2c, 0x2d):
+        return native_unaligned(op, rs, rt, imm), None
     target = insn & 0x03ffffff
 
     if insn == 0:
