@@ -274,6 +274,31 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    case 133: { /* SGI_XLV_ATTR_CURSOR(cursor): host has no XLV volumes */
+        IrixGuestAddr cur = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        uint32_t i;
+        if (!irix_guest_ptr(rt, cur, 20u)) {
+            errno = EFAULT;
+            compat_result(cpu, -1);
+            return;
+        }
+        for (i = 0; i < 20u; i += 4u)
+            irix_guest_write32be(rt, cur + i, 0u);
+        compat_result(cpu, 0);
+        return;
+    }
+    case 134: { /* SGI_XLV_ATTR_GET(cursor, req): empty table, zero counts */
+        IrixGuestAddr req = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
+        if (!irix_guest_ptr(rt, req, 16u)) {
+            errno = EFAULT;
+            compat_result(cpu, -1);
+            return;
+        }
+        irix_guest_write32be(rt, req + 8u, 0u);
+        irix_guest_write32be(rt, req + 12u, 0u);
+        compat_result(cpu, 0);
+        return;
+    }
     case SGI_INVENT: { /* hardware inventory (libc getinvent) */
         uint32_t sub = (uint32_t)cpu->gpr[5];
         const uint32_t isize = 24u;   /* N32 inventory_t */

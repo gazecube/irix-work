@@ -1257,6 +1257,37 @@ static int mapped_exec(IrixGuestRuntime *rt, IrixGuestAddr pc)
     return 0;
 }
 
+/* gp of the caller at each pending lazy-binding stub call, keyed by the
+ * original return address (the stub passes it to rld in $t7).  rld's
+ * resolver tail-calls the resolved function without restoring the caller's
+ * gp, so the callee saves/restores rld's gp and the caller resumes with the
+ * wrong one.  The matching jr $ra puts it back. */
+#define LAZY_GP_MAX 64u
+static struct { IrixGuestAddr ra; uint32_t gp; } lazy_gp[LAZY_GP_MAX];
+static unsigned lazy_gp_n;
+
+static void lazy_gp_push(IrixGuestAddr ra, uint32_t gp)
+{
+    if (lazy_gp_n < LAZY_GP_MAX) {
+        lazy_gp[lazy_gp_n].ra = ra;
+        lazy_gp[lazy_gp_n].gp = gp;
+        ++lazy_gp_n;
+    }
+}
+
+static int lazy_gp_pop(IrixGuestAddr ra, uint32_t *gp)
+{
+    unsigned i;
+    for (i = lazy_gp_n; i > 0; --i) {
+        if (lazy_gp[i - 1u].ra == ra) {
+            *gp = lazy_gp[i - 1u].gp;
+            lazy_gp_n = i - 1u;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int is_lazy_plt_call(IrixGuestRuntime *rt, IrixGuestAddr pc)
 {
     if (pc < 4u || !irix_guest_ptr(rt, pc - 4u, 4u) ||
@@ -1627,26 +1658,78 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             }
         }
         {
+            /* IRIX_WATCH_GP=<lo>,<hi>,<gp>: report when code in [lo,hi) runs
+             * with $gp == <gp> (i.e. a callee returned with the wrong gp). */
+            static int ginit;
+            static IrixGuestAddr glo, ghi, ggp;
+            static uint32_t gprev_gp, gprev_pc, gprev_ra;
+            static int greported;
+            if (!ginit) {
+                const char *e = getenv("IRIX_WATCH_GP");
+                unsigned a = 0, b2 = 0, c = 0;
+                ginit = 1;
+                if (e && sscanf(e, "%x,%x,%x", &a, &b2, &c) == 3) {
+                    glo = a; ghi = b2; ggp = c;
+                }
+            }
+            if (ghi && !greported) {
+                uint32_t gp = (uint32_t)cpu->gpr[28];
+                if (pc >= glo && pc < ghi && gp == ggp) {
+                    fprintf(stderr,
+                            "WATCHGP code pc=%08x runs with gp=%08x (prev gp=%08x at pc=%08x ra=%08x) ra=%08x t9=%08x\n",
+                            pc, gp, gprev_gp, gprev_pc, gprev_ra,
+                            (uint32_t)cpu->gpr[31], (uint32_t)cpu->gpr[25]);
+                    greported = 1;
+                }
+                if (gp != gprev_gp) {
+                    gprev_gp = gp;
+                    gprev_pc = pc;
+                    gprev_ra = (uint32_t)cpu->gpr[31];
+                }
+            }
+        }
+        {
             /* IRIX_WATCH_WORD=<addr>: report every change of that guest word
              * together with the pc about to execute (GOT/data hunting). */
             static int winit;
             static IrixGuestAddr waddr;
-            static uint32_t wlast;
+            static uint32_t wlast, wprev_pc, wprev_insn;
             if (!winit) {
                 const char *e = getenv("IRIX_WATCH_WORD");
                 unsigned a = 0;
                 winit = 1;
                 if (e && sscanf(e, "%x", &a) == 1) waddr = a;
             }
+            {
+                /* IRIX_WATCH_SLOT=<pc>,<off>: when execution reaches <pc>,
+                 * watch the word at sp+<off> (stack-slot clobber hunting). */
+                static int sinit;
+                static IrixGuestAddr spc;
+                static uint32_t soff;
+                if (!sinit) {
+                    const char *e = getenv("IRIX_WATCH_SLOT");
+                    unsigned a2 = 0, b3 = 0;
+                    sinit = 1;
+                    if (e && sscanf(e, "%x,%x", &a2, &b3) == 2) { spc = a2; soff = b3; }
+                }
+                if (spc && pc == spc) {
+                    waddr = (IrixGuestAddr)((uint32_t)cpu->gpr[29] + soff);
+                    wlast = irix_guest_ptr(rt, waddr, 4u) ? irix_guest_read32be(rt, waddr) : 0;
+                    fprintf(stderr, "WATCHSLOT armed %08x (sp=%08x) value %08x ra=%08x\n",
+                            waddr, (uint32_t)cpu->gpr[29], wlast, (uint32_t)cpu->gpr[31]);
+                }
+            }
             if (waddr && irix_guest_ptr(rt, waddr, 4u)) {
                 uint32_t now = irix_guest_read32be(rt, waddr);
                 if (now != wlast) {
-                    fprintf(stderr, "WATCHWORD %08x %08x -> %08x before pc=%08x ra=%08x a0-a3=%08x,%08x,%08x,%08x t9=%08x\n",
-                            waddr, wlast, now, pc, (uint32_t)cpu->gpr[31],
+                    fprintf(stderr, "WATCHWORD %08x %08x -> %08x before pc=%08x (prev pc=%08x insn=%08x) ra=%08x a0-a3=%08x,%08x,%08x,%08x t9=%08x\n",
+                            waddr, wlast, now, pc, wprev_pc, wprev_insn, (uint32_t)cpu->gpr[31],
                             (uint32_t)cpu->gpr[4], (uint32_t)cpu->gpr[5], (uint32_t)cpu->gpr[6], (uint32_t)cpu->gpr[7], (uint32_t)cpu->gpr[25]);
                     wlast = now;
                 }
             }
+            wprev_pc = pc;
+            wprev_insn = irix_guest_ptr(rt, pc, 4u) ? irix_guest_read32be(rt, pc) : 0;
         }
         insn = irix_guest_read32be(rt, pc);
         if (rt->trapped)
@@ -1764,6 +1847,11 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     target >= 0x0d600000u && target < 0x0d700000u)
                     return_gp = 0x0d6cf058u;
 
+                {
+                    uint32_t lgp;
+                    if (lazy_gp_pop(target, &lgp))
+                        cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)lgp;
+                }
                 if (return_gp &&
                     (uint32_t)cpu->gpr[28] != return_gp) {
                     
@@ -1880,8 +1968,21 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 return -1;
             
             cpu->pc = pc;
-            if (irix_guest_call(rt, cpu, target) != 0)
-                return -1;
+            {
+                /* $gp is callee-saved in N32.  The dispatcher may switch it
+                 * to the callee's GP domain, so a PIC callee (dlopen, ...)
+                 * then saves *that* as the caller's gp and restores it on
+                 * return.  Put the caller's own gp back after a normal
+                 * return. */
+                uint64_t caller_gp = cpu->gpr[28];
+                if (rd == 31u && is_lazy_plt_call(rt, pc))
+                    lazy_gp_push((IrixGuestAddr)(uint32_t)cpu->gpr[15],
+                                 (uint32_t)caller_gp);
+                if (irix_guest_call(rt, cpu, target) != 0)
+                    return -1;
+                if (rd == 31u && !is_lazy_plt_call(rt, pc))
+                    cpu->gpr[28] = caller_gp;
+            }
             
             if (!rd)
                 return 0;

@@ -554,6 +554,20 @@ int irix_guest_map(IrixGuestRuntime *rt, IrixGuestAddr base, uint32_t size, unsi
         return -1;
     if (find_segment(rt, base, size))
         return -1;
+    {
+        /* find_segment() only matches a range wholly inside one segment, so a
+         * partial overlap used to create a second, shadowing segment: the
+         * first brk() maps the heap from the start of the executable's 16 KiB
+         * data page and zeroed/hid its .got (bgicons, FLtoPopDB). */
+        uint64_t nend = (uint64_t)base + (uint64_t)size;
+        size_t k;
+        for (k = 0; k < rt->memory.count; ++k) {
+            const IrixGuestSegment *o = &rt->memory.segments[k];
+            if ((uint64_t)base < (uint64_t)o->guest_base + o->size &&
+                (uint64_t)o->guest_base < nend)
+                return -1;
+        }
+    }
     seg = &rt->memory.segments[rt->memory.count];
     {
         size_t alloc_size = ((size_t)size + 0xfffu) & ~(size_t)0xfffu;
@@ -1892,10 +1906,93 @@ static int irix_open_flags(uint32_t f)
     return out;
 }
 
+/* Linux errno -> IRIX errno.  Numbers 1-34 agree; the rest differ
+ * (generated from IRIX sys/errno.h by name). */
+static int irix_errno_from_host(int e)
+{
+    switch (e) {
+    case EDEADLK: return 45;
+    case ENAMETOOLONG: return 78;
+    case ENOLCK: return 46;
+    case ENOSYS: return 89;
+    case ENOTEMPTY: return 93;
+    case ELOOP: return 90;
+    case ENOMSG: return 35;
+    case EIDRM: return 36;
+    case ECHRNG: return 37;
+    case EL2NSYNC: return 38;
+    case EL3HLT: return 39;
+    case EL3RST: return 40;
+    case ELNRNG: return 41;
+    case EUNATCH: return 42;
+    case ENOCSI: return 43;
+    case EL2HLT: return 44;
+    case EBADE: return 50;
+    case EBADR: return 51;
+    case EXFULL: return 52;
+    case ENOANO: return 53;
+    case EBADRQC: return 54;
+    case EBADSLT: return 55;
+    case EBFONT: return 57;
+    case EMULTIHOP: return 74;
+    case EBADMSG: return 77;
+    case EOVERFLOW: return 79;
+    case ENOTUNIQ: return 80;
+    case EBADFD: return 81;
+    case EREMCHG: return 82;
+    case ELIBACC: return 83;
+    case ELIBBAD: return 84;
+    case ELIBSCN: return 85;
+    case ELIBMAX: return 86;
+    case ELIBEXEC: return 87;
+    case EILSEQ: return 88;
+    case ERESTART: return 91;
+    case ESTRPIPE: return 92;
+    case EUSERS: return 94;
+    case ENOTSOCK: return 95;
+    case EDESTADDRREQ: return 96;
+    case EMSGSIZE: return 97;
+    case EPROTOTYPE: return 98;
+    case ENOPROTOOPT: return 99;
+    case EPROTONOSUPPORT: return 120;
+    case ESOCKTNOSUPPORT: return 121;
+    case EOPNOTSUPP: return 122;
+    case EPFNOSUPPORT: return 123;
+    case EAFNOSUPPORT: return 124;
+    case EADDRINUSE: return 125;
+    case EADDRNOTAVAIL: return 126;
+    case ENETDOWN: return 127;
+    case ENETUNREACH: return 128;
+    case ENETRESET: return 129;
+    case ECONNABORTED: return 130;
+    case ECONNRESET: return 131;
+    case ENOBUFS: return 132;
+    case EISCONN: return 133;
+    case ENOTCONN: return 134;
+    case ESHUTDOWN: return 143;
+    case ETOOMANYREFS: return 144;
+    case ETIMEDOUT: return 145;
+    case ECONNREFUSED: return 146;
+    case EHOSTDOWN: return 147;
+    case EHOSTUNREACH: return 148;
+    case EALREADY: return 149;
+    case EINPROGRESS: return 150;
+    case ESTALE: return 151;
+    case EUCLEAN: return 135;
+    case ENOTNAM: return 137;
+    case ENAVAIL: return 138;
+    case EISNAM: return 139;
+    case EREMOTEIO: return 140;
+    case EDQUOT: return 1133;
+    case ECANCELED: return 158;
+    default: return e;
+    }
+}
+
 static void syscall_result(IrixGuestCpu *cpu, int64_t value)
 {
     if (value < 0) {
-        cpu->gpr[2] = (uint64_t)(int64_t)errno;
+        cpu->gpr[2] = (uint64_t)(int64_t)irix_errno_from_host(errno);
         cpu->gpr[7] = 1;
     } else {
         cpu->gpr[2] = (uint64_t)value;
@@ -3784,6 +3881,20 @@ exec_syscall_failed:
         uint32_t cmd = (uint32_t)cpu->gpr[5];
         IrixGuestAddr arg_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[6];
 
+        /* IRIX FIONBIO = _IOW('f', 126, int): the argument is a guest int. */
+        if (cmd == 0x8004667eu) {
+            int on = 0;
+            if (!arg_addr || !irix_guest_ptr(rt, arg_addr, 4u)) {
+                errno = EFAULT;
+                syscall_result(cpu, -1);
+                return;
+            }
+            on = (int)irix_guest_read32be(rt, arg_addr);
+            result = (int64_t)ioctl(fd, FIONBIO, &on);
+            syscall_result(cpu, result);
+            return;
+        }
+
         /* X11 transport's IRIX socket bytes-readable query. */
         if (cmd == 0x4004730au) {
             int available = 0;
@@ -4337,7 +4448,12 @@ exec_syscall_failed:
         size_t count = (size_t)(uint32_t)cpu->gpr[6];
         void *buf = irix_guest_ptr(rt, buf_addr, count);
         if (!path || (count && !buf)) { errno = EFAULT; syscall_result(cpu, -1); return; }
-        syscall_result(cpu, (int64_t)readlink(path, (char *)buf, count));
+        {
+            char host[PATH_MAX];
+            const char *hp = irix_guest_resolve_path(rt, path, host, sizeof(host),
+                                                     "readlink", 0);
+            syscall_result(cpu, (int64_t)readlink(hp ? hp : path, (char *)buf, count));
+        }
         return;
     }
     case SYS_truncate: {
@@ -7216,7 +7332,7 @@ int irix_guest_call_entry(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     }
 }
 
-int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
+static int irix_guest_call_inner(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
 {
     IrixGuestAddr caller = rt->current_pc;
     IrixGuestFunctionEntry *entry = irix_guest_find_function(rt, address);
@@ -7566,4 +7682,19 @@ int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr addre
         }
         return rc;
     }
+}
+
+
+/* $gp is callee-saved in N32.  Several dispatcher paths switch $gp to the
+ * callee's GP domain before running an interpreted function; a PIC callee
+ * (libc dlopen, ...) then saves that as the "caller's" gp and restores it on
+ * return, leaving the caller running with the wrong gp.  Put the caller's gp
+ * back after any normal return. */
+int irix_guest_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGuestAddr address)
+{
+    uint64_t caller_gp = cpu->gpr[28];
+    int rc = irix_guest_call_inner(rt, cpu, address);
+    if (rc == 0 && !rt->trapped)
+        cpu->gpr[28] = caller_gp;
+    return rc;
 }
