@@ -172,6 +172,20 @@ const char *irix_guest_resolve_path(IrixGuestRuntime *rt, const char *guest_path
             goto report;
         }
     }
+    /* IRIX-style disk names (/dev/dsk, /dev/rdsk, /dev/scsi) do not exist on
+       the host.  mediad-linux's irix-devices tool stages them under
+       $IRIXDEV_ROOT/dev; show that tree to the guest in their place. */
+    if (buffer && buffer_size && guest_path[0] == '/' &&
+        (path_is_within(guest_path, "/dev/dsk") ||
+         path_is_within(guest_path, "/dev/rdsk") ||
+         path_is_within(guest_path, "/dev/scsi"))) {
+        const char *root = getenv("IRIXDEV_ROOT");
+        if (root && root[0] == '/') {
+            int n = snprintf(buffer, buffer_size, "%s%s", root, guest_path);
+            if (n > 0 && (size_t)n < buffer_size && stat(buffer, &st) == 0)
+                return buffer;
+        }
+    }
     if (guest_path[0] == '/' && rt && rt->rootfs && rt->rootfs[0] &&
         !path_is_within(guest_path, rt->rootfs)) {
         int n;

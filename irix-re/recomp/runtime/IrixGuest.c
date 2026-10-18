@@ -4464,6 +4464,16 @@ exec_syscall_failed:
         /* Match the paired real/effective GID return used by IRIX libc. */
         cpu->gpr[3] = (uint64_t)getegid();
         return;
+    case SYS_swapctl: /* swapctl(cmd, arg): swap resources are the host's */
+        /* Only the query used by sysadm's getDiskInfo: no IRIX-style swap
+         * files or devices exist here, so report none. */
+        if ((uint32_t)cpu->gpr[4] == 4u) { /* SC_GETNSWP */
+            syscall_result(cpu, 0);
+        } else {
+            errno = EINVAL;
+            syscall_result(cpu, -1);
+        }
+        return;
     case SYS_sysmp: /* sysmp(cmd, ...) */
         irix_compat_sysmp(rt, cpu);
         return;
