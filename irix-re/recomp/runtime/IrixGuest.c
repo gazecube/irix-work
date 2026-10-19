@@ -7261,12 +7261,48 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         {
             static int trace_calls = -1;
             if (trace_calls < 0) trace_calls = getenv("IRIX_TRACE_CALLS") != 0;
-            if (trace_calls && !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED))
-                fprintf(stderr, "CALL[%d] %s a0=%08x a1=%08x a2=%08x\n",
-                        (int)getpid(),
-                        entry->name ? entry->name : "?",
+            if (trace_calls && !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)) {
+                const char *nm = entry->name ? entry->name : "?";
+                const char *base = strrchr(nm, ':');
+                char strs[300];
+                strs[0] = '\0';
+                base = base ? base + 1 : nm;
+                /* string-comparing imports: show the strings, not just pointers */
+                if (!strcmp(base, "strcmp") || !strcmp(base, "strncmp") ||
+                    !strcmp(base, "strcasecmp") || !strcmp(base, "strncasecmp") ||
+                    !strcmp(base, "strstr") || !strcmp(base, "strchr") ||
+                    !strcmp(base, "strdup") || !strcmp(base, "strlen") ||
+                    !strcmp(base, "dlopen") || !strcmp(base, "dlsym") ||
+                    !strcmp(base, "open") || !strcmp(base, "stat") ||
+                    !strcmp(base, "lstat") || !strcmp(base, "access") ||
+                    !strcmp(base, "readlink") || !strcmp(base, "fopen")) {
+                    const char *s0 = irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[4], 1u) ?
+                        irix_guest_cstr(rt, (IrixGuestAddr)cpu->gpr[4], 96u) : 0;
+                    const char *s1 = (strcmp(base, "strdup") && strcmp(base, "strlen") && strcmp(base, "strchr") &&
+                                      strcmp(base, "open") && strcmp(base, "stat") && strcmp(base, "lstat") &&
+                                      strcmp(base, "access") && strcmp(base, "readlink") && strcmp(base, "fopen") &&
+                                      irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[5], 1u)) ?
+                        irix_guest_cstr(rt, (IrixGuestAddr)cpu->gpr[5], 96u) : 0;
+                    snprintf(strs, sizeof strs, " s0=\"%.90s\" s1=\"%.90s\"", s0 ? s0 : "", s1 ? s1 : "");
+                }
+                if (!strcmp(base, "bcmp") || !strcmp(base, "memcmp")) {
+                    unsigned n = (unsigned)cpu->gpr[6];
+                    char b0[40], b1[40];
+                    unsigned k, m = n < 32u ? n : 32u;
+                    const unsigned char *p0 = irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[4], m ? m : 1u);
+                    const unsigned char *p1 = irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[5], m ? m : 1u);
+                    for (k = 0; k < m; k++) {
+                        b0[k] = p0 && p0[k] >= 32 && p0[k] < 127 ? (char)p0[k] : '.';
+                        b1[k] = p1 && p1[k] >= 32 && p1[k] < 127 ? (char)p1[k] : '.';
+                    }
+                    b0[m] = b1[m] = '\0';
+                    snprintf(strs, sizeof strs, " len=%u b0=\"%s\" b1=\"%s\"", n, b0, b1);
+                }
+                fprintf(stderr, "CALL[%d] %s a0=%08x a1=%08x a2=%08x%s\n",
+                        (int)getpid(), nm,
                         (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5],
-                        (unsigned)cpu->gpr[6]);
+                        (unsigned)cpu->gpr[6], strs);
+            }
         }
         entry->function(rt, cpu);
         if (irix_guest_signals_pending && irix_guest_signal_dispatch &&

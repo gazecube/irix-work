@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <sys/utsname.h>
 #include <time.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -118,6 +119,60 @@ static void put(IrixKinfoInvent *r, int cls, int type, int ctrl, int unit,
     r->inv_state = state;
 }
 
+/* SCSI devices: the host exposes them under /dev/scsi as scCdUlL aliases of
+ * the sg nodes (the IRIX device naming). Report a controller entry per
+ * controller (of those hosting a CD-ROM) and CD-ROMs as INV_SCSI/INV_CDROM,
+ * the way the IRIX kernel's inventory does, so programs that look a device up by
+ * controller and unit (the desktop's removable-media model) find it. */
+#define INV_DISK       2
+#define INV_SCSI       9
+#define INV_SCSICONTROL 1
+#define INV_SCSIDRIVE  2
+#define INV_CDROM      5
+
+static size_t inventory_scsi(IrixKinfoInvent *out, size_t n, size_t max)
+{
+    DIR *d = opendir("/dev/scsi");
+    struct dirent *e;
+    int seen_ctrl[32];
+    size_t nctrl = 0, i;
+    if (!d) return n;
+    while ((e = readdir(d)) != NULL) {
+        int c, u, l;
+        char link[256], sys[300], buf[32];
+        ssize_t len;
+        const char *sg;
+        FILE *f;
+        int type = -1, known = 0;
+        if (sscanf(e->d_name, "sc%dd%dl%d", &c, &u, &l) != 3 || l != 0) continue;
+        snprintf(sys, sizeof sys, "/dev/scsi/%s", e->d_name);
+        len = readlink(sys, link, sizeof link - 1);
+        if (len <= 0) continue;
+        link[len] = '\0';
+        sg = strrchr(link, '/');
+        sg = sg ? sg + 1 : link;
+        snprintf(sys, sizeof sys, "/sys/class/scsi_generic/%s/device/type", sg);
+        f = fopen(sys, "r");
+        if (f) {
+            if (fgets(buf, sizeof buf, f)) type = atoi(buf);
+            fclose(f);
+        }
+        /* Only optical drives are reported. Host disks are in use by the host
+         * system; listing them would make the desktop offer "unused disk" icons
+         * (SaDiskClass) that invite initializing them. */
+        if (type != 5) continue;
+        for (i = 0; i < nctrl; i++) if (seen_ctrl[i] == c) known = 1;
+        if (!known && nctrl < 32 && n < max) {
+            seen_ctrl[nctrl++] = c;
+            put(&out[n++], INV_DISK, INV_SCSICONTROL, c, 0, 0);
+        }
+        if (n >= max) continue;
+        put(&out[n++], INV_SCSI, INV_CDROM, c, u, 2);
+    }
+    closedir(d);
+    return n;
+}
+
 size_t irix_kinfo_inventory(IrixKinfoInvent *out, size_t max)
 {
     /* Only what the host really has.  hinv(1) can name an SGI board or a
@@ -134,6 +189,7 @@ size_t irix_kinfo_inventory(IrixKinfoInvent *out, size_t max)
                      (int)host_cache_bytes(2, 1024 * 1024));
     if (n < max) put(&out[n++], INV_MEMORY, INV_MAIN_MB, 0, 0,
                      (int)host_mem_mb());
+    n = inventory_scsi(out, n, max);
     return n;
 }
 
