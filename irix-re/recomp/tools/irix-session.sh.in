@@ -305,6 +305,22 @@ if [ ! -d "$HOME/$sysdesktopicondir" ] && [ -r "$runtime/usr/sbin/bgicons" ]; th
     (cd "$HOME" && bg_exec /usr/sbin/bgicons -overlay 2>&1)
 fi
 
+# Background directory and dumpster, as Xsession.dt creates them before the
+# background icon commands run.
+if [ -z "${SGI_DESKTOP_DIRECTORY:-}" ]; then
+    backgroundDir="$HOME/Desktop"
+else
+    backgroundDir="$SGI_DESKTOP_DIRECTORY"
+fi
+if [ ! -r "$backgroundDir" ]; then
+    mkdir -p "$backgroundDir"
+    rm -f "$desktopdir/DefaultBackgroundIconDB"
+fi
+dumpster="$(gettxt uxsgiimd:223 dumpster 2>/dev/null)"
+[ -n "$dumpster" ] || dumpster=dumpster
+[ -r "$HOME/$dumpster" ] || mkdir -p "$HOME/$dumpster"
+touch "$HOME/$dumpster/.dumpster"
+
 echo "IRIX session: starting desktop File Manager"
 guest_exec "$fm" -b &
 fm_pid=$!
@@ -317,9 +333,14 @@ if [ -r "$runtime/usr/sbin/bgicons" ] && [ -r "$runtime/usr/sysadm/bin/sabgicons
         bg_exec /usr/sbin/bgicons -icondb "$sysdesktopdir/SysadmBgIconDB" \
             -icondir "$sysdesktopicondir" >/dev/null 2>&1) &
 fi
-# Required/default icons (DefaultIconList via FLtoPopDB) are populated by
-# populate-irix-default-desktop.sh for now; running that leg here would add
-# duplicates of icons already on the Desktop.
+# Required/default icons: the local MIS list /var/X11/xdm/DefaultIconList goes
+# through FLtoPopDB into bgicons, which creates the Desktop references itself.
+# Targets that do not exist (packages not installed) are skipped, as on IRIX.
+defBGicons=/var/X11/xdm/DefaultIconList
+if [ -r "$runtime/usr/sbin/bgicons" ] && [ -r "$runtime/usr/sbin/FLtoPopDB" ] && [ -r "$runtime$defBGicons" ]; then
+    (cd "$HOME" && bg_exec /usr/sbin/FLtoPopDB < "$runtime$defBGicons" | \
+        bg_exec /usr/sbin/bgicons -icondb "$desktopdir/DefaultBackgroundIconDB" >/dev/null 2>&1) &
+fi
 if [ -r "$runtime/usr/sbin/genDeviceIcons" ] && [ -r "$runtime$defBGdevs" ]; then
     (cd "$HOME" && bg_exec /usr/sbin/genDeviceIcons "$defBGdevs" | \
         bg_exec /usr/sbin/bgicons -icondir "$sysdesktopicondir" \

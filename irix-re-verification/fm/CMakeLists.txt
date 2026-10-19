@@ -125,6 +125,3 @@ endif()
 # ImdRefModel::createReference() persistent reference format is reconstructed.
 install(FILES DefaultIconList.irix-6.5
         DESTINATION share/irix-re/fm)
-install(PROGRAMS populate-irix-default-desktop.sh
-        DESTINATION bin
-        RENAME iid-populate-default-desktop)

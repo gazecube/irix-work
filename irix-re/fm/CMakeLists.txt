@@ -228,11 +228,7 @@ if(TARGET imdIconPanel)
     install(TARGETS iid-desktop RUNTIME DESTINATION bin)
 endif()
 
-# Exact original DefaultIconList captured from desktop_eoe plus a clearly
-# marked Linux host transport helper. The helper is temporary until the
-# ImdRefModel::createReference() persistent reference format is reconstructed.
+# Exact original DefaultIconList captured from desktop_eoe (the session feeds it to
+# FLtoPopDB and bgicons, as Xsession.dt does).
 install(FILES DefaultIconList.irix-6.5
         DESTINATION share/irix-re/fm)
-install(PROGRAMS populate-irix-default-desktop.sh
-        DESTINATION bin
-        RENAME iid-populate-default-desktop)
