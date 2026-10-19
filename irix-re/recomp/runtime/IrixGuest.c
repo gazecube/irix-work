@@ -4146,7 +4146,8 @@ exec_syscall_failed:
         new_page = (requested + page_size - 1u) & ~(page_size - 1u);
         if (new_page > old_page) {
             uint32_t grow = (uint32_t)(new_page - old_page);
-            if (guest_range_overlaps_segment(rt, old_page, grow) ||
+            if ((!getenv("IRIX_BRK_LEGACY") &&
+                 guest_range_overlaps_segment(rt, old_page, grow)) ||
                 irix_guest_map(rt, old_page, grow, 3u) != 0) {
                 /*
                  * The requested range may already be backed by a loader
