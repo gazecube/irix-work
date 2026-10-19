@@ -1,0 +1,13 @@
+[Unit]
+Description=IRIX removable media daemon (original /etc/init.d/mediad)
+After=rpcbind.service irix-devices.service
+Requires=rpcbind.service irix-devices.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/etc/init.d/mediad start
+ExecStop=/etc/init.d/mediad stop
+
+[Install]
+WantedBy=multi-user.target

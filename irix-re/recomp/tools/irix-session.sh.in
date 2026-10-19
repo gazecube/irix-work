@@ -285,9 +285,46 @@ while [ "$xscr" -lt 8 ] && xdpyinfo -display "$xdisp.$xscr" >/dev/null 2>&1; do
     xscr=$((xscr + 1))
 done
 
+# Background icons, as Xsession.dt does it.  bgicons, sabgicons, FLtoPopDB and
+# genDeviceIcons are not part of the recompiled set, so they run as the
+# original binaries under the guest runner.
+host="$(hostname)"
+desktopdir="$HOME/.desktop-$host"
+sysdesktopdir=".desktophost/$host"
+sysdesktopicondir="$sysdesktopdir/Icons"
+defBGdevs=/var/X11/xdm/DefaultDeviceList
+bg_exec()
+{
+    bg_path=$1
+    shift
+    "$guest_runner" "$bg_path" "$@"
+}
+
+# The overlay directory for "system" icons must exist before fm starts.
+if [ ! -d "$HOME/$sysdesktopicondir" ] && [ -r "$runtime/usr/sbin/bgicons" ]; then
+    (cd "$HOME" && bg_exec /usr/sbin/bgicons -overlay 2>&1)
+fi
+
 echo "IRIX session: starting desktop File Manager"
 guest_exec "$fm" -b &
 fm_pid=$!
+
+if [ -r "$runtime/usr/sbin/bgicons" ] && [ -r "$runtime/usr/sysadm/bin/sabgicons" ]; then
+    # System administration background icons (removable media via mediad,
+    # disks).  sabgicons stops when its stdin reaches EOF here, whereas
+    # Xsession.dt's stdin never does, so keep a pipe open for it.
+    (cd "$HOME" && sleep 2147483647 | bg_exec /usr/sysadm/bin/sabgicons 2>/dev/null | \
+        bg_exec /usr/sbin/bgicons -icondb "$sysdesktopdir/SysadmBgIconDB" \
+            -icondir "$sysdesktopicondir" >/dev/null 2>&1) &
+fi
+# Required/default icons (DefaultIconList via FLtoPopDB) are populated by
+# populate-irix-default-desktop.sh for now; running that leg here would add
+# duplicates of icons already on the Desktop.
+if [ -r "$runtime/usr/sbin/genDeviceIcons" ] && [ -r "$runtime$defBGdevs" ]; then
+    (cd "$HOME" && bg_exec /usr/sbin/genDeviceIcons "$defBGdevs" | \
+        bg_exec /usr/sbin/bgicons -icondir "$sysdesktopicondir" \
+            -icondb "$sysdesktopdir/DefaultBackgroundDeviceDB" >/dev/null 2>&1) &
+fi
 
 # Xsession.dt runs the user's startup-applications script once the desktop is
 # up (output to the console there; the session log here).

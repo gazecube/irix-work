@@ -73,15 +73,147 @@ extern "C" int FAMNextEvent(FAMConnection *fc,FAMEvent *e) {
     if(f->pending.empty()){uint64_t v;while(read(f->notify,&v,sizeof v)>0){}}
     return 1;
 }
+/* Paths.  By default mediad uses the same absolute paths as on IRIX
+ * (/etc/config/mediad.config, /etc/fsd.tab, /<device name> mount points,
+ * /tmp/.mediad_socket).  MEDIAD_STATE, if set, redirects them into a private
+ * directory (used for testing without touching the system). */
 const char *linux_state_path(const char *leaf) {
     static std::map<std::string,std::string> paths;
     std::string key=leaf;
     if(paths.find(key)==paths.end()){
         const char *s=getenv("MEDIAD_STATE");
-        if(!s || *s!='/'){fprintf(stderr,"MEDIAD_STATE must name an absolute private state directory\n");exit(1);}
-        paths[key]=std::string(s)+"/"+leaf;
+        if(s && *s=='/'){
+            paths[key]=std::string(s)+"/"+leaf;
+        } else {
+            static const struct { const char *leaf, *path; } irix[] = {
+                { "mediad.config", "/etc/config/mediad.config" },
+                { "fsd.tab",       "/etc/fsd.tab" },
+                { "fsd.auto",      "/etc/fsd.auto" },
+                { "fsdXXXXXX",     "/etc/fsdXXXXXX" },
+                { "mediad.sock",   "/tmp/.mediad_socket" },
+                { "media",         "" },          /* mount points are /<name> */
+            };
+            std::string path;
+            for (size_t i = 0; i < sizeof irix / sizeof irix[0]; ++i)
+                if (key == irix[i].leaf) path = irix[i].path;
+            if (path.empty() && key != "media") path = std::string("/etc/") + leaf;
+            paths[key]=path;
+        }
     }
     return paths[key].c_str();
 }
-bool linux_actions_enabled(){const char *e=getenv("MEDIAD_ENABLE_ACTIONS");return e && !strcmp(e,"1");}
-const char *linux_module_dir(){const char *p=getenv("MEDIAD_MODULE_DIR");return p?p:"/usr/lib/irix/devicelib";}
+/* Mount/eject/export actions are on by default for root (as on IRIX);
+ * MEDIAD_ENABLE_ACTIONS=0/1 overrides. */
+bool linux_actions_enabled(){
+    const char *e=getenv("MEDIAD_ENABLE_ACTIONS");
+    if (e) return !strcmp(e,"1");
+    return getuid()==0;
+}
+const char *linux_module_dir(){const char *p=getenv("MEDIAD_MODULE_DIR");return p?p:"/usr/lib/devicelib";}
+
+/* ---- udisks mount helpers ------------------------------------------------
+ * Mount removable media as the invoking user through udisks2 (no root), then
+ * make mediad's own mount directory (dir()) a symlink to wherever udisks
+ * mounted it, so the path mediad reports to clients stays stable. */
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <irixdev.h>
+
+static int run_capture(const char *const argv[], char *out, size_t outsz)
+{
+    int fds[2];
+    pid_t pid;
+    size_t n = 0;
+    int status = -1;
+    if (pipe(fds) != 0) return -1;
+    pid = fork();
+    if (pid < 0) { close(fds[0]); close(fds[1]); return -1; }
+    if (pid == 0) {
+        dup2(fds[1], 1); dup2(fds[1], 2);
+        close(fds[0]); close(fds[1]);
+        execv(argv[0], (char *const *) argv);
+        _exit(127);
+    }
+    close(fds[1]);
+    for (;;) {
+        ssize_t r = read(fds[0], out + n, outsz - 1 - n);
+        if (r <= 0) break;
+        n += (size_t) r;
+        if (n >= outsz - 1) break;
+    }
+    out[n] = 0;
+    close(fds[0]);
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int block_for(const char *irix_dev, char *blk, size_t n)
+{
+    if (irixdev_resolve(irix_dev, blk, n) != 0) return -1;
+    if (strncmp(blk, "/dev/", 5) != 0) return -1;
+    for (const char *c = blk + 5; *c; ++c)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+              (*c >= '0' && *c <= '9') || *c == '_' || *c == '-' || *c == '/'))
+            return -1;
+    return 0;
+}
+
+int linux_media_mount(const char *irix_dev, const char *link)
+{
+    char blk[256], out[1024];
+    const char *argv[] = { "/usr/bin/udisksctl", "mount", "-b", blk, "-o", "ro", NULL };
+    if (block_for(irix_dev, blk, sizeof blk) != 0) return -1;
+    int rc = run_capture(argv, out, sizeof out);
+    char *at = strstr(out, " at ");
+    if (!at) at = strstr(out, "already mounted at");
+    char path[512] = "";
+    if (at) {
+        char *p = strstr(at, "at ") + 3;
+        if (*p == '`' || *p == '\'') ++p;
+        size_t k = 0;
+        while (*p && *p != '\n' && *p != '\'' && k < sizeof path - 1) path[k++] = *p++;
+        while (k && (path[k-1] == '.' || path[k-1] == ' ')) --k;
+        path[k] = 0;
+    }
+    if (path[0] != '/' || (rc != 0 && !strstr(out, "already mounted"))) {
+        fprintf(stderr, "mediad: udisksctl mount failed: %s", out);
+        return -1;
+    }
+    // dir() may be a leftover empty directory or a stale symlink.
+    unlink(link);
+    rmdir(link);
+    if (symlink(path, link) != 0) return -1;
+    return 0;
+}
+
+int linux_media_unmount(const char *irix_dev, const char *link)
+{
+    char blk[256], out[1024];
+    const char *argv[] = { "/usr/bin/udisksctl", "unmount", "-b", blk, NULL };
+    if (block_for(irix_dev, blk, sizeof blk) != 0) return -1;
+    int rc = run_capture(argv, out, sizeof out);
+    if (rc != 0 && !strstr(out, "not mounted")) {
+        fprintf(stderr, "mediad: udisksctl unmount failed: %s", out);
+        return -1;
+    }
+    unlink(link);
+    return 0;
+}
+
+int linux_media_block(const char *irix_dev, char *blk, size_t n)
+{
+    return block_for(irix_dev, blk, n);
+}
+/* Mount ownership: whoever owns the private state directory. */
+static struct stat state_stat(void)
+{
+    struct stat st;
+    memset(&st, 0, sizeof st);
+    const char *d = getenv("MEDIAD_STATE");
+    if (d) stat(d, &st);
+    return st;
+}
+unsigned linux_media_owner_uid(void) { return (unsigned) state_stat().st_uid; }
+unsigned linux_media_owner_gid(void) { return (unsigned) state_stat().st_gid; }

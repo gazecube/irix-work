@@ -1,0 +1,15 @@
+#!/bin/sh
+# Minimal host stand-in for IRIX chkconfig(1M): flags live in /etc/config/<name>
+# and are "on" or "off".  The original /etc/init.d scripts call it as
+#   /etc/chkconfig <flag>        exit 0 if <flag> is on
+# This is not the IRIX binary; it implements only what the init scripts use.
+CONFIG=${CHKCONFIG_DIR:-/etc/config}
+case $# in
+0)  for f in "$CONFIG"/*; do [ -f "$f" ] && printf '\t%-15s %s\n' "$(basename "$f")" "$(cat "$f")"; done ;;
+1)  [ -f "$CONFIG/$1" ] && [ "$(cat "$CONFIG/$1" 2>/dev/null)" = on ] ;;
+2)  case $2 in
+    on|off) mkdir -p "$CONFIG" && echo "$2" > "$CONFIG/$1" ;;
+    *) echo "usage: chkconfig [ flag [ on | off ] ]" >&2; exit 2 ;;
+    esac ;;
+*)  echo "usage: chkconfig [ flag [ on | off ] ]" >&2; exit 2 ;;
+esac

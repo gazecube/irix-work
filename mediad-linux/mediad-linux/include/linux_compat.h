@@ -35,4 +35,9 @@ int re_exec(const char *);
 const char *linux_state_path(const char *);
 const char *linux_module_dir();
 bool linux_actions_enabled();
+int linux_media_mount(const char *irix_dev, const char *link);
+int linux_media_unmount(const char *irix_dev, const char *link);
+int linux_media_block(const char *irix_dev, char *blk, size_t n);
+unsigned linux_media_owner_uid(void);
+unsigned linux_media_owner_gid(void);
 #endif

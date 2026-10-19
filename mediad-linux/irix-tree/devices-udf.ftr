@@ -1,0 +1,16 @@
+##
+## CDROM with a UDF file system (Linux/mediad-linux extension).
+## IRIX itself shipped no UDF support; this type is additive and modelled on
+## cdrom.iso9660.  mediad-linux reports such discs with format name "udf".
+##
+TYPE cdrom.udf
+    LEGEND      :186:UDF CDROM Drive
+    CMD OPEN	/usr/sbin/fm $LEADERMOUNTPOINT
+    CMD ALTOPEN /usr/sbin/fm $LEADERMOUNTPOINT
+    CMD GETINFO	/usr/sysadm/bin/runpanel /usr/sysadm/catalogdf/SaRemovableMediaCatalog.cdf $LEADER
+    MENUCMD	":570:Eject CDROM" /usr/lib/Eject $LEADERDEVICEFILE
+    MENUCMD 	":606:Share" /usr/sysadm/bin/runtask /usr/sysadm/taskdf/SaShareFsTask.tdf $LEADERMOUNTPOINT
+    ICON {
+	        include("iconlib/cdrom.loaded.fti");
+	        include("iconlib/addon.iso9660.fti");
+    }

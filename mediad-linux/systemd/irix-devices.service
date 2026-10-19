@@ -1,0 +1,11 @@
+[Unit]
+Description=IRIX device namespace (/dev/dsk, /dev/rdsk, /dev/scsi) for mediad
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/irix-devices/irix-devices --state /var/lib/irix-devices --root / --host-dev --watch --quiet
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

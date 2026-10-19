@@ -408,13 +408,41 @@ Volume::mount()
         Log::info("observe only: filesystem %s on %s; mount disabled", type(), fsname());
         return;
     }
+    if (getuid() != 0) {
+	// Unprivileged: mount through udisks2 and point dir() at the result.
+	if (linux_media_mount(fsname(), dir()) != 0) {
+	    _state = VS_MOUNT_FAILED;
+	    Log::critical("The file system on device: %s cannot be mounted", fsname());
+	    return;
+	}
+	_state = VS_MOUNTED;
+	find_inst_subformat();
+	find_photoCD_subformat();
+	CallBack::activate(Event(Event::Mount, NULL, this));
+	return;
+    }
+
     if (make_dir(dir()) != 0)
 	return;
 
-    //	Build the mount command and run it.
+    //	Build the mount command and run it.  fsname() is an IRIX-style alias
+    //	(/dev/rdsk/dks5d0vol); mount(8) needs the real block device, and the
+    //	files must be readable by the user who owns the state directory.
 
+    char blk[256], mntopts[512];
+    if (linux_media_block(fsname(), blk, sizeof blk) != 0) {
+	_state = VS_MOUNT_FAILED;
+	Log::critical("No block device for %s", fsname());
+	return;
+    }
+    snprintf(mntopts, sizeof mntopts, "%s", options());
+    if (!strcmp(type(), "udf") || !strcmp(type(), "iso9660")) {	// data discs: readable by the owner
+	size_t l = strlen(mntopts);
+	snprintf(mntopts + l, sizeof mntopts - l, "%suid=%u,gid=%u",
+		 l ? "," : "", linux_media_owner_uid(), linux_media_owner_gid());
+    }
     const char *mount_argv[8] = {
-	"/usr/bin/mount", "-t", type(), "-o", options(), fsname(), dir(), NULL
+	"/usr/bin/mount", "-t", strcmp(type(), "iso9660") ? type() : "auto", "-o", mntopts, blk, dir(), NULL
     };
     int mount_status = execute(mount_argv);
 
@@ -422,7 +450,7 @@ Volume::mount()
     {
 	// On the off chance that the mount failed because the device
 	// was already mounted, try to dismount it and retry the mount.
-	const char *umount_argv[8] = { "/usr/bin/umount", fsname(), NULL };
+	const char *umount_argv[8] = { "/usr/bin/umount", blk, NULL };
 	execute(umount_argv);	// umount doesn't return non zero with
 				// bad filesys so just have to try again.
 	mount_status = execute(mount_argv);
@@ -485,7 +513,8 @@ Volume::dismount(bool force)
     const char *umount_argv[8] = {
 	"/usr/bin/umount", dir(), NULL
     };
-    if (execute(umount_argv) != 0)
+    if ((getuid() != 0 ? linux_media_unmount(fsname(), dir())
+		       : execute(umount_argv)) != 0)
     {
 	Log::critical("The file system on device: %s cannot be dismounted",
 		      fsname());

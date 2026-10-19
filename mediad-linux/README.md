@@ -8,33 +8,21 @@ Transport: TCP on 127.0.0.1, registered with rpcbind as program 391017 v1, as on
 IRIX, so the unmodified IRIX `libmediaclient` (used by SaRemovableMediaClass,
 which feeds the desktop's drive icons) can find it.
 
-Run (needs the `optical` group for /dev/sr*; state dir path must be short):
+Install (native IRIX paths; dry run by default):
 
-    irix-device-ecosystem/bin/irix-devices --state $S/ids --root $S/root --quiet
-    MEDIAD_STATE=$S MEDIAD_MODULE_DIR=$PWD/mediad-linux/build IRIXDEV_STATE=$S/ids \
-      IRIXDEV_ROOT=$S/root mediad-linux/build/mediad-linux -f -a -l 7
-    mediad-linux/build/media-client      # dumps the monitor state as JSON
+    mediad-linux/install-mediad.sh            # show what would change
+    mediad-linux/install-mediad.sh --apply    # sudo -n; writes a manifest
+    sudo systemctl enable --now irix-devices mediad
 
-## Desktop drive icons: the original chain
+This installs `/usr/etc/mediad`, `/usr/lib/devicelib/{dev_linux,fmt_iso,fmt_udf}.so`,
+the **original** `/etc/init.d/mediad` and `/etc/config/mediad{,.options}` from
+the IRIX tree, a small host `/etc/chkconfig` stand-in, the `irix-devices` tool
+and two systemd units (`mediad.service` just runs `/etc/init.d/mediad
+start|stop`).  `irix-devices --host-dev` publishes `/dev/dsk`, `/dev/rdsk` and
+`/dev/scsi` aliases.  mediad runs as root and mounts discs at `/<device name>`
+(e.g. `/CDROM2`); `MEDIAD_STATE=<dir>` still redirects its files for testing.
 
-`Xsession.dt` runs `sabgicons | bgicons -icondb $sysdesktopdir/SysadmBgIconDB
--icondir $sysdesktopicondir`.  With the runtime fixes in this tree the
-original IRIX binaries do this against mediad-linux:
-
-    mediad-linux  <--(portmapper 391017, XDR)--  libmediaclient (IRIX original)
-        SaRemovableMediaClass.so  ->  sabgicons  ->  bgicons  ->  Icons/ + SysadmBgIconDB
-
-`sabgicons` exits on stdin EOF (session-lifetime guard): keep its stdin open
-(`tail -f /dev/null | sabgicons | bgicons ...`).  Needs, in the local-only
-IRIX-TREE: `usr/lib32/imdModels/libSaRemovableMediaModel.so` ->
-`../../sysadm/adminclass/SaRemovableMediaClass.so` (the model factory lives in
-the admin class DSO) and `usr/sysadm/bin/runpriv` replaced by
-`desktop-integration/native/runpriv-shim` (no setuid root here).
-Run with `IRIXDEV_ROOT=<irix-devices staging root>` so the guest sees
-/dev/{dsk,rdsk,scsi}.
-
-Open: the *running native fm* (static recompilation) cannot dlopen
-SaRemovableMediaClass.so ("IRIX N32 dynamic loading is unavailable"), so it
-shows an error dialog per icon.  The DSO (and its closure: libmediaclient,
-libsaremote, libSaModel, libsaAdminObj, ...) must be part of fm's recompiled
-bundle, or the runtime needs a real N32 dlopen.
+UDF discs are currently reported as `iso9660` (spoof; set MEDIAD_REPORT_UDF=1
+for the real `udf` format, which needs `devices/udf.ftr` compiled into
+devices.otr).  The desktop icon chain (`sabgicons | bgicons`, `genDeviceIcons |
+bgicons`) is started by `irix-session` (irix-re/recomp/tools/irix-session.sh.in).

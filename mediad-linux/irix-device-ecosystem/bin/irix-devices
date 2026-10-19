@@ -62,10 +62,10 @@ def generate(devices, registry, slices):
             for kind in ['dsk','rdsk']: aliases[f'/dev/{kind}/{stem}{sl}']=match[0]['target']
     return aliases
 
-def reconcile(root, aliases):
+def reconcile(root, aliases, ledger=None):
     root=P(root).absolute(); root.mkdir(parents=True,exist_ok=True)
     # Ownership ledger prevents deleting aliases or files created by others.
-    ledger=root/'.irix-device-links.json'
+    ledger=P(ledger) if ledger else root/'.irix-device-links.json'
     old=json.loads(read(ledger) or '{}')
     for name,target in aliases.items():
         dest=root/name.lstrip('/')
@@ -91,7 +91,7 @@ def refresh(args):
         aliases=generate(ds,reg,slices)
         # Save identity assignments before publishing aliases; never reuse an ID.
         atomic(state/'identities.json',json.dumps(reg,indent=2)+'\n')
-        if args.root: reconcile(args.root,aliases)
+        if args.root: reconcile(args.root,aliases,(state/'links.json') if args.host_dev else None)
         atomic(state/'devices.json',json.dumps(dict(version=1,devices=ds,aliases=aliases),indent=2)+'\n')
         rows=[]
         for d in ds:
@@ -113,9 +113,12 @@ def main():
     ap.add_argument('--slices',help='JSON mapping stable device identity to {s0: Linux-partition-number, ...}')
     ap.add_argument('--watch',action='store_true',help='reconcile device additions/removals every two seconds')
     ap.add_argument('--quiet',action='store_true')
+    ap.add_argument('--host-dev',action='store_true',help='deploy the aliases into the real /dev (--root /); only symlinks under /dev/dsk, /dev/rdsk, /dev/scsi are created, tracked in STATE/links.json')
     args=ap.parse_args()
-    if args.root and P(args.root).resolve()==P('/'):
-        ap.error('use an isolated root; host /dev deployment is not implemented')
+    if args.root and P(args.root).resolve()==P('/') and not args.host_dev:
+        ap.error('--root / needs --host-dev (aliases are created under the real /dev)')
+    if args.host_dev and not (args.root and P(args.root).resolve()==P('/')):
+        ap.error('--host-dev requires --root /')
     while True:
         refresh(args)
         if not args.watch: return

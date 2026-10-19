@@ -393,6 +393,81 @@ static void b_usmalloc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { cpu->gpr[2] = guest_alloc(rt, ARG(0)); }
 static void b_usnop1(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(1); }
 
+/* ---- libgen strccpy()/strecpy(): C escape sequence conversion ------------ */
+/* strccpy(out, in): copy in to out, converting \n \t \ddd ... escapes to the
+ * characters they stand for; returns out.  strecpy(out, in, except) is the
+ * inverse: unprintable characters become escapes (those in `except` stay). */
+static void b_strccpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr out = (IrixGuestAddr)ARG(0), in = (IrixGuestAddr)ARG(1);
+    uint8_t c;
+    uint32_t o = 0;
+    if (!out || !in) { cpu->gpr[2] = out; return; }
+    for (;;) {
+        c = irix_guest_read8(rt, in++);
+        if (c == '\\') {
+            c = irix_guest_read8(rt, in++);
+            switch (c) {
+            case 'a': c = 7; break;   case 'b': c = 8; break;
+            case 'f': c = 12; break;  case 'n': c = 10; break;
+            case 'r': c = 13; break;  case 't': c = 9; break;
+            case 'v': c = 11; break;
+            case '0': case '1': case '2': case '3':
+            case '4': case '5': case '6': case '7': {
+                unsigned v = (unsigned)(c - '0'), k;
+                for (k = 0; k < 2; ++k) {
+                    uint8_t d = irix_guest_read8(rt, in);
+                    if (d < '0' || d > '7') break;
+                    v = v * 8u + (unsigned)(d - '0');
+                    ++in;
+                }
+                c = (uint8_t)v;
+                break;
+            }
+            case 0: --in; c = '\\'; break;
+            default: break;           /* \\ \' \" and others: the char itself */
+            }
+        }
+        irix_guest_write8(rt, out + o++, c);
+        if (!c && in) {
+            /* an escape produced NUL or the string ended */
+            if (irix_guest_read8(rt, in - 1) == 0) break;
+        }
+    }
+    cpu->gpr[2] = out;
+}
+static void b_strecpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr out = (IrixGuestAddr)ARG(0), in = (IrixGuestAddr)ARG(1);
+    IrixGuestAddr except = (IrixGuestAddr)ARG(2);
+    uint32_t o = 0;
+    uint8_t c;
+    if (!out || !in) { cpu->gpr[2] = out; return; }
+    while ((c = irix_guest_read8(rt, in++)) != 0) {
+        int keep = (c >= 32 && c < 127 && c != '\\');
+        const char *esc = 0;
+        char oct[5];
+        IrixGuestAddr e;
+        if (except) {
+            for (e = except; irix_guest_read8(rt, e); ++e)
+                if (irix_guest_read8(rt, e) == c) { keep = 1; break; }
+        }
+        if (keep) { irix_guest_write8(rt, out + o++, c); continue; }
+        switch (c) {
+        case 7: esc = "\\a"; break;  case 8: esc = "\\b"; break;
+        case 12: esc = "\\f"; break; case 10: esc = "\\n"; break;
+        case 13: esc = "\\r"; break; case 9: esc = "\\t"; break;
+        case 11: esc = "\\v"; break; case '\\': esc = "\\\\"; break;
+        default:
+            snprintf(oct, sizeof oct, "\\%03o", c);
+            esc = oct;
+        }
+        while (*esc) irix_guest_write8(rt, out + o++, (uint8_t)*esc++);
+    }
+    irix_guest_write8(rt, out + o, 0);
+    cpu->gpr[2] = out;
+}
+
 /* ---- hardware inventory (libc setinvent/getinvent/endinvent) ------------ */
 /* The state block is {next index, count, records}; records are N32
  * inventory_t (24 bytes, inv_next always NULL) materialised in guest memory
@@ -758,6 +833,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "lckpwdf", b_zero }, { "ulckpwdf", b_zero },
         { "putpwent", b_enosys }, { "putspent", b_enosys },
         { "fdopen", b_fdopen }, { "popen", b_popen },
+        { "strccpy", b_strccpy }, { "strecpy", b_strecpy },
         { "setinvent_r", b_setinvent_r }, { "getinvent_r", b_getinvent_r },
         { "endinvent_r", b_endinvent_r }, { "setinvent", b_setinvent },
         { "getinvent", b_getinvent }, { "endinvent", b_endinvent },
