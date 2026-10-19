@@ -145,6 +145,7 @@
 #define SYS_sysinfo 1156
 #define SYS_nuname 1157
 #define SYS_xstat 1158
+#define SYS_getmountid 1203
 #define SYS_lxstat 1159
 #define SYS_fxstat 1160
 #define SYS_xmknod 1161

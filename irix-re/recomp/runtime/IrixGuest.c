@@ -4551,6 +4551,31 @@ exec_syscall_failed:
         syscall_result(cpu, 0);
         return;
     }
+    case SYS_getmountid: { /* getmountid(path, mountid_t *): identify the filesystem holding path */
+        IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
+        IrixGuestAddr out_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[5];
+        const char *guest_path = irix_guest_cstr(rt, path_addr, 65536u);
+        char host_path[PATH_MAX];
+        const char *path;
+        struct stat st;
+        if (!guest_path || !irix_guest_ptr(rt, out_addr, 16u)) {
+            errno = EFAULT;
+            syscall_result(cpu, -1);
+            return;
+        }
+        path = irix_host_path(rt, guest_path, host_path, sizeof(host_path));
+        if (!path || stat(path, &st) != 0) {
+            syscall_result(cpu, -1);
+            return;
+        }
+        /* mountid_t is four words; the device number identifies the mount. */
+        irix_guest_write32be(rt, out_addr, irix_syscall_dev(st.st_dev));
+        irix_guest_write32be(rt, out_addr + 4u, 0u);
+        irix_guest_write32be(rt, out_addr + 8u, 0u);
+        irix_guest_write32be(rt, out_addr + 12u, 0u);
+        syscall_result(cpu, 0);
+        return;
+    }
     case SYS_access: { /* access */
         IrixGuestAddr path_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         int mode = (int)(int32_t)cpu->gpr[5];

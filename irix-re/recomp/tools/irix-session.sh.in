@@ -297,7 +297,15 @@ bg_exec()
 {
     bg_path=$1
     shift
-    "$guest_runner" "$bg_path" "$@"
+    # The generic runner takes the program in IRIX_GUEST_EXEC_PATH; its own
+    # arguments are the program's argv (argv[0] first).
+    if [ -n "$session_logdir" ]; then
+        IRIX_GUEST_EXEC_PATH="$bg_path" IRIX_EXEC_BACKEND=static \
+            "$guest_runner" "$(basename "$bg_path")" "$@" 2>>"$session_logdir/$(basename "$bg_path").log"
+    else
+        IRIX_GUEST_EXEC_PATH="$bg_path" IRIX_EXEC_BACKEND=static \
+            "$guest_runner" "$(basename "$bg_path")" "$@"
+    fi
 }
 
 # The overlay directory for "system" icons must exist before fm starts.
