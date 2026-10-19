@@ -737,9 +737,20 @@ def main():
                    '-Wall', '-Wextra', '-Werror',
                    '-Wno-error=unused-label', '-Wno-error=unused-but-set-variable',
                    '-fPIC', '-I', str(inc), '-c', str(src), '-o', str(dst)]
+            # dst may be a hardlink of a cache entry: never write through it.
+            if dst.exists():
+                dst.unlink()
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if p.returncode == 0:
                 dst_key.write_text(expected_source_key + '\n')
+                # Store the object once in the shared cache and keep dst as a hardlink
+                # of it, so every app closure shares one copy of identical objects.
+                try:
+                    tmp = object_cache / (key + '.tmp.%d.o' % os.getpid())
+                    os.link(dst, tmp)
+                    os.replace(tmp, cache_obj)
+                except OSError:
+                    pass
             return src, dst, p
 
     objects = []
@@ -956,6 +967,15 @@ def main():
     print(lib)
     for dso in shared_outputs:
         print(dso)
+
+    # Keep the shared caches from growing without bound: every runtime rebuild
+    # changes the cache keys, leaving unreferenced entries behind.
+    if os.environ.get('IRIX_PRUNE_CACHES', '1') != '0':
+        try:
+            import prune_build_caches
+            prune_build_caches.prune(str(out.parent), True, min_age=3600, quiet=False)
+        except Exception as exc:                      # pruning must never fail a build
+            print(f'warning: cache pruning skipped: {exc}', file=sys.stderr)
 
 
 if __name__ == '__main__':
