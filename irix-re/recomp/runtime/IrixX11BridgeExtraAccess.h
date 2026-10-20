@@ -5,6 +5,9 @@
 #include <X11/Xlib.h>
 
 Display *irix_x11_primary_display_from_guest(IrixGuestAddr addr);
+void irix_x11_overlay_adjust(Display *dpy, Window w, int *x, int *y);
+void irix_x11_overlay_unadjust(Display *dpy, Window w, int *x, int *y);
+void irix_x11_overlay_destroying(Display *dpy, Window w);
 IrixGuestAddr irix_x11_guest_visual_by_id(IrixGuestRuntime *rt, IrixGuestAddr dpy,
                                           int screen, unsigned long visualid);
 Screen *irix_x11_primary_screen_from_guest(IrixGuestAddr display_addr,

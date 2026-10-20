@@ -66,6 +66,22 @@ def main():
                 def_rank[name]=bi
     for name,addr in rld_fallback.items():
         defs.setdefault(name,addr)
+    # The translator keeps one function per address, so weak aliases such as
+    # IRIS GL's getgdesc (the same code as __GLgetgdesc) have no function row
+    # of their own.  Imports of such names bind to the alias's address when a
+    # recovered function exists there.
+    for b in bundles:
+        if b.get('prefix') == 'irix_rld':
+            continue
+        funcs={f['address'] for f in b['functions'] if f['address']}
+        syms=dyn_symbols(b['path'])
+        # SGI's IRIS GL exports a strong __GL<name> with a weak <name> alias.
+        for name,row in syms.items():
+            alias=syms.get('__GL'+name)
+            if (alias and row['shndx'] and row['type']==STT_FUNC and
+                    row['bind']==2 and alias['sym_value']==row['sym_value'] and
+                    row['sym_value'] in funcs):
+                defs.setdefault(name,row['sym_value'])
     # Explicit runtime providers outrank auto-expanded DSOs regardless of
     # closure order.  Auto dependencies are appended after seed components,
     # so "last definition wins" alone can let a later recovered import stub

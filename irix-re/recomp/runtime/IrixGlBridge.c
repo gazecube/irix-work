@@ -162,7 +162,15 @@ static void gl_b_glLightModelfv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void gl_b_glLoadMatrixf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     float m[16];
-    if (gl_read_floats(rt, I(0), 16, m)) glLoadMatrixf(m);
+    if (gl_read_floats(rt, I(0), 16, m)) {
+        if (getenv("IRIX_TRACE_GL_DRAW")) {
+            GLint mode = 0;
+            glGetIntegerv(GL_MATRIX_MODE, &mode);
+            fprintf(stderr, "GLD loadmatrix mode=%x [%g %g %g %g | %g %g %g %g | %g %g %g %g | %g %g %g %g]\n", mode,
+                    m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+        }
+        glLoadMatrixf(m);
+    }
     cpu->gpr[2] = 0;
 }
 
@@ -694,11 +702,13 @@ static void gl_b_glIglooInterfaceSGIX(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     if (gl_trace_on()) {
         IrixGuestAddr p = (uint32_t)cpu->gpr[5];
-        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x) [%x %x %x]\n",
-                (unsigned)cpu->gpr[4], (unsigned)p,
-                p ? irix_guest_read32be(rt, p) : 0u,
-                p ? irix_guest_read32be(rt, p + 4u) : 0u,
-                p ? irix_guest_read32be(rt, p + 8u) : 0u);
+        unsigned k;
+        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x) ra=%08x a2=%08x a3=%08x [",
+                (unsigned)cpu->gpr[4], (unsigned)p, (unsigned)cpu->gpr[31],
+                (unsigned)cpu->gpr[6], (unsigned)cpu->gpr[7]);
+        for (k = 0; p && k < 8; ++k)
+            fprintf(stderr, "%s%x", k ? " " : "", irix_guest_read32be(rt, p + 4u * k));
+        fprintf(stderr, "]\n");
     }
     {
         const char *r = getenv("IRIX_GL_IGLOO_RET");
@@ -956,6 +966,7 @@ static void gl_b_glXDestroyContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 static int gl_cur_overlay;
+static GLenum gl_shade_model = GL_SMOOTH;
 int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
 
 static void gl_b_glXMakeCurrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -972,6 +983,12 @@ static void gl_b_glXMakeCurrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         {
             XWindowAttributes wa;
             gl_cur_overlay = 0;
+            if (c && !getenv("IRIX_GL_NO_SHADE_SYNC")) glShadeModel(gl_shade_model);
+            if (c && getenv("IRIX_GL_FRONT")) {
+                typedef void (*db_t)(GLenum);
+                db_t f = (db_t)gl_proc("glDrawBuffer");
+                if (f) f(GL_FRONT);
+            }
             if (c && XGetWindowAttributes(d, (Window)I(1), &wa) && wa.visual)
                 gl_cur_overlay = irix_gl_is_overlay_visual(
                     d, XScreenNumberOfScreen(wa.screen),
@@ -1177,7 +1194,95 @@ static void gl_ov_glIndexMask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+
+/* IRIX_TRACE_GL_DRAW=1 logs the values behind the main drawing calls. */
+static int gl_draw_trace(void)
+{
+    static int on = -1;
+    if (on < 0) on = getenv("IRIX_TRACE_GL_DRAW") != 0;
+    return on;
+}
+static void gl_t_glVertex3fv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (gl_draw_trace()) {
+        IrixGuestAddr p = ARG(0);
+        fprintf(stderr, "GLD vertex3fv %g %g %g\n", gl_rdf(rt, p), gl_rdf(rt, p + 4), gl_rdf(rt, p + 8));
+    }
+    gl_b_glVertex3fv(rt, cpu);
+}
+static void gl_t_glColor3fv(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (gl_draw_trace()) {
+        IrixGuestAddr p = ARG(0);
+        fprintf(stderr, "GLD color3fv %g %g %g draw=%lx\n", gl_rdf(rt, p), gl_rdf(rt, p + 4), gl_rdf(rt, p + 8), (unsigned long)glXGetCurrentDrawable());
+    }
+    gl_b_glColor3fv(rt, cpu);
+}
+static void gl_t_glRotatef(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (gl_draw_trace())
+        fprintf(stderr, "GLD rotatef %g %g %g %g\n", F(0), F(1), F(2), F(3));
+    gl_b_glRotatef(rt, cpu);
+}
+static void gl_t_glOrtho(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (gl_draw_trace())
+        fprintf(stderr, "GLD ortho %g %g %g %g\n", F(0), F(1), F(2), F(3));
+    gl_b_glOrtho(rt, cpu);
+}
+
+static void gl_t_glFlush(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    gl_b_glFlush(rt, cpu);
+    {
+        /* IRIS GL draws single-buffered windows straight to the front buffer;
+         * the host only presents that on a finish. */
+        GLint db = 0;
+        if (glXGetCurrentContext()) {
+            glGetIntegerv(GL_DRAW_BUFFER, &db);
+            if (db == GL_FRONT || db == GL_FRONT_LEFT) glFinish();
+        }
+    }
+    if (gl_draw_trace()) {
+        unsigned char px[4] = {1, 2, 3, 4};
+        GLint rb = 0, db = 0;
+        glGetIntegerv(GL_READ_BUFFER, &rb);
+        glGetIntegerv(GL_DRAW_BUFFER, &db);
+        glFinish();
+        glReadPixels(100, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        fprintf(stderr, "GLD flush draw=%lx readbuf=%x drawbuf=%x px=%d,%d,%d,%d\n",
+                (unsigned long)glXGetCurrentDrawable(), rb, db, px[0], px[1], px[2], px[3]);
+    }
+}
+
+/*
+ * IGLOO keeps one shade-model cache for the whole process, but every window
+ * has its own host GL context.  Remember the last model IGLOO set and apply
+ * it whenever a context becomes current, so its cache and the context agree.
+ */
+static void gl_t_glShadeModel(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    gl_shade_model = (GLenum)I(0);
+    gl_b_glShadeModel(rt, cpu);
+}
+
+/* Overlay index 0 is transparent: a black clear on an overlay clears to alpha 0. */
+static void gl_t_glClearColor(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    float r = F(0), g = F(1), b = F(2), a = F(3);
+    typedef void (*fn_t)(GLclampf, GLclampf, GLclampf, GLclampf);
+    fn_t f = (fn_t)gl_proc("glClearColor");
+    (void)rt;
+    if (gl_cur_overlay && r == 0.0f && g == 0.0f && b == 0.0f) a = 0.0f;
+    if (f) f(r, g, b, a);
+    cpu->gpr[2] = 0;
+}
 static const GlNamed gl_named[] = {
+    { "glClearColor", gl_t_glClearColor },
+    { "glShadeModel", gl_t_glShadeModel },
+    { "glFlush", gl_t_glFlush },
+    { "glVertex3fv", gl_t_glVertex3fv }, { "glColor3fv", gl_t_glColor3fv },
+    { "glRotatef", gl_t_glRotatef }, { "glOrtho", gl_t_glOrtho },
     { "glClearIndex", gl_ov_glClearIndex }, { "glIndexf", gl_ov_glIndexf },
     { "glIndexi", gl_ov_glIndexi }, { "glIndexs", gl_ov_glIndexs },
     { "glIndexMask", gl_ov_glIndexMask },

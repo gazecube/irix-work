@@ -387,6 +387,69 @@ static void write_xrectangle(IrixGuestRuntime *rt, IrixGuestAddr addr,
     irix_guest_write16be(rt, addr + 6u, r->height);
 }
 
+
+/*
+ * The emulated GL overlay is a child of its GL window in the guest's view, but
+ * a mapped child clips the parent's own drawing (Mesa copies front-buffer
+ * output into the window with the default clip-by-children), which would hide
+ * the normal planes completely.  So the overlay lives on the host as a
+ * sibling stacked above its guest parent, and positions are translated.
+ */
+#define OV_MAX 16
+static struct { Window ov, guest_parent; } ov_tab[OV_MAX];
+
+int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
+
+static int ov_find(Window w)
+{
+    int i;
+    for (i = 0; i < OV_MAX; ++i)
+        if (ov_tab[i].ov == w) return i;
+    return -1;
+}
+
+static void ov_offset(Display *dpy, Window gp, int *ox, int *oy)
+{
+    Window root, parent, *kids = 0;
+    unsigned int nk = 0;
+    Window child;
+    *ox = *oy = 0;
+    if (XQueryTree(dpy, gp, &root, &parent, &kids, &nk)) {
+        if (kids) XFree(kids);
+        if (parent) XTranslateCoordinates(dpy, gp, parent, 0, 0, ox, oy, &child);
+    }
+}
+
+void irix_x11_overlay_adjust(Display *dpy, Window w, int *x, int *y)
+{
+    int i = ov_find(w), ox, oy;
+    if (i < 0) return;
+    ov_offset(dpy, ov_tab[i].guest_parent, &ox, &oy);
+    *x += ox; *y += oy;
+}
+
+void irix_x11_overlay_unadjust(Display *dpy, Window w, int *x, int *y)
+{
+    int i = ov_find(w), ox, oy;
+    if (i < 0) return;
+    ov_offset(dpy, ov_tab[i].guest_parent, &ox, &oy);
+    *x -= ox; *y -= oy;
+}
+
+/* Destroying a GL window takes its sibling overlay with it. */
+void irix_x11_overlay_destroying(Display *dpy, Window w)
+{
+    int i;
+    for (i = 0; i < OV_MAX; ++i) {
+        if (ov_tab[i].guest_parent == w && ov_tab[i].ov) {
+            XDestroyWindow(dpy, ov_tab[i].ov);
+            ov_tab[i].ov = 0;
+        } else if (ov_tab[i].ov == w) {
+            ov_tab[i].ov = 0;
+        }
+    }
+}
+
 static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *dpy = fallback_display(rt, (uint32_t)cpu->gpr[4]);
@@ -440,8 +503,35 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         if (vl && vn > 0) depth = vl[0].depth;
         if (vl) XFree(vl);
     }
-    w = XCreateWindow(dpy, parent, x, y, width, height, border_width,
-                      depth, class_value, visual, valuemask, attrs_ptr);
+    {
+        Window guest_parent = 0;
+        if (visual && visual != (Visual *)CopyFromParent && parent) {
+            XWindowAttributes pwa;
+            if (XGetWindowAttributes(dpy, parent, &pwa) &&
+                irix_gl_is_overlay_visual(dpy, XScreenNumberOfScreen(pwa.screen),
+                                          XVisualIDFromVisual(visual))) {
+                Window root, up, *kids = 0;
+                unsigned int nk = 0;
+                if (XQueryTree(dpy, parent, &root, &up, &kids, &nk)) {
+                    int ox, oy;
+                    if (kids) XFree(kids);
+                    if (up && up != root) {
+                        ov_offset(dpy, parent, &ox, &oy);
+                        guest_parent = parent;
+                        parent = up;
+                        x += ox; y += oy;
+                    }
+                }
+            }
+        }
+        w = XCreateWindow(dpy, parent, x, y, width, height, border_width,
+                          depth, class_value, visual, valuemask, attrs_ptr);
+        if (w && guest_parent) {
+            int i;
+            for (i = 0; i < OV_MAX; ++i)
+                if (!ov_tab[i].ov) { ov_tab[i].ov = w; ov_tab[i].guest_parent = guest_parent; break; }
+        }
+    }
     if (getenv("IRIX_TRACE_GL"))
         fprintf(stderr, "IRIX X: XCreateWindow parent=%lx %ux%u depth=%d class=%u visualid=%lx mask=%lx border=%lx cmap=%lx -> %lx\n",
                 (unsigned long)parent, width, height, depth, class_value,
@@ -488,13 +578,32 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         cpu->gpr[2] = 0;
         return;
     }
+    if ((uint32_t)cpu->gpr[6] & (CWX | CWY))
+        irix_x11_overlay_adjust(dpy, (Window)(uint32_t)cpu->gpr[5], &changes.x, &changes.y);
     cpu->gpr[2] = (uint32_t)XConfigureWindow(dpy, (Window)(uint32_t)cpu->gpr[5],
                                               (unsigned int)(uint32_t)cpu->gpr[6], &changes);
 }
 
 static void bridge_XMapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XMapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
 static void bridge_XUnmapSubwindows(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XUnmapSubwindows(d,(Window)(uint32_t)cpu->gpr[5]):0;}
-static void bridge_XReparentWindow(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);Window w=(Window)(uint32_t)cpu->gpr[5],p=(Window)(uint32_t)cpu->gpr[6];cpu->gpr[2]=d?(uint32_t)XReparentWindow(d,w,p,(int)cpu->gpr[7],(int)cpu->gpr[8]):0;}
+static void bridge_XReparentWindow(IrixGuestRuntime *rt,IrixGuestCpu *cpu)
+{
+    Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);
+    Window w=(Window)(uint32_t)cpu->gpr[5],p=(Window)(uint32_t)cpu->gpr[6];
+    int x=(int)cpu->gpr[7],y=(int)cpu->gpr[8];
+    if(d){
+        int i=ov_find(w);
+        if(i>=0&&p==ov_tab[i].guest_parent){
+            /* keep the overlay a host sibling of its guest parent */
+            Window root,up,*kids=0;unsigned int nk=0;int ox,oy;
+            if(XQueryTree(d,p,&root,&up,&kids,&nk)){
+                if(kids)XFree(kids);
+                if(up&&up!=root){ov_offset(d,p,&ox,&oy);p=up;x+=ox;y+=oy;}
+            }
+        }
+    }
+    cpu->gpr[2]=d?(uint32_t)XReparentWindow(d,w,p,x,y):0;
+}
 static void bridge_XSetWindowBorderWidth(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBorderWidth(d,(Window)(uint32_t)cpu->gpr[5],(unsigned)cpu->gpr[6]):0;}
 static void bridge_XSetWindowColormap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowColormap(d,(Window)(uint32_t)cpu->gpr[5],(Colormap)(uint32_t)cpu->gpr[6]):0;}
 static void bridge_XSetWindowBackgroundPixmap(IrixGuestRuntime *rt,IrixGuestCpu *cpu){Display*d=fallback_display(rt,(uint32_t)cpu->gpr[4]);cpu->gpr[2]=d?(uint32_t)XSetWindowBackgroundPixmap(d,(Window)(uint32_t)cpu->gpr[5],(Pixmap)(uint32_t)cpu->gpr[6]):0;}

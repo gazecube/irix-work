@@ -1650,7 +1650,13 @@ static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
     (void)rt; \
     cpu->gpr[2] = d ? (uint32_t)(call) : 0; }
 
-WINDOW_CALL1(bridge_XDestroyWindow, XDestroyWindow(d, (Window)(uint32_t)cpu->gpr[5]))
+static void bridge_XDestroyWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    (void)rt;
+    if (d) irix_x11_overlay_destroying(d, (Window)(uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = d ? (uint32_t)XDestroyWindow(d, (Window)(uint32_t)cpu->gpr[5]) : 0;
+}
 int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
 
 /*
@@ -1679,6 +1685,11 @@ static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     cpu->gpr[2] = d ? (uint32_t)XMapWindow(d, w) : 0;
+    /* an overlay is a sibling of its GL window on the host: keep it on top */
+    if (d && XGetWindowAttributes(d, w, &wa) && wa.visual &&
+        irix_gl_is_overlay_visual(d, XScreenNumberOfScreen(wa.screen),
+                                  XVisualIDFromVisual(wa.visual)))
+        XRaiseWindow(d, w);
 }
 WINDOW_CALL1(bridge_XMapRaised, XMapRaised(d, (Window)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XUnmapWindow, XUnmapWindow(d, (Window)(uint32_t)cpu->gpr[5]))
@@ -1692,6 +1703,7 @@ static void bridge_XMoveWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int x = (int32_t)cpu->gpr[6], y = (int32_t)cpu->gpr[7];
     (void)rt;
     
+    if (d) irix_x11_overlay_adjust(d, w, &x, &y);
     cpu->gpr[2] = d ? (uint32_t)XMoveWindow(d, w, x, y) : 0;
 }
 
@@ -1714,6 +1726,7 @@ static void bridge_XMoveResizeWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     unsigned width = (unsigned)cpu->gpr[8], height = (unsigned)cpu->gpr[9];
     (void)rt;
     
+    if (d) irix_x11_overlay_adjust(d, w, &x, &y);
     cpu->gpr[2] = d ? (uint32_t)XMoveResizeWindow(d, w, x, y, width, height) : 0;
 }
 
@@ -1739,6 +1752,7 @@ static void bridge_XConfigureWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     v.border_width = (int32_t)irix_guest_read32be(rt, a + 16u);
     v.sibling = (Window)irix_guest_read32be(rt, a + 20u);
     v.stack_mode = (int32_t)irix_guest_read32be(rt, a + 24u);
+    if (mask & (CWX | CWY)) irix_x11_overlay_adjust(d, w, &v.x, &v.y);
     cpu->gpr[2] = (uint32_t)XConfigureWindow(d, w, mask, &v);
 }
 
@@ -1949,6 +1963,7 @@ static void bridge_XGetGeometry(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d=display_from_guest((uint32_t)cpu->gpr[4]); Window root=0; int x=0,y=0; unsigned w=0,h=0,b=0,depth=0; Status s=0;
     if (d) s=XGetGeometry(d,(Drawable)(uint32_t)cpu->gpr[5],&root,&x,&y,&w,&h,&b,&depth);
+    if (d && s) irix_x11_overlay_unadjust(d,(Window)(uint32_t)cpu->gpr[5],&x,&y);
     wr32(rt,(uint32_t)cpu->gpr[6],(uint32_t)root); wr32(rt,(uint32_t)cpu->gpr[7],(uint32_t)x);
     wr32(rt,(uint32_t)cpu->gpr[8],(uint32_t)y); wr32(rt,(uint32_t)cpu->gpr[9],w);
     wr32(rt,(uint32_t)cpu->gpr[10],h); wr32(rt,(uint32_t)cpu->gpr[11],b);

@@ -581,6 +581,30 @@ static void b_crypt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = r ? scratch_str(rt, r) : 0;
 }
 
+
+/* tempnam(dir, prefix): a fresh, unique path in malloc'd guest memory (the caller frees it). */
+static void b_tempnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    static unsigned counter;
+    const char *dir = ARG(0) ? gcs(rt, ARG(0)) : 0, *prefix = ARG(1) ? gcs(rt, ARG(1)) : "";
+    const char *env = getenv("TMPDIR");
+    char path[512];
+    IrixGuestFunction m = irix_libc_bridge_lookup("malloc");
+    IrixGuestCpu c;
+    size_t i, n;
+    if (!dir || !*dir || access(dir, W_OK) != 0) dir = (env && *env && access(env, W_OK) == 0) ? env : "/tmp";
+    snprintf(path, sizeof path, "%s/%.5s%05d%u", dir, prefix ? prefix : "", (int)getpid() % 100000, counter++);
+    cpu->gpr[2] = 0;
+    if (!m) return;
+    n = strlen(path) + 1u;
+    memset(&c, 0, sizeof(c));
+    c.gpr[4] = (uint64_t)n;
+    m(rt, &c);
+    if (!(uint32_t)c.gpr[2]) return;
+    for (i = 0; i < n; ++i) irix_guest_write8(rt, (IrixGuestAddr)((uint32_t)c.gpr[2] + i), (uint8_t)path[i]);
+    cpu->gpr[2] = (uint32_t)c.gpr[2];
+}
+
 static void b_setuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { (void)rt; RET(setuid((uid_t)ARG(0))); }
 static void b_setgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -867,20 +891,9 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "yp_master", b_one }, { "yperr_string", b_null },
         { "iconv_open", b_enosys }, { "iconv", b_enosys }, { "iconv_close", b_zero },
         { "regcmp", b_null }, { "regex", b_null },
-        { "crypt", b_crypt }, { "tempnam", b_null }, { "nftw64", b_enosys },
+        { "crypt", b_crypt }, { "tempnam", b_tempnam }, { "nftw64", b_enosys },
         { "pclose", b_zero },
         { "_vfork", b_enosys }, { "l64a", b_null }, { "a64l", b_zero }, { "atold", b_zero },
-        /* IRIS GL drawing entry points: no GL device here */
-        { "RGBcolor", b_zero }, { "bgnline", b_zero }, { "bgnpolygon", b_zero },
-        { "bgntmesh", b_zero }, { "c3s", b_zero }, { "clear", b_zero },
-        { "cpack", b_zero }, { "draw2s", b_zero }, { "endline", b_zero },
-        { "endpolygon", b_zero }, { "endtmesh", b_zero }, { "getgdesc", b_zero },
-        { "move2s", b_zero }, { "ortho2", b_zero }, { "popmatrix", b_zero },
-        { "pushmatrix", b_zero }, { "rects", b_zero }, { "rot", b_zero },
-        { "sbox", b_zero }, { "sboxfi", b_zero }, { "shademodel", b_zero },
-        { "subpixel", b_zero }, { "swapbuffers", b_zero }, { "v2s", b_zero },
-        { "v3f", b_zero }, { "viewport", b_zero }, { "vpfmt", b_zero },
-        { "waddstr", b_zero },
     };
     size_t i;
     if (!name) return 0;

@@ -7274,6 +7274,26 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             
         }
 
+        {
+            /* IRIX_TRACE_FP=sym,sym: log FP argument registers on entry to those functions. */
+            static const char *fp_only = (const char *)-1;
+            if (fp_only == (const char *)-1) fp_only = getenv("IRIX_TRACE_FP");
+            if (fp_only && *fp_only && entry->name) {
+                const char *p = fp_only; size_t nl = strlen(entry->name);
+                while (*p) {
+                    const char *q = strchr(p, ',');
+                    size_t pl = q ? (size_t)(q - p) : strlen(p);
+                    if (pl == nl && !strncmp(p, entry->name, nl)) {
+                        fprintf(stderr, "FP %s a0=%08x f12=%g f13=%g f14=%g f15=%g\n", entry->name,
+                                (unsigned)cpu->gpr[4],
+                                irix_guest_fpr_get_s(cpu, 12), irix_guest_fpr_get_s(cpu, 13),
+                                irix_guest_fpr_get_s(cpu, 14), irix_guest_fpr_get_s(cpu, 15));
+                        break;
+                    }
+                    p += pl; if (*p == ',') ++p;
+                }
+            }
+        }
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
             irix_mips_interp_push_translated(&translated_frame, address,
                                               entry->size, caller_ra);
