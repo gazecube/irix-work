@@ -1654,10 +1654,17 @@ WINDOW_CALL1(bridge_XDestroyWindow, XDestroyWindow(d, (Window)(uint32_t)cpu->gpr
 int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
 
 /*
- * The emulated GL overlay is a plain depth-32 window on the host and would
- * hide the normal planes beneath it; there is no compositing path for its
- * transparency yet, so it stays unmapped.
+ * The emulated GL overlay is a depth-32 ARGB window on the host.  Under a
+ * compositor its cleared (alpha 0) pixels are transparent; without one it
+ * would paint opaque black over the normal planes, so it stays unmapped.
  */
+static int compositor_running(Display *d, int screen)
+{
+    char name[32];
+    snprintf(name, sizeof name, "_NET_WM_CM_S%d", screen);
+    return XGetSelectionOwner(d, XInternAtom(d, name, False)) != None;
+}
+
 static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
@@ -1666,7 +1673,8 @@ static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     (void)rt;
     if (d && XGetWindowAttributes(d, w, &wa) && wa.visual &&
         irix_gl_is_overlay_visual(d, XScreenNumberOfScreen(wa.screen),
-                                  XVisualIDFromVisual(wa.visual))) {
+                                  XVisualIDFromVisual(wa.visual)) &&
+        !compositor_running(d, XScreenNumberOfScreen(wa.screen))) {
         cpu->gpr[2] = 1;
         return;
     }
