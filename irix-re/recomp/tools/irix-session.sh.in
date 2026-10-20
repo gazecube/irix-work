@@ -201,7 +201,8 @@ guest_exec "$prealloc" || {
 # IRIX_SESSION_COMPOSITOR=0 to skip it, or leave it alone when one is running.
 if [ "${IRIX_SESSION_COMPOSITOR:-1}" != 0 ] && command -v picom >/dev/null 2>&1 &&
    ! xprop -root _NET_WM_CM_S0 2>/dev/null | grep -q window; then
-    picom -D 0 -o 0 >"$session_logdir/picom.log" 2>&1 &
+    if [ -n "$session_logdir" ]; then picom_log="$session_logdir/picom.log"; else picom_log=/dev/null; fi
+    picom -D 0 -o 0 >"$picom_log" 2>&1 &
     picom_pid=$!
 fi
 echo "IRIX session: starting 4Dwm on $DISPLAY"
