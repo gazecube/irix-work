@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
+
 #define IRIX_X11_BULK_TMP_BASE 0x72900000u
 #define IRIX_X11_BULK_TMP_SIZE 0x00100000u
 #define IRIX_X11_MAX_FALLBACK_DISPLAYS 16u
@@ -470,8 +472,15 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 wr32(rt,row+0u,gv);
                 wr32(rt,row+4u,(uint32_t)list[i].visualid);
                 wr32(rt,row+8u,(uint32_t)list[i].screen);
+                if(irix_gl_is_overlay_visual(d,list[i].screen,list[i].visualid)) {
+                    /* guest sees the emulated overlay as 8-bit colour index */
+                    wr32(rt,row+12u,8u);
+                    wr32(rt,row+16u,4u);
+                    list[i].colormap_size=256;
+                } else {
                 wr32(rt,row+12u,(uint32_t)list[i].depth);
                 wr32(rt,row+16u,(uint32_t)list[i].class);
+                }
                 wr32(rt,row+20u,(uint32_t)list[i].red_mask);
                 wr32(rt,row+24u,(uint32_t)list[i].green_mask);
                 wr32(rt,row+28u,(uint32_t)list[i].blue_mask);

@@ -853,6 +853,11 @@ static void gl_publish_overlay(Display *d, int screen, VisualID vid)
 
 static VisualID gl_overlay_visual_find(Display *d, int screen);
 
+int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid)
+{
+    return getenv("IRIX_GL_OVERLAY") == NULL || strcmp(getenv("IRIX_GL_OVERLAY"), "0") ? (vid && gl_overlay_visual(d, screen) == vid) : 0;
+}
+
 static VisualID gl_overlay_visual(Display *d, int screen)
 {
     VisualID vid = gl_overlay_visual_find(d, screen);
@@ -908,6 +913,7 @@ static void gl_b_glXGetConfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         if (rc == 0 && gl_overlay_visual(d, v->screen) == v->visualid) {
             switch ((int)I(2)) {
             case GLX_LEVEL: val = 1; break;
+            case GLX_BUFFER_SIZE: val = 8; break; /* colour-index overlay planes */
             case 0x23: val = 0x8009; break; /* GLX_TRANSPARENT_TYPE_EXT: transparent index */
             case 0x24: val = 0; break;      /* GLX_TRANSPARENT_INDEX_VALUE_EXT */
             case GLX_RGBA: val = 0; break;  /* IRIS GL overlays are colour index */
