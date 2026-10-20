@@ -19,6 +19,14 @@ CSS = {
 NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
+def nibble_rgb(k):
+    """One half of color(-n): bits 0/1/2 = R/G/B, bit 3 = "dim" (levels 85/170
+    in place of 0/255).  color(-n) is the low and high nibble of n, which the
+    desktop dithers 50/50."""
+    lo, hi = (85, 170) if k & 8 else (0, 255)
+    return tuple(hi if k & m else lo for m in (1, 2, 4))
+
+
 def ident():
     return [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
@@ -459,10 +467,17 @@ class Conv:
         if hexv in self.names:
             return self.names[hexv]
         r, g, b = (int(hexv[i:i + 2], 16) for i in (1, 3, 5))
-        luma = int(round(0.299 * r + 0.587 * g + 0.114 * b))
-        self.warn("colour %s has no FTI name; using color(-%d) (grey-ramp "
-                  "guess, unverified)" % (hexv, luma))
-        return str(-luma)
+        best = None
+        for n in range(2, 256):
+            lo, hi = nibble_rgb(n & 15), nibble_rgb(n >> 4)
+            avg = [(x + y) / 2.0 for x, y in zip(lo, hi)]
+            err = math.sqrt(sum((a - c) ** 2 for a, c in zip(avg, (r, g, b))))
+            cost = err + (8.0 if lo != hi else 0.0)   # prefer undithered
+            if best is None or cost < best[0]:
+                best = (cost, n, err, lo != hi)
+        self.warn("colour %s has no FTI name; using color(-%d)%s, error %.0f"
+                  % (hexv, best[1], " (dithered)" if best[3] else "", best[2]))
+        return str(-best[1])
 
     def walk(self, el, m, inherited):
         tag = el.tag.split("}")[-1]

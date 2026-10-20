@@ -42,14 +42,28 @@ IRIS = ["#000000", "#ff0000", "#00ff00", "#ffff00", "#0000ff", "#ff00ff",
         "#00ffff", "#ffffff"]
 
 
+def nibble_rgb(k):
+    """One half of color(-n): bits 0/1/2 = R/G/B, bit 3 = "dim" (levels 85/170
+    in place of 0/255)."""
+    lo, hi = (85, 170) if k & 8 else (0, 255)
+    return tuple(hi if k & m else lo for m in (1, 2, 4))
+
+
+def neg_color_rgb(n):
+    """color(-n) is two such nibbles (low, high) that the desktop dithers
+    50/50; the average is the colour you see."""
+    a, b = nibble_rgb(n & 15), nibble_rgb((n >> 4) & 15)
+    return tuple(int(round((x + y) / 2.0)) for x, y in zip(a, b))
+
+
 def numeric_color(color):
     try:
         n = int(color)
     except ValueError:
         return None
     if n < 0:
-        g = min(-n, 255)
-        return "#%02x%02x%02x" % (g, g, g)
+        r, g, b = neg_color_rgb(-n)
+        return "#%02x%02x%02x" % (r, g, b)
     if n < len(IRIS):
         return IRIS[n]
     return None
