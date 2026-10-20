@@ -456,10 +456,140 @@ def static_branch_condition(addr, insn):
     return None
 
 
+
+# Jump-table recovery.  MIPSpro switch statements compile to
+#   sltiu t, idx, N ; beqz t, default
+#   sll   i, idx, 2 ; (lw b, got_page($gp) ; addiu b, b, lo | lui/addiu)
+#   addu  a, i, b   ; lw r, 0(a) ; [addu r, r, $gp] ; jr r
+# so the case targets live in a table in the image.  Without them the C
+# backend's dispatch switch has no entry for a case block and every switch
+# falls back to the interpreter for the rest of the call.
+_JT_EXTRA = set()
+
+
+def _elf_canonical_gp(elf):
+    for sh in elf.sections:
+        if sh.get('name') == '.got':
+            return (sh['addr'] + 0x7ff0) & 0xffffffff
+    return None
+
+
+def _jt_reg_value(elf, decoded_words, pos, reg_no, gp, depth=0):
+    """Constant value of reg_no just before decoded_words[pos], or None."""
+    if depth > 4:
+        return None
+    for j in range(pos - 1, max(pos - 40, -1), -1):
+        w = decoded_words[j]
+        op = w >> 26
+        rs = (w >> 21) & 31
+        rt = (w >> 16) & 31
+        rd = (w >> 11) & 31
+        imm = sx16(w & 0xffff)
+        if op == 0x0f and rt == reg_no:
+            return ((w & 0xffff) << 16) & 0xffffffff
+        if op == 0x09 and rt == reg_no:
+            base = _jt_reg_value(elf, decoded_words, j, rs, gp, depth + 1)
+            if base is None:
+                return None
+            return (base + imm) & 0xffffffff
+        if op == 0x23 and rt == reg_no:
+            if rs == 28 and gp is not None:
+                try:
+                    return elf.words((gp + imm) & 0xffffffff, 4)[0]
+                except Exception:
+                    return None
+            return None
+        if op == 0 and rd == reg_no and (w & 0x3f) in (0x21, 0x20, 0x25, 0x00, 0x2d):
+            return None
+        if op not in (0x2b, 0x2a, 0x2e, 0x28, 0x29, 0x04, 0x05, 0x06, 0x07, 0x01,
+                      0x14, 0x15, 0x16, 0x17, 0x0b, 0x0a) and rt == reg_no and op != 0:
+            return None
+    return None
+
+
+def jump_table_targets(elf, decoded, start, size):
+    """Return the set of in-function targets of switch jump tables."""
+    out = set()
+    if elf.etype == 1:
+        return out
+    gp = _elf_canonical_gp(elf)
+    words = [w for (_a, w, _l, _c) in decoded]
+    end = start + size
+    for idx, (addr, word, _lines, _control) in enumerate(decoded):
+        if (word >> 26) != 0 or (word & 0x3f) != 0x08:
+            continue
+        jr_reg = (word >> 21) & 31
+        if jr_reg == 31:
+            continue
+        # Find "lw jr_reg, 0(y)" shortly before, optionally "addu jr_reg,jr_reg,gp".
+        add_gp = False
+        lw_pos = None
+        for j in range(idx - 1, max(idx - 6, -1), -1):
+            w = words[j]
+            op = w >> 26
+            if op == 0 and (w & 0x3f) == 0x21 and ((w >> 11) & 31) == jr_reg and \
+                    jr_reg in (((w >> 21) & 31), ((w >> 16) & 31)) and \
+                    28 in (((w >> 21) & 31), ((w >> 16) & 31)):
+                add_gp = True
+                continue
+            if op == 0x23 and ((w >> 16) & 31) == jr_reg and sx16(w & 0xffff) == 0:
+                lw_pos = j
+                break
+        if lw_pos is None:
+            continue
+        y = (words[lw_pos] >> 21) & 31
+        # addu y, a, b
+        add_pos = None
+        for j in range(lw_pos - 1, max(lw_pos - 10, -1), -1):
+            w = words[j]
+            if (w >> 26) == 0 and (w & 0x3f) == 0x21 and ((w >> 11) & 31) == y:
+                add_pos = j
+                break
+        if add_pos is None:
+            continue
+        a = (words[add_pos] >> 21) & 31
+        b = (words[add_pos] >> 16) & 31
+        base = None
+        for cand in (a, b):
+            v = _jt_reg_value(elf, words, add_pos, cand, gp)
+            if v is not None:
+                base = v
+                break
+        if base is None:
+            continue
+        # Bound from the nearest sltiu before the jr.
+        n = None
+        for j in range(idx - 1, max(idx - 40, -1), -1):
+            w = words[j]
+            if (w >> 26) == 0x0b:
+                n = w & 0xffff
+                break
+        if n is None or n == 0 or n > 512:
+            continue
+        try:
+            table = elf.words(base, n * 4)
+        except Exception:
+            continue
+        targets = []
+        ok = True
+        for ent in table:
+            t = (ent + (gp if add_gp and gp is not None else 0)) & 0xffffffff
+            if t % 4 or not (start <= t < end):
+                ok = False
+                break
+            targets.append(t)
+        if ok:
+            out.update(targets)
+    return out
+
+
 def static_cfg_entries(decoded, start, size):
     """Return addresses that can legitimately receive local dynamic control."""
     entries = {start}
     end = start + size
+    for t in _JT_EXTRA:
+        if start <= t < end:
+            entries.add(t)
     for addr, word, _lines, control in decoded:
         if not control:
             continue
@@ -587,6 +717,8 @@ def emit_range(path, name, start, size, c_prefix='', shndx=None,
         print('    IrixGuestAddr local_link_returns[64];')
         print('    unsigned local_link_depth = 0;')
     print('')
+    global _JT_EXTRA
+    _JT_EXTRA = jump_table_targets(elf, decoded, start, size)
     cfg_entries = static_cfg_entries(decoded, start, size)
     block_labels = static_block_labels(decoded, start, size)
     shared_delay_owners = set()

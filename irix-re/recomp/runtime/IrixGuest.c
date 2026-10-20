@@ -7335,8 +7335,11 @@ trace_done:     ;
         if (irix_guest_signals_pending && irix_guest_signal_dispatch &&
             !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED))
             irix_guest_signal_dispatch(rt, cpu);
-        if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)
+        if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED) {
             irix_mips_interp_pop_translated(&translated_frame);
+            if (irix_mips_interp_unwind_done(&translated_frame))
+                rt->trapped = 0;
+        }
 
         if (sg_drop_swap && sg_class &&
             irix_guest_ptr(rt, sg_class + 0x60u, 4u)) {

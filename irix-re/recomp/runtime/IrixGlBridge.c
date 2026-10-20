@@ -692,11 +692,18 @@ static void gl_igloo_command_stub(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void gl_b_glIglooInterfaceSGIX(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
-    (void)rt;
-    if (gl_trace_on())
-        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x)\n",
-                (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5]);
-    cpu->gpr[2] = GL_IGLOO_STUB_ADDR;
+    if (gl_trace_on()) {
+        IrixGuestAddr p = (uint32_t)cpu->gpr[5];
+        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x) [%x %x %x]\n",
+                (unsigned)cpu->gpr[4], (unsigned)p,
+                p ? irix_guest_read32be(rt, p) : 0u,
+                p ? irix_guest_read32be(rt, p + 4u) : 0u,
+                p ? irix_guest_read32be(rt, p + 8u) : 0u);
+    }
+    {
+        const char *r = getenv("IRIX_GL_IGLOO_RET");
+        cpu->gpr[2] = r ? (uint32_t)strtol(r, 0, 0) : 0u;
+    }
 }
 
 /* ---- GLX ---- */

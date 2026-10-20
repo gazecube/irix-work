@@ -1519,6 +1519,34 @@ void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame)
         translated_frame = frame->previous;
 }
 
+/*
+ * A jr $ra whose target is the return address of an active translated frame
+ * (rather than the interpreter invocation's own) returns past every C frame
+ * above that one.  SGI's IRIS GL does this on purpose: its token interpreter
+ * ends when a "handler" that is really the interpreter's own epilogue runs.
+ * The interpreter stops and the C stack is unwound to that frame, which then
+ * returns to its caller with the registers the epilogue left behind.
+ */
+static _Thread_local IrixMipsTranslatedFrame *unwind_frame;
+
+static IrixMipsTranslatedFrame *find_return_frame(IrixGuestAddr ra)
+{
+    IrixMipsTranslatedFrame *f;
+    for (f = translated_frame; f; f = f->previous)
+        if (f->size && f->return_address == ra)
+            return f;
+    return NULL;
+}
+
+int irix_mips_interp_unwind_done(IrixMipsTranslatedFrame *frame)
+{
+    if (unwind_frame && unwind_frame == frame) {
+        unwind_frame = NULL;
+        return 1;
+    }
+    return 0;
+}
+
 int irix_mips_interp_invoke(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                             IrixGuestAddr address)
 {
@@ -1944,6 +1972,17 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     return 0;
                 }
 
+                {
+                    IrixMipsTranslatedFrame *nl = find_return_frame(target);
+                    if (nl) {
+                        unwind_frame = nl;
+                        rt->trapped = 1;
+                        cpu->pc = target;
+                        rt->current_pc = target;
+                        cpu->gpr[0] = 0;
+                        return 0;
+                    }
+                }
                 pc = target;
                 cpu->pc = pc;
                 rt->current_pc = pc;
