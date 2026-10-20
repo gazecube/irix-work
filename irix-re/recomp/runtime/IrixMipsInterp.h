@@ -18,6 +18,8 @@ void irix_mips_interp_push_translated(IrixMipsTranslatedFrame *frame,
                                       IrixGuestAddr address, uint32_t size,
                                       IrixGuestAddr return_address);
 void irix_mips_interp_pop_translated(IrixMipsTranslatedFrame *frame);
+int irix_mips_interp_nonlocal_return(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                     IrixGuestAddr target);
 int irix_mips_interp_unwind_done(IrixMipsTranslatedFrame *frame);
 
 int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,

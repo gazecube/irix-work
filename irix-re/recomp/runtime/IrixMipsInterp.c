@@ -1538,6 +1538,25 @@ static IrixMipsTranslatedFrame *find_return_frame(IrixGuestAddr ra)
     return NULL;
 }
 
+/*
+ * A translated function came back with $ra holding the return address of an
+ * outer translated frame, not its own caller's: IRIS GL's token interpreter
+ * loops calling handlers until one of them "returns" past it.  Treat it like
+ * the interpreter's non-local jr $ra and unwind the C stack to that frame.
+ */
+int irix_mips_interp_nonlocal_return(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
+                                     IrixGuestAddr target)
+{
+    IrixMipsTranslatedFrame *nl = find_return_frame(target);
+    if (!nl)
+        return 0;
+    unwind_frame = nl;
+    rt->trapped = 1;
+    cpu->pc = target;
+    rt->current_pc = target;
+    return 1;
+}
+
 int irix_mips_interp_unwind_done(IrixMipsTranslatedFrame *frame)
 {
     if (unwind_frame && unwind_frame == frame) {

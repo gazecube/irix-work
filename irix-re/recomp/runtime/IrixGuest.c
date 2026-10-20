@@ -1517,7 +1517,17 @@ static int irix_guest_register_function_range_flags(
      * ABI entry points.  Generated code may still use anonymous ranges as
      * local coverage labels inside its own recovered CFG.
      */
-    if ((flags & IRIX_GUEST_FUNCTION_RECOMPILED) && !name && size)
+    /*
+     * Substantial anonymous ranges (a whole compiler-emitted function found
+     * through .debug_frame/.pdr, such as a static helper entered only by BAL;
+     * so far only the IRIS GL/GLX libraries at 0x0f0xxxxx, the Xt/Xm ranges
+     * rely on the conservative interior treatment)
+     * are entered translated; running them through the interpreter makes
+     * everything they call interpreted too, which IRIS GL's init path cannot
+     * afford.  Tiny ones stay interior fragments.
+     */
+    if ((flags & IRIX_GUEST_FUNCTION_RECOMPILED) && !name && size &&
+        !(size >= 0x80u && address >= 0x0f000000u && address < 0x0f200000u))
         flags |= IRIX_GUEST_FUNCTION_INTERIOR;
 
     entry = &rt->functions[rt->function_count++];
@@ -6767,6 +6777,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         (void)0;
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 1 (line 6770): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
@@ -6787,6 +6798,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         (void)0;
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 2 (line 6790): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
@@ -6806,6 +6818,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
         cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
         (void)0;
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 3 (line 6809): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
@@ -6829,6 +6842,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
             (void)0;
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 4 (line 6832): 0x%08x\n", (unsigned)address);
             rc = irix_mips_interp_invoke(rt, cpu, address);
             if (!rt->trapped)
                 cpu->gpr[28] = saved_gp;
@@ -6846,6 +6860,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
     if ((!entry || !(entry->flags & IRIX_GUEST_FUNCTION_NATIVE)) &&
         irix_mips_interp_should_force(address)) {
         
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 5 (line 6849): 0x%08x\n", (unsigned)address);
         return irix_mips_interp_invoke(rt, cpu, address);
     }
 
@@ -6872,6 +6887,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fprintf(stderr,
                 "IRIX Xt TMparse internal fallback: %08x -> original MIPS\n",
                 address);
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 6 (line 6875): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
@@ -6905,6 +6921,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         fprintf(stderr,
                 "IRIX Xt TMparse fallback: %s @ %08x -> original MIPS\n",
                 entry->name, address);
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 7 (line 6908): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped)
             cpu->gpr[28] = saved_gp;
@@ -6939,6 +6956,8 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
             cpu->gpr[25] = (uint64_t)(int64_t)(int32_t)address;
 
+            if (getenv("IRIX_TRACE_INTERP"))
+                fprintf(stderr, "IRIX interp fallback: 0x%08x\n", (unsigned)address);
             interp_rc = irix_mips_interp_invoke(rt, cpu, address);
             if (interp_rc == 0) {
                 if (!rt->trapped)
@@ -7337,6 +7356,9 @@ trace_done:     ;
             irix_guest_signal_dispatch(rt, cpu);
         if (entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED) {
             irix_mips_interp_pop_translated(&translated_frame);
+            if (!rt->trapped && (IrixGuestAddr)(uint32_t)cpu->gpr[31] != caller_ra)
+                (void)irix_mips_interp_nonlocal_return(
+                    rt, cpu, (IrixGuestAddr)(uint32_t)cpu->gpr[31]);
             if (irix_mips_interp_unwind_done(&translated_frame))
                 rt->trapped = 0;
         }
@@ -7689,6 +7711,7 @@ static int irix_guest_call_inner(IrixGuestRuntime *rt, IrixGuestCpu *cpu, IrixGu
         
         if (target_gp)
             cpu->gpr[28] = (uint64_t)(int64_t)(int32_t)target_gp;
+        if (getenv("IRIX_TRACE_INTERP")) fprintf(stderr, "IRIX interp site 8 (line 7694): 0x%08x\n", (unsigned)address);
         rc = irix_mips_interp_invoke(rt, cpu, address);
         if (!rt->trapped) {
             /*

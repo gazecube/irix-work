@@ -431,6 +431,15 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         visual && visual != (Visual *)CopyFromParent)
         attrs_ptr->colormap = XCreateColormap(dpy, DefaultRootWindow(dpy),
                                                visual, AllocNone);
+    if (visual && visual != (Visual *)CopyFromParent) {
+        /* the guest may have been shown an emulated depth (overlay planes) */
+        XVisualInfo vt, *vl;
+        int vn = 0;
+        vt.visualid = XVisualIDFromVisual(visual);
+        vl = XGetVisualInfo(dpy, VisualIDMask, &vt, &vn);
+        if (vl && vn > 0) depth = vl[0].depth;
+        if (vl) XFree(vl);
+    }
     w = XCreateWindow(dpy, parent, x, y, width, height, border_width,
                       depth, class_value, visual, valuemask, attrs_ptr);
     if (getenv("IRIX_TRACE_GL"))
