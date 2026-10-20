@@ -199,9 +199,14 @@ guest_exec "$prealloc" || {
 # The emulated IRIS GL overlay planes are ARGB windows; they only look right
 # under a compositor.  Plain picom (no fading, no shadows); set
 # IRIX_SESSION_COMPOSITOR=0 to skip it, or leave it alone when one is running.
-if [ "${IRIX_SESSION_COMPOSITOR:-1}" != 0 ] && command -v picom >/dev/null 2>&1 &&
-   ! xprop -root _NET_WM_CM_S0 2>/dev/null | grep -q window; then
-    if [ -n "$session_logdir" ]; then picom_log="$session_logdir/picom.log"; else picom_log=/dev/null; fi
+if [ -n "$session_logdir" ]; then picom_log="$session_logdir/picom.log"; else picom_log=/dev/null; fi
+if [ "${IRIX_SESSION_COMPOSITOR:-1}" = 0 ]; then
+    echo "compositor disabled by IRIX_SESSION_COMPOSITOR=0" >"$picom_log"
+elif ! command -v picom >/dev/null 2>&1; then
+    echo "picom not found in PATH=$PATH" >"$picom_log"
+elif xprop -root _NET_WM_CM_S0 2>/dev/null | grep -q window; then
+    echo "a compositor already owns _NET_WM_CM_S0" >"$picom_log"
+else
     picom -D 0 -o 0 >"$picom_log" 2>&1 &
     picom_pid=$!
 fi
