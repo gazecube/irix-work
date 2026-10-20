@@ -389,6 +389,17 @@ if(IRIX_DEV_TREE)
             --host-wrapper-link-arg=Xt=-lcrypt
             --host-wrapper-link-arg=Xm=${IRIX_NATIVE32_CORE_DIR}/libXt.so
         )
+        # The bridge archive is linked into libXt.so by the native32 core
+        # builder, outside CMake's normal transitive target-link processing.
+        # Preserve the host GL dependency explicitly for that final DSO link.
+        if(OPENGL_opengl_LIBRARY)
+            list(APPEND IRIX_NATIVE32_HOST_ABI_ARGS
+                --host-wrapper-link-arg=Xt=${OPENGL_opengl_LIBRARY})
+        endif()
+        if(OPENGL_glx_LIBRARY)
+            list(APPEND IRIX_NATIVE32_HOST_ABI_ARGS
+                --host-wrapper-link-arg=Xt=${OPENGL_glx_LIBRARY})
+        endif()
         add_custom_command(
             OUTPUT "${IRIX_NATIVE32_CORE_LIB}" ${IRIX_NATIVE32_CORE_DSOS}
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${IRIX_NATIVE32_CORE_DIR}"
@@ -711,6 +722,18 @@ if(IRIX_DEV_TREE)
                 "${CMAKE_CURRENT_BINARY_DIR}/quick/irix-session"
                 @ONLY
             )
+            # Same script in the install tree so install-native.sh puts it in
+            # /usr/bin; the display-manager launcher prefers that copy.
+            configure_file(
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/irix-session.sh.in"
+                "${IRIX_RECOMP_ROOT}/usr/bin/irix-session"
+                @ONLY
+            )
+            file(CHMOD "${IRIX_RECOMP_ROOT}/usr/bin/irix-session"
+                 PERMISSIONS
+                    OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE
+                    WORLD_READ WORLD_EXECUTE)
             file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/quick/irix-session"
                  PERMISSIONS
                     OWNER_READ OWNER_WRITE OWNER_EXECUTE

@@ -32,7 +32,9 @@ int main(int argc, char **argv)
     (void)argc; (void)argv;
     user_runtime_env();
     if (!s || !*s)
-        s = "/home/nekron/Projects/irix-work/build-irix-re/recomp/quick/irix-session";
+        s = access("/usr/bin/irix-session", R_OK) == 0
+            ? "/usr/bin/irix-session"
+            : "/home/nekron/Projects/irix-work/build-irix-re/recomp/quick/irix-session";
     execl("/bin/sh", "sh", s, (char *)0);
     perror("irix-xdm-session: exec");
     return 127;
