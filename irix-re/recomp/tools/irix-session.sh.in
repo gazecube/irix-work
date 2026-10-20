@@ -176,6 +176,7 @@ cleanup()
     [ -n "${fm_pid:-}" ] && kill "$fm_pid" 2>/dev/null || true
     [ -n "${toolchest_pid:-}" ] && kill "$toolchest_pid" 2>/dev/null || true
     [ -n "${wm_pid:-}" ] && kill "$wm_pid" 2>/dev/null || true
+    [ -n "${picom_pid:-}" ] && kill "$picom_pid" 2>/dev/null || true
 }
 echo $$ > "$pidfile"
 trap 'rm -f "$pidfile"; cleanup' EXIT
@@ -195,6 +196,14 @@ guest_exec "$prealloc" || {
     exit "$status"
 }
 
+# The emulated IRIS GL overlay planes are ARGB windows; they only look right
+# under a compositor.  Plain picom (no fading, no shadows); set
+# IRIX_SESSION_COMPOSITOR=0 to skip it, or leave it alone when one is running.
+if [ "${IRIX_SESSION_COMPOSITOR:-1}" != 0 ] && command -v picom >/dev/null 2>&1 &&
+   ! xprop -root _NET_WM_CM_S0 2>/dev/null | grep -q window; then
+    picom -D 0 -o 0 >"$session_logdir/picom.log" 2>&1 &
+    picom_pid=$!
+fi
 echo "IRIX session: starting 4Dwm on $DISPLAY"
 # SG_UseBackgrounds makes 4Dwm run bgInit, which publishes the
 # _SGI_DESKS_BACKGROUND_DAEMON_WINDOW<root> selection used by the
