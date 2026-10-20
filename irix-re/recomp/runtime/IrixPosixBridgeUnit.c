@@ -1197,6 +1197,60 @@ static int bridge_dl_same_file(const char *a, const char *b)
     return strcmp(ra, rb) == 0;
 }
 
+
+/*
+ * Prelinked IRIX DSOs may share addresses with DSOs they are never loaded
+ * together with; rld relocates the later one at run time.  The recompiled
+ * images are all mapped at their link addresses, so such a pair overlaps and
+ * one of them is overwritten by the other.  Read the PT_LOAD ranges of a
+ * component for the overlap check below.
+ */
+static int bridge_dl_load_ranges(const char *file, uint32_t lo[8], uint32_t hi[8])
+{
+    unsigned char h[52], ph[32];
+    FILE *f = fopen(file, "rb");
+    int n = 0;
+    uint32_t phoff, phnum, phentsize, i;
+    if (!f) return 0;
+    if (fread(h, 1, sizeof h, f) != sizeof h || memcmp(h, "\177ELF", 4) != 0 || h[4] != 1 || h[5] != 2) {
+        fclose(f);
+        return 0;
+    }
+    phoff = ((uint32_t)h[28] << 24) | ((uint32_t)h[29] << 16) | ((uint32_t)h[30] << 8) | h[31];
+    phentsize = ((uint32_t)h[42] << 8) | h[43];
+    phnum = ((uint32_t)h[44] << 8) | h[45];
+    for (i = 0; i < phnum && n < 8; ++i) {
+        uint32_t type, va, msz;
+        if (fseek(f, (long)(phoff + i * phentsize), SEEK_SET) != 0 || fread(ph, 1, sizeof ph, f) != sizeof ph) break;
+        type = ((uint32_t)ph[0] << 24) | ((uint32_t)ph[1] << 16) | ((uint32_t)ph[2] << 8) | ph[3];
+        if (type != 1) continue;
+        va = ((uint32_t)ph[8] << 24) | ((uint32_t)ph[9] << 16) | ((uint32_t)ph[10] << 8) | ph[11];
+        msz = ((uint32_t)ph[20] << 24) | ((uint32_t)ph[21] << 16) | ((uint32_t)ph[22] << 8) | ph[23];
+        lo[n] = va; hi[n] = va + msz; ++n;
+    }
+    fclose(f);
+    return n;
+}
+
+static int bridge_dl_component_overlaps(const char *tree, size_t self)
+{
+    uint32_t alo[8], ahi[8], blo[8], bhi[8];
+    char path[PATH_MAX];
+    size_t j;
+    int an, bn, x, y;
+    snprintf(path, sizeof(path), "%s/%s", tree, irix_app_guest_components[self].path);
+    an = bridge_dl_load_ranges(path, alo, ahi);
+    for (j = 0; an && j < irix_app_guest_component_count; ++j) {
+        if (j == self || irix_app_guest_components[j].role != 0) continue;
+        snprintf(path, sizeof(path), "%s/%s", tree, irix_app_guest_components[j].path);
+        bn = bridge_dl_load_ranges(path, blo, bhi);
+        for (x = 0; x < an; ++x)
+            for (y = 0; y < bn; ++y)
+                if (alo[x] < bhi[y] && blo[y] < ahi[x]) return 1;
+    }
+    return 0;
+}
+
 static void bridge_dlopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     IrixGuestAddr guest_path = (uint32_t)cpu->gpr[4];
@@ -1228,6 +1282,12 @@ static void bridge_dlopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
                 snprintf(comp, sizeof(comp), "%s/%s", tree,
                          irix_app_guest_components[i].path);
                 if (bridge_dl_same_file(file, comp)) {
+                    if (bridge_dl_component_overlaps(tree, i)) {
+                        snprintf(g_irix_dlerror_message, sizeof(g_irix_dlerror_message),
+                                 "%s: address range collides with another loaded object", path);
+                        ret_i32(cpu, 0);
+                        return;
+                    }
                     ret_i32(cpu, (int32_t)(BRIDGE_DL_HANDLE_BASE + (uint32_t)i));
                     return;
                 }
@@ -1252,6 +1312,10 @@ static void bridge_dlsym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             const char *base = e->name ? strrchr(e->name, ':') : NULL;
             base = base ? base + 1 : e->name;
             if (base && strcmp(base, name) == 0) {
+                if (getenv("IRIX_TRACE_CALLS"))
+                    fprintf(stderr, "dlsym %s -> %08x (entry %s flags=%x) got[0980164c]=%08x\n", name,
+                            (unsigned)e->address, e->name ? e->name : "?", (unsigned)e->flags,
+                            (unsigned)irix_guest_read32be(rt, 0x0980164cu));
                 ret_i32(cpu, (int32_t)e->address);
                 return;
             }
