@@ -886,15 +886,16 @@ static VisualID gl_overlay_visual_find(Display *d, int screen)
     t.depth = 32;
     v = XGetVisualInfo(d, VisualScreenMask | VisualDepthMask, &t, &n);
     for (i = 0; i < n && !cached; ++i) {
-        int use = 0, db = 1, dp = 1, st = 1, ar = 1, ms = 1, lv = 1;
+        int use = 0, db = 1, dp = 1, st = 1, ar = 1, ms = 1, lv = 1, al = 0;
         glXGetConfig(d, &v[i], GLX_USE_GL, &use);
+        glXGetConfig(d, &v[i], GLX_ALPHA_SIZE, &al);
         glXGetConfig(d, &v[i], GLX_DOUBLEBUFFER, &db);
         glXGetConfig(d, &v[i], GLX_DEPTH_SIZE, &dp);
         glXGetConfig(d, &v[i], GLX_STENCIL_SIZE, &st);
         glXGetConfig(d, &v[i], GLX_ACCUM_RED_SIZE, &ar);
         glXGetConfig(d, &v[i], GLX_SAMPLE_BUFFERS, &ms);
         glXGetConfig(d, &v[i], GLX_LEVEL, &lv);
-        if (use && !db && !dp && !st && !ar && !ms && !lv) cached = v[i].visualid;
+        if (use && al && !db && !dp && !st && !ar && !ms && !lv) cached = v[i].visualid;
     }
     if (v) XFree(v);
     cache[screen] = cached;
@@ -954,6 +955,9 @@ static void gl_b_glXDestroyContext(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+static int gl_cur_overlay;
+int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
+
 static void gl_b_glXMakeCurrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = glx_display(cpu);
@@ -965,6 +969,14 @@ static void gl_b_glXMakeCurrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (ok) {
         glx_cur_display = (uint32_t)cpu->gpr[4];
         glx_cur_handle = c ? I(2) : 0;
+        {
+            XWindowAttributes wa;
+            gl_cur_overlay = 0;
+            if (c && XGetWindowAttributes(d, (Window)I(1), &wa) && wa.visual)
+                gl_cur_overlay = irix_gl_is_overlay_visual(
+                    d, XScreenNumberOfScreen(wa.screen),
+                    XVisualIDFromVisual(wa.visual));
+        }
     }
     cpu->gpr[2] = (uint32_t)ok;
 }
@@ -1091,7 +1103,84 @@ static void gl_b_xi_noop(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 typedef struct { const char *name; IrixGuestFunction fn; } GlNamed;
 
+
+/*
+ * Colour-index emulation for the overlay planes.  The host overlay is an
+ * RGBA window, so index drawing becomes RGBA drawing through a palette:
+ * index 0 is transparent (as on SGI overlays), the rest come from the
+ * palette the guest loaded with XStoreColors (IRIS GL defaults until then).
+ */
+static float gl_palette[256][4];
+static int gl_palette_init;
+
+static void gl_palette_defaults(void)
+{
+    static const float d[8][3] = {{0,0,0},{1,0,0},{0,1,0},{1,1,0},
+                                  {0,0,1},{1,0,1},{0,1,1},{1,1,1}};
+    int i;
+    for (i = 0; i < 256; ++i) {
+        const float *c = d[i < 8 ? i : 7];
+        gl_palette[i][0] = c[0]; gl_palette[i][1] = c[1];
+        gl_palette[i][2] = c[2]; gl_palette[i][3] = i ? 1.0f : 0.0f;
+    }
+    gl_palette_init = 1;
+}
+
+void irix_gl_palette_store(unsigned pixel, unsigned r, unsigned g, unsigned b)
+{
+    if (!gl_palette_init) gl_palette_defaults();
+    if (pixel > 255 || !pixel) return;
+    gl_palette[pixel][0] = r / 65535.0f;
+    gl_palette[pixel][1] = g / 65535.0f;
+    gl_palette[pixel][2] = b / 65535.0f;
+    gl_palette[pixel][3] = 1.0f;
+}
+
+static const float *gl_palette_entry(float idx)
+{
+    int i = (int)(idx + 0.5f);
+    if (!gl_palette_init) gl_palette_defaults();
+    return gl_palette[i < 0 ? 0 : i > 255 ? 255 : i];
+}
+
+static void gl_index_color(IrixGuestRuntime *rt, IrixGuestCpu *cpu, float idx,
+                           const char *ci, const char *rgba)
+{
+    (void)rt;
+    if (gl_cur_overlay) {
+        const float *c = gl_palette_entry(idx);
+        typedef void (*f4_t)(GLfloat, GLfloat, GLfloat, GLfloat);
+        f4_t f = (f4_t)gl_proc(rgba);
+        if (f) f(c[0], c[1], c[2], c[3]);
+    } else {
+        typedef void (*f1_t)(GLfloat);
+        f1_t f = (f1_t)gl_proc(ci);
+        if (f) f(idx);
+    }
+    cpu->gpr[2] = 0;
+}
+
+static void gl_ov_glClearIndex(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ gl_index_color(rt, cpu, F(0), "glClearIndex", "glClearColor"); }
+static void gl_ov_glIndexf(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ gl_index_color(rt, cpu, F(0), "glIndexf", "glColor4f"); }
+static void gl_ov_glIndexi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ gl_index_color(rt, cpu, (float)(int32_t)I(0), "glIndexf", "glColor4f"); }
+static void gl_ov_glIndexs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ gl_index_color(rt, cpu, (float)(int16_t)I(0), "glIndexf", "glColor4f"); }
+static void gl_ov_glIndexMask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    typedef void (*fn_t)(GLuint);
+    fn_t f = (fn_t)gl_proc("glIndexMask");
+    (void)rt;
+    if (!gl_cur_overlay && f) f(I(0));
+    cpu->gpr[2] = 0;
+}
+
 static const GlNamed gl_named[] = {
+    { "glClearIndex", gl_ov_glClearIndex }, { "glIndexf", gl_ov_glIndexf },
+    { "glIndexi", gl_ov_glIndexi }, { "glIndexs", gl_ov_glIndexs },
+    { "glIndexMask", gl_ov_glIndexMask },
 #define N(n) { #n, gl_b_##n }
     N(glLightfv), N(glMaterialfv), N(glTexEnvfv), N(glTexGenfv), N(glFogfv),
     N(glLightModelfv), N(glLoadMatrixf), N(glMultMatrixf), N(glMultMatrixd),

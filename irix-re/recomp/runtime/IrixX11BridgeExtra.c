@@ -1674,7 +1674,7 @@ static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (d && XGetWindowAttributes(d, w, &wa) && wa.visual &&
         irix_gl_is_overlay_visual(d, XScreenNumberOfScreen(wa.screen),
                                   XVisualIDFromVisual(wa.visual)) &&
-        !compositor_running(d, XScreenNumberOfScreen(wa.screen))) {
+        (getenv("IRIX_GL_OVERLAY_NOMAP") || !compositor_running(d, XScreenNumberOfScreen(wa.screen)))) {
         cpu->gpr[2] = 1;
         return;
     }
