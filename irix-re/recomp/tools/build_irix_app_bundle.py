@@ -847,7 +847,17 @@ def main():
                 rel = os.path.relpath(dep.parent, dso.parent)
                 rp = '$ORIGIN' if rel == '.' else '$ORIGIN/' + rel
                 if rp not in runpaths:
-                    runpaths.append(rp)
+                    # Two different translated DSOs can share a soname (the
+                    # IRIS GL libgl.so of IGLOO32 and of SERVER32).  The
+                    # native loader takes the first match, so the directory
+                    # holding this dependency must come before any directory
+                    # that has another file of the same name.
+                    at = len(runpaths)
+                    for i, other in enumerate(runpaths):
+                        base = (dso.parent / other.replace('$ORIGIN', '.')).resolve()
+                        if i < at and (base / needed).is_file() and base != dep.parent.resolve():
+                            at = i
+                    runpaths.insert(at, rp)
             # Build a stable cache key from everything that can affect the
             # resulting native DSO. Dependency keys are included rather than
             # app names, so identical closures from different executables

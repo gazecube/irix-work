@@ -5,6 +5,8 @@
 #include <X11/Xlib.h>
 
 Display *irix_x11_primary_display_from_guest(IrixGuestAddr addr);
+IrixGuestAddr irix_x11_guest_visual_by_id(IrixGuestRuntime *rt, IrixGuestAddr dpy,
+                                          int screen, unsigned long visualid);
 Screen *irix_x11_primary_screen_from_guest(IrixGuestAddr display_addr,
                                             IrixGuestAddr screen_addr);
 GC irix_x11_primary_gc_from_guest(IrixGuestAddr addr);

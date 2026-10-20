@@ -238,6 +238,15 @@ if(X11_FOUND)
         runtime/IrixXrmCompat.c
         runtime/IrixXrmQuarkBridge.c
     )
+    find_package(OpenGL QUIET)
+    if(TARGET OpenGL::GL AND EXISTS /usr/include/GL/glx.h)
+        message(STATUS "Using host OpenGL/GLX for the IRIX GL bridge")
+        target_sources(irix_recomp_x11_bridge PRIVATE runtime/IrixGlBridge.c)
+        target_link_libraries(irix_recomp_x11_bridge PUBLIC OpenGL::GL)
+    else()
+        message(WARNING "Host OpenGL/GLX development files not found; IRIX GL bridge disabled")
+        target_sources(irix_recomp_x11_bridge PRIVATE runtime/IrixGlBridgeStub.c)
+    endif()
     target_include_directories(irix_recomp_x11_bridge PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     )

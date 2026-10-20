@@ -453,6 +453,9 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     if(d && !rt->trapped) list=XGetVisualInfo(d,mask,&tmpl,&n);
+    if(getenv("IRIX_TRACE_GL"))
+        fprintf(stderr,"IRIX X: XGetVisualInfo mask=%lx visualid=%lx screen=%d depth=%d class=%d -> %d\n",
+                mask,(unsigned long)tmpl.visualid,tmpl.screen,tmpl.depth,tmpl.class,n);
     if(list && n>0 && (uint32_t)n<=UINT32_MAX/40u) {
         out=bulk_alloc((uint32_t)n*40u);
         if(out) {
@@ -481,6 +484,12 @@ static void bridge_XGetVisualInfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     wr32(rt,nitems_return,(uint32_t)n);
     cpu->gpr[2]=out;
     (void)0;
+}
+
+IrixGuestAddr irix_x11_guest_visual_by_id(IrixGuestRuntime *rt, IrixGuestAddr dpy,
+                                          int screen, unsigned long visualid)
+{
+    return guest_visual_by_id(rt, dpy, screen, (VisualID)visualid);
 }
 
 static void bridge_XSetCloseDownMode(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
