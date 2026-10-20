@@ -1660,9 +1660,10 @@ static void bridge_XDestroyWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
 
 /*
- * The emulated GL overlay is a depth-32 ARGB window on the host.  Under a
- * compositor its cleared (alpha 0) pixels are transparent; without one it
- * would paint opaque black over the normal planes, so it stays unmapped.
+ * The emulated GL overlay is a depth-32 ARGB window on the host.  Under the
+ * picom setup in use here such windows composite as opaque black (a plain
+ * test ARGB window does too), which would hide the normal planes, so the
+ * overlay stays unmapped unless IRIX_GL_OVERLAY_MAP=1 under a compositor.
  */
 static int compositor_running(Display *d, int screen)
 {
@@ -1680,7 +1681,7 @@ static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (d && XGetWindowAttributes(d, w, &wa) && wa.visual &&
         irix_gl_is_overlay_visual(d, XScreenNumberOfScreen(wa.screen),
                                   XVisualIDFromVisual(wa.visual)) &&
-        (getenv("IRIX_GL_OVERLAY_NOMAP") || !compositor_running(d, XScreenNumberOfScreen(wa.screen)))) {
+        !(getenv("IRIX_GL_OVERLAY_MAP") && compositor_running(d, XScreenNumberOfScreen(wa.screen)))) {
         cpu->gpr[2] = 1;
         return;
     }
