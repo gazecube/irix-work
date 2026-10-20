@@ -1651,7 +1651,27 @@ static void name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { \
     cpu->gpr[2] = d ? (uint32_t)(call) : 0; }
 
 WINDOW_CALL1(bridge_XDestroyWindow, XDestroyWindow(d, (Window)(uint32_t)cpu->gpr[5]))
-WINDOW_CALL1(bridge_XMapWindow, XMapWindow(d, (Window)(uint32_t)cpu->gpr[5]))
+int irix_gl_is_overlay_visual(Display *d, int screen, unsigned long vid);
+
+/*
+ * The emulated GL overlay is a plain depth-32 window on the host and would
+ * hide the normal planes beneath it; there is no compositing path for its
+ * transparency yet, so it stays unmapped.
+ */
+static void bridge_XMapWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d = display_from_guest((uint32_t)cpu->gpr[4]);
+    Window w = (Window)(uint32_t)cpu->gpr[5];
+    XWindowAttributes wa;
+    (void)rt;
+    if (d && XGetWindowAttributes(d, w, &wa) && wa.visual &&
+        irix_gl_is_overlay_visual(d, XScreenNumberOfScreen(wa.screen),
+                                  XVisualIDFromVisual(wa.visual))) {
+        cpu->gpr[2] = 1;
+        return;
+    }
+    cpu->gpr[2] = d ? (uint32_t)XMapWindow(d, w) : 0;
+}
 WINDOW_CALL1(bridge_XMapRaised, XMapRaised(d, (Window)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XUnmapWindow, XUnmapWindow(d, (Window)(uint32_t)cpu->gpr[5]))
 WINDOW_CALL1(bridge_XRaiseWindow, XRaiseWindow(d, (Window)(uint32_t)cpu->gpr[5]))
