@@ -422,8 +422,23 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         attrs_ptr = &attrs;
     }
 
+    /*
+     * A window on a non-default visual needs a colormap for that visual.
+     * IRIS GL's overlay setup hands back colormap 0 when the server has no
+     * overlay colormap, which an X server rejects with BadMatch.
+     */
+    if (attrs_ptr && (valuemask & CWColormap) && !attrs_ptr->colormap &&
+        visual && visual != (Visual *)CopyFromParent)
+        attrs_ptr->colormap = XCreateColormap(dpy, DefaultRootWindow(dpy),
+                                               visual, AllocNone);
     w = XCreateWindow(dpy, parent, x, y, width, height, border_width,
                       depth, class_value, visual, valuemask, attrs_ptr);
+    if (getenv("IRIX_TRACE_GL"))
+        fprintf(stderr, "IRIX X: XCreateWindow parent=%lx %ux%u depth=%d class=%u visualid=%lx mask=%lx border=%lx cmap=%lx -> %lx\n",
+                (unsigned long)parent, width, height, depth, class_value,
+                visual && visual != (Visual *)CopyFromParent ? (unsigned long)XVisualIDFromVisual(visual) : 0ul,
+                valuemask, attrs_ptr ? (unsigned long)attrs_ptr->border_pixel : 0ul,
+                attrs_ptr ? (unsigned long)attrs_ptr->colormap : 0ul, (unsigned long)w);
     if (w) XFlush(dpy);
     cpu->gpr[2] = (uint32_t)w;
 }

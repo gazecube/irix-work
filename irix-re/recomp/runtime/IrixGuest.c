@@ -7264,6 +7264,26 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             if (trace_calls && !(entry->flags & IRIX_GUEST_FUNCTION_RECOMPILED)) {
                 const char *nm = entry->name ? entry->name : "?";
                 const char *base = strrchr(nm, ':');
+                {
+                    /* IRIX_TRACE_CALLS_ONLY="stat,realpath,..." limits the
+                     * trace to those imports (comma separated, exact). */
+                    static const char *only = (const char *)-1;
+                    if (only == (const char *)-1) only = getenv("IRIX_TRACE_CALLS_ONLY");
+                    if (only && *only) {
+                        const char *b2 = base ? base + 1 : nm;
+                        size_t bl = strlen(b2);
+                        const char *p = only;
+                        int hit = 0;
+                        while (*p && !hit) {
+                            const char *q = strchr(p, ',');
+                            size_t pl = q ? (size_t)(q - p) : strlen(p);
+                            if (pl == bl && !strncmp(p, b2, bl)) hit = 1;
+                            p += pl;
+                            if (*p == ',') ++p;
+                        }
+                        if (!hit) goto trace_done;
+                    }
+                }
                 char strs[300];
                 strs[0] = '\0';
                 base = base ? base + 1 : nm;
@@ -7275,12 +7295,18 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                     !strcmp(base, "dlopen") || !strcmp(base, "dlsym") ||
                     !strcmp(base, "open") || !strcmp(base, "stat") ||
                     !strcmp(base, "lstat") || !strcmp(base, "access") ||
-                    !strcmp(base, "readlink") || !strcmp(base, "fopen")) {
+                    !strcmp(base, "readlink") || !strcmp(base, "fopen") ||
+                    !strcmp(base, "realpath") || !strcmp(base, "opendir") ||
+                    !strcmp(base, "mkdir") || !strcmp(base, "rename") ||
+                    !strcmp(base, "getenv") || !strcmp(base, "unlink")) {
                     const char *s0 = irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[4], 1u) ?
                         irix_guest_cstr(rt, (IrixGuestAddr)cpu->gpr[4], 96u) : 0;
                     const char *s1 = (strcmp(base, "strdup") && strcmp(base, "strlen") && strcmp(base, "strchr") &&
                                       strcmp(base, "open") && strcmp(base, "stat") && strcmp(base, "lstat") &&
                                       strcmp(base, "access") && strcmp(base, "readlink") && strcmp(base, "fopen") &&
+                                      strcmp(base, "realpath") && strcmp(base, "opendir") &&
+                                      strcmp(base, "mkdir") && strcmp(base, "getenv") &&
+                                      strcmp(base, "unlink") &&
                                       irix_guest_ptr(rt, (IrixGuestAddr)cpu->gpr[5], 1u)) ?
                         irix_guest_cstr(rt, (IrixGuestAddr)cpu->gpr[5], 96u) : 0;
                     snprintf(strs, sizeof strs, " s0=\"%.90s\" s1=\"%.90s\"", s0 ? s0 : "", s1 ? s1 : "");
@@ -7302,6 +7328,7 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                         (int)getpid(), nm,
                         (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5],
                         (unsigned)cpu->gpr[6], strs);
+trace_done:     ;
             }
         }
         entry->function(rt, cpu);

@@ -767,8 +767,11 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
 
     if (path[0] == '/') {
-        if (irix_guest_realpath(rt, path, resolved) != 0)
+        if (irix_guest_realpath(rt, path, resolved) != 0) {
+            if (getenv("IRIX_TRACE_CALLS"))
+                fprintf(stderr, "realpath(%s) FAILED errno=%d\n", path, errno);
             return;
+        }
     } else if (!realpath(path, resolved)) {
         return;
     }
@@ -781,6 +784,8 @@ static void bridge_realpath(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     }
     memcpy(dst, resolved, n);
     cpu->gpr[2] = out_addr;
+    if (getenv("IRIX_TRACE_CALLS"))
+        fprintf(stderr, "realpath(%s) -> %s\n", path, resolved);
 }
 
 /* N32 passes the first eight argument slots in a0-a7 and later slots in
@@ -1199,7 +1204,7 @@ static void bridge_dlopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     const char *tree = getenv("IRIX_RUNTIME_TREE");
     static const char *const dirs[] = {
         "/usr/lib32/imdModels/", "/usr/lib32/", "/usr/lib32/internal/",
-        "/lib32/", "/opt/lib32/", 0
+        "/lib32/", "/opt/lib32/", "/usr/gfx/arch/SERVER32/", "/usr/gfx/arch/IGLOO32/", 0
     };
 
     if (!guest_path) { /* dlopen(NULL): the main program */
@@ -1243,7 +1248,10 @@ static void bridge_dlsym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     if (name) {
         for (i = 0; i < rt->function_count; ++i) {
             const IrixGuestFunctionEntry *e = &rt->functions[i];
-            if (e->name && strcmp(e->name, name) == 0) {
+            /* Entries are registered as "component:symbol". */
+            const char *base = e->name ? strrchr(e->name, ':') : NULL;
+            base = base ? base + 1 : e->name;
+            if (base && strcmp(base, name) == 0) {
                 ret_i32(cpu, (int32_t)e->address);
                 return;
             }

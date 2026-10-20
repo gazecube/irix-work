@@ -669,15 +669,34 @@ static void gl_b_glMap2f(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
-/* SGI's IGLOO fast-path interface into GLcore.  Reporting it unavailable
- * leaves IRIS GL on the ordinary OpenGL entry points. */
+/*
+ * SGI's IGLOO talks to GLcore through glIglooInterfaceSGIX, which hands back
+ * a command function that IGLOO then calls with a command id (0x81a1..0x81a3
+ * seen so far) and a small argument block.  Those commands configure SGI
+ * hardware paths that host Mesa has no counterpart for, so the command
+ * function is a guest-callable stub that accepts and ignores them.
+ */
+#define GL_IGLOO_STUB_ADDR 0x1f00u
+
+static void gl_igloo_command_stub(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (gl_trace_on()) {
+        IrixGuestAddr p = (uint32_t)cpu->gpr[5];
+        fprintf(stderr, "IRIX GL: igloo command %08x args=%08x [%x %x]\n",
+                (unsigned)cpu->gpr[4], (unsigned)p,
+                p ? irix_guest_read32be(rt, p) : 0u,
+                p ? irix_guest_read32be(rt, p + 4u) : 0u);
+    }
+    cpu->gpr[2] = 0;
+}
+
 static void gl_b_glIglooInterfaceSGIX(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     (void)rt;
     if (gl_trace_on())
-        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x) -> unavailable\n",
+        fprintf(stderr, "IRIX GL: glIglooInterfaceSGIX(%08x, %08x)\n",
                 (unsigned)cpu->gpr[4], (unsigned)cpu->gpr[5]);
-    cpu->gpr[2] = 0;
+    cpu->gpr[2] = GL_IGLOO_STUB_ADDR;
 }
 
 /* ---- GLX ---- */
@@ -759,6 +778,8 @@ static void gl_b_glXQueryVersion(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)ok;
 }
 
+static VisualID gl_overlay_visual(Display *d, int screen);
+
 static void gl_b_glXChooseVisual(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = glx_display(cpu);
@@ -767,6 +788,7 @@ static void gl_b_glXChooseVisual(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     XVisualInfo *v = 0;
     cpu->gpr[2] = 0;
     if (!d) return;
+    (void)gl_overlay_visual(d, (int)I(1));
     for (; n < 60;) {
         uint32_t k = p ? irix_guest_read32be(rt, p) : 0;
         p += 4u;
@@ -794,6 +816,81 @@ static void gl_b_glXChooseVisual(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         fprintf(stderr, "IRIX GL: glXChooseVisual -> %08x\n", (unsigned)cpu->gpr[2]);
 }
 
+/*
+ * SGI's GLX exposes overlay planes as visuals at GLX_LEVEL 1, and IRIS GL
+ * programs (the desktop's colour chooser among them) fall back to popup
+ * planes, then fail, when there are none.  Host Mesa has no layers, so one
+ * spare single-buffered ARGB visual (depth 32, no depth/stencil/accum/
+ * multisample) is reported at level 1.  A compositing manager then makes its
+ * transparent pixels show what is beneath.  IRIX_GL_OVERLAY=0 disables this;
+ * IRIX_GL_OVERLAY=<hex id> picks the visual.
+ */
+static void gl_publish_overlay(Display *d, int screen, VisualID vid)
+{
+    static unsigned published;
+    Atom a;
+    long info[4];
+    if (!vid || screen < 0 || screen > 31 || (published & (1u << screen))) return;
+    published |= 1u << screen;
+    /* The convention overlay-capable servers follow: for each overlay
+     * visual, {visual id, transparency type (1 = pixel), value, layer}. */
+    a = XInternAtom(d, "SERVER_OVERLAY_VISUALS", False);
+    info[0] = (long)vid;
+    info[1] = 1;
+    info[2] = 0;
+    info[3] = 1;
+    XChangeProperty(d, RootWindow(d, screen), a, a, 32, PropModeReplace,
+                    (unsigned char *)info, 4);
+    XFlush(d);
+}
+
+static VisualID gl_overlay_visual_find(Display *d, int screen);
+
+static VisualID gl_overlay_visual(Display *d, int screen)
+{
+    VisualID vid = gl_overlay_visual_find(d, screen);
+    gl_publish_overlay(d, screen, vid);
+    return vid;
+}
+
+static VisualID gl_overlay_visual_find(Display *d, int screen)
+{
+    static VisualID cache[8];
+    static int done[8];
+    VisualID cached = 0;
+    const char *e = getenv("IRIX_GL_OVERLAY");
+    XVisualInfo t, *v;
+    int n = 0, i;
+    if (screen < 0 || screen >= 8) return 0;
+    if (done[screen]) return cache[screen];
+    done[screen] = 1;
+    if (e && !strcmp(e, "0")) return 0;
+    if (e && *e) {
+        cache[screen] = (VisualID)strtoul(e, 0, 16);
+        return cache[screen];
+    }
+    memset(&t, 0, sizeof(t));
+    t.screen = screen;
+    t.depth = 32;
+    v = XGetVisualInfo(d, VisualScreenMask | VisualDepthMask, &t, &n);
+    for (i = 0; i < n && !cached; ++i) {
+        int use = 0, db = 1, dp = 1, st = 1, ar = 1, ms = 1, lv = 1;
+        glXGetConfig(d, &v[i], GLX_USE_GL, &use);
+        glXGetConfig(d, &v[i], GLX_DOUBLEBUFFER, &db);
+        glXGetConfig(d, &v[i], GLX_DEPTH_SIZE, &dp);
+        glXGetConfig(d, &v[i], GLX_STENCIL_SIZE, &st);
+        glXGetConfig(d, &v[i], GLX_ACCUM_RED_SIZE, &ar);
+        glXGetConfig(d, &v[i], GLX_SAMPLE_BUFFERS, &ms);
+        glXGetConfig(d, &v[i], GLX_LEVEL, &lv);
+        if (use && !db && !dp && !st && !ar && !ms && !lv) cached = v[i].visualid;
+    }
+    if (v) XFree(v);
+    cache[screen] = cached;
+    if (gl_trace_on())
+        fprintf(stderr, "IRIX GL: screen %d overlay visual %lx\n", screen, (unsigned long)cached);
+    return cached;
+}
+
 static void gl_b_glXGetConfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = glx_display(cpu);
@@ -801,12 +898,21 @@ static void gl_b_glXGetConfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     int val = 0, rc = 1; /* GLX_BAD_SCREEN-like failure */
     if (v) {
         rc = glXGetConfig(d, v, (int)I(2), &val);
+        if (rc == 0 && gl_overlay_visual(d, v->screen) == v->visualid) {
+            switch ((int)I(2)) {
+            case GLX_LEVEL: val = 1; break;
+            case 0x23: val = 0x8009; break; /* GLX_TRANSPARENT_TYPE_EXT: transparent index */
+            case 0x24: val = 0; break;      /* GLX_TRANSPARENT_INDEX_VALUE_EXT */
+            case GLX_RGBA: val = 0; break;  /* IRIS GL overlays are colour index */
+            default: break;
+            }
+        }
         XFree(v);
     }
     if (I(3)) irix_guest_write32be(rt, I(3), (uint32_t)val);
     if (gl_trace_on())
-        fprintf(stderr, "IRIX GL: glXGetConfig vis=%08x attr=%d -> rc=%d val=%d\n",
-                (unsigned)I(1), (int)I(2), rc, val);
+        fprintf(stderr, "IRIX GL: glXGetConfig vis=%08x id=%x attr=%d -> rc=%d val=%d\n",
+                (unsigned)I(1), (unsigned)irix_guest_read32be(rt, I(1) + 4u), (int)I(2), rc, val);
     cpu->gpr[2] = (uint32_t)rc;
 }
 
@@ -1002,6 +1108,8 @@ static const GlNamed gl_named[] = {
 void irix_gl_bridge_init(IrixGuestRuntime *rt)
 {
     (void)irix_guest_map(rt, 0x1000u, 0x1000u, 3u);
+    (void)irix_guest_register_function(rt, GL_IGLOO_STUB_ADDR, gl_igloo_command_stub,
+                                       "igloo-command");
 }
 
 IrixGuestFunction irix_gl_bridge_lookup(const char *name)
