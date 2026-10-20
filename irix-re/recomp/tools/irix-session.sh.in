@@ -333,6 +333,27 @@ echo "IRIX session: starting desktop File Manager"
 guest_exec "$fm" -b &
 fm_pid=$!
 
+# fm -b starts with shaping off, which leaves its full-screen window painting
+# default grey over 4Dwm's background and icons as boxes.  The desktop turns
+# shaping on through its command channel (what "telldesktop shape on" sends).
+if command -v xwininfo >/dev/null 2>&1 && command -v xprop >/dev/null 2>&1; then
+    (
+        n=0
+        while [ "$n" -lt 60 ] && kill -0 "$fm_pid" 2>/dev/null; do
+            n=$((n + 1))
+            sleep 1
+            for w in $(xwininfo -display "$display" -root -children 2>/dev/null | \
+                    sed -n 's/^ *\(0x[0-9a-f]*\) .*: ().*\+0\+0.*/\1/p'); do
+                if xprop -display "$display" -id "$w" _SGI_DESKS_BACKGROUND 2>/dev/null | grep -q PIXEL; then
+                    xprop -display "$display" -id "$w" -f _SGI_DESKS_DESKTOP_COMMAND 8s \
+                        -set _SGI_DESKS_DESKTOP_COMMAND "shape on"
+                    exit 0
+                fi
+            done
+        done
+    ) &
+fi
+
 if [ -r "$runtime/usr/sbin/bgicons" ] && [ -r "$runtime/usr/sysadm/bin/sabgicons" ]; then
     # System administration background icons (removable media via mediad,
     # disks).  sabgicons stops when its stdin reaches EOF here, whereas

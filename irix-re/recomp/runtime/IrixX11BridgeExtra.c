@@ -2276,6 +2276,44 @@ static void bridge_XShapeCombineShape(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = 0;
 }
 
+
+/*
+ * A shaped window is only seen through its own shape when the windows above
+ * it are transparent.  Desktop-style background windows (fm -b) shape a child
+ * of unshaped, full-screen Xt/Motif parents and rely on those parents not
+ * showing their own background; with a plain parent the area outside the
+ * shape paints solid grey or black over the root background.  Make the
+ * non-root ancestors take the root's background once, when a shape is first
+ * applied to a window below them.
+ */
+static void shape_make_ancestors_transparent(Display *d, Window w)
+{
+    static Window done[64];
+    static int ndone;
+    Window root, parent, *kids;
+    unsigned int nkids;
+    Window chain[16];
+    int n = 0, i, j;
+
+    for (;;) {
+        kids = NULL;
+        if (!XQueryTree(d, w, &root, &parent, &kids, &nkids)) break;
+        if (kids) XFree(kids);
+        if (!parent || parent == root || n >= 16) break;
+        chain[n++] = parent;
+        w = parent;
+    }
+    for (i = 0; i < n; i++) {
+        int seen = 0;
+        for (j = 0; j < ndone; j++) if (done[j] == chain[i]) seen = 1;
+        if (seen || ndone >= 64) continue;
+        done[ndone++] = chain[i];
+        XSetWindowBackgroundPixmap(d, chain[i], ParentRelative);
+        XClearArea(d, chain[i], 0, 0, 0, 0, True);
+    }
+    XFlush(d);
+}
+
 static void bridge_XShapeCombineRectangles(IrixGuestRuntime *rt,
                                            IrixGuestCpu *cpu)
 {
@@ -2284,14 +2322,19 @@ static void bridge_XShapeCombineRectangles(IrixGuestRuntime *rt,
     int nrects = (int32_t)shape_arg32(rt, cpu, 6u);
     XRectangle *rects = NULL;
     int i;
+    if (getenv("IRIX_TRACE_SHAPE"))
+        fprintf(stderr, "SHAPE rects win=%x kind=%d off=%d,%d n=%d op=%d ord=%d\n",
+            shape_arg32(rt, cpu, 1u), (int)shape_arg32(rt, cpu, 2u),
+            (int)shape_arg32(rt, cpu, 3u), (int)shape_arg32(rt, cpu, 4u),
+            nrects, (int)shape_arg32(rt, cpu, 7u), (int)shape_arg32(rt, cpu, 8u));
 
-    if (d && !rt->trapped && nrects > 0) {
+    if (d && !rt->trapped && nrects >= 0) {
         if (nrects > 65536 ||
-            !irix_guest_ptr(rt, rect_addr, (size_t)nrects * 8u)) {
+            (nrects > 0 && !irix_guest_ptr(rt, rect_addr, (size_t)nrects * 8u))) {
             cpu->gpr[2] = 0;
             return;
         }
-        rects = (XRectangle *)calloc((size_t)nrects, sizeof(*rects));
+        rects = (XRectangle *)calloc((size_t)nrects + 1u, sizeof(*rects));
         if (!rects) {
             cpu->gpr[2] = 0;
             return;
@@ -2310,6 +2353,8 @@ static void bridge_XShapeCombineRectangles(IrixGuestRuntime *rt,
                 (int32_t)shape_arg32(rt, cpu, 4u), rects, nrects,
                 (int)shape_arg32(rt, cpu, 7u),
                 (int)shape_arg32(rt, cpu, 8u));
+        if (!rt->trapped)
+            shape_make_ancestors_transparent(d, (Window)shape_arg32(rt, cpu, 1u));
         free(rects);
     }
     cpu->gpr[2] = 0;
@@ -2318,6 +2363,11 @@ static void bridge_XShapeCombineRectangles(IrixGuestRuntime *rt,
 static void bridge_XShapeCombineMask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     Display *d = display_from_guest(shape_arg32(rt, cpu, 0u));
+    if (getenv("IRIX_TRACE_SHAPE"))
+        fprintf(stderr, "SHAPE mask win=%x kind=%d off=%d,%d pix=%x op=%d\n",
+            shape_arg32(rt, cpu, 1u), (int)shape_arg32(rt, cpu, 2u),
+            (int)shape_arg32(rt, cpu, 3u), (int)shape_arg32(rt, cpu, 4u),
+            shape_arg32(rt, cpu, 5u), (int)shape_arg32(rt, cpu, 6u));
     if (d && !rt->trapped)
         XShapeCombineMask(d,
             (Window)shape_arg32(rt, cpu, 1u),
@@ -2326,6 +2376,8 @@ static void bridge_XShapeCombineMask(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             (int32_t)shape_arg32(rt, cpu, 4u),
             (Pixmap)shape_arg32(rt, cpu, 5u),
             (int32_t)shape_arg32(rt, cpu, 6u));
+    if (d && !rt->trapped)
+        shape_make_ancestors_transparent(d, (Window)shape_arg32(rt, cpu, 1u));
     cpu->gpr[2] = 0;
 }
 #endif
