@@ -848,6 +848,9 @@ static void gl_publish_overlay(Display *d, int screen, VisualID vid)
     Atom a;
     long info[4];
     if (!vid || screen < 0 || screen > 31 || (published & (1u << screen))) return;
+    /* Motif and Xt read this property and put popup menus in overlay
+     * windows, which are never shown here; advertise it only on request. */
+    if (!getenv("IRIX_GL_PUBLISH_OVERLAY")) return;
     published |= 1u << screen;
     /* The convention overlay-capable servers follow: for each overlay
      * visual, {visual id, transparency type (1 = pixel), value, layer}. */

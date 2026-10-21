@@ -1626,6 +1626,7 @@ static void bridge_XUngrabPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 SIMPLE_DISPLAY0(bridge_XEventsQueued, XEventsQueued(d, (int)cpu->gpr[5]))
+SIMPLE_DISPLAY0(bridge__XEventsQueued, XEventsQueued(d, (int)cpu->gpr[5]))
 SIMPLE_DISPLAY0(bridge_XBell, XBell(d, (int)cpu->gpr[5]))
 
 static void bridge_XCreateSimpleWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -2450,7 +2451,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     if(!strcmp(name,"XChangeWindowAttributes")) return irix_x11_window_bridge_lookup(name);
     MAP(XDisplayWidth); MAP(XDisplayHeight); MAP(XDefaultDepth); MAP(XBlackPixel); MAP(XWhitePixel); MAP(XDefaultColormap);
     if(!strcmp(name, "_IrixXkbDisplayInit")) return bridge__IrixXkbDisplayInit;
-    MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XFilterEvent); MAP(XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
+    MAP(XkbKeysymToModifiers); MAP(XkbGetUpdatedMap); MAP(XkbSelectEventDetails); MAP(XkbQueryExtension); MAP(XkbUseExtension); MAP(XInitExtension); MAP(XAddExtension); MAP(XQueryExtension); MAP(XInternAtom); MAP(XGetAtomName); MAP(XLoadQueryFont); MAP(XFlush); MAP(XSync); MAP(XPending); MAP(XNextEvent); MAP(XWindowEvent); MAP(XCheckWindowEvent); MAP(XFilterEvent); MAP(XEventsQueued); MAP(_XEventsQueued); MAP(XBell); MAP(XLookupKeysym); MAP(XLookupString); MAP(XGrabKeyboard); MAP(XUngrabKeyboard); MAP(XGrabPointer); MAP(XUngrabPointer);
     MAP(XCreateSimpleWindow); MAP(XDestroyWindow); MAP(XMapWindow); MAP(XMapRaised); MAP(XUnmapWindow); MAP(XRaiseWindow); MAP(XLowerWindow);
     MAP(XMoveWindow); MAP(XResizeWindow); MAP(XMoveResizeWindow); MAP(XConfigureWindow); MAP(XSelectInput); MAP(XSetWindowBackground); MAP(XSetWindowBorder); MAP(XClearWindow); MAP(XClearArea);
     MAP(XStoreName); MAP(XSetIconName); MAP(XCreatePixmap); MAP(XFreePixmap); MAP(XCreateGC); MAP(XChangeGC); MAP(XGetGCValues); MAP(XCopyGC); MAP(XFreeGC);
