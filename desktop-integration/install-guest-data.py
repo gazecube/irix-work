@@ -12,6 +12,7 @@ DEFAULT_ROOTS = [
     "usr/lib/images",
     "usr/include/X11/bitmaps",
     "usr/share",
+    "usr/sysadm",
 ]
 NEVER = ("dev", "proc", "sys", "tmp", "etc", "stand", "unix")
 SKIP_PREFIXES = ("var/tmp", "var/spool", "var/adm", "var/opt", "var/named",
