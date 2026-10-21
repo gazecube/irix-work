@@ -1133,6 +1133,54 @@ int irix_libc_bridge_init(IrixGuestRuntime *rt, IrixGuestAddr heap_base, uint32_
     return 0;
 }
 
+
+/*
+ * libc's arena-lock hooks (_nlock, _lock, _ulock, ...) are data objects that
+ * hold function pointers; libraries such as libil call through them after
+ * usinit().  The recompiled processes are single threaded, so each hook is a
+ * trivial function reached through a guest-visible pointer cell.
+ */
+static void bridge_lock_new(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = alloc_guest(16u, 4u); }
+static void bridge_lock_ok(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 1; }
+static void bridge_lock_zero(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 0; }
+static void bridge_test_and_set32(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr a = (uint32_t)cpu->gpr[4];
+    uint32_t old = irix_guest_read32be(rt, a);
+    irix_guest_write32be(rt, a, (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = old;
+}
+static void bridge_test_then_add32(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    IrixGuestAddr a = (uint32_t)cpu->gpr[4];
+    uint32_t old = irix_guest_read32be(rt, a);
+    irix_guest_write32be(rt, a, old + (uint32_t)cpu->gpr[5]);
+    cpu->gpr[2] = old;
+}
+
+static IrixGuestAddr lock_hook_cell(const char *name, IrixGuestFunction fn)
+{
+    static struct { const char *name; IrixGuestAddr cell; } cache[16];
+    size_t i;
+    for (i = 0; i < 16u && cache[i].name; ++i)
+        if (!strcmp(cache[i].name, name)) return cache[i].cell;
+    if (i >= 16u) return 0;
+    {
+        IrixGuestAddr code = alloc_guest(4u, 4u), cell = alloc_guest(4u, 4u);
+        if (!code || !cell) return 0;
+        irix_guest_write32be(g_libc.rt, code, 0x03e00008u);   /* jr $ra: never executed */
+        irix_guest_register_function(g_libc.rt, code, fn, name);
+        irix_guest_write32be(g_libc.rt, cell, code);
+        irix_guest_register_function(g_libc.rt, cell, fn, name);   /* also callable through the cell itself */
+        cache[i].name = name;
+        cache[i].cell = cell;
+        return cell;
+    }
+}
+
 IrixGuestAddr irix_libc_bridge_data_lookup(const char *name)
 {
     if (!name)
@@ -1149,6 +1197,13 @@ IrixGuestAddr irix_libc_bridge_data_lookup(const char *name)
         return g_libc.optopt_addr;
     if (!strcmp(name, "_sp"))
         return g_libc.getopt_sp_addr;
+    if (!strcmp(name, "_nlock")) return lock_hook_cell("_nlock", bridge_lock_new);
+    if (!strcmp(name, "_lock") || !strcmp(name, "_wlock") || !strcmp(name, "_ctlock"))
+        return lock_hook_cell(name, bridge_lock_ok);
+    if (!strcmp(name, "_ulock") || !strcmp(name, "_ilock") || !strcmp(name, "_freelock"))
+        return lock_hook_cell(name, bridge_lock_zero);
+    if (!strcmp(name, "__test_and_set32")) return lock_hook_cell(name, bridge_test_and_set32);
+    if (!strcmp(name, "__test_then_add32")) return lock_hook_cell(name, bridge_test_then_add32);
     return 0;
 }
 

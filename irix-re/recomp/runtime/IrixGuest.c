@@ -2324,6 +2324,22 @@ int irix_guest_execve(IrixGuestRuntime *rt, const char *guest_path,
             if (!child_argv) { errno = ENOMEM; return -1; }
             child_argv[0] = "sh";
             for (j = 1u; j < argc; ++j) child_argv[j] = argv[j];
+            /*
+             * A plain interactive shell (what xwsh starts: no arguments, or a
+             * login "-sh") is the user's own host shell, started as a login
+             * shell so it reads their profile.  Scripts and "-c" keep the
+             * POSIX /bin/sh above.
+             */
+            if (argc <= 1u) {
+                const char *user_sh = getenv("SHELL");
+                if (user_sh && user_sh[0] == '/' && !access(user_sh, X_OK)) {
+                    const char *base = strrchr(user_sh, '/') + 1;
+                    static char login_name[256];
+                    snprintf(login_name, sizeof(login_name), "-%s", base);
+                    sh = user_sh;
+                    child_argv[0] = login_name;
+                }
+            }
         }
         merged_env = irix_merge_host_env(envp ? envp : environ, 1);
         execve(sh, child_argv, merged_env ? merged_env :

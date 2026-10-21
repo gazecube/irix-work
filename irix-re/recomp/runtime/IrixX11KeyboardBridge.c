@@ -386,6 +386,18 @@ void irix_x11_keyboard_bridge_init(IrixGuestRuntime *rt)
         g_kbd.tmp_cur = IRIX_X11_KBD_TMP_BASE;
 }
 
+
+/*
+ * XKB component enumeration (keymap/geometry/symbol name lists) needs the
+ * server-side keyboard compiler's data, which the guest libX11 reads from its
+ * own display structure; report "no components" so panels such as ipanel
+ * show an empty list instead of faulting.
+ */
+static void bridge_XkbListComponents(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 0; }
+static void bridge_XkbFreeComponentList(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 0; }
+
 IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
 {
     if (!name) return 0;
@@ -394,6 +406,8 @@ IrixGuestFunction irix_x11_keyboard_bridge_lookup(const char *name)
     if (!strcmp(name, "XGetModifierMapping")) return bridge_XGetModifierMapping;
     if (!strcmp(name, "XFreeModifiermap")) return bridge_XFreeModifiermap;
     if (!strcmp(name, "XkbLookupKeySym")) return bridge_XkbLookupKeySym;
+    if (!strcmp(name, "XkbListComponents")) return bridge_XkbListComponents;
+    if (!strcmp(name, "XkbFreeComponentList")) return bridge_XkbFreeComponentList;
     if (!strcmp(name, "XListHosts")) return bridge_XListHosts;
     if (!strcmp(name, "XAddHost")) return bridge_XAddHost;
     if (!strcmp(name, "XRemoveHost")) return bridge_XRemoveHost;

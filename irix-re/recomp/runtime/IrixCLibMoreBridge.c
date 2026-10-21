@@ -605,6 +605,56 @@ static void b_tempnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     cpu->gpr[2] = (uint32_t)c.gpr[2];
 }
 
+
+/* Message catalogs: no catalogs are installed; fail the open and hand back defaults. */
+static void b_catopen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = (uint64_t)(int64_t)-1; }
+static void b_catgets(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = (uint32_t)cpu->gpr[7]; }
+static void b_catclose(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 0; }
+
+
+/* Wide-character strings: IRIX N32 wchar_t is a 32-bit big-endian word. */
+static uint32_t wc_at(IrixGuestRuntime *rt, IrixGuestAddr a, size_t i)
+{ return irix_guest_read32be(rt, a + (IrixGuestAddr)(i * 4u)); }
+static void b_wcslen(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr a = (uint32_t)cpu->gpr[4]; size_t n = 0; while (n < 0x100000u && wc_at(rt, a, n)) ++n; cpu->gpr[2] = (uint32_t)n; }
+static void b_wcscpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr d = (uint32_t)cpu->gpr[4], s = (uint32_t)cpu->gpr[5]; size_t i = 0; uint32_t c;
+  do { c = wc_at(rt, s, i); irix_guest_write32be(rt, d + (IrixGuestAddr)(i * 4u), c); ++i; } while (c && i < 0x100000u);
+  cpu->gpr[2] = d; }
+static void b_wcsncpy(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr d = (uint32_t)cpu->gpr[4], s = (uint32_t)cpu->gpr[5]; size_t n = (uint32_t)cpu->gpr[6], i; int end = 0;
+  for (i = 0; i < n; ++i) { uint32_t c = end ? 0u : wc_at(rt, s, i); if (!c) end = 1; irix_guest_write32be(rt, d + (IrixGuestAddr)(i * 4u), c); }
+  cpu->gpr[2] = d; }
+static void b_wcscmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr a = (uint32_t)cpu->gpr[4], b = (uint32_t)cpu->gpr[5]; size_t i = 0; int32_t d = 0;
+  for (; i < 0x100000u; ++i) { uint32_t x = wc_at(rt, a, i), y = wc_at(rt, b, i); if (x != y) { d = x < y ? -1 : 1; break; } if (!x) break; }
+  cpu->gpr[2] = (uint64_t)(int64_t)d; }
+static void b_wcsncmp(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr a = (uint32_t)cpu->gpr[4], b = (uint32_t)cpu->gpr[5]; size_t n = (uint32_t)cpu->gpr[6], i; int32_t d = 0;
+  for (i = 0; i < n; ++i) { uint32_t x = wc_at(rt, a, i), y = wc_at(rt, b, i); if (x != y) { d = x < y ? -1 : 1; break; } if (!x) break; }
+  cpu->gpr[2] = (uint64_t)(int64_t)d; }
+static void b_wcschr(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr a = (uint32_t)cpu->gpr[4]; uint32_t ch = (uint32_t)cpu->gpr[5]; size_t i = 0;
+  for (; i < 0x100000u; ++i) { uint32_t x = wc_at(rt, a, i); if (x == ch) { cpu->gpr[2] = a + (IrixGuestAddr)(i * 4u); return; } if (!x) break; }
+  cpu->gpr[2] = 0; }
+static void b_wcscat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ IrixGuestAddr d = (uint32_t)cpu->gpr[4], s = (uint32_t)cpu->gpr[5]; size_t n = 0, i = 0; uint32_t c;
+  while (n < 0x100000u && wc_at(rt, d, n)) ++n;
+  do { c = wc_at(rt, s, i); irix_guest_write32be(rt, d + (IrixGuestAddr)((n + i) * 4u), c); ++i; } while (c && i < 0x100000u);
+  cpu->gpr[2] = d; }
+
+
+static void b_wc_zero(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; cpu->gpr[2] = 0; }
+static void b_iswpunct(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ uint32_t c = (uint32_t)cpu->gpr[4]; (void)rt; cpu->gpr[2] = (c < 128u && ispunct((int)c)) ? 1u : 0u; }
+static void b_towlower(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ uint32_t c = (uint32_t)cpu->gpr[4]; (void)rt; cpu->gpr[2] = c < 128u ? (uint32_t)tolower((int)c) : c; }
+static void b_nl_langinfo(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ cpu->gpr[2] = scratch_str(rt, ""); }
 static void b_setuid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { (void)rt; RET(setuid((uid_t)ARG(0))); }
 static void b_setgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -862,7 +912,12 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "endinvent_r", b_endinvent_r }, { "setinvent", b_setinvent },
         { "getinvent", b_getinvent }, { "endinvent", b_endinvent },
         { "usinit", b_usinit }, { "usnewsema", b_usnewsema }, { "usmalloc", b_usmalloc },
-        { "usconfig", b_zero }, { "usdetach", b_zero }, { "usfree", b_zero },
+        { "isideogram", b_wc_zero }, { "isphonogram", b_wc_zero }, { "isspecial", b_wc_zero },
+        { "iswpunct", b_iswpunct }, { "towlower", b_towlower }, { "nl_langinfo", b_nl_langinfo },
+        { "wcslen", b_wcslen }, { "wcscpy", b_wcscpy }, { "wcsncpy", b_wcsncpy }, { "wcscmp", b_wcscmp },
+        { "wcsncmp", b_wcsncmp }, { "wcschr", b_wcschr }, { "wcscat", b_wcscat },
+        { "catopen", b_catopen }, { "catgets", b_catgets }, { "catclose", b_catclose },
+        { "usconfig", b_zero }, { "setitimer", b_zero }, { "getitimer", b_zero }, { "usdetach", b_zero }, { "usfree", b_zero },
         { "usfreesema", b_zero }, { "uspsema", b_usnop1 }, { "uscpsema", b_usnop1 },
         { "usvsema", b_zero }, { "usinitsema", b_zero }, { "usmallinfo", b_zero },
         { "init_lock", b_zero }, { "spin_lock", b_zero }, { "release_lock", b_zero },

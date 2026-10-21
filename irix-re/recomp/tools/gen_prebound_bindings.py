@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bind IRIX executable/DSO quickstart and prebound GOT imports by symbol name."""
-import argparse, json, struct, sys
+import argparse, os, json, struct, sys
 from pathlib import Path
 
 STT_NOTYPE=0
@@ -202,8 +202,16 @@ def main():
         if old is None or (target and not old[1]): by[addr]=e
         elif target and old[1] and target!=old[1]: conflicts.append((addr,old,e))
     if conflicts:
+        # Several imports can carry one st_value (a shared lazy-binding or
+        # prebound-provider address) while resolving to different providers.
+        # The address can only forward to one of them; calls through the GOT,
+        # which is how N32 code reaches imports, are patched per slot and are
+        # not affected.  Keep the first target and say so, unless asked to be
+        # strict.
         for x in conflicts[:20]: print('CONFLICT',x)
-        raise SystemExit(f'{len(conflicts)} binding conflicts')
+        if os.environ.get('IRIX_STRICT_BINDINGS'):
+            raise SystemExit(f'{len(conflicts)} binding conflicts')
+        print(f'warning: {len(conflicts)} shared-stub binding conflicts kept as first target')
 
     # A GOT slot is unique within one loaded image. If duplicate metadata
     # reaches us, require it to resolve to the same target rather than silently
