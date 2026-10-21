@@ -7279,11 +7279,11 @@ static int irix_guest_call_entry_impl(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
             static const char *fp_only = (const char *)-1;
             if (fp_only == (const char *)-1) fp_only = getenv("IRIX_TRACE_FP");
             if (fp_only && *fp_only && entry->name) {
-                const char *p = fp_only; size_t nl = strlen(entry->name);
+                const char *p = fp_only; const char *bn = strrchr(entry->name, ':'); bn = bn ? bn + 1 : entry->name; size_t nl = strlen(bn);
                 while (*p) {
                     const char *q = strchr(p, ',');
                     size_t pl = q ? (size_t)(q - p) : strlen(p);
-                    if (pl == nl && !strncmp(p, entry->name, nl)) {
+                    if (pl == nl && !strncmp(p, bn, nl)) {
                         fprintf(stderr, "FP %s a0=%08x f12=%g f13=%g f14=%g f15=%g\n", entry->name,
                                 (unsigned)cpu->gpr[4],
                                 irix_guest_fpr_get_s(cpu, 12), irix_guest_fpr_get_s(cpu, 13),
