@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Delete _MOTIF_WM_HINTS from Electron/Chromium windows so 4Dwm frames them.
+"""Delete _MOTIF_WM_HINTS from Electron, CEF (steamwebhelper) and Chromium windows so 4Dwm frames them.
 
 Watches the root window for new top-level windows and for the property being
 set again.  A window counts as Electron when its _NET_WM_PID process runs an
@@ -9,7 +9,7 @@ electron binary or one of the app's own Electron launchers.  Usage:
 import os, sys
 from Xlib import X, display, error, Xatom
 
-MATCH = ("electron", "chrome-sandbox", "resources/app.asar", "claude-desktop")
+MATCH = ("electron", "chrome-sandbox", "resources/app.asar", "claude-desktop", "steamwebhelper")
 
 def is_electron(pid):
     try:
