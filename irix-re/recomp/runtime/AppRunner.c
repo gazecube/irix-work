@@ -901,6 +901,10 @@ fail:
     return -1;
 }
 
+/* Pid of this process image (kept for diagnostics; see the guest-exit path). */
+static pid_t g_startup_pid;
+__attribute__((constructor)) static void note_startup_pid(void) { g_startup_pid = getpid(); }
+
 int main(int argc, char **argv)
 {
     IrixGuestRuntime rt;
@@ -1465,8 +1469,13 @@ int main(int argc, char **argv)
             if (getenv("IRIX_VERBOSE"))
                 fprintf(stderr, "IRIX %s exited: status=%d\n",
                         IRIX_APP_NAME, status);
-            irix_guest_runtime_destroy(&rt);
-            return status;
+            /* Leave with _exit(): runtime teardown leaves environ and the
+             * thread state of host libraries (GL, PulseAudio) unusable for
+             * their exit-time destructors, and a forked child has none of the
+             * parent's threads to join. */
+            (void)g_startup_pid;
+            fflush(NULL);
+            _exit(status);
         }
         IrixGuestFunctionEntry *e = irix_guest_find_function(&rt, rt.trap_pc);
         IrixGuestFunctionEntry *fault_e = irix_guest_find_function(&rt, rt.fault_addr);

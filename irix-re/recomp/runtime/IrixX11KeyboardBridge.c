@@ -375,6 +375,8 @@ static void bridge_XStringToKeysym(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
     const char *s = irix_guest_cstr(rt, (uint32_t)cpu->gpr[4], 65536u);
     cpu->gpr[2] = s ? (uint32_t)XStringToKeysym(s) : 0;
+    if (getenv("IRIX_TRACE_KEYS"))
+        fprintf(stderr, "IRIX KEY: XStringToKeysym(\"%s\") -> %#x\n", s ? s : "(null)", (unsigned)cpu->gpr[2]);
 }
 
 void irix_x11_keyboard_bridge_init(IrixGuestRuntime *rt)

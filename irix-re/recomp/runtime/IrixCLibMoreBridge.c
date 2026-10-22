@@ -751,6 +751,13 @@ static IrixGuestAddr put_group(IrixGuestRuntime *rt, const struct group *g)
 
 static void b_getgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { cpu->gpr[2] = put_group(rt, getgrent()); }
+static void b_getgrgid(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ cpu->gpr[2] = put_group(rt, getgrgid((gid_t)ARG(0))); }
+static void b_getgrnam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    const char *name = gcs(rt, ARG(0));
+    cpu->gpr[2] = name ? put_group(rt, getgrnam(name)) : 0;
+}
 static void b_setgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { (void)rt; setgrent(); RET(0); }
 static void b_endgrent(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
@@ -881,7 +888,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
     static const struct { const char *n; IrixGuestFunction f; } t[] = {
         { "openlog", b_zero }, { "closelog", b_zero },
         { "sysinfo", b_sysinfo }, { "execve", b_execve }, { "execv", b_execv },
-        { "getgrent", b_getgrent }, { "setgrent", b_setgrent }, { "endgrent", b_endgrent },
+        { "getgrgid", b_getgrgid }, { "getgrnam", b_getgrnam }, { "getgrent", b_getgrent }, { "setgrent", b_setgrent }, { "endgrent", b_endgrent },
         { "gethostent", b_null }, { "sethostent", b_zero }, { "endhostent", b_zero },
         { "killpg", b_killpg }, { "setpgid", b_setpgid }, { "wait3", b_wait3 },
         { "sigsetmask", b_sigsetmask }, { "sigsuspend", b_sigsuspend },
