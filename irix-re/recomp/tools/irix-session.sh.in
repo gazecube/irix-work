@@ -440,6 +440,13 @@ if [ -x "$root$reaper" ]; then
             sleep 1
         done
         echo "IRIX session: $session_property cleared or 4Dwm gone; ending"
+        # Shutdown jingle (the Octane PROM one); IRIX_SHUTDOWN_SOUND= disables.
+        shutdown_sound=${IRIX_SHUTDOWN_SOUND-/usr/share/data/sounds/prom/IP30stop.aiff}
+        sound_pid=
+        if [ -n "$shutdown_sound" ] && [ -f "$runtime$shutdown_sound" ] && [ -x "$root/usr/sbin/sfplay" ]; then
+            IRIX_RECOMP_ROOT="$root" IRIX_RUNTIME_TREE="$runtime" "$root/usr/sbin/sfplay" "$runtime$shutdown_sound" >/dev/null 2>&1 &
+            sound_pid=$!
+        fi
         # 4Dwm writes its session files before it clears the property; let it
         # finish and exit before the cleanup trap stops it.
         waited=0
@@ -447,6 +454,7 @@ if [ -x "$root$reaper" ]; then
             sleep 0.5
             waited=$((waited + 1))
         done
+        [ -n "$sound_pid" ] && wait "$sound_pid" 2>/dev/null
         exit 0
     fi
     echo "IRIX session: reaper did not publish $session_property; waiting on 4Dwm" >&2
