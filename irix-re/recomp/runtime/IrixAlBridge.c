@@ -26,7 +26,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define RET(v) do { cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)(v); } while (0)
+#define RET(v) do { cpu->gpr[2] = (uint64_t)(int64_t)(int32_t)(v); if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "%s(%x,%x,%x) -> %d\n", __func__, ARG(0), ARG(1), ARG(2), (int)(int32_t)cpu->gpr[2]); } while (0)
 #define ARG(n) ((uint32_t)cpu->gpr[4 + (n)])
 
 /* <dmedia/audio.h> */
@@ -129,6 +129,7 @@ static void guest_string(IrixGuestRuntime *rt, uint32_t addr, char *out, size_t 
 
 static void b_ALnewconfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALnewconfig a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     uint32_t i;
     (void)rt;
     for (i = 0; i < MAX_CFG; ++i) {
@@ -162,6 +163,7 @@ CFG_ACCESSORS(queuesize, queuesize)
 
 static void b_ALopenport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALopenport a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     AlConfig *c = ARG(2) ? cfg_from(ARG(2)) : 0;
     char name[32], dir[8];
     uint32_t i;
@@ -205,6 +207,7 @@ static void b_ALcloseport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALsetconfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALsetconfig a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     AlPort *p = port_from(ARG(0));
     AlConfig *c = cfg_from(ARG(1));
     (void)rt;
@@ -359,6 +362,7 @@ static int port_filled(AlPort *p)
 
 static void b_ALgetfilled(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALgetfilled a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     AlPort *p = port_from(ARG(0));
     (void)rt;
     RET(p ? port_filled(p) : -1);
@@ -366,6 +370,7 @@ static void b_ALgetfilled(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALgetfillable(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALgetfillable a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     AlPort *p = port_from(ARG(0));
     int free_samples;
     (void)rt;
@@ -389,6 +394,7 @@ static void b_ALseterrorhandler(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALsetparams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALsetparams a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     uint32_t buf = ARG(1);
     uint32_t n = ARG(2), i;
     params_init();
@@ -402,6 +408,7 @@ static void b_ALsetparams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALgetparams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALgetparams a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     uint32_t buf = ARG(1);
     uint32_t n = ARG(2), i;
     params_init();
@@ -415,6 +422,7 @@ static void b_ALgetparams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALgetdefault(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALgetdefault a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     int32_t id = (int32_t)ARG(1);
     (void)rt;
     params_init();
@@ -423,6 +431,7 @@ static void b_ALgetdefault(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_ALgetminmax(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 {
+    if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "AL ALgetminmax a0=%x a1=%x a2=%x a3=%x\n", ARG(0), ARG(1), ARG(2), ARG(3));
     int32_t id = (int32_t)ARG(1);
     int32_t lo = 0, hi = 255;
     if (id == AL_OUTPUT_RATE || id == AL_INPUT_RATE) { lo = 4000; hi = 48000; }
@@ -790,7 +799,52 @@ static const AlEntry g_af_entries[] = {
 #endif /* IRIX_HAVE_AUDIOFILE */
 
 
+
+/* IRIX 6.3+ lowercase al* API: same objects as the AL* ones, frames instead of samples */
+static void b_alWriteFrames(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AlPort *p = port_from(ARG(0));
+    int ch = p && p->cfg.channels > 0 ? p->cfg.channels : 2;
+    cpu->gpr[6] = (uint32_t)(ARG(2) * (uint32_t)ch);
+    b_ALwritesamps(rt, cpu);
+    if ((int32_t)cpu->gpr[2] >= 0) cpu->gpr[2] = (uint32_t)((int32_t)cpu->gpr[2] / ch);
+}
+static void b_alGetFilled(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AlPort *p = port_from(ARG(0));
+    int ch = p && p->cfg.channels > 0 ? p->cfg.channels : 2;
+    (void)rt;
+    RET(p ? port_filled(p) / ch : -1);
+}
+static void b_alRes(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(1); }
+static void b_alGetParams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i, n = ARG(2);
+    for (i = 0; i < n && i < 64; ++i) irix_guest_write64be(rt, ARG(1) + i * 16u + 8u, 0);
+    RET(0);
+}
+static void b_alZero(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(0); }
+static void b_alSetParams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i, n = ARG(2);
+    params_init();
+    for (i = 0; i < n && i < 64; ++i) {
+        uint32_t param = irix_guest_read32be(rt, ARG(1) + i * 16u);
+        uint64_t val = irix_guest_read64be(rt, ARG(1) + i * 16u + 8u);
+        if (getenv("IRIX_AL_TRACE")) fprintf(stderr, "alSetParams res=%x param=%x val=%llx\n", ARG(0), param, (unsigned long long)val);
+        /* AL_RATE (0x1000000d): alFixed with the integer part in the high word */
+        if (param == 0x1000000du && (val >> 32) >= 1000 && (val >> 32) <= 192000)
+            g_param[AL_OUTPUT_RATE] = g_param[AL_INPUT_RATE] = (int)(val >> 32);
+    }
+    RET(0);
+}
+
 static const AlEntry g_entries[] = {
+    { "alNewConfig", b_ALnewconfig }, { "alFreeConfig", b_ALfreeconfig }, { "alSetChannels", b_ALsetchannels },
+    { "alSetQueueSize", b_ALsetqueuesize }, { "alOpenPort", b_ALopenport }, { "alClosePort", b_ALcloseport },
+    { "alWriteFrames", b_alWriteFrames }, { "alGetFilled", b_alGetFilled }, { "alGetResourceByName", b_alRes },
+    { "alSetParams", b_alSetParams }, { "alGetParams", b_alGetParams }, { "alSetDevice", b_alZero }, { "alSetFillPoint", b_alZero },
+
     { "ALnewconfig", b_ALnewconfig }, { "ALfreeconfig", b_ALfreeconfig },
     { "ALsetwidth", b_ALsetwidth }, { "ALgetwidth", b_ALgetwidth },
     { "ALsetsampfmt", b_ALsetsampfmt }, { "ALgetsampfmt", b_ALgetsampfmt },
