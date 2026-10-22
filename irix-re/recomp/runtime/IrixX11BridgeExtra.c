@@ -1348,6 +1348,25 @@ static int write_xevent(IrixGuestRuntime *rt, IrixGuestAddr a, const XEvent *e)
                      (uint32_t)e->xclient.data.l[i]);
         }
         break;
+    case SelectionClear:
+        wr32(rt, a + 20u, (uint32_t)e->xselectionclear.selection);
+        wr32(rt, a + 24u, (uint32_t)e->xselectionclear.time);
+        break;
+    case SelectionRequest:
+        /* owner is the XAnyEvent window at +16 */
+        wr32(rt, a + 20u, (uint32_t)e->xselectionrequest.requestor);
+        wr32(rt, a + 24u, (uint32_t)e->xselectionrequest.selection);
+        wr32(rt, a + 28u, (uint32_t)e->xselectionrequest.target);
+        wr32(rt, a + 32u, (uint32_t)e->xselectionrequest.property);
+        wr32(rt, a + 36u, (uint32_t)e->xselectionrequest.time);
+        break;
+    case SelectionNotify:
+        /* requestor is the XAnyEvent window at +16 */
+        wr32(rt, a + 20u, (uint32_t)e->xselection.selection);
+        wr32(rt, a + 24u, (uint32_t)e->xselection.target);
+        wr32(rt, a + 28u, (uint32_t)e->xselection.property);
+        wr32(rt, a + 32u, (uint32_t)e->xselection.time);
+        break;
     default:
         break;
     }
@@ -2115,6 +2134,18 @@ static void bridge_XGetSelectionOwner(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 static void bridge_XDeleteProperty(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+static void bridge_XConvertSelection(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    Display *d=display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
+    if (d) {
+        XConvertSelection(d,(Atom)(uint32_t)cpu->gpr[5],(Atom)(uint32_t)cpu->gpr[6],
+                          (Atom)(uint32_t)cpu->gpr[7],(Window)(uint32_t)cpu->gpr[8],
+                          (Time)(uint32_t)cpu->gpr[9]);
+        XFlush(d);
+    }
+    cpu->gpr[2]=0;
+}
+
 {
     Display *d=display_from_guest((uint32_t)cpu->gpr[4]); (void)rt;
     cpu->gpr[2]=d?(uint32_t)XDeleteProperty(d,(Window)(uint32_t)cpu->gpr[5],(Atom)(uint32_t)cpu->gpr[6]):0;
@@ -2458,7 +2489,7 @@ IrixGuestFunction irix_x11_extra_lookup(const char *name)
     MAP(XSetForeground); MAP(XSetBackground); MAP(XSetFunction); MAP(XSetPlaneMask); MAP(XSetFillStyle); MAP(XSetFillRule); MAP(XSetArcMode); MAP(XSetClipMask); MAP(XSetClipOrigin); MAP(XSetFont); MAP(XSetSubwindowMode); MAP(XSetGraphicsExposures); MAP(XSetLineAttributes);
     MAP(XDrawLine); MAP(XDrawRectangle); MAP(XFillRectangle); MAP(XCopyArea); MAP(XGetGeometry); MAP(XTranslateCoordinates);
     MAP(XGetInputFocus); MAP(XSetInputFocus); MAP(XCreateFontCursor); MAP(XRecolorCursor); MAP(XFreeCursor); MAP(XDefineCursor); MAP(XUndefineCursor);
-    MAP(XSetSelectionOwner); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
+    MAP(XSetSelectionOwner); MAP(XConvertSelection); MAP(XGetSelectionOwner); MAP(XDeleteProperty); MAP(XChangeProperty);
 #ifdef IRIX_HAVE_XEXT
     MAP(XdbeQueryExtension); MAP(XdbeAllocateBackBufferName); MAP(XdbeDeallocateBackBufferName);
     MAP(XdbeSwapBuffers); MAP(XdbeGetVisualInfo); MAP(XdbeFreeVisualInfo);
