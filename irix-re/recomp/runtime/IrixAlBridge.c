@@ -694,7 +694,76 @@ static void b_afInitMiscSize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 { AFSET(); (void)rt; if (st) afInitMiscSize(st, (int)ARG(1), (int)ARG(2)); RET(0); }
 static void b_af_noop(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(0); }
 
+
+/* AUpvlist parameter-value lists: kept host-side, values read/written through guest pointers */
+#define PV_BASE 0x7b300000u
+#define PV_MAX 16
+#define PV_ITEMS 32
+typedef struct { int used, max; int param[PV_ITEMS], type[PV_ITEMS]; uint64_t val[PV_ITEMS]; } PvList;
+static PvList g_pv[PV_MAX];
+static PvList *pv_from(uint32_t h)
+{
+    if (h < PV_BASE || (h - PV_BASE) % HANDLE_STRIDE) return 0;
+    h = (h - PV_BASE) / HANDLE_STRIDE;
+    return h < PV_MAX && g_pv[h].used ? &g_pv[h] : 0;
+}
+#define PVI() PvList *pl = pv_from(ARG(0)); int it = (int)ARG(1); int ok = pl && it >= 0 && it < pl->max
+static void b_AUpvnew(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i; (void)rt;
+    for (i = 0; i < PV_MAX; ++i)
+        if (!g_pv[i].used) {
+            memset(&g_pv[i], 0, sizeof g_pv[i]);
+            g_pv[i].used = 1; g_pv[i].max = (int)ARG(0) > PV_ITEMS ? PV_ITEMS : (int)ARG(0);
+            RET(PV_BASE + i * HANDLE_STRIDE); return;
+        }
+    RET(0);
+}
+static void b_AUpvfree(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PvList *pl = pv_from(ARG(0)); (void)rt; if (pl) pl->used = 0; RET(pl ? 0 : -1); }
+static void b_AUpvgetmaxitems(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PvList *pl = pv_from(ARG(0)); (void)rt; RET(pl ? pl->max : -1); }
+static void b_AUpvsetparam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PVI(); (void)rt; if (ok) pl->param[it] = (int)ARG(2); RET(ok ? 0 : -1); }
+static void b_AUpvsetvaltype(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PVI(); (void)rt; if (ok) pl->type[it] = (int)ARG(2); RET(ok ? 0 : -1); }
+static void b_AUpvgetparam(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PVI(); if (ok && ARG(2)) irix_guest_write32be(rt, ARG(2), (uint32_t)pl->param[it]); RET(ok ? 0 : -1); }
+static void b_AUpvgetvaltype(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ PVI(); if (ok && ARG(2)) irix_guest_write32be(rt, ARG(2), (uint32_t)pl->type[it]); RET(ok ? 0 : -1); }
+static void b_AUpvsetval(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    PVI();
+    if (ok && ARG(2)) pl->val[it] = pl->type[it] == 2 ? irix_guest_read64be(rt, ARG(2)) : irix_guest_read32be(rt, ARG(2));
+    RET(ok ? 0 : -1);
+}
+static void b_AUpvgetval(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    PVI();
+    if (ok && ARG(2)) {
+        if (pl->type[it] == 2) irix_guest_write64be(rt, ARG(2), pl->val[it]);
+        else irix_guest_write32be(rt, ARG(2), (uint32_t)pl->val[it]);
+    }
+    RET(ok ? 0 : -1);
+}
+static void b_afQueryLong(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ (void)rt; RET((uint32_t)afQueryLong((int)ARG(0), (int)ARG(1), (int)ARG(2), (int)ARG(3), (int)ARG(4))); }
+static void b_afQueryPointer(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(0); }
+static void b_afGetMarkPosition(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; cpu->gpr[2] = 0; }
+static void b_af_fail(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(-1); }
+
 static const AlEntry g_af_entries[] = {
+    { "AUpvnew", b_AUpvnew }, { "AUpvfree", b_AUpvfree }, { "AUpvgetmaxitems", b_AUpvgetmaxitems }, { "AUpvsetparam", b_AUpvsetparam },
+    { "AUpvsetvaltype", b_AUpvsetvaltype }, { "AUpvgetparam", b_AUpvgetparam }, { "AUpvgetvaltype", b_AUpvgetvaltype },
+    { "AUpvsetval", b_AUpvsetval }, { "AUpvgetval", b_AUpvgetval }, { "AUchecklicense", b_af_noop },
+    { "afQueryLong", b_afQueryLong }, { "afQueryPointer", b_afQueryPointer }, { "afGetCompressionName", b_af_noop },
+    { "afGetCompressionParams", b_af_fail }, { "afGetMarkName", b_af_noop }, { "afGetMarkPosition", b_afGetMarkPosition },
+    { "afSetMarkPosition", b_af_noop }, { "afGetInstParamLong", b_af_noop }, { "afSetInstParamLong", b_af_noop },
+    { "afGetLoopStart", b_af_noop }, { "afGetLoopEnd", b_af_noop }, { "afGetLoopMode", b_af_noop }, { "afSetLoopStart", b_af_noop },
+    { "afSetLoopEnd", b_af_noop }, { "afSetLoopMode", b_af_noop }, { "afGetMiscSize", b_af_noop }, { "afGetMiscType", b_af_noop },
+    { "afReadMisc", b_af_fail }, { "afSeekMisc", b_af_fail }, { "afWriteMisc", b_af_fail }, { "afWriteFrames", b_af_fail },
+    { "afGetAESChannelData", b_af_fail }, { "afSetAESChannelData", b_af_noop },
+
     { "afNewFileSetup", b_afNewFileSetup }, { "afFreeFileSetup", b_afFreeFileSetup }, { "afInitFileFormat", b_afInitFileFormat },
     { "afInitChannels", b_afInitChannels }, { "afInitCompression", b_afInitCompression }, { "afInitByteOrder", b_afInitByteOrder },
     { "afInitSampleFormat", b_afInitSampleFormat }, { "afInitRate", b_afInitRate }, { "afInitDataOffset", b_afInitDataOffset },
@@ -742,6 +811,72 @@ void irix_al_bridge_init(IrixGuestRuntime *rt)
     params_init();
 }
 
+static const char *const g_af_strong[][2] = {
+    {"afGetFrameCount", "AFgetframecnt"},
+    {"afReadFrames", "AFreadframes"},
+    {"afWriteFrames", "AFwriteframes"},
+    {"afTellFrame", "AFtellframe"},
+    {"afSeekFrame", "AFseekframe"},
+    {"afSyncFile", "AFsyncfile"},
+    {"afSetErrorHandler", "AFseterrorhandler"},
+    {"afInitFileFormat", "AFinitfilefmt"},
+    {"afGetFileFormat", "AFgetfilefmt"},
+    {"afInitTrackIDs", "AFinittrackids"},
+    {"afGetTrackIDs", "AFgettrackids"},
+    {"afInitAESChannelData", "AFinitaeschanneldata"},
+    {"afSetAESChannelData", "AFsetaeschanneldata"},
+    {"afGetAESChannelData", "AFgetaeschanneldata"},
+    {"afInitChannels", "AFinitchannels"},
+    {"afGetChannels", "AFgetchannels"},
+    {"afInitCompression", "AFinitcompression"},
+    {"afInitCompressionParams", "AFinitcompressionparams"},
+    {"afGetCompression", "AFgetcompression"},
+    {"afGetCompressionParams", "AFgetcompressionparams"},
+    {"afGetCompressionName", "AFgetcompressionname"},
+    {"afInitRate", "AFinitrate"},
+    {"afGetRate", "AFgetrate"},
+    {"afInitSampleFormat", "AFinitsampfmt"},
+    {"afGetSampleFormat", "AFgetsampfmt"},
+    {"afInitInstIDs", "AFinitinstids"},
+    {"afGetInstIDs", "AFgetinstids"},
+    {"afSetInstParams", "AFsetinstparams"},
+    {"afSetInstParamLong", "AFsetinstparamlong"},
+    {"afGetInstParams", "AFgetinstparams"},
+    {"afGetInstParamLong", "AFgetinstparamlong"},
+    {"afInitLoopIDs", "AFinitloopids"},
+    {"afGetLoopIDs", "AFgetloopids"},
+    {"afSetLoopMode", "AFsetloopmode"},
+    {"afGetLoopMode", "AFgetloopmode"},
+    {"afSetLoopStart", "AFsetloopstart"},
+    {"afGetLoopStart", "AFgetloopstart"},
+    {"afSetLoopTrack", "AFsetlooptrack"},
+    {"afGetLoopTrack", "AFgetlooptrack"},
+    {"afSetLoopEnd", "AFsetloopend"},
+    {"afGetLoopEnd", "AFgetloopend"},
+    {"afInitMarkIDs", "AFinitmarkids"},
+    {"afGetMarkIDs", "AFgetmarkids"},
+    {"afInitMarkName", "AFinitmarkname"},
+    {"afGetMarkName", "AFgetmarkname"},
+    {"afSetMarkPosition", "AFsetmarkpos"},
+    {"afGetMarkPosition", "AFgetmarkpos"},
+    {"afInitMiscIDs", "AFinitmiscids"},
+    {"afGetMiscIDs", "AFgetmiscids"},
+    {"afInitMiscSize", "AFinitmiscsize"},
+    {"afGetMiscSize", "AFgetmiscsize"},
+    {"afInitMiscType", "AFinitmisctype"},
+    {"afGetMiscType", "AFgetmisctype"},
+    {"afReadMisc", "AFreadmisc"},
+    {"afSeekMisc", "AFseekmisc"},
+    {"afWriteMisc", "AFwritemisc"},
+    {"afGetFD", "AFgetfd"},
+    {"afIdentifyFD", "AFidentifyfd"},
+    {"afOpenFile", "AFopenfile"},
+    {"afOpenFD", "AFopenfd"},
+    {"afCloseFile", "AFclosefile"},
+    {"afNewFileSetup", "AFnewfilesetup"},
+    {"afFreeFileSetup", "AFfreefilesetup"},
+};
+
 IrixGuestFunction irix_al_bridge_lookup(const char *name)
 {
     size_t i;
@@ -755,6 +890,9 @@ IrixGuestFunction irix_al_bridge_lookup(const char *name)
             if (!strcmp(name, n)) return g_af_entries[i].fn;
             /* the translated functions are recorded under SGI's strong names:
                afOpenFile is the alias of AFopenfile */
+            { size_t k;
+              for (k = 0; k < sizeof g_af_strong / sizeof g_af_strong[0]; ++k)
+                  if (!strcmp(name, g_af_strong[k][1]) && !strcmp(n, g_af_strong[k][0])) return g_af_entries[i].fn; }
             if (name[0] == 'A' && name[1] == 'F' && strlen(name) == strlen(n)) {
                 size_t k;
                 for (k = 2; n[k] && name[k] == (n[k] >= 'A' && n[k] <= 'Z' ? n[k] + 32 : n[k]); ++k) ;
