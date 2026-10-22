@@ -1574,6 +1574,9 @@ static void bridge_XLookupString(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
     rc = XLookupString(&e, buf, bytes, keysym_addr ? &ks : NULL, NULL);
+    if (getenv("IRIX_TRACE_KEYS"))
+        fprintf(stderr, "IRIX KEY: XLookupString keycode=%u state=%#x type=%d -> keysym=%#lx bytes=%d\n",
+                e.keycode, e.state, e.type, (unsigned long)ks, rc);
     if (keysym_addr) wr32(rt, keysym_addr, (uint32_t)ks);
     
     cpu->gpr[2] = (uint32_t)rc;
