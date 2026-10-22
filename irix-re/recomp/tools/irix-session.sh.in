@@ -231,9 +231,38 @@ if command -v xrdb >/dev/null 2>&1; then
         xscr=$((xscr + 1))
     done
 fi
-IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" -launch $multiscreen \
-    -xrm '*SG_UseBackgrounds: True' \
-    -xrm "*freezeOnConfig: $freeze_on_config" &
+# 4Dwm occasionally dies at login (a trap in its LaunchNext/appIsActive queue
+# walk).  Once reaper has published _SGI_SESSION_PROPERTY the session is up,
+# so a 4Dwm that exits while the property is still set was a crash, not a
+# logout: restart it, without -launch so the saved apps are not started twice.
+# Before that point, and after end_session clears the property, an exit still
+# ends the session as before.  IRIX_4DWM_RESPAWN=0 turns this off.
+wm_session_up()
+{
+    xprop -display "$display" -root _SGI_SESSION_PROPERTY 2>/dev/null | grep -q "(ATOM)"
+}
+run_wm()
+{
+    wm_args=-launch
+    while :; do
+        IRIX_DEFINE_ROOT_POINTER_CURSOR=1 guest_exec "$wm" $wm_args $multiscreen \
+            -xrm '*SG_UseBackgrounds: True' \
+            -xrm "*freezeOnConfig: $freeze_on_config" &
+        wm_child=$!
+        wait "$wm_child"
+        wm_rc=$?
+        [ "${IRIX_4DWM_RESPAWN:-1}" = 1 ] || return "$wm_rc"
+        command -v xprop >/dev/null 2>&1 || return "$wm_rc"
+        wm_session_up || return "$wm_rc"
+        echo "IRIX session: 4Dwm exited ($wm_rc) while the session was up; restarting it" >&2
+        wm_args=
+        sleep 1
+    done
+}
+(
+    trap 'kill "${wm_child:-0}" 2>/dev/null; exit 0' TERM INT USR1
+    run_wm
+) &
 wm_pid=$!
 
 echo "IRIX session: waiting for 4Dwm"
@@ -343,7 +372,7 @@ if command -v xwininfo >/dev/null 2>&1 && command -v xprop >/dev/null 2>&1; then
             n=$((n + 1))
             sleep 1
             for w in $(xwininfo -display "$display" -root -children 2>/dev/null | \
-                    sed -n 's/^ *\(0x[0-9a-f]*\) .*: ().*\+0\+0.*/\1/p'); do
+                    sed -n 's/^ *\(0x[0-9a-f]*\) .*: ().*[+]0[+]0.*/\1/p'); do
                 if xprop -display "$display" -id "$w" _SGI_DESKS_BACKGROUND 2>/dev/null | grep -q PIXEL; then
                     xprop -display "$display" -id "$w" -f _SGI_DESKS_DESKTOP_COMMAND 8s \
                         -set _SGI_DESKS_DESKTOP_COMMAND "shape on"

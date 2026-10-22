@@ -54,3 +54,26 @@ Goal: every IRIX library the desktop links against is a standalone native librar
   (b) treat Motif bitfield containers specially (XmString, text line table, DnD status);
   (c) use the oracle (native from source) as the primary x86 library and translate only SGI-only
   libraries (libSgm etc.), measuring their hazard count with the detector.
+
+## Decision 2026-10-21: the output should look like a native x86_64 build
+User goal: the recompiled output should be as close as possible to an actual local x86_64 (or i386)
+compile of the same app. Concretely: each IRIX app is a normal ELF whose DT_NEEDED matches the IRIX
+original (libXm.so.1, libXt, libgl, ...); each IRIX library is a standalone .so with the same soname
+and exported symbols; no shared runtime (libirixre.so) and no address-based dispatch table; a
+recompiled app plus its libraries can be copied anywhere and run. Native code can link against these
+libraries, call them with the normal C ABI and subclass their widgets. O32 apps are in scope later
+(iconsmith, showcase) and need O32 ABI support in the translator.
+
+Consequence for memory: **native little-endian memory, native struct layouts** (the native-memory
+lowering above), not a big-endian image with swapping. The mixed-width hazard (bitfields, unions,
+struct copies, XmString segments) therefore has to be solved by recovering types, not avoided:
+- field and bitfield widths come from the UnixWare source oracle compiled for N32 with -g, matched by
+  name, and from relocations for pointers;
+- hazard sites found by the NM_SHADOW detector are resolved from those types and patched in the
+  translation (candidates a and b), with differential tests against the oracle;
+- libraries with no source match (libSgm, libvk, SGI-only widgets) get a measured hazard count first.
+Accuracy here means: the lowered code must behave like the type-correct native compile would.
+
+Order of work: (1) per-DSO output in the native-memory mode; (2) libc shim named libc.so.1 (struct
+layouts, errno, constants); (3) one small chain end to end (libX11 shim -> libXt -> a tiny app such
+as xclock); (4) scale to libXm/libSgm/libvk and the desktop apps; (5) O32 ABI; (6) x86_64 from N64.
