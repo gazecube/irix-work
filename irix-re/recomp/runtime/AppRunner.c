@@ -359,6 +359,22 @@ static void register_native_dsos(IrixGuestRuntime *rt)
                 *(char *)p = '_';
         reg = (IrixDsoRegister)dlsym(handle, symbol);
         if (!reg) {
+            /* Versioned file (libfoo.so.1) whose registry is named after the
+               SONAME (libfoo.so): retry with the version suffix removed. */
+            char *ver = strstr(symbol, "_so_");
+            if (ver) {
+                ver[3] = '\0';
+                reg = (IrixDsoRegister)dlsym(handle, symbol);
+            }
+        }
+        if (!reg) {
+            snprintf(symbol, sizeof(symbol), "register_dso_%s", base);
+            for (p = symbol; *p; ++p)
+                if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                      (*p >= '0' && *p <= '9') || *p == '_'))
+                    *(char *)p = '_';
+        }
+        if (!reg) {
             /* Explicit IID components use the basename without lib/.so. */
             size_t n = strlen(base);
             const char *name = base;
