@@ -141,6 +141,8 @@ void irix_x11_bulk_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_bulk_lookup(const char *name);
 IrixGuestFunction irix_gl_bridge_lookup(const char *name);
 void irix_gl_bridge_init(IrixGuestRuntime *rt);
+IrixGuestFunction irix_al_bridge_lookup(const char *name);
+void irix_al_bridge_init(IrixGuestRuntime *rt);
 void irix_x11_image_bridge_init(IrixGuestRuntime *rt);
 IrixGuestFunction irix_x11_image_bridge_lookup(const char *name);
 
@@ -186,6 +188,8 @@ static IrixGuestFunction resolve_native(const char *name)
     fn = irix_runtime_xt_bridge_lookup(name);
     if (fn) return fn;
     fn = irix_gl_bridge_lookup(name);
+    if (fn) return fn;
+    fn = irix_al_bridge_lookup(name);
     if (fn) return fn;
     return irix_x11_bulk_lookup(name);
 }
@@ -1132,6 +1136,7 @@ int main(int argc, char **argv)
 #endif
     irix_x11_extra_init(&rt);
     irix_gl_bridge_init(&rt);
+    irix_al_bridge_init(&rt);
     irix_x11_keyboard_bridge_init(&rt);
     irix_x11_connection_bridge_init(&rt);
     irix_x11_context_bridge_init(&rt);

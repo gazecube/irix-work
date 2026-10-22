@@ -194,6 +194,15 @@ static void b_getrlimit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     RET(0);
 }
 
+/* The guest must not lower the host process's real limits (stack, fds); accept a
+ * valid resource and report success. */
+static void b_setrlimit(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    (void)rt;
+    if (ARG(0) >= 8u) { FAIL(EINVAL); return; }
+    RET(0);
+}
+
 /* N32 struct statfs layout: short fstyp @0, long bsize @4, frsize @8,
  * int64 blocks @16, bfree @24, files @32, ffree @40, name[6]/pack[6] @48. */
 static void put_statfs(IrixGuestRuntime *rt, IrixGuestAddr out, const struct statfs *sf)
@@ -897,7 +906,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "isnan", b_isnan }, { "iswspace", b_iswspace }, { "wcstombs", b_wcstombs },
         { "lseek64", b_lseek64 }, { "waitpid", b_waitpid }, { "writev", b_writev },
         { "utime", b_utime }, { "mkfifo", b_mkfifo }, { "mknod", b_mknod },
-        { "lockf", b_lockf }, { "getrlimit", b_getrlimit },
+        { "lockf", b_lockf }, { "getrlimit", b_getrlimit }, { "setrlimit", b_setrlimit },
         { "statfs", b_statfs }, { "statvfs", b_statvfs }, { "fstatvfs64", b_fstatvfs64 },
         { "sysfs", b_sysfs }, { "syslog", b_syslog }, { "vsyslog", b_vsyslog }, { "sigset", b_sigset },
         { "inet_addr", b_inet_addr }, { "inet_ntoa", b_inet_ntoa },
