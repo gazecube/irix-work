@@ -17,6 +17,9 @@
 #include <fcntl.h>
 #include <pulse/error.h>
 #include <pulse/simple.h>
+#ifdef IRIX_HAVE_AUDIOFILE
+#include <audiofile.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -432,6 +435,292 @@ static void b_ALgetminmax(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 typedef struct { const char *name; IrixGuestFunction fn; } AlEntry;
 
+#ifdef IRIX_HAVE_AUDIOFILE
+/*
+ * SGI Audio File Library (af*) on the host libaudiofile, which is API
+ * compatible with it.  Handles are small guest-visible ids; arrays and
+ * doubles cross the boundary in guest (big-endian) form.  Only the reading
+ * path is bridged; the rest stays with the translated library.
+ */
+#define AF_BASE 0x7b100000u
+#define AF_MAX 32
+static AFfilehandle g_af[AF_MAX];
+
+static AFfilehandle af_from(uint32_t h)
+{
+    uint32_t i;
+    if (h < AF_BASE || (h - AF_BASE) % HANDLE_STRIDE) return 0;
+    i = (h - AF_BASE) / HANDLE_STRIDE;
+    return i < AF_MAX ? g_af[i] : 0;
+}
+
+static uint32_t af_register(AFfilehandle f)
+{
+    uint32_t i;
+    if (!f) return 0;
+    for (i = 0; i < AF_MAX; ++i)
+        if (!g_af[i]) { g_af[i] = f; return AF_BASE + i * HANDLE_STRIDE; }
+    afCloseFile(f);
+    return 0;
+}
+
+static void af_put_ints(IrixGuestRuntime *rt, uint32_t addr, const int *v, int n)
+{
+    int i;
+    for (i = 0; addr && i < n; ++i) irix_guest_write32be(rt, addr + 4u * (uint32_t)i, (uint32_t)v[i]);
+}
+
+static void af_put_double(IrixGuestRuntime *rt, uint32_t addr, double d)
+{
+    uint64_t u;
+    memcpy(&u, &d, sizeof u);
+    if (addr) irix_guest_write64be(rt, addr, u);
+}
+
+#define AFS_BASE 0x7b200000u
+#define AFS_MAX 16
+static AFfilesetup g_afs[AFS_MAX];
+static AFfilesetup afs_from(uint32_t h)
+{
+    uint32_t i;
+    if (h < AFS_BASE || (h - AFS_BASE) % HANDLE_STRIDE) return AF_NULL_FILESETUP;
+    i = (h - AFS_BASE) / HANDLE_STRIDE;
+    return i < AFS_MAX ? g_afs[i] : AF_NULL_FILESETUP;
+}
+#define AFSET() AFfilesetup st = afs_from(ARG(0))
+static int af_read_ints(IrixGuestRuntime *rt, uint32_t addr, int *out, int n)
+{
+    int i;
+    if (!addr || n < 0 || n > 256) return 0;
+    for (i = 0; i < n; ++i) out[i] = (int)irix_guest_read32be(rt, addr + 4u * (uint32_t)i);
+    return n;
+}
+#define AFH() AFfilehandle f = af_from(ARG(0))
+static void b_afSetErrorHandler(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(0); }
+
+static void b_afOpenFile(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char name[1024], mode[16];
+    guest_string(rt, ARG(0), name, sizeof name);
+    guest_string(rt, ARG(1), mode, sizeof mode);
+    RET(af_register(afOpenFile(name, mode, afs_from(ARG(2)))));
+}
+static void b_afOpenFD(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char mode[16];
+    guest_string(rt, ARG(1), mode, sizeof mode);
+    RET(af_register(afOpenFD((int)ARG(0), mode, afs_from(ARG(2)))));
+}
+static void b_afOpenNamedFD(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char mode[16], name[1024];
+    guest_string(rt, ARG(1), mode, sizeof mode);
+    guest_string(rt, ARG(3), name, sizeof name);
+    RET(af_register(afOpenNamedFD((int)ARG(0), mode, afs_from(ARG(2)), name)));
+}
+static void b_afIdentifyFD(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(afIdentifyFD((int)ARG(0))); }
+static void b_afIdentifyNamedFD(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    char name[1024]; int impl = 0, r;
+    guest_string(rt, ARG(1), name, sizeof name);
+    r = afIdentifyNamedFD((int)ARG(0), name, &impl);
+    if (ARG(2)) irix_guest_write32be(rt, ARG(2), (uint32_t)impl);
+    RET(r);
+}
+static void b_afCloseFile(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); uint32_t i = (ARG(0) - AF_BASE) / HANDLE_STRIDE; (void)rt;
+    if (!f) { RET(-1); return; }
+    g_af[i] = 0; RET(afCloseFile(f));
+}
+static void b_afGetFileFormat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ver = 0, r = f ? afGetFileFormat(f, &ver) : -1;
+    if (ARG(1)) irix_guest_write32be(rt, ARG(1), (uint32_t)ver);
+    RET(r);
+}
+static void b_afGetTrackIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ids[64] = {0}, n = f ? afGetTrackIDs(f, ids) : -1;
+    if (n > 64) n = 64;
+    if (n > 0) af_put_ints(rt, ARG(1), ids, n);
+    RET(n);
+}
+static void b_afGetInstIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ids[256] = {0}, n = f ? afGetInstIDs(f, ids) : -1;
+    if (n > 256) n = 256;
+    if (n > 0) af_put_ints(rt, ARG(1), ids, n);
+    RET(n);
+}
+static void b_afGetMiscIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ids[256] = {0}, n = f ? afGetMiscIDs(f, ids) : -1;
+    if (n > 256) n = 256;
+    if (n > 0) af_put_ints(rt, ARG(1), ids, n);
+    RET(n);
+}
+static void b_afGetMarkIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ids[256] = {0}, n = f ? afGetMarkIDs(f, (int)ARG(1), ids) : -1;
+    if (n > 256) n = 256;
+    if (n > 0) af_put_ints(rt, ARG(2), ids, n);
+    RET(n);
+}
+static void b_afGetLoopIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int ids[256] = {0}, n = f ? afGetLoopIDs(f, (int)ARG(1), ids) : -1;
+    if (n > 256) n = 256;
+    if (n > 0) af_put_ints(rt, ARG(2), ids, n);
+    RET(n);
+}
+
+#define AF_INT_GETTER(Name) \
+static void b_##Name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { AFH(); (void)rt; RET(f ? Name(f, (int)ARG(1)) : -1); }
+#define AF_INT_SETTER(Name) \
+static void b_##Name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { AFH(); (void)rt; RET(f ? Name(f, (int)ARG(1), (int)ARG(2)) : -1); }
+AF_INT_GETTER(afGetByteOrder)
+AF_INT_GETTER(afGetVirtualByteOrder)
+AF_INT_GETTER(afGetChannels)
+AF_INT_GETTER(afGetVirtualChannels)
+AF_INT_GETTER(afGetCompression)
+AF_INT_SETTER(afSetVirtualByteOrder)
+AF_INT_SETTER(afSetVirtualChannels)
+
+static void b_afSetVirtualSampleFormat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; RET(f ? afSetVirtualSampleFormat(f, (int)ARG(1), (int)ARG(2), (int)ARG(3)) : -1); }
+static void b_afGetSampleFormat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int v[2] = {0, 0};
+    if (f) afGetSampleFormat(f, (int)ARG(1), &v[0], &v[1]);
+    af_put_ints(rt, ARG(2), &v[0], 1); af_put_ints(rt, ARG(3), &v[1], 1);
+}
+static void b_afGetVirtualSampleFormat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int v[2] = {0, 0};
+    if (f) afGetVirtualSampleFormat(f, (int)ARG(1), &v[0], &v[1]);
+    af_put_ints(rt, ARG(2), &v[0], 1); af_put_ints(rt, ARG(3), &v[1], 1);
+}
+static void b_afGetRate(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; irix_guest_fpr_set_d(cpu, 0, f ? afGetRate(f, (int)ARG(1)) : 0.0); }
+static void b_afGetVirtualRate(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; irix_guest_fpr_set_d(cpu, 0, f ? afGetRate(f, (int)ARG(1)) : 0.0); }  /* host lib has no rate converter: virtual rate == file rate */
+static void b_afSetVirtualRate(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; RET(f ? 0 : -1); }  /* accepted without conversion; the AL bridge plays at any rate */
+static void b_afGetFrameSize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; irix_guest_fpr_set_s(cpu, 0, f ? afGetFrameSize(f, (int)ARG(1), (int)ARG(2)) : 0.0f); }
+static void b_afGetVirtualFrameSize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; irix_guest_fpr_set_s(cpu, 0, f ? afGetVirtualFrameSize(f, (int)ARG(1), (int)ARG(2)) : 0.0f); }
+static void b_afGetFrameCount(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; cpu->gpr[2] = (uint64_t)(int64_t)(f ? afGetFrameCount(f, (int)ARG(1)) : -1); }
+static void b_afGetDataOffset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; cpu->gpr[2] = (uint64_t)(int64_t)(f ? afGetDataOffset(f, (int)ARG(1)) : -1); }
+static void b_afSeekFrame(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFH(); (void)rt; cpu->gpr[2] = (uint64_t)(int64_t)(f ? afSeekFrame(f, (int)ARG(1), (AFframecount)(int64_t)cpu->gpr[6]) : -1); }
+static void af_get_mapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int virt)
+{
+    AFH(); double m[4] = {1.0, 0.0, 0.0, 0.0};
+    if (f) { if (virt) afGetVirtualPCMMapping(f, (int)ARG(1), &m[0], &m[1], &m[2], &m[3]); else afGetPCMMapping(f, (int)ARG(1), &m[0], &m[1], &m[2], &m[3]); }
+    af_put_double(rt, ARG(2), m[0]); af_put_double(rt, ARG(3), m[1]);
+    af_put_double(rt, ARG(4), m[2]); af_put_double(rt, ARG(5), m[3]);
+}
+static void b_afGetPCMMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { af_get_mapping(rt, cpu, 0); }
+static void b_afGetVirtualPCMMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { af_get_mapping(rt, cpu, 1); }
+static void b_afSetVirtualPCMMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); (void)rt;
+    RET(f ? afSetVirtualPCMMapping(f, (int)ARG(1), irix_guest_fpr_get_d(cpu, 14), irix_guest_fpr_get_d(cpu, 15),
+                                   irix_guest_fpr_get_d(cpu, 16), irix_guest_fpr_get_d(cpu, 17)) : -1);
+}
+static void b_afReadFrames(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFH(); int track = (int)ARG(1), frames = (int)ARG(3);
+    size_t bytes; void *dst;
+    if (!f || frames <= 0) { RET(f ? 0 : -1); return; }
+    bytes = (size_t)(afGetVirtualFrameSize(f, track, 1) * (float)frames) + 8u;
+    dst = irix_guest_ptr(rt, ARG(2), bytes);
+    if (!dst) { RET(-1); return; }
+    RET(afReadFrames(f, track, dst, frames));
+}
+
+static void b_afNewFileSetup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    uint32_t i; AFfilesetup st = afNewFileSetup(); (void)rt;
+    for (i = 0; st && i < AFS_MAX; ++i)
+        if (!g_afs[i]) { g_afs[i] = st; RET(AFS_BASE + i * HANDLE_STRIDE); return; }
+    if (st) afFreeFileSetup(st);
+    RET(0);
+}
+static void b_afFreeFileSetup(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFSET(); (void)rt;
+    if (st) { g_afs[(ARG(0) - AFS_BASE) / HANDLE_STRIDE] = 0; afFreeFileSetup(st); }
+    RET(0);
+}
+#define AFS_VOID1(Name) static void b_##Name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { AFSET(); (void)rt; if (st) Name(st, (int)ARG(1)); RET(0); }
+#define AFS_VOID2(Name) static void b_##Name(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { AFSET(); (void)rt; if (st) Name(st, (int)ARG(1), (int)ARG(2)); RET(0); }
+AFS_VOID1(afInitFileFormat)
+AFS_VOID2(afInitChannels)
+AFS_VOID2(afInitCompression)
+AFS_VOID2(afInitByteOrder)
+static void b_afInitSampleFormat(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitSampleFormat(st, (int)ARG(1), (int)ARG(2), (int)ARG(3)); RET(0); }
+static void b_afInitRate(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitRate(st, (int)ARG(1), irix_guest_fpr_get_d(cpu, 14)); RET(0); }
+static void b_afInitDataOffset(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitDataOffset(st, (int)ARG(1), (AFfileoffset)(int64_t)cpu->gpr[6]); RET(0); }
+static void b_afInitFrameCount(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitFrameCount(st, (int)ARG(1), (AFframecount)(int64_t)cpu->gpr[6]); RET(0); }
+static void b_afInitPCMMapping(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    AFSET(); (void)rt;
+    if (st) afInitPCMMapping(st, (int)ARG(1), irix_guest_fpr_get_d(cpu, 14), irix_guest_fpr_get_d(cpu, 15),
+                             irix_guest_fpr_get_d(cpu, 16), irix_guest_fpr_get_d(cpu, 17));
+    RET(0);
+}
+static void b_afInitTrackIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); int ids[256]; int n = af_read_ints(rt, ARG(1), ids, (int)ARG(2)); if (st) afInitTrackIDs(st, ids, n); RET(0); }
+static void b_afInitInstIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); int ids[256]; int n = af_read_ints(rt, ARG(1), ids, (int)ARG(2)); if (st) afInitInstIDs(st, ids, n); RET(0); }
+static void b_afInitMiscIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); int ids[256]; int n = af_read_ints(rt, ARG(1), ids, (int)ARG(2)); if (st) afInitMiscIDs(st, ids, n); RET(0); }
+static void b_afInitMarkIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); int ids[256]; int n = af_read_ints(rt, ARG(2), ids, (int)ARG(3)); if (st) afInitMarkIDs(st, (int)ARG(1), ids, n); RET(0); }
+static void b_afInitLoopIDs(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); int ids[256]; int n = af_read_ints(rt, ARG(2), ids, (int)ARG(3)); if (st) afInitLoopIDs(st, (int)ARG(1), ids, n); RET(0); }
+static void b_afInitMiscType(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitMiscType(st, (int)ARG(1), (int)ARG(2)); RET(0); }
+static void b_afInitMiscSize(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{ AFSET(); (void)rt; if (st) afInitMiscSize(st, (int)ARG(1), (int)ARG(2)); RET(0); }
+static void b_af_noop(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; RET(0); }
+
+static const AlEntry g_af_entries[] = {
+    { "afNewFileSetup", b_afNewFileSetup }, { "afFreeFileSetup", b_afFreeFileSetup }, { "afInitFileFormat", b_afInitFileFormat },
+    { "afInitChannels", b_afInitChannels }, { "afInitCompression", b_afInitCompression }, { "afInitByteOrder", b_afInitByteOrder },
+    { "afInitSampleFormat", b_afInitSampleFormat }, { "afInitRate", b_afInitRate }, { "afInitDataOffset", b_afInitDataOffset },
+    { "afInitFrameCount", b_afInitFrameCount }, { "afInitPCMMapping", b_afInitPCMMapping }, { "afInitTrackIDs", b_afInitTrackIDs },
+    { "afInitInstIDs", b_afInitInstIDs }, { "afInitMiscIDs", b_afInitMiscIDs }, { "afInitMarkIDs", b_afInitMarkIDs },
+    { "afInitLoopIDs", b_afInitLoopIDs }, { "afInitMiscType", b_afInitMiscType }, { "afInitMiscSize", b_afInitMiscSize },
+    { "afInitMarkName", b_af_noop }, { "afInitCompressionParams", b_af_noop }, { "afInitAESChannelDataTo", b_af_noop },
+    { "afSetChannelMatrix", b_af_noop }, { "afSetTrackPCMMapping", b_af_noop },
+    { "afSetErrorHandler", b_afSetErrorHandler }, { "afOpenFile", b_afOpenFile }, { "afOpenFD", b_afOpenFD },
+    { "afOpenNamedFD", b_afOpenNamedFD }, { "afIdentifyFD", b_afIdentifyFD }, { "afIdentifyNamedFD", b_afIdentifyNamedFD },
+    { "afCloseFile", b_afCloseFile }, { "afGetFileFormat", b_afGetFileFormat }, { "afGetTrackIDs", b_afGetTrackIDs },
+    { "afGetInstIDs", b_afGetInstIDs }, { "afGetMiscIDs", b_afGetMiscIDs }, { "afGetMarkIDs", b_afGetMarkIDs },
+    { "afGetLoopIDs", b_afGetLoopIDs }, { "afGetByteOrder", b_afGetByteOrder }, { "afGetVirtualByteOrder", b_afGetVirtualByteOrder },
+    { "afGetChannels", b_afGetChannels }, { "afGetVirtualChannels", b_afGetVirtualChannels }, { "afGetCompression", b_afGetCompression },
+    { "afSetVirtualByteOrder", b_afSetVirtualByteOrder }, { "afSetVirtualChannels", b_afSetVirtualChannels },
+    { "afSetVirtualSampleFormat", b_afSetVirtualSampleFormat }, { "afGetSampleFormat", b_afGetSampleFormat },
+    { "afGetVirtualSampleFormat", b_afGetVirtualSampleFormat }, { "afGetRate", b_afGetRate },
+    { "afGetVirtualRate", b_afGetVirtualRate }, { "afSetVirtualRate", b_afSetVirtualRate },
+    { "afGetFrameSize", b_afGetFrameSize }, { "afGetVirtualFrameSize", b_afGetVirtualFrameSize },
+    { "afGetFrameCount", b_afGetFrameCount }, { "afGetDataOffset", b_afGetDataOffset }, { "afSeekFrame", b_afSeekFrame },
+    { "afGetPCMMapping", b_afGetPCMMapping }, { "afGetVirtualPCMMapping", b_afGetVirtualPCMMapping },
+    { "afSetVirtualPCMMapping", b_afSetVirtualPCMMapping }, { "afReadFrames", b_afReadFrames },
+};
+#endif /* IRIX_HAVE_AUDIOFILE */
+
+
 static const AlEntry g_entries[] = {
     { "ALnewconfig", b_ALnewconfig }, { "ALfreeconfig", b_ALfreeconfig },
     { "ALsetwidth", b_ALsetwidth }, { "ALgetwidth", b_ALgetwidth },
@@ -459,5 +748,19 @@ IrixGuestFunction irix_al_bridge_lookup(const char *name)
     if (getenv("IRIX_AL_BRIDGE") && !strcmp(getenv("IRIX_AL_BRIDGE"), "0")) return 0;
     for (i = 0; i < sizeof g_entries / sizeof g_entries[0]; ++i)
         if (!strcmp(name, g_entries[i].name)) return g_entries[i].fn;
+#ifdef IRIX_HAVE_AUDIOFILE
+    if (!(getenv("IRIX_AF_BRIDGE") && !strcmp(getenv("IRIX_AF_BRIDGE"), "0")))
+        for (i = 0; i < sizeof g_af_entries / sizeof g_af_entries[0]; ++i) {
+            const char *n = g_af_entries[i].name;
+            if (!strcmp(name, n)) return g_af_entries[i].fn;
+            /* the translated functions are recorded under SGI's strong names:
+               afOpenFile is the alias of AFopenfile */
+            if (name[0] == 'A' && name[1] == 'F' && strlen(name) == strlen(n)) {
+                size_t k;
+                for (k = 2; n[k] && name[k] == (n[k] >= 'A' && n[k] <= 'Z' ? n[k] + 32 : n[k]); ++k) ;
+                if (!n[k]) return g_af_entries[i].fn;
+            }
+        }
+#endif
     return 0;
 }
