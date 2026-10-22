@@ -82,6 +82,12 @@ def main():
                     row['bind']==2 and alias['sym_value']==row['sym_value'] and
                     row['sym_value'] in funcs):
                 defs.setdefault(name,row['sym_value'])
+        # Any other exported function whose address is a recovered function
+        # is an alias of it too (libaudiofile's af<Name> beside AF<name>).
+        for name,row in syms.items():
+            if (row['shndx'] and row['type']==STT_FUNC and row['sym_value'] and
+                    row['sym_value'] in funcs):
+                defs.setdefault(name,row['sym_value'])
     # Explicit runtime providers outrank auto-expanded DSOs regardless of
     # closure order.  Auto dependencies are appended after seed components,
     # so "last definition wins" alone can let a later recovered import stub
