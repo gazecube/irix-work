@@ -1,0 +1,37 @@
+From 39a40409e392b2d3c1ab5f9a6893da4a30016f7d Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:12:35 -0700
+Subject: [PATCH 7/7] xmfb: find the cursor by walking up the window tree
+ (overlay windows with colormaps have optional records without a cursor)
+
+---
+ hw/xmfb/InitOutput.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 263c8e0..a02702f 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -621,7 +621,18 @@ static void
+ xmfbDrawCursor(vfbScreenInfoPtr pvfb)
+ {
+     WindowPtr sw = inputInfo.pointer ? GetSpriteWindow(inputInfo.pointer) : NULL;
+-    CursorPtr c = sw && !sw->cursorIsNone ? wCursor(sw) : NULL;
++    CursorPtr c = NULL;
++    WindowPtr win;
++
++    /* same rule as the server: the first window up the tree that has a cursor */
++    for (win = sw; win; win = win->parent) {
++        if (win->cursorIsNone)
++            break;
++        if (win->optional && win->optional->cursor) {
++            c = win->optional->cursor;
++            break;
++        }
++    }
+     uint32_t *out = (uint32_t *) pvfb->pfbMemory;
+     int w, h, dx, dy;
+     uint32_t fg, bg;
+-- 
+2.56.0
+

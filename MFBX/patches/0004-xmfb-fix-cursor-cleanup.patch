@@ -1,7 +1,7 @@
 From 1c7cc3ff8b5a31c28288a860d9cd60fbd89c4dba Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:06:36 -0700
-Subject: [PATCH 4/6] xmfb: fix cursor cleanup
+Subject: [PATCH 4/7] xmfb: fix cursor cleanup
 
 ---
  hw/xmfb/InitOutput.c | 2 --
