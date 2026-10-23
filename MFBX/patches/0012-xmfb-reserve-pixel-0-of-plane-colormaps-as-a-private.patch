@@ -1,7 +1,7 @@
 From 09a1d420240a6ad79930bbb9ae16084428cbbc9e Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:34:23 -0700
-Subject: [PATCH 12/12] xmfb: reserve pixel 0 of plane colormaps as a private
+Subject: [PATCH 12/13] xmfb: reserve pixel 0 of plane colormaps as a private
  cell (black text must not allocate the transparent pixel)
 
 ---

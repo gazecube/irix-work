@@ -1,7 +1,7 @@
 From d550822a4c9a5e4a283c4019d12618da13a735bf Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:14:01 -0700
-Subject: [PATCH 08/12] xmfb: composite into a back buffer, publish only
+Subject: [PATCH 08/13] xmfb: composite into a back buffer, publish only
  changed frames in one copy (no torn frames, cursor no longer flickers)
 
 ---

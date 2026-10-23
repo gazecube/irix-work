@@ -1,0 +1,104 @@
+From 882de60eed15c5db7af3d66c531ca3a9900f0d1b Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:39:53 -0700
+Subject: [PATCH 13/13] MFBX: image-plane windows nested in an overlay-plane
+ window get no visible area (fm's full-screen shell painted over the image
+ plane when a popup went away)
+
+---
+ hw/xmfb/InitOutput.c |  1 +
+ mi/mi.h              |  1 +
+ mi/mivaltree.c       | 25 +++++++++++++++++++++----
+ 3 files changed, 23 insertions(+), 4 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 979bd0a..9472797 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -1519,6 +1519,7 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+             pScreen->XYToWindow = xmfbXYToWindow;
+             pScreen->ClipNotify = xmfbClipNotify;
+             miNumLayers = XL_COUNT;
++            miImageLayer = XL_IMAGE;
+             miWindowLayerProc = xmfbWindowLayer;
+         }
+     }
+diff --git a/mi/mi.h b/mi/mi.h
+index fa66bad..e60258b 100644
+--- a/mi/mi.h
++++ b/mi/mi.h
+@@ -414,6 +414,7 @@ extern _X_EXPORT int miShapedWindowIn(RegionPtr /*universe */ ,
+ /* MFBX: layered screens (overlay/popup/underlay planes) */
+ #define MI_MAX_LAYERS 4
+ extern _X_EXPORT int miNumLayers;
++extern _X_EXPORT int miImageLayer;
+ extern _X_EXPORT int (*miWindowLayerProc) (WindowPtr pWin);
+ 
+ extern _X_EXPORT int miValidateTree(WindowPtr /*pParent */ ,
+diff --git a/mi/mivaltree.c b/mi/mivaltree.c
+index 4220b36..ff84bad 100644
+--- a/mi/mivaltree.c
++++ b/mi/mivaltree.c
+@@ -200,6 +200,7 @@ miShapedWindowIn(RegionPtr universe, RegionPtr bounding,
+  * "universe".  miWindowLayerProc maps a window to its layer (0..N-1).
+  */
+ int miNumLayers = 1;
++int miImageLayer = 0;
+ int (*miWindowLayerProc) (WindowPtr pWin) = NULL;
+ 
+ /*
+@@ -214,6 +215,16 @@ miLayerDepthCompatible(int gcDepth, int drawDepth)
+            (gcDepth == 24 || gcDepth == 8) && (drawDepth == 24 || drawDepth == 8);
+ }
+ 
++/*
++ * An image-plane window nested inside an overlay/popup/underlay window has no
++ * meaningful place in the image plane's stacking (its parent chain is clipped
++ * by another plane), so it gets no visible area and never paints over it.
++ */
++#define MI_IMAGE_IN_OTHER_LAYER(child, parent) \
++    (miNumLayers > 1 && miWindowLayerProc && \
++     miWindowLayerProc(child) == miImageLayer && \
++     miWindowLayerProc(parent) != miImageLayer)
++
+ #define MI_LAYER(w) (miNumLayers > 1 && miWindowLayerProc ? \
+                      miWindowLayerProc(w) : 0)
+ 
+@@ -430,10 +441,13 @@ miComputeClips(WindowPtr pParent,
+                 continue;
+             l = MI_LAYER(pChild);
+             if (pChild->valdata) {
+-                RegionIntersect(&childUniverse, &univ[l], &pChild->borderSize);
++                if (MI_IMAGE_IN_OTHER_LAYER(pChild, pParent))
++                    RegionEmpty(&childUniverse);
++                else
++                    RegionIntersect(&childUniverse, &univ[l], &pChild->borderSize);
+                 miComputeClips(pChild, pScreen, &childUniverse, kind, exposed);
+             }
+-            if (!TreatAsTransparent(pChild))
++            if (!TreatAsTransparent(pChild) && !MI_IMAGE_IN_OTHER_LAYER(pChild, pParent))
+                 RegionSubtract(&univ[l], &univ[l], &pChild->borderSize);
+         }
+         /* the parent only loses the space of children in its own layer */
+@@ -629,13 +643,16 @@ miValidateTreeLayered(WindowPtr pParent, WindowPtr pChild, VTKind kind)
+         if (pWin->viewable) {
+             l = MI_LAYER(pWin);
+             if (pWin->valdata) {
+-                RegionIntersect(&childClip, &univ[l], &pWin->borderSize);
++                if (MI_IMAGE_IN_OTHER_LAYER(pWin, pParent))
++                    RegionEmpty(&childClip);
++                else
++                    RegionIntersect(&childClip, &univ[l], &pWin->borderSize);
+                 miComputeClips(pWin, pScreen, &childClip, kind, &exposed);
+             }
+             else if (pWin->visibility == VisibilityNotViewable) {
+                 miTreeObscured(pWin);
+             }
+-            if (!TreatAsTransparent(pWin))
++            if (!TreatAsTransparent(pWin) && !MI_IMAGE_IN_OTHER_LAYER(pWin, pParent))
+                 RegionSubtract(&univ[l], &univ[l], &pWin->borderSize);
+         }
+         else if (pWin->valdata) {
+-- 
+2.56.0
+

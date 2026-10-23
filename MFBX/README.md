@@ -88,6 +88,11 @@ of its visual.
   (swept at composite time when clip lists changed).
 - 4Dwm runs on it: `DISPLAY=:9 4Dwm`; its menus draw in the overlay plane.
 
+- Nested cross-plane windows: an image-plane window inside an overlay-plane
+  window (fm makes a full-screen one) gets an empty clip, otherwise its
+  background repaints image-plane areas whenever a popup uncovers it.
+  Test: MFBX/tests/popup_test.py (needs the full session running to show it).
+
 ## Open
 - Run the IRIX session on it (4Dwm crashed the server once: investigate).
 - Composite redirect is not supported with planes.

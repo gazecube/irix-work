@@ -1,7 +1,7 @@
 From 276b16d0376d2dc8a5137a032c418acabfe376e1 Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:21:17 -0700
-Subject: [PATCH 10/12] MFBX: four planes (underlay, image, overlay, popup)
+Subject: [PATCH 10/13] MFBX: four planes (underlay, image, overlay, popup)
  with per-layer clipping in mi, layer-aware hit test, own plane
  pixmaps/colormaps/visuals, SERVER_OVERLAY_VISUALS published by the server;
  overlay transparency works

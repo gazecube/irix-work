@@ -1,7 +1,7 @@
 From dec95b50b2cd0179661a46f8c26282363aae0e62 Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:14:57 -0700
-Subject: [PATCH 09/12] xmfb: do not stop at cursorIsNone when looking up the
+Subject: [PATCH 09/13] xmfb: do not stop at cursorIsNone when looking up the
  cursor (it means inherit)
 
 ---
