@@ -1,0 +1,293 @@
+From 12ea2df76890bbe77762b8031c2715a93f1b2de2 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:54:12 -0700
+Subject: [PATCH 14/14] MFBX: per-layer stacking contexts passed down the
+ recursion (cross-layer children clip against their own layer's stacking),
+ underlay layer validated last, fm shell on the underlay with the desktop
+ transparent; tile pixmaps of the other plane depth retag the GC
+
+---
+ dix/dispatch.c       |  6 +++-
+ dix/gc.c             |  9 ++++++
+ hw/xmfb/InitOutput.c | 31 ++++++++++++++++++--
+ mi/mi.h              |  1 +
+ mi/mivaltree.c       | 68 +++++++++++++++++++++++++++++++-------------
+ 5 files changed, 91 insertions(+), 24 deletions(-)
+
+diff --git a/dix/dispatch.c b/dix/dispatch.c
+index 15e63e2..a31f7fd 100644
+--- a/dix/dispatch.c
++++ b/dix/dispatch.c
+@@ -1568,8 +1568,12 @@ ProcCreateGC(ClientPtr client)
+         return BadLength;
+     pGC = (GC *) CreateGC(pDraw, stuff->mask, (XID *) &stuff[1], &error,
+                           stuff->gc, client);
+-    if (error != Success)
++    if (error != Success) {
++        ErrorF("MFBX debug: CreateGC %x failed %d on drawable %x depth %d mask %x\n",
++               (unsigned) stuff->gc, error, (unsigned) stuff->drawable, pDraw->depth,
++               (unsigned) stuff->mask);
+         return error;
++    }
+     if (!AddResource(stuff->gc, RT_GC, (void *) pGC))
+         return BadAlloc;
+     return Success;
+diff --git a/dix/gc.c b/dix/gc.c
+index 1487728..4da7811 100644
+--- a/dix/gc.c
++++ b/dix/gc.c
+@@ -246,6 +246,15 @@ ChangeGC(ClientPtr client, GC * pGC, BITS32 mask, ChangeGCValPtr pUnion)
+         case GCTile:
+             NEXT_PTR(PixmapPtr, pPixmap);
+ 
++            /*
++             * MFBX: on layered screens a tile of the other plane depth makes
++             * the GC a GC of that plane (toolkits create GCs on the image
++             * plane's root and tile them with overlay-depth pixmaps)
++             */
++            if (pPixmap->drawable.depth != pGC->depth &&
++                pPixmap->drawable.pScreen == pGC->pScreen &&
++                miLayerDepthCompatible(pPixmap->drawable.depth, pGC->depth))
++                pGC->depth = pPixmap->drawable.depth;
+             if ((pPixmap->drawable.depth != pGC->depth) ||
+                 (pPixmap->drawable.pScreen != pGC->pScreen)) {
+                 error = BadMatch;
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 9472797..7b3648f 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -114,6 +114,7 @@ typedef struct {
+     ColormapPtr cmap[XL_COUNT];
+     uint32_t rgb[XL_COUNT][256];
+     uint32_t underKey;          /* image pixel value that lets the underlay show */
++    unsigned char *rootMask;    /* 1 where the root window itself is visible */
+     uint32_t *back;             /* composite target, copied to pfbMemory when it changed */
+     uint32_t *last;             /* the frame last copied out */
+     unsigned long lastComposite;
+@@ -766,6 +767,20 @@ xmfbSweepPlanes(vfbScreenInfoPtr pvfb, ScreenPtr pScreen)
+         if (l != XL_IMAGE && !(cover[l] = calloc(sz, 1)))
+             goto out;
+     xmfbCoverWindow(pvfb, cover, pScreen->root->firstChild);
++    if (pvfb->rootMask) {
++        BoxPtr b = RegionRects(&pScreen->root->clipList);
++        int nb = RegionNumRects(&pScreen->root->clipList), k;
++
++        memset(pvfb->rootMask, 0, sz);
++        for (k = 0; k < nb; k++) {
++            int y;
++
++            for (y = b[k].y1; y < b[k].y2 && y < pvfb->height; y++)
++                if (y >= 0 && b[k].x2 > b[k].x1)
++                    memset(pvfb->rootMask + (size_t) y * pvfb->stride8 + (b[k].x1 < 0 ? 0 : b[k].x1), 1,
++                           (size_t) (b[k].x2 > pvfb->width ? pvfb->width : b[k].x2) - (b[k].x1 < 0 ? 0 : b[k].x1));
++        }
++    }
+     for (l = 0; l < XL_COUNT; l++) {
+         if (l == XL_IMAGE)
+             continue;
+@@ -800,13 +815,18 @@ xmfbComposite(vfbScreenInfoPtr pvfb)
+         const unsigned char *u = pvfb->plane8[XL_UNDER] + (size_t) y * pvfb->stride8;
+         const unsigned char *o = pvfb->plane8[XL_OVERLAY] + (size_t) y * pvfb->stride8;
+         const unsigned char *p = pvfb->plane8[XL_POPUP] + (size_t) y * pvfb->stride8;
++        const unsigned char *rm = pvfb->rootMask + (size_t) y * pvfb->stride8;
+         uint32_t *dst = out + (size_t) y * pvfb->paddedWidth;
+ 
+         for (x = 0; x < pvfb->width; x++) {
+             uint32_t pix = img[x];
+ 
+-            if (pix == pvfb->underKey)      /* image plane is "transparent" */
++            /* the desktop (root window visible) and the key colour are transparent
++               in the image plane: the underlay shows through there */
++            if ((rm[x] || pix == pvfb->underKey) && u[x])
+                 pix = pvfb->rgb[XL_UNDER][u[x]];
++            else if (pix == pvfb->underKey)
++                pix = 0;
+             if (o[x])
+                 pix = pvfb->rgb[XL_OVERLAY][o[x]];
+             if (p[x])
+@@ -1422,6 +1442,9 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+             }
+             xmfbRefreshPlaneRGB(pvfb, l);
+         }
++        pvfb->rootMask = calloc((size_t) pvfb->stride8 * pvfb->height, 1);
++        if (!pvfb->rootMask)
++            return FALSE;
+         pvfb->underKey = 0xff00ff;      /* magenta in the image plane shows the underlay */
+     }
+     if (!pvfb->img)
+@@ -1495,8 +1518,9 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+                                rootdepth, ndepths, depths, defaultVisual, nvisuals,
+                                visuals);
+         if (ret) {
+-            /* hand the first three 8-bit PseudoColor visuals to the planes */
+-            static const int order[3] = { XL_OVERLAY, XL_POPUP, XL_UNDER };
++            /* the first three 8-bit PseudoColor visuals go to the planes: toolkits and
++               fm take the first one, which is the underlay (below the windows) */
++            static const int order[3] = { XL_UNDER, XL_OVERLAY, XL_POPUP };
+ 
+             for (i = 0; i < pScreen->numVisuals && k < 3; i++) {
+                 VisualPtr v = &pScreen->visuals[i];
+@@ -1520,6 +1544,7 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+             pScreen->ClipNotify = xmfbClipNotify;
+             miNumLayers = XL_COUNT;
+             miImageLayer = XL_IMAGE;
++            miBottomLayer = XL_UNDER;
+             miWindowLayerProc = xmfbWindowLayer;
+         }
+     }
+diff --git a/mi/mi.h b/mi/mi.h
+index e60258b..f443af8 100644
+--- a/mi/mi.h
++++ b/mi/mi.h
+@@ -415,6 +415,7 @@ extern _X_EXPORT int miShapedWindowIn(RegionPtr /*universe */ ,
+ #define MI_MAX_LAYERS 4
+ extern _X_EXPORT int miNumLayers;
+ extern _X_EXPORT int miImageLayer;
++extern _X_EXPORT int miBottomLayer;
+ extern _X_EXPORT int (*miWindowLayerProc) (WindowPtr pWin);
+ 
+ extern _X_EXPORT int miValidateTree(WindowPtr /*pParent */ ,
+diff --git a/mi/mivaltree.c b/mi/mivaltree.c
+index ff84bad..84bfec0 100644
+--- a/mi/mivaltree.c
++++ b/mi/mivaltree.c
+@@ -201,6 +201,7 @@ miShapedWindowIn(RegionPtr universe, RegionPtr bounding,
+  */
+ int miNumLayers = 1;
+ int miImageLayer = 0;
++int miBottomLayer = -1;   /* layer validated last: below every other window */
+ int (*miWindowLayerProc) (WindowPtr pWin) = NULL;
+ 
+ /*
+@@ -216,14 +217,12 @@ miLayerDepthCompatible(int gcDepth, int drawDepth)
+ }
+ 
+ /*
+- * An image-plane window nested inside an overlay/popup/underlay window has no
+- * meaningful place in the image plane's stacking (its parent chain is clipped
+- * by another plane), so it gets no visible area and never paints over it.
++ * The per-layer visible regions of the top-level stacking context currently
++ * being validated.  A window whose layer differs from its parent's takes its
++ * clip from here (it belongs to the stacking of its own layer, not to its
++ * parent's) and, once placed, removes itself from the windows stacked below.
+  */
+-#define MI_IMAGE_IN_OTHER_LAYER(child, parent) \
+-    (miNumLayers > 1 && miWindowLayerProc && \
+-     miWindowLayerProc(child) == miImageLayer && \
+-     miWindowLayerProc(parent) != miImageLayer)
++static RegionPtr *miLayerUnivGlobal = NULL;
+ 
+ #define MI_LAYER(w) (miNumLayers > 1 && miWindowLayerProc ? \
+                      miWindowLayerProc(w) : 0)
+@@ -429,26 +428,43 @@ miComputeClips(WindowPtr pParent,
+ 
+     if (miNumLayers > 1 && pParent->firstChild && pParent->mapped) {
+         RegionRec univ[MI_MAX_LAYERS];
+-        int l, pl = MI_LAYER(pParent);
++        int l, pl = MI_LAYER(pParent), pass;
+ 
+         for (l = 0; l < miNumLayers; l++) {
+             RegionNull(&univ[l]);
+             RegionCopy(&univ[l], universe);
+         }
+         RegionNull(&childUniverse);
++        for (pass = 0; pass < 2; pass++)
+         for (pChild = pParent->firstChild; pChild; pChild = pChild->nextSib) {
++            RegionPtr u;
++            Bool cross;
++
+             if (!pChild->viewable)
+                 continue;
+             l = MI_LAYER(pChild);
++            if ((l == miBottomLayer) != (pass == 1))
++                continue;
++            cross = (l != pl) && miLayerUnivGlobal != NULL;
++            u = cross ? miLayerUnivGlobal[l] : &univ[l];
+             if (pChild->valdata) {
+-                if (MI_IMAGE_IN_OTHER_LAYER(pChild, pParent))
+-                    RegionEmpty(&childUniverse);
+-                else
+-                    RegionIntersect(&childUniverse, &univ[l], &pChild->borderSize);
++                RegionIntersect(&childUniverse, u, &pChild->borderSize);
++                if (cross)
++                    RegionIntersect(&childUniverse, &childUniverse, &pParent->winSize);
+                 miComputeClips(pChild, pScreen, &childUniverse, kind, exposed);
+             }
+-            if (!TreatAsTransparent(pChild) && !MI_IMAGE_IN_OTHER_LAYER(pChild, pParent))
+-                RegionSubtract(&univ[l], &univ[l], &pChild->borderSize);
++            if (!TreatAsTransparent(pChild)) {
++                if (cross) {
++                    RegionRec cut;
++
++                    RegionNull(&cut);
++                    RegionIntersect(&cut, &pChild->borderSize, &pParent->winSize);
++                    RegionSubtract(u, u, &cut);
++                    RegionUninit(&cut);
++                }
++                else
++                    RegionSubtract(u, u, &pChild->borderSize);
++            }
+         }
+         /* the parent only loses the space of children in its own layer */
+         RegionCopy(universe, &univ[pl]);
+@@ -616,11 +632,13 @@ static int
+ miValidateTreeLayered(WindowPtr pParent, WindowPtr pChild, VTKind kind)
+ {
+     RegionRec univ[MI_MAX_LAYERS];
++    RegionPtr univp[MI_MAX_LAYERS];
++    RegionPtr *savedGlobal = miLayerUnivGlobal;
+     RegionRec childClip;
+     RegionRec exposed;
+     ScreenPtr pScreen = pParent->drawable.pScreen;
+     WindowPtr pWin;
+-    int l, pl = MI_LAYER(pParent);
++    int l, pl = MI_LAYER(pParent), pass;
+ 
+     if (pChild == NullWindow)
+         pChild = pParent->firstChild;
+@@ -631,6 +649,7 @@ miValidateTreeLayered(WindowPtr pParent, WindowPtr pChild, VTKind kind)
+         RegionNull(&univ[l]);
+         RegionCopy(&univ[l], &pParent->borderClip);
+         RegionIntersect(&univ[l], &univ[l], &pParent->winSize);
++        univp[l] = &univ[l];
+     }
+     /* siblings above pChild are untouched but still obscure their layer */
+     for (pWin = pParent->firstChild; pWin && pWin != pChild; pWin = pWin->nextSib) {
+@@ -639,20 +658,29 @@ miValidateTreeLayered(WindowPtr pParent, WindowPtr pChild, VTKind kind)
+             RegionSubtract(&univ[l], &univ[l], &pWin->borderSize);
+         }
+     }
++    /*
++     * Two passes: everything else first (stacking order), the bottom layer
++     * (underlay) last, so its windows and their children only get what the
++     * other windows leave, whatever the X stacking order says.
++     */
++    for (pass = 0; pass < 2; pass++)
+     for (pWin = pChild; pWin != NullWindow; pWin = pWin->nextSib) {
++        if (pWin->viewable && ((MI_LAYER(pWin) == miBottomLayer) != (pass == 1)))
++            continue;
++        if (!pWin->viewable && pass == 1)
++            continue;
+         if (pWin->viewable) {
+             l = MI_LAYER(pWin);
+             if (pWin->valdata) {
+-                if (MI_IMAGE_IN_OTHER_LAYER(pWin, pParent))
+-                    RegionEmpty(&childClip);
+-                else
+-                    RegionIntersect(&childClip, &univ[l], &pWin->borderSize);
++                RegionIntersect(&childClip, &univ[l], &pWin->borderSize);
++                miLayerUnivGlobal = univp;
+                 miComputeClips(pWin, pScreen, &childClip, kind, &exposed);
++                miLayerUnivGlobal = savedGlobal;
+             }
+             else if (pWin->visibility == VisibilityNotViewable) {
+                 miTreeObscured(pWin);
+             }
+-            if (!TreatAsTransparent(pWin) && !MI_IMAGE_IN_OTHER_LAYER(pWin, pParent))
++            if (!TreatAsTransparent(pWin))
+                 RegionSubtract(&univ[l], &univ[l], &pWin->borderSize);
+         }
+         else if (pWin->valdata) {
+-- 
+2.56.0
+

@@ -1,7 +1,7 @@
 From 882de60eed15c5db7af3d66c531ca3a9900f0d1b Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:39:53 -0700
-Subject: [PATCH 13/13] MFBX: image-plane windows nested in an overlay-plane
+Subject: [PATCH 13/14] MFBX: image-plane windows nested in an overlay-plane
  window get no visible area (fm's full-screen shell painted over the image
  plane when a popup went away)
 

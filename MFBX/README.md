@@ -88,10 +88,21 @@ of its visual.
   (swept at composite time when clip lists changed).
 - 4Dwm runs on it: `DISPLAY=:9 4Dwm`; its menus draw in the overlay plane.
 
-- Nested cross-plane windows: an image-plane window inside an overlay-plane
-  window (fm makes a full-screen one) gets an empty clip, otherwise its
-  background repaints image-plane areas whenever a popup uncovers it.
-  Test: MFBX/tests/popup_test.py (needs the full session running to show it).
+- Cross-plane windows: a window whose plane differs from its parent's is
+  clipped against the stacking of its own plane (the per-plane visible regions
+  are passed down the recursion), not inherited from the parent. fm is an
+  8-bit shell with a full-screen 24-bit child that draws the desktop icons.
+- The first 8-bit visual (what 4Dwm and fm take) is the UNDERLAY plane; its
+  windows, with their image-plane children, are validated last, so they sit
+  below every other window whatever the X stacking order. The desktop (root
+  window visible area) is transparent in the image plane: the underlay shows
+  through there.
+- A tile pixmap of the other plane depth retags the GC to that depth
+  (toolkits create GCs on the image-depth root and tile them with overlay
+  pixmaps).
+- Test: MFBX/tests/popup_test.py (needs the full session running).
+- Gotcha for testing: stale SysV shm segments of old servers pile up; read the
+  live one (attach count > 0), see ~/opt/claude-work/snap9.py.
 
 ## Open
 - Run the IRIX session on it (4Dwm crashed the server once: investigate).
