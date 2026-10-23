@@ -1,7 +1,7 @@
 From 39a40409e392b2d3c1ab5f9a6893da4a30016f7d Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:12:35 -0700
-Subject: [PATCH 7/9] xmfb: find the cursor by walking up the window tree
+Subject: [PATCH 07/10] xmfb: find the cursor by walking up the window tree
  (overlay windows with colormaps have optional records without a cursor)
 
 ---

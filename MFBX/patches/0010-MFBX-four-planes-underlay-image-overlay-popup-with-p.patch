@@ -1,0 +1,631 @@
+From 276b16d0376d2dc8a5137a032c418acabfe376e1 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:21:17 -0700
+Subject: [PATCH 10/10] MFBX: four planes (underlay, image, overlay, popup)
+ with per-layer clipping in mi, layer-aware hit test, own plane
+ pixmaps/colormaps/visuals, SERVER_OVERLAY_VISUALS published by the server;
+ overlay transparency works
+
+---
+ hw/xmfb/InitOutput.c | 329 ++++++++++++++++++++++++++++++++++++-------
+ mi/mi.h              |   5 +
+ mi/mivaltree.c       | 121 +++++++++++++++-
+ 3 files changed, 400 insertions(+), 55 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 84330a8..8e0adee 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -71,7 +71,9 @@ from The Open Group.
+ #include "miline.h"
+ #include "glx_extinit.h"
+ #include "randrstr.h"
+-#include "fboverlay.h"
++#include "shmint.h"
++#include "mi.h"
++#include "propertyst.h"
+ #include "colormapst.h"
+ 
+ #define VFB_DEFAULT_WIDTH      1280
+@@ -82,6 +84,9 @@ from The Open Group.
+ #define VFB_DEFAULT_LINEBIAS      0
+ #define XWD_WINDOW_NAME_LEN      60
+ 
++/* planes, bottom to top; also the layer numbers used by miWindowLayerProc */
++enum { XL_UNDER, XL_IMAGE, XL_OVERLAY, XL_POPUP, XL_COUNT };
++
+ typedef struct {
+     int width;
+     int paddedBytesWidth;
+@@ -99,11 +104,16 @@ typedef struct {
+     unsigned int lineBias;
+     CloseScreenProcPtr closeScreen;
+ 
+-    /* MFBX: separate image and overlay plane buffers, composited into pfbMemory */
+-    uint32_t *img;              /* layer 0: depth 24, 32bpp */
+-    unsigned char *ovl;         /* layer 1: depth 8, index 0 transparent */
+-    ColormapPtr ovlCmap;        /* installed overlay colormap */
+-    uint32_t ovlRGB[256];
++    /* MFBX planes: image is depth 24 / 32bpp, the others 8-bit PseudoColor with
++       pixel 0 transparent; each has its own pixmap, visual and colormap */
++    uint32_t *img;
++    unsigned char *plane8[XL_COUNT];    /* XL_UNDER, XL_OVERLAY, XL_POPUP */
++    int stride8;
++    PixmapPtr planePix[XL_COUNT];
++    VisualID layerVid[XL_COUNT];
++    ColormapPtr cmap[XL_COUNT];
++    uint32_t rgb[XL_COUNT][256];
++    uint32_t underKey;          /* image pixel value that lets the underlay show */
+     uint32_t *back;             /* composite target, copied to pfbMemory when it changed */
+     uint32_t *last;             /* the frame last copied out */
+     unsigned long lastComposite;
+@@ -422,10 +432,25 @@ ddxProcessArgument(int argc, char *argv[], int i)
+     return 0;
+ }
+ 
++/* which 8-bit plane does this colormap belong to, or -1 */
++static int
++xmfbMapLayer(ColormapPtr pmap)
++{
++    vfbScreenInfoPtr pvfb = &vfbScreens[pmap->pScreen->myNum];
++    int l;
++
++    if (pmap->pVisual->nplanes != 8 || pmap->pVisual->class != PseudoColor)
++        return -1;
++    for (l = 0; l < XL_COUNT; l++)
++        if (l != XL_IMAGE && pvfb->layerVid[l] == pmap->pVisual->vid)
++            return l;
++    return -1;
++}
++
+ static void
+-xmfbRefreshOverlayRGB(vfbScreenInfoPtr pvfb)
++xmfbRefreshPlaneRGB(vfbScreenInfoPtr pvfb, int l)
+ {
+-    ColormapPtr pmap = pvfb->ovlCmap;
++    ColormapPtr pmap = pvfb->cmap[l];
+     int i;
+ 
+     for (i = 0; i < 256; i++) {
+@@ -433,30 +458,24 @@ xmfbRefreshOverlayRGB(vfbScreenInfoPtr pvfb)
+         xrgb rgb;
+ 
+         if (!pmap) {
+-            pvfb->ovlRGB[i] = i ? 0xffffff : 0;
++            pvfb->rgb[l][i] = i ? 0xffffff : 0;
+             continue;
+         }
+         QueryColors(pmap, 1, &pix, &rgb, serverClient);
+-        pvfb->ovlRGB[i] = ((rgb.red >> 8) << 16) | ((rgb.green >> 8) << 8) |
++        pvfb->rgb[l][i] = ((rgb.red >> 8) << 16) | ((rgb.green >> 8) << 8) |
+                           (rgb.blue >> 8);
+     }
+ }
+ 
+-static Bool
+-xmfbIsOverlayMap(ColormapPtr pmap)
+-{
+-    return pmap->pVisual->nplanes == 8 && pmap->pVisual->class == PseudoColor;
+-}
+-
+ static CreateColormapProcPtr xmfbOldCreateColormap;
+ 
+-/* Overlay plane colormaps: pixel 0 is the transparent key, never hand it out */
++/* Plane colormaps: pixel 0 is the transparent key, never hand it out */
+ static Bool
+ xmfbCreateColormap(ColormapPtr pmap)
+ {
+     Bool ok = xmfbOldCreateColormap ? xmfbOldCreateColormap(pmap) : TRUE;
+ 
+-    if (ok && xmfbIsOverlayMap(pmap)) {
++    if (ok && xmfbMapLayer(pmap) >= 0) {
+         CARD16 r = 0, g = 0, b = 0;
+         Pixel pix = 0;
+ 
+@@ -470,11 +489,15 @@ vfbInstallColormap(ColormapPtr pmap)
+ {
+     ColormapPtr oldpmap = GetInstalledmiColormap(pmap->pScreen);
+ 
+-    if (xmfbIsOverlayMap(pmap)) {
+-        /* overlay plane colormaps live beside the image plane one */
+-        vfbScreens[pmap->pScreen->myNum].ovlCmap = pmap;
+-        xmfbRefreshOverlayRGB(&vfbScreens[pmap->pScreen->myNum]);
+-        return;
++    {
++        int l = xmfbMapLayer(pmap);
++
++        if (l >= 0) {
++            /* plane colormaps live beside the image plane one */
++            vfbScreens[pmap->pScreen->myNum].cmap[l] = pmap;
++            xmfbRefreshPlaneRGB(&vfbScreens[pmap->pScreen->myNum], l);
++            return;
++        }
+     }
+ 
+     if (pmap != oldpmap) {
+@@ -529,10 +552,14 @@ vfbStoreColors(ColormapPtr pmap, int ndef, xColorItem * pdefs)
+     XWDColor *pXWDCmap;
+     int i;
+ 
+-    if (xmfbIsOverlayMap(pmap)) {
+-        if (pmap == vfbScreens[pmap->pScreen->myNum].ovlCmap)
+-            xmfbRefreshOverlayRGB(&vfbScreens[pmap->pScreen->myNum]);
+-        return;
++    {
++        int l = xmfbMapLayer(pmap);
++
++        if (l >= 0) {
++            if (pmap == vfbScreens[pmap->pScreen->myNum].cmap[l])
++                xmfbRefreshPlaneRGB(&vfbScreens[pmap->pScreen->myNum], l);
++            return;
++        }
+     }
+     if (pmap != GetInstalledmiColormap(pmap->pScreen)) {
+         return;
+@@ -691,15 +718,30 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb, uint32_t *out)
+ static Bool
+ xmfbComposite(vfbScreenInfoPtr pvfb)
+ {
+-    size_t n = (size_t) pvfb->paddedWidth * (size_t) pvfb->height, i;
+     uint32_t *out = pvfb->back;
++    size_t n = (size_t) pvfb->paddedWidth * (size_t) pvfb->height;
++    int x, y;
+ 
+-    if (!pvfb->img || !pvfb->ovl || !out)
++    if (!pvfb->img || !out)
+         return FALSE;
+-    for (i = 0; i < n; i++) {
+-        unsigned char o = pvfb->ovl[i];
+-
+-        out[i] = o ? pvfb->ovlRGB[o] : pvfb->img[i];
++    for (y = 0; y < pvfb->height; y++) {
++        const uint32_t *img = pvfb->img + (size_t) y * pvfb->paddedWidth;
++        const unsigned char *u = pvfb->plane8[XL_UNDER] + (size_t) y * pvfb->stride8;
++        const unsigned char *o = pvfb->plane8[XL_OVERLAY] + (size_t) y * pvfb->stride8;
++        const unsigned char *p = pvfb->plane8[XL_POPUP] + (size_t) y * pvfb->stride8;
++        uint32_t *dst = out + (size_t) y * pvfb->paddedWidth;
++
++        for (x = 0; x < pvfb->width; x++) {
++            uint32_t pix = img[x];
++
++            if (pix == pvfb->underKey)      /* image plane is "transparent" */
++                pix = pvfb->rgb[XL_UNDER][u[x]];
++            if (o[x])
++                pix = pvfb->rgb[XL_OVERLAY][o[x]];
++            if (p[x])
++                pix = pvfb->rgb[XL_POPUP][p[x]];
++            dst[x] = pix;
++        }
+     }
+     xmfbDrawCursor(pvfb, out);
+     /* publish only when something changed, and in one quick copy, so the host
+@@ -1129,6 +1171,142 @@ vfbRandRInit(ScreenPtr pScreen)
+     return TRUE;
+ }
+ 
++/*
++ * Plane (layer) machinery.  A window belongs to the plane of its visual; the
++ * server clips windows against same-plane windows only (mi/mivaltree.c).
++ */
++static int
++xmfbWindowLayer(WindowPtr pWin)
++{
++    vfbScreenInfoPtr pvfb;
++    int l;
++
++    while (pWin && pWin->parent && pWin->drawable.class != InputOutput)
++        pWin = pWin->parent;
++    if (!pWin || !pWin->parent)
++        return XL_IMAGE;
++    pvfb = &vfbScreens[pWin->drawable.pScreen->myNum];
++    if (pWin->drawable.depth == 8)
++        for (l = 0; l < XL_COUNT; l++)
++            if (l != XL_IMAGE && pvfb->layerVid[l] == wVisual(pWin))
++                return l;
++    return XL_IMAGE;
++}
++
++static void
++xmfbPublishOverlayVisuals(WindowPtr root)
++{
++    vfbScreenInfoPtr pvfb = &vfbScreens[root->drawable.pScreen->myNum];
++    CARD32 info[12];
++    int n = 0;
++    Atom a = MakeAtom("SERVER_OVERLAY_VISUALS", 22, TRUE);
++
++    /* {visual id, transparency type (1 = pixel), value, layer}: overlay 1, popup 2, underlay -1 */
++    info[n++] = pvfb->layerVid[XL_OVERLAY]; info[n++] = 1; info[n++] = 0; info[n++] = 1;
++    info[n++] = pvfb->layerVid[XL_POPUP];   info[n++] = 1; info[n++] = 0; info[n++] = 2;
++    info[n++] = pvfb->layerVid[XL_UNDER];   info[n++] = 0; info[n++] = 0; info[n++] = (CARD32) -1;
++    if (a != BAD_RESOURCE)
++        dixChangeWindowProperty(serverClient, root, a, a, 32, PropModeReplace,
++                                n, info, FALSE);
++}
++
++static Bool
++xmfbCreateWindow(WindowPtr pWin)
++{
++    Bool ok = fbCreateWindow(pWin);
++
++    if (ok && pWin->drawable.class == InputOutput) {
++        vfbScreenInfoPtr pvfb = &vfbScreens[pWin->drawable.pScreen->myNum];
++
++        if (pvfb->planePix[XL_IMAGE])
++            dixSetPrivate(&pWin->devPrivates, fbGetWinPrivateKey(pWin),
++                          pvfb->planePix[xmfbWindowLayer(pWin)]);
++        if (!pWin->parent)
++            xmfbPublishOverlayVisuals(pWin);
++    }
++    return ok;
++}
++
++static Bool
++xmfbCreateScreenResources(ScreenPtr pScreen)
++{
++    vfbScreenInfoPtr pvfb = &vfbScreens[pScreen->myNum];
++    int l;
++
++    if (!miCreateScreenResources(pScreen))
++        return FALSE;
++    for (l = 0; l < XL_COUNT; l++) {
++        int depth = l == XL_IMAGE ? 24 : 8;
++        int bpp = l == XL_IMAGE ? 32 : 8;
++        void *bits = l == XL_IMAGE ? (void *) pvfb->img : (void *) pvfb->plane8[l];
++        int stride = l == XL_IMAGE ? pvfb->paddedWidth * 4 : pvfb->stride8;
++        PixmapPtr pix = (*pScreen->CreatePixmap) (pScreen, 0, 0, depth, 0);
++
++        if (!pix)
++            return FALSE;
++        if (!(*pScreen->ModifyPixmapHeader) (pix, pScreen->width, pScreen->height,
++                                             depth, bpp, stride, bits))
++            return FALSE;
++        pvfb->planePix[l] = pix;
++    }
++    pScreen->devPrivate = pvfb->planePix[XL_IMAGE];
++    return TRUE;
++}
++
++static Bool
++xmfbCloseScreenPlanes(ScreenPtr pScreen)
++{
++    vfbScreenInfoPtr pvfb = &vfbScreens[pScreen->myNum];
++    int l;
++
++    for (l = 0; l < XL_COUNT; l++) {
++        if (pvfb->planePix[l])
++            (*pScreen->DestroyPixmap) (pvfb->planePix[l]);
++        pvfb->planePix[l] = NULL;
++    }
++    return TRUE;
++}
++
++/* pointer hit test: a higher plane wins over a lower one, then stacking order */
++static WindowPtr
++xmfbXYToWindow(ScreenPtr pScreen, SpritePtr pSprite, int x, int y)
++{
++    WindowPtr pWin, best;
++    BoxRec box;
++
++    pSprite->spriteTraceGood = 1;       /* root window still there */
++    pWin = pSprite->spriteTrace[pSprite->spriteTraceGood - 1]->firstChild;
++    while (pWin) {
++        best = NULL;
++        for (; pWin; pWin = pWin->nextSib) {
++            if (pWin->mapped &&
++                x >= pWin->drawable.x - wBorderWidth(pWin) &&
++                x < pWin->drawable.x + (int) pWin->drawable.width + wBorderWidth(pWin) &&
++                y >= pWin->drawable.y - wBorderWidth(pWin) &&
++                y < pWin->drawable.y + (int) pWin->drawable.height + wBorderWidth(pWin) &&
++                (!wBoundingShape(pWin) || PointInBorderSize(pWin, x, y)) &&
++                (!wInputShape(pWin) ||
++                 RegionContainsPoint(wInputShape(pWin), x - pWin->drawable.x,
++                                     y - pWin->drawable.y, &box)) &&
++                !pWin->unhittable) {
++                if (!best || xmfbWindowLayer(pWin) > xmfbWindowLayer(best))
++                    best = pWin;
++            }
++        }
++        if (!best)
++            break;
++        if (pSprite->spriteTraceGood >= pSprite->spriteTraceSize) {
++            pSprite->spriteTraceSize += 10;
++            pSprite->spriteTrace = reallocarray(pSprite->spriteTrace,
++                                                pSprite->spriteTraceSize,
++                                                sizeof(WindowPtr));
++        }
++        pSprite->spriteTrace[pSprite->spriteTraceGood++] = best;
++        pWin = best->firstChild;
++    }
++    return pSprite->spriteTrace[pSprite->spriteTraceGood - 1];
++}
++
+ static Bool
+ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+ {
+@@ -1157,17 +1335,31 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+         ErrorF("Xmfb: only -screen ... x24 is supported (image 24 + overlay 8)\n");
+         return FALSE;
+     }
+-    pvfb->img = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
+-    pvfb->ovl = calloc((size_t) pvfb->paddedWidth * pvfb->height, 1);
+-    if (!pvfb->img || !pvfb->ovl)
++    {
++        int l;
++
++        pvfb->stride8 = PixmapBytePad(pvfb->paddedWidth, 8);
++        pvfb->img = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
++        for (l = 0; l < XL_COUNT; l++) {
++            pvfb->planePix[l] = NULL;
++            pvfb->layerVid[l] = 0;
++            pvfb->cmap[l] = NULL;
++            if (l != XL_IMAGE) {
++                pvfb->plane8[l] = calloc((size_t) pvfb->stride8 * pvfb->height, 1);
++                if (!pvfb->plane8[l])
++                    return FALSE;
++            }
++            xmfbRefreshPlaneRGB(pvfb, l);
++        }
++        pvfb->underKey = 0xff00ff;      /* magenta in the image plane shows the underlay */
++    }
++    if (!pvfb->img)
+         return FALSE;
+     pvfb->back = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
+     pvfb->last = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
+     if (!pvfb->back || !pvfb->last)
+         return FALSE;
+-    pvfb->ovlCmap = NULL;
+     pvfb->lastComposite = 0;
+-    xmfbRefreshOverlayRGB(pvfb);
+ 
+     switch (pvfb->depth) {
+     case 8:
+@@ -1208,31 +1400,62 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+         return FALSE;
+     }
+ 
+-    /* overlay plane visual: 8-bit PseudoColor with its own colormap */
++    /* one 8-bit PseudoColor visual per plane: overlay, popup, underlay */
++    miSetVisualTypesAndMasks(8, (1 << PseudoColor), 8, PseudoColor, 0, 0, 0);
++    miSetVisualTypesAndMasks(8, (1 << PseudoColor), 8, PseudoColor, 0, 0, 0);
+     miSetVisualTypesAndMasks(8, (1 << PseudoColor), 8, PseudoColor, 0, 0, 0);
+ 
+     miSetPixmapDepths();
+ 
+-    ret = fbOverlaySetupScreen(pScreen, pvfb->img, pvfb->ovl, pvfb->width,
+-                               pvfb->height, dpix, dpiy, pvfb->paddedWidth,
+-                               pvfb->paddedWidth, 32, 8);
+-    if (ret)
+-        ret = fbOverlayFinishScreenInit(pScreen, pvfb->img, pvfb->ovl,
+-                                        pvfb->width, pvfb->height, dpix, dpiy,
+-                                        pvfb->paddedWidth, pvfb->paddedWidth,
+-                                        32, 8, 24, 8);
++    {
++        VisualPtr visuals;
++        DepthPtr depths;
++        int nvisuals, ndepths, rootdepth = 24, i, k = 0;
++        VisualID defaultVisual;
++
++        ret = fbSetupScreen(pScreen, pvfb->img, pvfb->width, pvfb->height,
++                            dpix, dpiy, pvfb->paddedWidth, 32);
++        if (ret)
++            ret = fbInitVisuals(&visuals, &depths, &nvisuals, &ndepths, &rootdepth,
++                                &defaultVisual,
++                                ((unsigned long) 1 << 31) | ((unsigned long) 1 << 7), 8);
++        if (ret)
++            ret = miScreenInit(pScreen, 0, pvfb->width, pvfb->height, dpix, dpiy, 0,
++                               rootdepth, ndepths, depths, defaultVisual, nvisuals,
++                               visuals);
++        if (ret) {
++            /* hand the first three 8-bit PseudoColor visuals to the planes */
++            static const int order[3] = { XL_OVERLAY, XL_POPUP, XL_UNDER };
++
++            for (i = 0; i < pScreen->numVisuals && k < 3; i++) {
++                VisualPtr v = &pScreen->visuals[i];
++
++                if (v->nplanes == 8 && v->class == PseudoColor)
++                    pvfb->layerVid[order[k++]] = v->vid;
++            }
++            if (k < 3)
++                ret = FALSE;
++        }
++        if (ret) {
++#ifdef MITSHM
++            ShmRegisterFbFuncs(pScreen);
++#endif
++            pScreen->minInstalledCmaps = 1;
++            pScreen->maxInstalledCmaps = XL_COUNT;
++            pScreen->CloseScreen = xmfbCloseScreenPlanes;
++            pScreen->CreateScreenResources = xmfbCreateScreenResources;
++            pScreen->CreateWindow = xmfbCreateWindow;
++            pScreen->XYToWindow = xmfbXYToWindow;
++            miNumLayers = XL_COUNT;
++            miWindowLayerProc = xmfbWindowLayer;
++        }
++    }
+     if (ret && Render)
+         fbPictureInit(pScreen, 0, 0);
+ 
+     if (!ret)
+         return FALSE;
+ 
+-    {
+-        FbOverlayScrPrivPtr ovp = fbOverlayGetScrPriv(pScreen);
+-
+-        ovp->layer[0].key = 0;
+-        ovp->layer[1].key = 0;      /* overlay pixel 0 = transparent */
+-    }
+     xmfbOldCreateColormap = pScreen->CreateColormap;
+     pScreen->CreateColormap = xmfbCreateColormap;
+ 
+diff --git a/mi/mi.h b/mi/mi.h
+index 8b0a231..fa66bad 100644
+--- a/mi/mi.h
++++ b/mi/mi.h
+@@ -411,6 +411,11 @@ extern _X_EXPORT int miShapedWindowIn(RegionPtr /*universe */ ,
+                                       int       /*y */
+     );
+ 
++/* MFBX: layered screens (overlay/popup/underlay planes) */
++#define MI_MAX_LAYERS 4
++extern _X_EXPORT int miNumLayers;
++extern _X_EXPORT int (*miWindowLayerProc) (WindowPtr pWin);
++
+ extern _X_EXPORT int miValidateTree(WindowPtr /*pParent */ ,
+                                     WindowPtr /*pChild */ ,
+                                     VTKind      /*kind */
+diff --git a/mi/mivaltree.c b/mi/mivaltree.c
+index ea6889f..7977831 100644
+--- a/mi/mivaltree.c
++++ b/mi/mivaltree.c
+@@ -193,6 +193,18 @@ miShapedWindowIn(RegionPtr universe, RegionPtr bounding,
+  *
+  *-----------------------------------------------------------------------
+  */
++/*
++ * MFBX: layers.  When miNumLayers > 1 (screens with overlay/popup/underlay
++ * planes) windows in different layers do not obscure each other, neither as
++ * siblings nor as parent/child, so every layer keeps its own running
++ * "universe".  miWindowLayerProc maps a window to its layer (0..N-1).
++ */
++int miNumLayers = 1;
++int (*miWindowLayerProc) (WindowPtr pWin) = NULL;
++
++#define MI_LAYER(w) (miNumLayers > 1 && miWindowLayerProc ? \
++                     miWindowLayerProc(w) : 0)
++
+ static void
+ miComputeClips(WindowPtr pParent,
+                ScreenPtr pScreen,
+@@ -392,7 +404,33 @@ miComputeClips(WindowPtr pParent,
+     else
+         RegionCopy(&pParent->borderClip, universe);
+ 
+-    if ((pChild = pParent->firstChild) && pParent->mapped) {
++    if (miNumLayers > 1 && pParent->firstChild && pParent->mapped) {
++        RegionRec univ[MI_MAX_LAYERS];
++        int l, pl = MI_LAYER(pParent);
++
++        for (l = 0; l < miNumLayers; l++) {
++            RegionNull(&univ[l]);
++            RegionCopy(&univ[l], universe);
++        }
++        RegionNull(&childUniverse);
++        for (pChild = pParent->firstChild; pChild; pChild = pChild->nextSib) {
++            if (!pChild->viewable)
++                continue;
++            l = MI_LAYER(pChild);
++            if (pChild->valdata) {
++                RegionIntersect(&childUniverse, &univ[l], &pChild->borderSize);
++                miComputeClips(pChild, pScreen, &childUniverse, kind, exposed);
++            }
++            if (!TreatAsTransparent(pChild))
++                RegionSubtract(&univ[l], &univ[l], &pChild->borderSize);
++        }
++        /* the parent only loses the space of children in its own layer */
++        RegionCopy(universe, &univ[pl]);
++        for (l = 0; l < miNumLayers; l++)
++            RegionUninit(&univ[l]);
++        RegionUninit(&childUniverse);
++    }
++    else if ((pChild = pParent->firstChild) && pParent->mapped) {
+         RegionNull(&childUniverse);
+         RegionNull(&childUnion);
+         if ((pChild->drawable.y < pParent->lastChild->drawable.y) ||
+@@ -545,7 +583,84 @@ getBorderClip(WindowPtr pWin)
+  *
+  *-----------------------------------------------------------------------
+  */
+- /*ARGSUSED*/ int
++ /*ARGSUSED*/ /*
++ * MFBX: full per-layer revalidation of pParent's children from pChild on.
++ */
++static int
++miValidateTreeLayered(WindowPtr pParent, WindowPtr pChild, VTKind kind)
++{
++    RegionRec univ[MI_MAX_LAYERS];
++    RegionRec childClip;
++    RegionRec exposed;
++    ScreenPtr pScreen = pParent->drawable.pScreen;
++    WindowPtr pWin;
++    int l, pl = MI_LAYER(pParent);
++
++    if (pChild == NullWindow)
++        pChild = pParent->firstChild;
++
++    RegionNull(&childClip);
++    RegionNull(&exposed);
++    for (l = 0; l < miNumLayers; l++) {
++        RegionNull(&univ[l]);
++        RegionCopy(&univ[l], &pParent->borderClip);
++        RegionIntersect(&univ[l], &univ[l], &pParent->winSize);
++    }
++    /* siblings above pChild are untouched but still obscure their layer */
++    for (pWin = pParent->firstChild; pWin && pWin != pChild; pWin = pWin->nextSib) {
++        if (pWin->viewable && !TreatAsTransparent(pWin)) {
++            l = MI_LAYER(pWin);
++            RegionSubtract(&univ[l], &univ[l], &pWin->borderSize);
++        }
++    }
++    for (pWin = pChild; pWin != NullWindow; pWin = pWin->nextSib) {
++        if (pWin->viewable) {
++            l = MI_LAYER(pWin);
++            if (pWin->valdata) {
++                RegionIntersect(&childClip, &univ[l], &pWin->borderSize);
++                miComputeClips(pWin, pScreen, &childClip, kind, &exposed);
++            }
++            else if (pWin->visibility == VisibilityNotViewable) {
++                miTreeObscured(pWin);
++            }
++            if (!TreatAsTransparent(pWin))
++                RegionSubtract(&univ[l], &univ[l], &pWin->borderSize);
++        }
++        else if (pWin->valdata) {
++            RegionEmpty(&pWin->clipList);
++            if (pScreen->ClipNotify)
++                (*pScreen->ClipNotify) (pWin, 0, 0);
++            RegionEmpty(&pWin->borderClip);
++            pWin->valdata = NULL;
++        }
++    }
++    RegionUninit(&childClip);
++
++    RegionNull(&pParent->valdata->after.exposed);
++    RegionNull(&pParent->valdata->after.borderExposed);
++
++    switch (kind) {
++    case VTStack:
++        break;
++    default:
++        RegionSubtract(&pParent->valdata->after.exposed,
++                       &univ[pl], &pParent->clipList);
++        /* fall through */
++    case VTMap:
++        RegionCopy(&pParent->clipList, &univ[pl]);
++        pParent->drawable.serialNumber = NEXT_SERIAL_NUMBER;
++        break;
++    }
++
++    for (l = 0; l < miNumLayers; l++)
++        RegionUninit(&univ[l]);
++    RegionUninit(&exposed);
++    if (pScreen->ClipNotify)
++        (*pScreen->ClipNotify) (pParent, 0, 0);
++    return 1;
++}
++
++int
+ miValidateTree(WindowPtr pParent,       /* Parent to validate */
+                WindowPtr pChild,        /* First child of pParent that was
+                                          * affected */
+@@ -568,6 +683,8 @@ miValidateTree(WindowPtr pParent,       /* Parent to validate */
+     Bool forward;
+ 
+     pScreen = pParent->drawable.pScreen;
++    if (miNumLayers > 1)
++        return miValidateTreeLayered(pParent, pChild, kind);
+     if (pChild == NullWindow)
+         pChild = pParent->firstChild;
+ 
+-- 
+2.56.0
+

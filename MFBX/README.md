@@ -59,10 +59,27 @@ PseudoColor with their own colormap and one transparent pixel value.
   (crashed once in the release build, not reproduced under ASan), compositing
   on the GPU, nested-window output, running the IRIX session on it.
 
-## Why transparency needs a DIX patch
-`fbOverlay` follows the X window tree: where an overlay window covers an image
-window, the image window is clipped away and its bits are replaced by a key
-colour, so overlay pixel 0 would show black, not the image. SGI planes are
-separate: the image plane keeps its contents under the overlay. So windows in
-different layers must not clip each other (siblings and children), which means
-a layer hook in the clip computation (mi/mivaltree.c).
+## Planes (current design)
+Four planes, bottom to top: underlay, image, overlay, popup (layer numbers 0..3,
+also the z-order). Image is depth 24 / 32bpp; the other three are 8-bit
+PseudoColor, each with its own visual, pixmap and colormap, and pixel 0
+transparent (reserved: clients cannot allocate it). A window lives in the plane
+of its visual.
+- `mi/mivaltree.c`: with `miNumLayers > 1` windows only obscure windows of their
+  own layer (siblings and children), so the image plane keeps its contents under
+  overlay windows; overlay pixel 0 shows the image through. Hook:
+  `miWindowLayerProc`. Stock behaviour when `miNumLayers == 1`.
+- `composite/compwindow.c`: do not force a child onto its parent's pixmap when
+  the depths differ.
+- `hw/xmfb/InitOutput.c`: plane setup (replaces fbOverlay), per-plane colormaps,
+  layer-aware pointer hit test (higher plane wins), `SERVER_OVERLAY_VISUALS`
+  published on the root ({visual, 1, 0, 1} overlay, {.., 1, 0, 2} popup,
+  {.., 0, 0, -1} underlay), composite with the cursor on top.
+- Underlay: visible where the image plane pixel is 0xff00ff (magenta) - an
+  approximation until the IRIX behaviour is known.
+- Test client: MFBX/tests/planes.c (see Test below).
+
+## Open
+- Run the IRIX session on it (4Dwm crashed the server once: investigate).
+- Composite redirect is not supported with planes.
+- GPU compositing in VRAM.
