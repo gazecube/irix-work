@@ -840,6 +840,9 @@ static void b_alSetParams(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 }
 
 static const AlEntry g_entries[] = {
+    { "alSetWidth", b_ALsetwidth }, { "alGetWidth", b_ALgetwidth }, { "alSetSampFmt", b_ALsetsampfmt }, { "alGetSampFmt", b_ALgetsampfmt },
+    { "alGetChannels", b_ALgetchannels }, { "alGetQueueSize", b_ALgetqueuesize }, { "alSetConfig", b_ALsetconfig },
+    { "alGetConfig", b_ALgetconfig }, { "alGetFillable", b_ALgetfillable },
     { "alNewConfig", b_ALnewconfig }, { "alFreeConfig", b_ALfreeconfig }, { "alSetChannels", b_ALsetchannels },
     { "alSetQueueSize", b_ALsetqueuesize }, { "alOpenPort", b_ALopenport }, { "alClosePort", b_ALcloseport },
     { "alWriteFrames", b_alWriteFrames }, { "alGetFilled", b_alGetFilled }, { "alGetResourceByName", b_alRes },

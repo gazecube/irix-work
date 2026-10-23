@@ -68,6 +68,35 @@ static void b_pfmt(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static void b_one(IrixGuestRuntime *rt, IrixGuestCpu *cpu)   { (void)rt; RET(1); }
 static void b_enosys(IrixGuestRuntime *rt, IrixGuestCpu *cpu) { (void)rt; FAIL(ENOSYS); }
+
+/* sproc: refused by default; real share-group children (fork + shared
+ * segments, see SYS_sproc in IrixGuest.c) for programs that need one:
+ * IRIX_SPROC=1, or soundscheme, whose transport process plays the sounds. */
+static int sproc_wanted(void)
+{
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("IRIX_SPROC");
+        char exe[512];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        cached = (e && e[0] == '1') ? 1 : (e && e[0] == '0') ? 0 : 0;
+        if (cached == 0 && !(e && e[0] == '0') && n > 0) {
+            exe[n] = 0;
+            cached = strstr(exe, "/soundscheme") != 0;
+        }
+    }
+    return cached;
+}
+static void b_sproc(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
+{
+    if (!sproc_wanted()) { FAIL(ENOSYS); return; }
+    cpu->gpr[2] = 1129; /* SYS_sproc */
+    irix_guest_syscall(rt, cpu);
+    if ((int64_t)(int32_t)cpu->gpr[2] < 0 || cpu->gpr[7]) {
+        /* error: syscall_result left errno semantics in v0; keep -1 */
+        cpu->gpr[2] = (uint64_t)(int64_t)-1;
+    }
+}
 static void b_null(IrixGuestRuntime *rt, IrixGuestCpu *cpu)  { (void)rt; cpu->gpr[2] = 0; }
 
 /* ---- IRIS GL fixed-function entry points (no GL on this path) ----------- */
@@ -943,7 +972,7 @@ IrixGuestFunction irix_clib_more_bridge_lookup(const char *name)
         { "pthread_cond_broadcast", b_zero }, { "pthread_cond_wait", b_zero },
         { "pthread_self", b_one },
         { "setlabel", b_zero }, { "pfmt", b_pfmt }, { "lfmt", b_pfmt }, { "setcat", b_null }, { "addsev", b_zero },
-        { "sproc", b_enosys }, { "blockproc", b_zero }, { "unblockproc", b_zero },
+        { "sproc", b_sproc }, { "blockproc", b_zero }, { "unblockproc", b_zero },
         { "__libc_threadbind", b_zero }, { "__libc_threadunbind", b_zero },
         { "mpin", b_zero }, { "munpin", b_zero },
         { "sgidladd", b_null }, { "sgidlopen_version", b_null },
