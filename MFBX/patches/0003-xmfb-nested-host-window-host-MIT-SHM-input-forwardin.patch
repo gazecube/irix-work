@@ -1,7 +1,7 @@
 From 2c9d37b35918bd95659188fba7ad243fabeca214 Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:06:11 -0700
-Subject: [PATCH 03/10] xmfb: nested host window (-host, MIT-SHM, input
+Subject: [PATCH 03/11] xmfb: nested host window (-host, MIT-SHM, input
  forwarding), evdev keymap, absolute pointer, top-most software cursor
 
 ---

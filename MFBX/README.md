@@ -79,6 +79,15 @@ of its visual.
   approximation until the IRIX behaviour is known.
 - Test client: MFBX/tests/planes.c (see Test below).
 
+- `include/dix.h` + `mi/mivaltree.c`: on layered screens a GC may be used on a
+  drawable of the other plane depth (8 vs 24).  Toolkit GCs are made once for the
+  image depth and Motif draws its overlay menus with them; strict X rules gave
+  BadMatch and blank menus.
+- Stale pixels: nothing underneath an overlay window repaints the plane when the
+  window goes away, so the server clears plane pixels no mapped window covers
+  (swept at composite time when clip lists changed).
+- 4Dwm runs on it: `DISPLAY=:9 4Dwm`; its menus draw in the overlay plane.
+
 ## Open
 - Run the IRIX session on it (4Dwm crashed the server once: investigate).
 - Composite redirect is not supported with planes.

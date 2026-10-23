@@ -1,0 +1,160 @@
+From 2d2e2e91edfcc9557bea9bc470b1267482c3bbae Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:31:18 -0700
+Subject: [PATCH 11/11] MFBX: GC depth relaxed between plane depths on layered
+ screens (Motif overlay menus draw), stale plane pixels cleared when no window
+ of the plane covers them
+
+---
+ hw/xmfb/InitOutput.c | 71 ++++++++++++++++++++++++++++++++++++++++++++
+ include/dix.h        |  7 ++++-
+ mi/mivaltree.c       | 12 ++++++++
+ 3 files changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 8e0adee..213cc10 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -711,6 +711,72 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb, uint32_t *out)
+     }
+ }
+ 
++/*
++ * A plane has no window "underneath" that repaints an area when a window of that
++ * plane goes away, so stale pixels would stay.  When the clip lists changed,
++ * clear every plane pixel that no mapped window of that plane covers.
++ */
++static int xmfbWindowLayer(WindowPtr pWin);
++static Bool xmfbPlanesDirty = TRUE;
++
++static void
++xmfbClipNotify(WindowPtr pWin, int dx, int dy)
++{
++    xmfbPlanesDirty = TRUE;
++}
++
++static void
++xmfbCoverWindow(vfbScreenInfoPtr pvfb, unsigned char **cover, WindowPtr pWin)
++{
++    for (; pWin; pWin = pWin->nextSib) {
++        if (pWin->viewable && pWin->drawable.class == InputOutput) {
++            int l = xmfbWindowLayer(pWin);
++
++            if (l != XL_IMAGE) {
++                BoxPtr b = RegionRects(&pWin->borderClip);
++                int nb = RegionNumRects(&pWin->borderClip), i;
++
++                for (i = 0; i < nb; i++) {
++                    int y;
++
++                    for (y = b[i].y1; y < b[i].y2 && y < pvfb->height; y++)
++                        if (y >= 0 && b[i].x2 > b[i].x1)
++                            memset(cover[l] + (size_t) y * pvfb->stride8 + (b[i].x1 < 0 ? 0 : b[i].x1),
++                                   1, (size_t) (b[i].x2 > pvfb->width ? pvfb->width : b[i].x2) -
++                                   (b[i].x1 < 0 ? 0 : b[i].x1));
++                }
++            }
++        }
++        if (pWin->firstChild)
++            xmfbCoverWindow(pvfb, cover, pWin->firstChild);
++    }
++}
++
++static void
++xmfbSweepPlanes(vfbScreenInfoPtr pvfb, ScreenPtr pScreen)
++{
++    unsigned char *cover[XL_COUNT] = { 0 };
++    size_t sz = (size_t) pvfb->stride8 * pvfb->height, i;
++    int l;
++
++    if (!pScreen->root)
++        return;
++    for (l = 0; l < XL_COUNT; l++)
++        if (l != XL_IMAGE && !(cover[l] = calloc(sz, 1)))
++            goto out;
++    xmfbCoverWindow(pvfb, cover, pScreen->root->firstChild);
++    for (l = 0; l < XL_COUNT; l++) {
++        if (l == XL_IMAGE)
++            continue;
++        for (i = 0; i < sz; i++)
++            if (!cover[l][i])
++                pvfb->plane8[l][i] = 0;
++    }
++ out:
++    for (l = 0; l < XL_COUNT; l++)
++        free(cover[l]);
++}
++
+ /*
+  * Chroma-key composite of the planes into the visible framebuffer: an overlay
+  * pixel other than index 0 wins, otherwise the image plane shows through.
+@@ -724,6 +790,10 @@ xmfbComposite(vfbScreenInfoPtr pvfb)
+ 
+     if (!pvfb->img || !out)
+         return FALSE;
++    if (xmfbPlanesDirty && screenInfo.numScreens > 0) {
++        xmfbPlanesDirty = FALSE;
++        xmfbSweepPlanes(pvfb, screenInfo.screens[0]);
++    }
+     for (y = 0; y < pvfb->height; y++) {
+         const uint32_t *img = pvfb->img + (size_t) y * pvfb->paddedWidth;
+         const unsigned char *u = pvfb->plane8[XL_UNDER] + (size_t) y * pvfb->stride8;
+@@ -1446,6 +1516,7 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+             pScreen->CreateScreenResources = xmfbCreateScreenResources;
+             pScreen->CreateWindow = xmfbCreateWindow;
+             pScreen->XYToWindow = xmfbXYToWindow;
++            pScreen->ClipNotify = xmfbClipNotify;
+             miNumLayers = XL_COUNT;
+             miWindowLayerProc = xmfbWindowLayer;
+         }
+diff --git a/include/dix.h b/include/dix.h
+index 0dcd09b..aa81624 100644
+--- a/include/dix.h
++++ b/include/dix.h
+@@ -101,6 +101,9 @@ SOFTWARE.
+         }                                       \
+     } while (0)
+ 
++/* MFBX: on screens with several planes a GC may be used on any plane's drawable */
++extern _X_EXPORT int miLayerDepthCompatible(int gcDepth, int drawDepth);
++
+ #define VALIDATE_DRAWABLE_AND_GC(drawID, pDraw, mode)                   \
+     do {                                                                \
+         int tmprc = dixLookupDrawable(&(pDraw), drawID, client, M_ANY, mode); \
+@@ -109,7 +112,9 @@ SOFTWARE.
+         tmprc = dixLookupGC(&(pGC), stuff->gc, client, DixUseAccess);   \
+         if (tmprc != Success)                                           \
+             return tmprc;                                               \
+-        if ((pGC->depth != pDraw->depth) || (pGC->pScreen != pDraw->pScreen)) \
++        if (((pGC->depth != pDraw->depth) &&                            \
++             !miLayerDepthCompatible(pGC->depth, pDraw->depth)) ||      \
++            (pGC->pScreen != pDraw->pScreen))                           \
+             return BadMatch;                                            \
+         if (pGC->serialNumber != pDraw->serialNumber)                   \
+             ValidateGC(pDraw, pGC);                                     \
+diff --git a/mi/mivaltree.c b/mi/mivaltree.c
+index 7977831..4220b36 100644
+--- a/mi/mivaltree.c
++++ b/mi/mivaltree.c
+@@ -202,6 +202,18 @@ miShapedWindowIn(RegionPtr universe, RegionPtr bounding,
+ int miNumLayers = 1;
+ int (*miWindowLayerProc) (WindowPtr pWin) = NULL;
+ 
++/*
++ * MFBX: overlay/popup/underlay planes have another depth than the image plane
++ * but toolkit GCs are made once, for the image depth.  Accept a GC against a
++ * drawable of the other plane depth on layered screens (8 and 24 only).
++ */
++int
++miLayerDepthCompatible(int gcDepth, int drawDepth)
++{
++    return miNumLayers > 1 &&
++           (gcDepth == 24 || gcDepth == 8) && (drawDepth == 24 || drawDepth == 8);
++}
++
+ #define MI_LAYER(w) (miNumLayers > 1 && miWindowLayerProc ? \
+                      miWindowLayerProc(w) : 0)
+ 
+-- 
+2.56.0
+

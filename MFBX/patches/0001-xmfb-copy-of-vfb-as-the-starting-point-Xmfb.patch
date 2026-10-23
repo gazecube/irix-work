@@ -1,7 +1,7 @@
 From 8098154f8fbb06e627774596ea3e72d661e8aaf4 Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 18:33:55 -0700
-Subject: [PATCH 01/10] xmfb: copy of vfb as the starting point (Xmfb)
+Subject: [PATCH 01/11] xmfb: copy of vfb as the starting point (Xmfb)
 
 ---
  hw/meson.build       |    1 +
