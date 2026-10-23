@@ -1,0 +1,46 @@
+From 7fe9f09bb5a806f5b1726ea1d33d831e955ebe29 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:10:15 -0700
+Subject: [PATCH 5/5] xmfb: reuse the host window across server resets (one
+ window), event trace via XMFB_TRACE
+
+---
+ hw/xmfb/hostwin.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/hw/xmfb/hostwin.c b/hw/xmfb/hostwin.c
+index 654bb4e..c5963f7 100644
+--- a/hw/xmfb/hostwin.c
++++ b/hw/xmfb/hostwin.c
+@@ -83,6 +83,8 @@ host_events(int fd, int ready, void *data)
+ 
+     (void) fd; (void) ready; (void) data;
+     while ((ev = xcb_poll_for_event(conn))) {
++        if (getenv("XMFB_TRACE"))
++            ErrorF("Xmfb: host event %d (ptr_dev=%p)\n", ev->response_type & 0x7f, (void *) ptr_dev);
+         if (ev->response_type == 0) {
+             xcb_generic_error_t *er = (xcb_generic_error_t *) ev;
+ 
+@@ -153,6 +155,19 @@ xmfbHostOpen(const char *display, int w, int h, int shmid, size_t offset,
+     xcb_cursor_t cursor;
+     int scr = 0;
+ 
++    if (conn) {
++        /* server reset: keep the window and the connection, attach the new framebuffer */
++        if (seg)
++            xcb_shm_detach(conn, seg);
++        seg = xcb_generate_id(conn);
++        xcb_shm_attach(conn, seg, shmid, 1);
++        fb_w = w;
++        fb_h = h;
++        shm_offset = (uint32_t) offset;
++        xcb_flush(conn);
++        return TRUE;
++    }
++
+     conn = xcb_connect(display, &scr);
+     if (!conn || xcb_connection_has_error(conn)) {
+         ErrorF("Xmfb: cannot open host display %s\n", display ? display : "(default)");
+-- 
+2.56.0
+
