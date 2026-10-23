@@ -879,6 +879,27 @@ static VisualID gl_overlay_visual(Display *d, int screen)
 }
 
 static VisualID gl_overlay_visual_find(Display *d, int screen)
+/* A server with real overlay planes (Xmfb) publishes SERVER_OVERLAY_VISUALS
+ * itself: then the guest talks to the real overlay visuals and nothing is
+ * emulated here. */
+static int gl_server_has_overlay(Display *d, int screen)
+{
+    Atom a = XInternAtom(d, "SERVER_OVERLAY_VISUALS", True);
+    Atom type;
+    int fmt;
+    unsigned long n = 0, after;
+    unsigned char *data = 0;
+    int has;
+
+    if (!a || getenv("IRIX_GL_PUBLISH_OVERLAY")) return 0;
+    if (XGetWindowProperty(d, RootWindow(d, screen), a, 0, 4, False, a, &type,
+                           &fmt, &n, &after, &data) != Success)
+        return 0;
+    has = data && n >= 4;
+    if (data) XFree(data);
+    return has;
+}
+
 {
     static VisualID cache[8];
     static int done[8];
@@ -891,6 +912,11 @@ static VisualID gl_overlay_visual_find(Display *d, int screen)
     done[screen] = 1;
     if (e && !strcmp(e, "0")) return 0;
     if (e && *e) {
+    if (gl_server_has_overlay(d, screen)) {
+        if (gl_trace_on()) fprintf(stderr, "IRIX GL: screen %d has native overlay planes\n", screen);
+        cache[screen] = 0;
+        return 0;
+    }
         cache[screen] = (VisualID)strtoul(e, 0, 16);
         return cache[screen];
     }

@@ -494,6 +494,8 @@ static void bridge_XCreateWindow(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         visual && visual != (Visual *)CopyFromParent)
         attrs_ptr->colormap = XCreateColormap(dpy, DefaultRootWindow(dpy),
                                                visual, AllocNone);
+    if (getenv("IRIX_TRACE_GL"))
+        fprintf(stderr, "IRIX X: XCreateWindow guest passed depth=%d visual=%p\n", depth, (void *) visual);
     if (visual && visual != (Visual *)CopyFromParent) {
         /* the guest may have been shown an emulated depth (overlay planes) */
         XVisualInfo vt, *vl;
