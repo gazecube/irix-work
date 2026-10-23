@@ -1,0 +1,46 @@
+From 9b2786bcb85943a795e8feeb2da2be822e22c136 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:10:57 -0700
+Subject: [PATCH 6/6] xmfb: re-register block handler and host fd every server
+ generation (screen froze and input died after the first reset)
+
+---
+ hw/xmfb/InitOutput.c | 7 ++++---
+ hw/xmfb/hostwin.c    | 2 ++
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 3929084..263c8e0 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -1237,10 +1237,11 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+     pScreen->CloseScreen = vfbCloseScreen;
+ 
+     {
+-        static Bool handlers;
++        static int handler_generation;
+ 
+-        if (!handlers) {
+-            handlers = TRUE;
++        /* handlers are dropped at every server reset: register once per generation */
++        if (handler_generation != serverGeneration) {
++            handler_generation = serverGeneration;
+             RegisterBlockAndWakeupHandlers(xmfbBlockHandler, xmfbWakeupHandler, NULL);
+         }
+     }
+diff --git a/hw/xmfb/hostwin.c b/hw/xmfb/hostwin.c
+index c5963f7..5870468 100644
+--- a/hw/xmfb/hostwin.c
++++ b/hw/xmfb/hostwin.c
+@@ -165,6 +165,8 @@ xmfbHostOpen(const char *display, int w, int h, int shmid, size_t offset,
+         fb_h = h;
+         shm_offset = (uint32_t) offset;
+         xcb_flush(conn);
++        /* a server reset drops every notify fd: register the host connection again */
++        SetNotifyFd(xcb_get_file_descriptor(conn), host_events, X_NOTIFY_READ, NULL);
+         return TRUE;
+     }
+ 
+-- 
+2.56.0
+
