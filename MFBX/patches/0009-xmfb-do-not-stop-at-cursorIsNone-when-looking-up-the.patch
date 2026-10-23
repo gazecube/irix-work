@@ -1,0 +1,26 @@
+From dec95b50b2cd0179661a46f8c26282363aae0e62 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:14:57 -0700
+Subject: [PATCH 9/9] xmfb: do not stop at cursorIsNone when looking up the
+ cursor (it means inherit)
+
+---
+ hw/xmfb/InitOutput.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 044f3ff..84330a8 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -628,8 +628,6 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb, uint32_t *out)
+ 
+     /* same rule as the server: the first window up the tree that has a cursor */
+     for (win = sw; win; win = win->parent) {
+-        if (win->cursorIsNone)
+-            break;
+         if (win->optional && win->optional->cursor) {
+             c = win->optional->cursor;
+             break;
+-- 
+2.56.0
+
