@@ -29,3 +29,25 @@ Nothing in-tree uses it any more - no driver scans out two layers.
 ## Terms
 SGI planes: image (main), overlay, popup, underlay; overlay planes are 8-bit
 PseudoColor with their own colormap and one transparent pixel value.
+
+## Status (2026-10-22)
+- Branch `mfbx` in `xserver/` holds our changes; `MFBX/patches/` has them as
+  `git format-patch` output (apply on top of tag xorg-server-21.1.25).
+- `hw/xmfb/` (built as `Xmfb`, a copy of Xvfb): 24-bit image plane + 8-bit
+  PseudoColor overlay plane on `fbOverlay`, chroma-key composite (overlay pixel
+  0 is transparent) into the Xvfb framebuffer file, per-plane colormaps, overlay
+  colormap pixel 0 reserved.
+- Needed one change outside xmfb: the Composite extension forced every child
+  window onto its parent's pixmap (composite/compwindow.c, compCreateWindow);
+  it now only does that for pixmaps of the same depth.
+- Build: `meson setup MFBX/build -Dxorg=true -Dxephyr=true -Dglamor=true`
+  from `MFBX/xserver`, then `ninja -C MFBX/build hw/xmfb/Xmfb`.
+- Test: `Xmfb :9 -screen 0 1280x1024x24 -fbdir DIR -ac`, then a client that
+  maps a depth 24 window and a depth 8 PseudoColor window; read the composite
+  from `DIR/Xvfb_screen0` (xwd format).
+
+## Not done yet
+- Transparency test (overlay index 0 showing the image plane), popup/underlay
+  planes, SERVER_OVERLAY_VISUALS root property, GetImage on the root window
+  (crashed once in the release build, not reproduced under ASan), compositing
+  on the GPU, nested-window output, running the IRIX session on it.

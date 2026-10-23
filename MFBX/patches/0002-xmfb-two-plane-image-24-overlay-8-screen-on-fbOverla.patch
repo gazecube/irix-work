@@ -1,0 +1,253 @@
+From a78ae5db6ac48c3722fee8b4b2ea12607b2ddaed Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 18:54:02 -0700
+Subject: [PATCH 2/2] xmfb: two-plane (image 24 + overlay 8) screen on
+ fbOverlay with chroma-key composite; reserve overlay pixel 0; composite: keep
+ child windows in their own layer pixmap
+
+---
+ composite/compwindow.c |   8 ++-
+ hw/xmfb/InitOutput.c   | 133 +++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 134 insertions(+), 7 deletions(-)
+
+diff --git a/composite/compwindow.c b/composite/compwindow.c
+index 9a65163..ddb1c3f 100644
+--- a/composite/compwindow.c
++++ b/composite/compwindow.c
+@@ -581,7 +581,13 @@ compCreateWindow(WindowPtr pWin)
+         PixmapPtr parent_pixmap = (*pScreen->GetWindowPixmap)(pWin->parent);
+         PixmapPtr window_pixmap = (*pScreen->GetWindowPixmap)(pWin);
+ 
+-        if (window_pixmap != parent_pixmap)
++        /*
++         * MFBX: with overlay planes a child can legitimately live in a
++         * different layer pixmap (different depth) than its parent; only
++         * unify pixmaps of the same depth.
++         */
++        if (window_pixmap != parent_pixmap &&
++            window_pixmap->drawable.depth == parent_pixmap->drawable.depth)
+             (*pScreen->SetWindowPixmap) (pWin, parent_pixmap);
+         if (csw)
+             for (ccw = csw->clients; ccw; ccw = ccw->next)
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 48efb61..26583bd 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -67,6 +67,8 @@ from The Open Group.
+ #include "miline.h"
+ #include "glx_extinit.h"
+ #include "randrstr.h"
++#include "fboverlay.h"
++#include "colormapst.h"
+ 
+ #define VFB_DEFAULT_WIDTH      1280
+ #define VFB_DEFAULT_HEIGHT     1024
+@@ -93,6 +95,13 @@ typedef struct {
+     unsigned int lineBias;
+     CloseScreenProcPtr closeScreen;
+ 
++    /* MFBX: separate image and overlay plane buffers, composited into pfbMemory */
++    uint32_t *img;              /* layer 0: depth 24, 32bpp */
++    unsigned char *ovl;         /* layer 1: depth 8, index 0 transparent */
++    ColormapPtr ovlCmap;        /* installed overlay colormap */
++    uint32_t ovlRGB[256];
++    unsigned long lastComposite;
++
+ #ifdef HAVE_MMAP
+     int mmap_fd;
+     char mmap_file[MAXPATHLEN];
+@@ -378,11 +387,61 @@ ddxProcessArgument(int argc, char *argv[], int i)
+     return 0;
+ }
+ 
++static void
++xmfbRefreshOverlayRGB(vfbScreenInfoPtr pvfb)
++{
++    ColormapPtr pmap = pvfb->ovlCmap;
++    int i;
++
++    for (i = 0; i < 256; i++) {
++        Pixel pix = i;
++        xrgb rgb;
++
++        if (!pmap) {
++            pvfb->ovlRGB[i] = i ? 0xffffff : 0;
++            continue;
++        }
++        QueryColors(pmap, 1, &pix, &rgb, serverClient);
++        pvfb->ovlRGB[i] = ((rgb.red >> 8) << 16) | ((rgb.green >> 8) << 8) |
++                          (rgb.blue >> 8);
++    }
++}
++
++static Bool
++xmfbIsOverlayMap(ColormapPtr pmap)
++{
++    return pmap->pVisual->nplanes == 8 && pmap->pVisual->class == PseudoColor;
++}
++
++static CreateColormapProcPtr xmfbOldCreateColormap;
++
++/* Overlay plane colormaps: pixel 0 is the transparent key, never hand it out */
++static Bool
++xmfbCreateColormap(ColormapPtr pmap)
++{
++    Bool ok = xmfbOldCreateColormap ? xmfbOldCreateColormap(pmap) : TRUE;
++
++    if (ok && xmfbIsOverlayMap(pmap)) {
++        CARD16 r = 0, g = 0, b = 0;
++        Pixel pix = 0;
++
++        (void) AllocColor(pmap, &r, &g, &b, &pix, 0);
++    }
++    return ok;
++}
++
+ static void
+ vfbInstallColormap(ColormapPtr pmap)
+ {
+     ColormapPtr oldpmap = GetInstalledmiColormap(pmap->pScreen);
+ 
++    if (xmfbIsOverlayMap(pmap)) {
++        /* overlay plane colormaps live beside the image plane one */
++        vfbScreens[pmap->pScreen->myNum].ovlCmap = pmap;
++        xmfbRefreshOverlayRGB(&vfbScreens[pmap->pScreen->myNum]);
++        return;
++    }
++
+     if (pmap != oldpmap) {
+         int entries;
+         XWDFileHeader *pXWDHeader;
+@@ -435,6 +494,11 @@ vfbStoreColors(ColormapPtr pmap, int ndef, xColorItem * pdefs)
+     XWDColor *pXWDCmap;
+     int i;
+ 
++    if (xmfbIsOverlayMap(pmap)) {
++        if (pmap == vfbScreens[pmap->pScreen->myNum].ovlCmap)
++            xmfbRefreshOverlayRGB(&vfbScreens[pmap->pScreen->myNum]);
++        return;
++    }
+     if (pmap != GetInstalledmiColormap(pmap->pScreen)) {
+         return;
+     }
+@@ -460,12 +524,41 @@ vfbStoreColors(ColormapPtr pmap, int ndef, xColorItem * pdefs)
+ 
+ #ifdef HAVE_MMAP
+ 
++/*
++ * Chroma-key composite of the planes into the visible framebuffer: an overlay
++ * pixel other than index 0 wins, otherwise the image plane shows through.
++ */
++static void
++xmfbComposite(vfbScreenInfoPtr pvfb)
++{
++    uint32_t *out = (uint32_t *) pvfb->pfbMemory;
++    size_t n = (size_t) pvfb->paddedWidth * (size_t) pvfb->height, i;
++
++    if (!pvfb->img || !pvfb->ovl)
++        return;
++    for (i = 0; i < n; i++) {
++        unsigned char o = pvfb->ovl[i];
++
++        out[i] = o ? pvfb->ovlRGB[o] : pvfb->img[i];
++    }
++}
++
+ /* this flushes any changes to the screens out to the mmapped file */
+ static void
+ vfbBlockHandler(void *blockData, void *timeout)
+ {
+     int i;
+ 
++    for (i = 0; i < vfbNumScreens; i++) {
++        unsigned long now = GetTimeInMillis();
++
++        if (now - vfbScreens[i].lastComposite >= 20) {
++            xmfbComposite(&vfbScreens[i]);
++            vfbScreens[i].lastComposite = now;
++        }
++    }
++    AdjustWaitForDelay(timeout, 20);
++
+     for (i = 0; i < vfbNumScreens; i++) {
+ #ifdef MS_ASYNC
+         if (-1 == msync((caddr_t) vfbScreens[i].pXWDHeader,
+@@ -677,7 +770,7 @@ vfbWriteXWDFileHeader(ScreenPtr pScreen)
+         hostname[0] = 0;
+     else
+         hostname[XWD_WINDOW_NAME_LEN - 1] = 0;
+-    sprintf((char *) (pXWDHeader + 1), "Xvfb %s:%s.%d", hostname, display,
++    sprintf((char *) (pXWDHeader + 1), "Xmfb %s:%s.%d", hostname, display,
+             pScreen->myNum);
+ 
+     /* write colormap pixel slot values */
+@@ -723,9 +816,7 @@ vfbCloseScreen(ScreenPtr pScreen)
+     /*
+      * fb overwrites miCloseScreen, so do this here
+      */
+-    if (pScreen->devPrivate)
+-        (*pScreen->DestroyPixmap) (pScreen->devPrivate);
+-    pScreen->devPrivate = NULL;
++    pScreen->devPrivate = NULL;     /* layer pixmaps: fbOverlayCloseScreen */
+ 
+     return pScreen->CloseScreen(pScreen);
+ }
+@@ -879,6 +970,18 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+     if (!pbits)
+         return FALSE;
+ 
++    if (pvfb->depth != 24) {
++        ErrorF("Xmfb: only -screen ... x24 is supported (image 24 + overlay 8)\n");
++        return FALSE;
++    }
++    pvfb->img = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
++    pvfb->ovl = calloc((size_t) pvfb->paddedWidth * pvfb->height, 1);
++    if (!pvfb->img || !pvfb->ovl)
++        return FALSE;
++    pvfb->ovlCmap = NULL;
++    pvfb->lastComposite = 0;
++    xmfbRefreshOverlayRGB(pvfb);
++
+     switch (pvfb->depth) {
+     case 8:
+         miSetVisualTypesAndMasks(8,
+@@ -918,16 +1021,34 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+         return FALSE;
+     }
+ 
++    /* overlay plane visual: 8-bit PseudoColor with its own colormap */
++    miSetVisualTypesAndMasks(8, (1 << PseudoColor), 8, PseudoColor, 0, 0, 0);
++
+     miSetPixmapDepths();
+ 
+-    ret = fbScreenInit(pScreen, pbits, pvfb->width, pvfb->height,
+-                       dpix, dpiy, pvfb->paddedWidth, pvfb->bitsPerPixel);
++    ret = fbOverlaySetupScreen(pScreen, pvfb->img, pvfb->ovl, pvfb->width,
++                               pvfb->height, dpix, dpiy, pvfb->paddedWidth,
++                               pvfb->paddedWidth, 32, 8);
++    if (ret)
++        ret = fbOverlayFinishScreenInit(pScreen, pvfb->img, pvfb->ovl,
++                                        pvfb->width, pvfb->height, dpix, dpiy,
++                                        pvfb->paddedWidth, pvfb->paddedWidth,
++                                        32, 8, 24, 8);
+     if (ret && Render)
+         fbPictureInit(pScreen, 0, 0);
+ 
+     if (!ret)
+         return FALSE;
+ 
++    {
++        FbOverlayScrPrivPtr ovp = fbOverlayGetScrPriv(pScreen);
++
++        ovp->layer[0].key = 0;
++        ovp->layer[1].key = 0;      /* overlay pixel 0 = transparent */
++    }
++    xmfbOldCreateColormap = pScreen->CreateColormap;
++    pScreen->CreateColormap = xmfbCreateColormap;
++
+     if (!vfbRandRInit(pScreen))
+        return FALSE;
+ 
+-- 
+2.56.0
+
