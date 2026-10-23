@@ -1,0 +1,97 @@
+From d550822a4c9a5e4a283c4019d12618da13a735bf Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:14:01 -0700
+Subject: [PATCH 8/8] xmfb: composite into a back buffer, publish only changed
+ frames in one copy (no torn frames, cursor no longer flickers)
+
+---
+ hw/xmfb/InitOutput.c | 29 ++++++++++++++++++++---------
+ 1 file changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index a02702f..044f3ff 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -104,6 +104,8 @@ typedef struct {
+     unsigned char *ovl;         /* layer 1: depth 8, index 0 transparent */
+     ColormapPtr ovlCmap;        /* installed overlay colormap */
+     uint32_t ovlRGB[256];
++    uint32_t *back;             /* composite target, copied to pfbMemory when it changed */
++    uint32_t *last;             /* the frame last copied out */
+     unsigned long lastComposite;
+ 
+ #ifdef HAVE_MMAP
+@@ -618,7 +620,7 @@ static miPointerSpriteFuncRec xmfbSpriteFuncs = {
+ };
+ 
+ static void
+-xmfbDrawCursor(vfbScreenInfoPtr pvfb)
++xmfbDrawCursor(vfbScreenInfoPtr pvfb, uint32_t *out)
+ {
+     WindowPtr sw = inputInfo.pointer ? GetSpriteWindow(inputInfo.pointer) : NULL;
+     CursorPtr c = NULL;
+@@ -633,7 +635,6 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb)
+             break;
+         }
+     }
+-    uint32_t *out = (uint32_t *) pvfb->pfbMemory;
+     int w, h, dx, dy;
+     uint32_t fg, bg;
+ 
+@@ -689,20 +690,27 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb)
+  * Chroma-key composite of the planes into the visible framebuffer: an overlay
+  * pixel other than index 0 wins, otherwise the image plane shows through.
+  */
+-static void
++static Bool
+ xmfbComposite(vfbScreenInfoPtr pvfb)
+ {
+-    uint32_t *out = (uint32_t *) pvfb->pfbMemory;
+     size_t n = (size_t) pvfb->paddedWidth * (size_t) pvfb->height, i;
++    uint32_t *out = pvfb->back;
+ 
+-    if (!pvfb->img || !pvfb->ovl)
+-        return;
++    if (!pvfb->img || !pvfb->ovl || !out)
++        return FALSE;
+     for (i = 0; i < n; i++) {
+         unsigned char o = pvfb->ovl[i];
+ 
+         out[i] = o ? pvfb->ovlRGB[o] : pvfb->img[i];
+     }
+-    xmfbDrawCursor(pvfb);
++    xmfbDrawCursor(pvfb, out);
++    /* publish only when something changed, and in one quick copy, so the host
++       never reads a half-composited frame */
++    if (memcmp(out, pvfb->last, n * 4) == 0)
++        return FALSE;
++    memcpy(pvfb->last, out, n * 4);
++    memcpy(pvfb->pfbMemory, out, n * 4);
++    return TRUE;
+ }
+ 
+ static Bool xmfbHostActive;
+@@ -717,8 +725,7 @@ xmfbBlockHandler(void *blockData, void *timeout)
+         unsigned long now = GetTimeInMillis();
+ 
+         if (now - vfbScreens[i].lastComposite >= 20) {
+-            xmfbComposite(&vfbScreens[i]);
+-            if (xmfbHostActive)
++            if (xmfbComposite(&vfbScreens[i]) && xmfbHostActive)
+                 xmfbHostPresent();
+             vfbScreens[i].lastComposite = now;
+         }
+@@ -1156,6 +1163,10 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+     pvfb->ovl = calloc((size_t) pvfb->paddedWidth * pvfb->height, 1);
+     if (!pvfb->img || !pvfb->ovl)
+         return FALSE;
++    pvfb->back = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
++    pvfb->last = calloc((size_t) pvfb->paddedWidth * pvfb->height, 4);
++    if (!pvfb->back || !pvfb->last)
++        return FALSE;
+     pvfb->ovlCmap = NULL;
+     pvfb->lastComposite = 0;
+     xmfbRefreshOverlayRGB(pvfb);
+-- 
+2.56.0
+

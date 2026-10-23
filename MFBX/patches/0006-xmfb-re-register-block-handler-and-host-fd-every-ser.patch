@@ -1,7 +1,7 @@
 From 9b2786bcb85943a795e8feeb2da2be822e22c136 Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:10:57 -0700
-Subject: [PATCH 6/7] xmfb: re-register block handler and host fd every server
+Subject: [PATCH 6/8] xmfb: re-register block handler and host fd every server
  generation (screen froze and input died after the first reset)
 
 ---
