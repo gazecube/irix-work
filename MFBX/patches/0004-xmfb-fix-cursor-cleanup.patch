@@ -1,0 +1,28 @@
+From 1c7cc3ff8b5a31c28288a860d9cd60fbd89c4dba Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:06:36 -0700
+Subject: [PATCH 4/4] xmfb: fix cursor cleanup
+
+---
+ hw/xmfb/InitOutput.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 7a353eb..3929084 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -626,11 +626,9 @@ xmfbDrawCursor(vfbScreenInfoPtr pvfb)
+     int w, h, dx, dy;
+     uint32_t fg, bg;
+ 
+-    }
+     if (!c || c == NullCursor || !c->bits || !inputInfo.pointer)
+         return;
+     GetSpritePosition(inputInfo.pointer, &xmfbSprite.x, &xmfbSprite.y);
+-    }
+     w = c->bits->width;
+     h = c->bits->height;
+     fg = ((c->foreRed >> 8) << 16) | ((c->foreGreen >> 8) << 8) | (c->foreBlue >> 8);
+-- 
+2.56.0
+

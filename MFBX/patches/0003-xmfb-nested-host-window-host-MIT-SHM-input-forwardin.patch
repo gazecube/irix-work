@@ -1,0 +1,659 @@
+From 2c9d37b35918bd95659188fba7ad243fabeca214 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:06:11 -0700
+Subject: [PATCH 3/4] xmfb: nested host window (-host, MIT-SHM, input
+ forwarding), evdev keymap, absolute pointer, top-most software cursor
+
+---
+ hw/xmfb/InitInput.c  |  32 ++++--
+ hw/xmfb/InitOutput.c | 195 +++++++++++++++++++++++++++++++++-
+ hw/xmfb/hostwin.c    | 244 +++++++++++++++++++++++++++++++++++++++++++
+ hw/xmfb/meson.build  |   3 +-
+ hw/xmfb/xmfb.h       |  11 ++
+ 5 files changed, 472 insertions(+), 13 deletions(-)
+ create mode 100644 hw/xmfb/hostwin.c
+ create mode 100644 hw/xmfb/xmfb.h
+
+diff --git a/hw/xmfb/InitInput.c b/hw/xmfb/InitInput.c
+index 2c272fa..d46685d 100644
+--- a/hw/xmfb/InitInput.c
++++ b/hw/xmfb/InitInput.c
+@@ -42,6 +42,8 @@ from The Open Group.
+ #include "xserver-properties.h"
+ #include "exevents.h"
+ #include "extinit.h"
++#include "xmfb.h"
++#include "scrnintstr.h"
+ 
+ void
+ ProcessInputEvents(void)
+@@ -64,7 +66,12 @@ vfbKeybdProc(DeviceIntPtr pDevice, int onoff)
+ 
+     switch (onoff) {
+     case DEVICE_INIT:
+-        InitKeyboardDeviceStruct(pDevice, NULL, NULL, NULL);
++        {
++            /* host keycodes are evdev ones: use the evdev rules */
++            XkbRMLVOSet rmlvo = { "evdev", "pc105", "us", NULL, NULL };
++
++            InitKeyboardDeviceStruct(pDevice, &rmlvo, NULL, NULL);
++        }
+         break;
+     case DEVICE_ON:
+         pDev->on = TRUE;
+@@ -81,30 +88,36 @@ vfbKeybdProc(DeviceIntPtr pDevice, int onoff)
+ static int
+ vfbMouseProc(DeviceIntPtr pDevice, int onoff)
+ {
+-#define NBUTTONS 3
++#define NBUTTONS 7
+ #define NAXES 2
+ 
+     BYTE map[NBUTTONS + 1];
++    int b;
+     DevicePtr pDev = (DevicePtr) pDevice;
+     Atom btn_labels[NBUTTONS] = { 0 };
+     Atom axes_labels[NAXES] = { 0 };
+ 
+     switch (onoff) {
+     case DEVICE_INIT:
+-        map[1] = 1;
+-        map[2] = 2;
+-        map[3] = 3;
++        for (b = 1; b <= NBUTTONS; b++)
++            map[b] = b;
+ 
+         btn_labels[0] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_LEFT);
+         btn_labels[1] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_MIDDLE);
+         btn_labels[2] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_RIGHT);
++        btn_labels[3] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_UP);
++        btn_labels[4] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_DOWN);
++        btn_labels[5] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_LEFT);
++        btn_labels[6] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_RIGHT);
+ 
+-        axes_labels[0] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_X);
+-        axes_labels[1] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_Y);
++        axes_labels[0] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_X);
++        axes_labels[1] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_Y);
+ 
+         InitPointerDeviceStruct(pDev, map, NBUTTONS, btn_labels,
+                                 (PtrCtrlProcPtr) NoopDDA,
+                                 GetMotionHistorySize(), NAXES, axes_labels);
++        InitValuatorAxisStruct(pDevice, 0, axes_labels[0], 0, screenInfo.screens[0]->width - 1, 10000, 0, 10000, Absolute);
++        InitValuatorAxisStruct(pDevice, 1, axes_labels[1], 0, screenInfo.screens[0]->height - 1, 10000, 0, 10000, Absolute);
+         break;
+ 
+     case DEVICE_ON:
+@@ -133,9 +146,10 @@ InitInput(int argc, char *argv[])
+     p = AddInputDevice(serverClient, vfbMouseProc, TRUE);
+     k = AddInputDevice(serverClient, vfbKeybdProc, TRUE);
+     xiclass = MakeAtom(XI_MOUSE, sizeof(XI_MOUSE) - 1, TRUE);
+-    AssignTypeAndName(p, xiclass, "Xvfb mouse");
++    AssignTypeAndName(p, xiclass, "Xmfb mouse");
+     xiclass = MakeAtom(XI_KEYBOARD, sizeof(XI_KEYBOARD) - 1, TRUE);
+-    AssignTypeAndName(k, xiclass, "Xvfb keyboard");
++    AssignTypeAndName(k, xiclass, "Xmfb keyboard");
++    xmfbHostSetDevices(p, k);
+     (void) mieqInit();
+ }
+ 
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 26583bd..7a353eb 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -42,6 +42,10 @@ from The Open Group.
+ #define PSZ 8
+ #include "fb.h"
+ #include "colormapst.h"
++#include "xmfb.h"
++#include "windowstr.h"
++#include "mipointer.h"
++#include "cursorstr.h"
+ #include "gcstruct.h"
+ #include "input.h"
+ #include "mipointer.h"
+@@ -131,6 +135,10 @@ static char *pfbdir = NULL;
+ #endif
+ typedef enum { NORMAL_MEMORY_FB, SHARED_MEMORY_FB, MMAPPED_FILE_FB } fbMemType;
+ static fbMemType fbmemtype = NORMAL_MEMORY_FB;
++static const char *xmfbHostDisplay;
++static const char *xmfbHostTitle = "Xmfb";
++static Bool xmfbHostOverride;
++static int xmfbHostX, xmfbHostY;
+ static char needswap = 0;
+ static Bool Render = TRUE;
+ 
+@@ -253,6 +261,9 @@ ddxUseMsg(void)
+     ErrorF("+/-render		   turn on/off RENDER extension support"
+            "(default on)\n");
+     ErrorF("-linebias n            adjust thin line pixelization\n");
++    ErrorF("-host display          show the screen in a window on the host display\n");
++    ErrorF("-host-title string     title of that window\n");
++    ErrorF("-host-pos x y          place the window at x,y without a border (no window manager)\n");
+     ErrorF("-blackpixel n          pixel value for black\n");
+     ErrorF("-whitepixel n          pixel value for white\n");
+ 
+@@ -377,6 +388,28 @@ ddxProcessArgument(int argc, char *argv[], int i)
+     }
+ #endif                          /* HAVE_MMAP */
+ 
++    if (strcmp(argv[i], "-host") == 0) {        /* -host display */
++        if (++i >= argc)
++            UseMsg();
++        xmfbHostDisplay = argv[i];
++        fbmemtype = SHARED_MEMORY_FB;
++        return 2;
++    }
++    if (strcmp(argv[i], "-host-title") == 0) {
++        if (++i >= argc)
++            UseMsg();
++        xmfbHostTitle = argv[i];
++        return 2;
++    }
++    if (strcmp(argv[i], "-host-pos") == 0) {
++        if (i + 2 >= argc)
++            UseMsg();
++        xmfbHostX = atoi(argv[i + 1]);
++        xmfbHostY = atoi(argv[i + 2]);
++        xmfbHostOverride = TRUE;
++        return 3;
++    }
++
+ #ifdef HAS_SHM
+     if (strcmp(argv[i], "-shmem") == 0) {       /* -shmem */
+         fbmemtype = SHARED_MEMORY_FB;
+@@ -524,6 +557,125 @@ vfbStoreColors(ColormapPtr pmap, int ndef, xColorItem * pdefs)
+ 
+ #ifdef HAVE_MMAP
+ 
++/*
++ * Cursor: drawn last, above every plane, like a hardware sprite (the stock
++ * software cursor draws into the image plane, where an overlay window hides
++ * it).
++ */
++static struct {
++    CursorPtr cur;
++    int x, y;
++} xmfbSprite;
++
++static Bool
++xmfbRealizeCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor)
++{
++    return TRUE;
++}
++
++static Bool
++xmfbUnrealizeCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor)
++{
++    if (xmfbSprite.cur == pCursor)
++        xmfbSprite.cur = NULL;
++    return TRUE;
++}
++
++static void
++xmfbSetCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor, int x, int y)
++{
++    xmfbSprite.cur = pCursor;
++    xmfbSprite.x = x;
++    xmfbSprite.y = y;
++}
++
++static void
++xmfbMoveCursor(DeviceIntPtr pDev, ScreenPtr pScreen, int x, int y)
++{
++
++    xmfbSprite.x = x;
++    xmfbSprite.y = y;
++}
++
++static Bool
++xmfbDeviceCursorInitialize(DeviceIntPtr pDev, ScreenPtr pScreen)
++{
++    return TRUE;
++}
++
++static void
++xmfbDeviceCursorCleanup(DeviceIntPtr pDev, ScreenPtr pScreen)
++{
++}
++
++static miPointerSpriteFuncRec xmfbSpriteFuncs = {
++    xmfbRealizeCursor,
++    xmfbUnrealizeCursor,
++    xmfbSetCursor,
++    xmfbMoveCursor,
++    xmfbDeviceCursorInitialize,
++    xmfbDeviceCursorCleanup,
++};
++
++static void
++xmfbDrawCursor(vfbScreenInfoPtr pvfb)
++{
++    WindowPtr sw = inputInfo.pointer ? GetSpriteWindow(inputInfo.pointer) : NULL;
++    CursorPtr c = sw && !sw->cursorIsNone ? wCursor(sw) : NULL;
++    uint32_t *out = (uint32_t *) pvfb->pfbMemory;
++    int w, h, dx, dy;
++    uint32_t fg, bg;
++
++    }
++    if (!c || c == NullCursor || !c->bits || !inputInfo.pointer)
++        return;
++    GetSpritePosition(inputInfo.pointer, &xmfbSprite.x, &xmfbSprite.y);
++    }
++    w = c->bits->width;
++    h = c->bits->height;
++    fg = ((c->foreRed >> 8) << 16) | ((c->foreGreen >> 8) << 8) | (c->foreBlue >> 8);
++    bg = ((c->backRed >> 8) << 16) | ((c->backGreen >> 8) << 8) | (c->backBlue >> 8);
++    for (dy = 0; dy < h; dy++) {
++        int py = xmfbSprite.y - c->bits->yhot + dy;
++
++        if (py < 0 || py >= pvfb->height)
++            continue;
++        for (dx = 0; dx < w; dx++) {
++            int px = xmfbSprite.x - c->bits->xhot + dx;
++            uint32_t *dst;
++
++            if (px < 0 || px >= pvfb->width)
++                continue;
++            dst = &out[(size_t) py * pvfb->paddedWidth + px];
++            if (c->bits->argb) {
++                uint32_t a = c->bits->argb[dy * w + dx];
++                uint32_t al = a >> 24;
++
++                if (al == 255) {
++                    *dst = a & 0xffffff;
++                }
++                else if (al) {
++                    uint32_t d = *dst;
++                    uint32_t r = ((a >> 16) & 0xff) + ((d >> 16) & 0xff) * (255 - al) / 255;
++                    uint32_t g = ((a >> 8) & 0xff) + ((d >> 8) & 0xff) * (255 - al) / 255;
++                    uint32_t b = (a & 0xff) + (d & 0xff) * (255 - al) / 255;
++
++                    *dst = (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
++                }
++            }
++            else {
++                int stride = BitmapBytePad(w);
++                int bit = dx & 7;
++                const unsigned char *m = c->bits->mask + dy * stride + (dx >> 3);
++                const unsigned char *sbits = c->bits->source + dy * stride + (dx >> 3);
++
++                if ((*m >> bit) & 1)
++                    *dst = ((*sbits >> bit) & 1) ? fg : bg;
++            }
++        }
++    }
++}
++
+ /*
+  * Chroma-key composite of the planes into the visible framebuffer: an overlay
+  * pixel other than index 0 wins, otherwise the image plane shows through.
+@@ -541,11 +693,14 @@ xmfbComposite(vfbScreenInfoPtr pvfb)
+ 
+         out[i] = o ? pvfb->ovlRGB[o] : pvfb->img[i];
+     }
++    xmfbDrawCursor(pvfb);
+ }
+ 
+-/* this flushes any changes to the screens out to the mmapped file */
++static Bool xmfbHostActive;
++
++/* ~50 Hz: composite the planes and push the frame to the host window */
+ static void
+-vfbBlockHandler(void *blockData, void *timeout)
++xmfbBlockHandler(void *blockData, void *timeout)
+ {
+     int i;
+ 
+@@ -554,10 +709,24 @@ vfbBlockHandler(void *blockData, void *timeout)
+ 
+         if (now - vfbScreens[i].lastComposite >= 20) {
+             xmfbComposite(&vfbScreens[i]);
++            if (xmfbHostActive)
++                xmfbHostPresent();
+             vfbScreens[i].lastComposite = now;
+         }
+     }
+     AdjustWaitForDelay(timeout, 20);
++}
++
++static void
++xmfbWakeupHandler(void *blockData, int result)
++{
++}
++
++/* this flushes any changes to the screens out to the mmapped file */
++static void
++vfbBlockHandler(void *blockData, void *timeout)
++{
++    int i;
+ 
+     for (i = 0; i < vfbNumScreens; i++) {
+ #ifdef MS_ASYNC
+@@ -1055,7 +1224,7 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+     pScreen->InstallColormap = vfbInstallColormap;
+     pScreen->StoreColors = vfbStoreColors;
+ 
+-    miDCInitialize(pScreen, &vfbPointerCursorFuncs);
++    miPointerInitialize(pScreen, &xmfbSpriteFuncs, &vfbPointerCursorFuncs, TRUE);
+ 
+     vfbWriteXWDFileHeader(pScreen);
+ 
+@@ -1069,6 +1238,26 @@ vfbScreenInit(ScreenPtr pScreen, int argc, char **argv)
+     pvfb->closeScreen = pScreen->CloseScreen;
+     pScreen->CloseScreen = vfbCloseScreen;
+ 
++    {
++        static Bool handlers;
++
++        if (!handlers) {
++            handlers = TRUE;
++            RegisterBlockAndWakeupHandlers(xmfbBlockHandler, xmfbWakeupHandler, NULL);
++        }
++    }
++#ifdef HAS_SHM
++    if (xmfbHostDisplay && pScreen->myNum == 0) {
++        xmfbHostActive = xmfbHostOpen(xmfbHostDisplay, pvfb->width, pvfb->height,
++                                      pvfb->shmid,
++                                      (size_t) (pvfb->pfbMemory - (char *) pvfb->pXWDHeader),
++                                      xmfbHostTitle, xmfbHostOverride,
++                                      xmfbHostX, xmfbHostY);
++        if (!xmfbHostActive)
++            return FALSE;
++    }
++#endif
++
+     return ret;
+ 
+ }                               /* end vfbScreenInit */
+diff --git a/hw/xmfb/hostwin.c b/hw/xmfb/hostwin.c
+new file mode 100644
+index 0000000..654bb4e
+--- /dev/null
++++ b/hw/xmfb/hostwin.c
+@@ -0,0 +1,244 @@
++/*
++ * MFBX: nested-window output for Xmfb.  The composited framebuffer lives in
++ * SysV shared memory; a host X window shows it through MIT-SHM, and host
++ * keyboard and pointer events are queued into the server's input devices.
++ */
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include <stdlib.h>
++#include <string.h>
++#include <signal.h>
++#include <unistd.h>
++
++#include <xcb/xcb.h>
++#include <xcb/shm.h>
++#include <xcb/xproto.h>
++
++#include "os.h"
++#include "inputstr.h"
++#include "eventstr.h"
++#include "exevents.h"
++#include "xmfb.h"
++
++static xcb_connection_t *conn;
++static xcb_window_t win;
++static xcb_gcontext_t gc;
++static xcb_shm_seg_t seg;
++static int fb_w, fb_h;
++static uint32_t shm_offset;
++static DeviceIntPtr ptr_dev, kbd_dev;
++static xcb_atom_t wm_delete;
++
++void
++xmfbHostSetDevices(DeviceIntPtr p, DeviceIntPtr k)
++{
++    ptr_dev = p;
++    kbd_dev = k;
++}
++
++static xcb_atom_t
++intern(const char *name)
++{
++    xcb_intern_atom_reply_t *r =
++        xcb_intern_atom_reply(conn, xcb_intern_atom(conn, 0, strlen(name), name), NULL);
++    xcb_atom_t a = r ? r->atom : XCB_ATOM_NONE;
++
++    free(r);
++    return a;
++}
++
++static void
++queue_motion(int x, int y)
++{
++    ValuatorMask *mask;
++
++    if (!ptr_dev)
++        return;
++    mask = valuator_mask_new(2);
++    valuator_mask_set(mask, 0, x);
++    valuator_mask_set(mask, 1, y);
++    QueuePointerEvents(ptr_dev, MotionNotify, 0, POINTER_ABSOLUTE, mask);
++    valuator_mask_free(&mask);
++}
++
++static void
++queue_button(int type, int button)
++{
++    ValuatorMask *mask;
++
++    if (!ptr_dev)
++        return;
++    mask = valuator_mask_new(2);
++    QueuePointerEvents(ptr_dev, type, button, 0, mask);
++    valuator_mask_free(&mask);
++}
++
++static void
++host_events(int fd, int ready, void *data)
++{
++    xcb_generic_event_t *ev;
++
++    (void) fd; (void) ready; (void) data;
++    while ((ev = xcb_poll_for_event(conn))) {
++        if (ev->response_type == 0) {
++            xcb_generic_error_t *er = (xcb_generic_error_t *) ev;
++
++            ErrorF("Xmfb: host X error code %d major %d minor %d\n", er->error_code,
++                   er->major_code, er->minor_code);
++            free(ev);
++            continue;
++        }
++        switch (ev->response_type & 0x7f) {
++        case XCB_KEY_PRESS:
++        case XCB_KEY_RELEASE: {
++            xcb_key_press_event_t *k = (xcb_key_press_event_t *) ev;
++
++            if (kbd_dev)
++                QueueKeyboardEvents(kbd_dev,
++                                    (ev->response_type & 0x7f) == XCB_KEY_PRESS ?
++                                    KeyPress : KeyRelease, k->detail);
++            break;
++        }
++        case XCB_BUTTON_PRESS:
++        case XCB_BUTTON_RELEASE: {
++            xcb_button_press_event_t *b = (xcb_button_press_event_t *) ev;
++
++            queue_motion(b->event_x, b->event_y);
++            queue_button((ev->response_type & 0x7f) == XCB_BUTTON_PRESS ?
++                         ButtonPress : ButtonRelease, b->detail);
++            break;
++        }
++        case XCB_MOTION_NOTIFY: {
++            xcb_motion_notify_event_t *m = (xcb_motion_notify_event_t *) ev;
++
++            queue_motion(m->event_x, m->event_y);
++            break;
++        }
++        case XCB_ENTER_NOTIFY: {
++            xcb_enter_notify_event_t *e = (xcb_enter_notify_event_t *) ev;
++
++            queue_motion(e->event_x, e->event_y);
++            break;
++        }
++        case XCB_EXPOSE:
++            xmfbHostPresent();
++            break;
++        case XCB_CLIENT_MESSAGE: {
++            xcb_client_message_event_t *c = (xcb_client_message_event_t *) ev;
++
++            if (c->data.data32[0] == wm_delete)
++                kill(getpid(), SIGTERM);
++            break;
++        }
++        default:
++            break;
++        }
++        free(ev);
++    }
++    if (xcb_connection_has_error(conn))
++        kill(getpid(), SIGTERM);
++}
++
++Bool
++xmfbHostOpen(const char *display, int w, int h, int shmid, size_t offset,
++             const char *title, Bool override, int x, int y)
++{
++    xcb_screen_t *screen;
++    uint32_t values[3];
++    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK | XCB_CW_CURSOR;
++    xcb_pixmap_t blank;
++    xcb_cursor_t cursor;
++    int scr = 0;
++
++    conn = xcb_connect(display, &scr);
++    if (!conn || xcb_connection_has_error(conn)) {
++        ErrorF("Xmfb: cannot open host display %s\n", display ? display : "(default)");
++        return FALSE;
++    }
++    {
++        const xcb_setup_t *setup = xcb_get_setup(conn);
++        xcb_screen_iterator_t it = xcb_setup_roots_iterator(setup);
++
++        for (; it.rem && scr > 0; --scr)
++            xcb_screen_next(&it);
++        screen = it.data;
++    }
++
++    blank = xcb_generate_id(conn);
++    xcb_create_pixmap(conn, 1, blank, screen->root, 1, 1);
++    cursor = xcb_generate_id(conn);
++    xcb_create_cursor(conn, cursor, blank, blank, 0, 0, 0, 0, 0, 0, 0, 0);
++
++    win = xcb_generate_id(conn);
++    values[0] = screen->black_pixel;
++    values[1] = XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_KEY_RELEASE |
++                XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
++                XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_ENTER_WINDOW |
++                XCB_EVENT_MASK_EXPOSURE;
++    values[2] = cursor;
++    if (override) {
++        mask |= XCB_CW_OVERRIDE_REDIRECT;
++        /* values must be in mask-bit order: back pixel, override, events, cursor */
++        values[0] = screen->black_pixel;
++        {
++            uint32_t v[4] = { screen->black_pixel, 1, values[1], cursor };
++
++            xcb_create_window(conn, XCB_COPY_FROM_PARENT, win, screen->root, x, y,
++                              w, h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
++                              screen->root_visual, mask, v);
++        }
++    }
++    else {
++        xcb_create_window(conn, XCB_COPY_FROM_PARENT, win, screen->root, x, y,
++                          w, h, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
++                          screen->root_visual, mask, values);
++        xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win, XCB_ATOM_WM_NAME,
++                            XCB_ATOM_STRING, 8, strlen(title), title);
++        wm_delete = intern("WM_DELETE_WINDOW");
++        {
++            xcb_atom_t protocols = intern("WM_PROTOCOLS");
++
++            xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win, protocols,
++                                XCB_ATOM_ATOM, 32, 1, &wm_delete);
++        }
++        {
++            /* fixed size: min == max */
++            uint32_t hints[18] = { 0 };
++
++            hints[0] = (1 << 4) | (1 << 5);     /* PMinSize | PMaxSize */
++            hints[5] = w; hints[6] = h;         /* min */
++            hints[7] = w; hints[8] = h;         /* max */
++            xcb_change_property(conn, XCB_PROP_MODE_REPLACE, win,
++                                XCB_ATOM_WM_NORMAL_HINTS, XCB_ATOM_WM_SIZE_HINTS,
++                                32, 18, hints);
++        }
++    }
++
++    gc = xcb_generate_id(conn);
++    xcb_create_gc(conn, gc, win, 0, NULL);
++
++    seg = xcb_generate_id(conn);
++    xcb_shm_attach(conn, seg, shmid, 1);
++    fb_w = w;
++    fb_h = h;
++    shm_offset = (uint32_t) offset;
++
++    xcb_map_window(conn, win);
++    xcb_flush(conn);
++
++    SetNotifyFd(xcb_get_file_descriptor(conn), host_events, X_NOTIFY_READ, NULL);
++    return TRUE;
++}
++
++void
++xmfbHostPresent(void)
++{
++    if (!conn)
++        return;
++    xcb_shm_put_image(conn, win, gc, fb_w, fb_h, 0, 0, fb_w, fb_h, 0, 0, 24,
++                      XCB_IMAGE_FORMAT_Z_PIXMAP, 0, seg, shm_offset);
++    xcb_flush(conn);
++}
+diff --git a/hw/xmfb/meson.build b/hw/xmfb/meson.build
+index edf4ddc..21fd315 100644
+--- a/hw/xmfb/meson.build
++++ b/hw/xmfb/meson.build
+@@ -1,6 +1,7 @@
+ srcs = [
+     'InitInput.c',
+     'InitOutput.c',
++    'hostwin.c',
+     '../../mi/miinitext.c',
+     '../../mi/miinitext.h',
+ ]
+@@ -9,7 +10,7 @@ xmfb_server = executable(
+     'Xmfb',
+     srcs,
+     include_directories: inc,
+-    dependencies: common_dep,
++    dependencies: [common_dep, dependency('xcb'), dependency('xcb-shm')],
+     link_with: [
+         libxserver_main,
+         libxserver_fb,
+diff --git a/hw/xmfb/xmfb.h b/hw/xmfb/xmfb.h
+new file mode 100644
+index 0000000..c0801de
+--- /dev/null
++++ b/hw/xmfb/xmfb.h
+@@ -0,0 +1,11 @@
++#ifndef XMFB_H
++#define XMFB_H
++
++#include "inputstr.h"
++
++Bool xmfbHostOpen(const char *display, int w, int h, int shmid, size_t offset,
++                  const char *title, Bool override, int x, int y);
++void xmfbHostPresent(void);
++void xmfbHostSetDevices(DeviceIntPtr ptr, DeviceIntPtr kbd);
++
++#endif
+-- 
+2.56.0
+

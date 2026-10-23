@@ -46,8 +46,23 @@ PseudoColor with their own colormap and one transparent pixel value.
   maps a depth 24 window and a depth 8 PseudoColor window; read the composite
   from `DIR/Xvfb_screen0` (xwd format).
 
+- Nested window: `Xmfb :9 -screen 0 1280x1024x24 -host :0 [-host-title T]
+  [-host-pos X Y]`. Framebuffer in SysV shm shown through MIT-SHM at 50 Hz;
+  host keyboard (evdev keycodes) and pointer forwarded; cursor is composited
+  above every plane (a hardware-sprite stand-in), host cursor hidden.
+- Gotchas found: pointer axes must be absolute with range = screen size; the
+  stock software cursor is hidden by overlay windows, hence our own.
+
 ## Not done yet
-- Transparency test (overlay index 0 showing the image plane), popup/underlay
-  planes, SERVER_OVERLAY_VISUALS root property, GetImage on the root window
+- Transparency (needs layer-aware clipping in mi/mivaltree.c, see below),
+  popup/underlay planes, SERVER_OVERLAY_VISUALS root property, GetImage on the root window
   (crashed once in the release build, not reproduced under ASan), compositing
   on the GPU, nested-window output, running the IRIX session on it.
+
+## Why transparency needs a DIX patch
+`fbOverlay` follows the X window tree: where an overlay window covers an image
+window, the image window is clipped away and its bits are replaced by a key
+colour, so overlay pixel 0 would show black, not the image. SGI planes are
+separate: the image plane keeps its contents under the overlay. So windows in
+different layers must not clip each other (siblings and children), which means
+a layer hook in the clip computation (mi/mivaltree.c).
