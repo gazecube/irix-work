@@ -1,7 +1,7 @@
 From 2d2e2e91edfcc9557bea9bc470b1267482c3bbae Mon Sep 17 00:00:00 2001
 From: claude <noreply@anthropic.com>
 Date: Thu, 22 Oct 2026 19:31:18 -0700
-Subject: [PATCH 11/11] MFBX: GC depth relaxed between plane depths on layered
+Subject: [PATCH 11/12] MFBX: GC depth relaxed between plane depths on layered
  screens (Motif overlay menus draw), stale plane pixels cleared when no window
  of the plane covers them
 

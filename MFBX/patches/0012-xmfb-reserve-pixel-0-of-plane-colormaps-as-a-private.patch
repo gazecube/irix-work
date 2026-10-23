@@ -1,0 +1,32 @@
+From 09a1d420240a6ad79930bbb9ae16084428cbbc9e Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:34:23 -0700
+Subject: [PATCH 12/12] xmfb: reserve pixel 0 of plane colormaps as a private
+ cell (black text must not allocate the transparent pixel)
+
+---
+ hw/xmfb/InitOutput.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/hw/xmfb/InitOutput.c b/hw/xmfb/InitOutput.c
+index 213cc10..979bd0a 100644
+--- a/hw/xmfb/InitOutput.c
++++ b/hw/xmfb/InitOutput.c
+@@ -476,10 +476,11 @@ xmfbCreateColormap(ColormapPtr pmap)
+     Bool ok = xmfbOldCreateColormap ? xmfbOldCreateColormap(pmap) : TRUE;
+ 
+     if (ok && xmfbMapLayer(pmap) >= 0) {
+-        CARD16 r = 0, g = 0, b = 0;
+-        Pixel pix = 0;
++        /* a private cell: never shared, so a client that asks for black gets
++           another pixel, not the transparent one */
++        Pixel pix = 0, mask = 0;
+ 
+-        (void) AllocColor(pmap, &r, &g, &b, &pix, 0);
++        (void) AllocColorCells(serverClient->index, pmap, 1, 0, FALSE, &pix, &mask);
+     }
+     return ok;
+ }
+-- 
+2.56.0
+
