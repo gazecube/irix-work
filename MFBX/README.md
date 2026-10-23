@@ -1,10 +1,10 @@
-# MFBX — multi-framebuffer X
+# MFBX - multi-framebuffer X
 
 A fork of X.org's xserver with SGI-style overlay/popup/underlay planes built in,
 so the IRIX desktop (4Dwm, Motif, IRIS GL apps) sees real
 `SERVER_OVERLAY_VISUALS` instead of per-app shape/window workarounds.
 
-- `xserver/` — shallow clone of xorg-server tag `xorg-server-21.1.25` (what Arch
+- `xserver/` - shallow clone of xorg-server tag `xorg-server-21.1.25` (what Arch
   ships). Not tracked by this repo (see .gitignore); recreate with
   `git clone --depth 1 --branch xorg-server-21.1.25 https://gitlab.freedesktop.org/xorg/xserver.git MFBX/xserver`.
   Our changes live on a branch inside that clone and are exported as patches into
@@ -13,7 +13,7 @@ so the IRIX desktop (4Dwm, Motif, IRIS GL apps) sees real
 ## What the tree already has
 `fb/fboverlay.c` + `fboverlay.h` (`fbOverlay*`): a two-layer framebuffer (up to
 `FB_OVERLAY_MAX` = 2) with per-layer visuals/colormaps and a transparent key.
-Nothing in-tree uses it any more — no driver scans out two layers.
+Nothing in-tree uses it any more - no driver scans out two layers.
 
 ## Plan
 1. Phase 1: virtual driver (dummy-style) on `fbOverlay`, nested window output.
