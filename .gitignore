@@ -31,3 +31,4 @@ irix-re/kernel/modules.order
 *.log
 /out=*
 /desktop-integration/irix-bin/
+/MFBX/xserver/
