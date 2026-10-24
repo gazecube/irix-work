@@ -183,6 +183,7 @@ static void do_csi(unsigned char final)
     case 'B': cy += n; break;
     case 'C': cx += n; break;
     case 'D': cx -= n; break;
+    case 'G': { int column = csi_arg(0, 1); cx = (column > 1 ? column : 1) - 1; break; }
     case 's': saved_cx=cx; saved_cy=cy; break;
     case 'u': cx=saved_cx; cy=saved_cy; break;
     case 'r': scroll_top=csi_arg(0,1)-1; scroll_bottom=csi_arg(1,rows)-1; if(scroll_top<0)scroll_top=0; if(scroll_bottom>=rows)scroll_bottom=rows-1; cx=0;cy=scroll_top; break;
