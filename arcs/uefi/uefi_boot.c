@@ -1,6 +1,8 @@
 #include <Uefi.h>
+#include <Library/BaseLib.h>
 #include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/LoadedImage.h>
@@ -17,6 +19,10 @@
  */
 
 static EFI_HANDLE ArcsImageHandle;
+
+extern char *getenv(const char *Name);
+extern int setenv(char *Name, char *Value);
+
 
 /* UEFI machine glue: make sure driver/controller trees have been started
  * before looking for boot filesystems.  Interactive input bringup also does
@@ -177,6 +183,32 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
     if (EFI_ERROR(Status))
         return Status;
 
+    /*
+     * The ARCS OSLoadOptions variable is the boot option string.  Hand it to
+     * the child as its EFI load options; for a Linux EFI-stub kernel this is
+     * the kernel command line.
+     */
+    {
+        EFI_LOADED_IMAGE_PROTOCOL *Child = NULL;
+        char *Opts = getenv("OSLoadOptions");
+
+        if (Opts && *Opts &&
+            !EFI_ERROR(gBS->HandleProtocol(ChildImage, &gEfiLoadedImageProtocolGuid,
+                                           (VOID **)&Child)) && Child) {
+            UINTN Len = AsciiStrLen(Opts);
+            CHAR16 *Wide = AllocateZeroPool((Len + 1) * sizeof(CHAR16));
+
+            if (Wide) {
+                UINTN K;
+
+                for (K = 0; K < Len; K++)
+                    Wide[K] = (CHAR16)(UINT8)Opts[K];
+                Child->LoadOptions = Wide;
+                Child->LoadOptionsSize = (UINT32)((Len + 1) * sizeof(CHAR16));
+            }
+        }
+    }
+
     Status = gBS->StartImage(ChildImage, NULL, NULL);
 
     RestoreStatus = EFI_SUCCESS;
@@ -305,4 +337,51 @@ ArcsUefiBootDefault(void)
     Status = ArcsStartDevicePath(DevicePath);
     FreePool(DevicePath);
     return Status;
+}
+
+/*
+ * Persistent ARCS environment.  A real PROM keeps variables in NVRAM; here
+ * NAME=value lines in \EFI\ARCS\arcs.env on the ESP the PROM was loaded
+ * from override the compiled-in defaults.  '#' starts a comment.
+ */
+void
+ArcsUefiLoadEnvFile(void)
+{
+    EFI_LOADED_IMAGE_PROTOCOL *Img = NULL;
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
+    EFI_FILE_PROTOCOL *Root = NULL, *File = NULL;
+    UINTN Size = 4095, I, Start;
+    char *Buf;
+
+    if (!ArcsImageHandle ||
+        EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
+                                      (VOID **)&Img)) || !Img ||
+        EFI_ERROR(gBS->HandleProtocol(Img->DeviceHandle, &gEfiSimpleFileSystemProtocolGuid,
+                                      (VOID **)&Fs)) || !Fs ||
+        EFI_ERROR(Fs->OpenVolume(Fs, &Root)) ||
+        EFI_ERROR(Root->Open(Root, &File, L"\\EFI\\ARCS\\arcs.env",
+                             EFI_FILE_MODE_READ, 0)))
+        return;
+
+    Buf = AllocateZeroPool(Size + 1);
+    if (Buf && !EFI_ERROR(File->Read(File, &Size, Buf))) {
+        Buf[Size] = 0;
+        for (I = 0, Start = 0; I <= Size; I++) {
+            if (Buf[I] == '\n' || Buf[I] == '\r' || Buf[I] == 0) {
+                char *Eq;
+
+                Buf[I] = 0;
+                if (Buf[Start] && Buf[Start] != '#' &&
+                    (Eq = AsciiStrStr(Buf + Start, "=")) != NULL) {
+                    *Eq = 0;
+                    (void)setenv(Buf + Start, Eq + 1);
+                }
+                Start = I + 1;
+            }
+        }
+    }
+    if (Buf)
+        FreePool(Buf);
+    File->Close(File);
+    Root->Close(Root);
 }

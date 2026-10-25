@@ -4,6 +4,7 @@
 #include <Uefi.h>
 
 void ArcsUefiBootInit(EFI_HANDLE ImageHandle);
+void ArcsUefiLoadEnvFile(void);
 EFI_STATUS ArcsUefiBootDefault(void);
 EFI_STATUS ArcsUefiBootArcsPath(const char *Bootfile);
 

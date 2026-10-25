@@ -1,3 +1,4 @@
+#include "uefi_boot.h"
 #include <Uefi.h>
 #include <Library/MemoryAllocationLib.h>
 
@@ -145,11 +146,12 @@ ArcsCompatInitEnv(void)
     new_str2("AutoLoad", "Y", &environ_str);
     new_str2("SystemPartition",
              "scsi(0)disk(1)rdisk(0)partition(1)", &environ_str);
-    new_str2("OSLoader", "EFI/FreeBSD/loader.efi", &environ_str);
+    new_str2("OSLoader", "EFI/gentoo/bzImage.efi", &environ_str);
     new_str2("OSLoadOptions", "auto", &environ_str);
     new_str2("kernname", "", &environ_str);
     environ = environ_str.strptrs;
     ArcsEnvInitialized = 1;
+    ArcsUefiLoadEnvFile();
 }
 
 char *
