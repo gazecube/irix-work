@@ -23,6 +23,12 @@
  * width of PROM addresses.  X64 has the pointer/long widths of the SGI
  * ABI64 build used by that code path.
  */
+/* X64 has 64-bit machine registers: select the MIPS3/4 (64-bit machreg_t)
+ * branch of the original <sys/types.h>. */
+#ifndef _MIPS_ISA
+#define _MIPS_ISA              _MIPS_ISA_MIPS4
+#endif
+
 #ifndef _MIPS_SIM
 #define _MIPS_SIM              _MIPS_SIM_ABI64
 #endif

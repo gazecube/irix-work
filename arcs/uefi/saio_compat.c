@@ -51,27 +51,27 @@ isgraphic(ULONG fd)
     return arg;
 }
 
-/*
- * env_cmd.c uses the original ARCS Open()/Close() interface only to reopen
- * serial(0)/serial(1) after dbaud/rbaud changes.  Native UEFI serial-device
- * plumbing is not part of the current console implementation, so report the
- * original ARCS ENODEV result rather than inventing a descriptor.  This keeps
- * the pristine command path intact and makes those optional reopen blocks
- * simply not execute until the serial backend is ported.
- */
+extern LONG ArcsOpen(CHAR *, OPENMODE, ULONG *);
+extern LONG ArcsClose(ULONG);
+
+/* Console descriptors are native; everything else is the original ARCS
+ * Open/Close in libsk (arcsio.c) over the registered device components. */
 LONG
 Open(CHAR *Path, OPENMODE Mode, ULONG *FileId)
 {
-    (void)Path;
-    (void)Mode;
-    if (FileId)
-        *FileId = 0;
-    return ENODEV;
+    return ArcsOpen(Path, Mode, FileId);
 }
 
 LONG
 Close(ULONG FileId)
 {
-    (void)FileId;
-    return ESUCCESS;
+    if (FileId <= StandardOut)
+        return ESUCCESS;
+    return ArcsClose(FileId);
+}
+
+/* MIPS write-buffer flush: x86 has strongly ordered stores for this use. */
+void
+wbflush(void)
+{
 }

@@ -8,6 +8,9 @@
 #include "prom_startup.h"
 #include "uefi_boot.h"
 
+extern int ArcsUefiDiskInit(void);
+extern void ArcsUefiDiskSelfTest(void);
+
 EFI_STATUS
 EFIAPI
 UefiMain(
@@ -19,6 +22,8 @@ UefiMain(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop;
 
     ArcsUefiBootInit(ImageHandle);
+    ArcsUefiDiskInit();
+    ArcsUefiDiskSelfTest();
     ArcsPromAutobootInit(SystemTable);
 
     Gop = NULL;

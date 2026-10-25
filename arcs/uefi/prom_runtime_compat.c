@@ -60,10 +60,16 @@ ArcsKeyToByte(const EFI_INPUT_KEY *Key, unsigned char *Byte)
     return 0;
 }
 
+extern LONG ArcsRead(ULONG, void *, ULONG, ULONG *);
+extern LONG ArcsWrite(ULONG, void *, ULONG, ULONG *);
+
 LONG
 Read(ULONG FileId, void *Buffer, ULONG Count, ULONG *ReadCount)
 {
     EFI_INPUT_KEY Key;
+
+    if (FileId > StandardOut)
+        return ArcsRead(FileId, Buffer, Count, ReadCount);
     unsigned char *Out = (unsigned char *)Buffer;
     ULONG Done = 0;
 
@@ -106,6 +112,8 @@ Read(ULONG FileId, void *Buffer, ULONG Count, ULONG *ReadCount)
 LONG
 Write(ULONG FileId, void *Buffer, ULONG Count, ULONG *WriteCount)
 {
+    if (FileId > StandardOut)
+        return ArcsWrite(FileId, Buffer, Count, WriteCount);
     if (WriteCount)
         *WriteCount = 0;
     if (FileId != StandardOut || !Buffer)

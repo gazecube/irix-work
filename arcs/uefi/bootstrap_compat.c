@@ -132,21 +132,7 @@ strncasecmp(const char *A, const char *B, size_t Count)
     return 0;
 }
 
-char *
-strncpy(char *Dest, const char *Source, size_t Count)
-{
-    char *Ret = Dest;
-
-    while (Count && *Source) {
-        *Dest++ = *Source++;
-        --Count;
-    }
-    while (Count) {
-        *Dest++ = '\0';
-        --Count;
-    }
-    return Ret;
-}
+/* strncpy now comes from the original libsc strnstuff.c. */
 
 static void
 ArcsCompatInitEnv(void)

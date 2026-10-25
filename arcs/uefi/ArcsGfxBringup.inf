@@ -38,6 +38,19 @@
   ../sgisrc/stand/arcs/lib/libsc/cmd/misc_cmd.c
   ../sgisrc/stand/arcs/lib/libsc/cmd/env_cmd.c
   ../sgisrc/stand/arcs/lib/libsk/graphics/htport.c
+  ../sgisrc/stand/arcs/lib/libsk/lib/config.c
+  ../sgisrc/stand/arcs/lib/libsk/lib/parse.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/atob.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/large.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/strnstuff.c
+  ../sgisrc/stand/arcs/lib/libsc/lib/gpdata.c
+  ../sgisrc/stand/arcs/lib/libsk/io/null.c
+  ../sgisrc/stand/arcs/lib/libsk/io/mem.c
+  arcsio_wrap.c
+  uefi_eiob.c
+  uefi_disk.c
+  ../sgisrc/stand/arcs/lib/libsk/fs/fs.c
+  ../sgisrc/stand/arcs/lib/libsk/fs/dvh.c
   ../sgisrc/libsc/gui/core.c
   ../sgisrc/libsc/gui/background.c
   ../sgisrc/libsc/gui/button.c
@@ -56,6 +69,7 @@
   BaseMemoryLib
   DevicePathLib
   MemoryAllocationLib
+  PrintLib
   UefiBootServicesTableLib
   UefiApplicationEntryPoint
 
@@ -66,6 +80,7 @@
   gEfiDevicePathProtocolGuid
   gEfiLoadedImageProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
+  gEfiBlockIoProtocolGuid
   gEfiUsbIoProtocolGuid
 
 [BuildOptions]

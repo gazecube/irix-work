@@ -10,7 +10,19 @@
  * the platform boundary.
  */
 typedef struct {
+    LONG Signature;
+    ULONG Length;
+    USHORT Version;
+    USHORT Revision;
+    LONG *RestartBlock;
     LONG *DebugBlock;
+    LONG *GEVector;
+    LONG *UTLBMissVector;
+    ULONG TVLength;
+    void *TransferVector;
+    ULONG PTVLength;
+    LONG *PrivateVector;
+    LONG AdapterCount;
 } SystemParameterBlock;
 typedef SystemParameterBlock spb_t;
 
