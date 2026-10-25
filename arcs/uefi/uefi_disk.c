@@ -23,6 +23,7 @@
 #include <arcs/cfgtree.h>
 #include <arcs/errno.h>
 #include <sys/dvh.h>
+#include <sys/dkio.h>
 #include <standcfg.h>
 #include <libsc.h>
 #include <libsk.h>
@@ -33,6 +34,10 @@
 
 static EFI_BLOCK_IO_PROTOCOL *ArcsDisk[ARCS_UEFI_MAXDISK];
 static int ArcsDiskCount;
+
+/* Filesystems linked into the PROM, searched in registration order. */
+extern int dvh_install(void);
+int (*_fs_table[])(void) = { dvh_install, NULL };
 
 /* config.c expects the platform to provide the tree root and the (here
  * empty) standcfg table. */
@@ -128,6 +133,50 @@ ArcsDiskPartition(EFI_BLOCK_IO_PROTOCOL *Bio, int Part,
     return (*Blocks == 0) ? -1 : 0;
 }
 
+/*
+ * Read sector 0 and convert the big-endian on-disk volume header to host
+ * order, as the IRIX disk driver hands it to the dvh filesystem (DIOCGETVH).
+ * Only the fields dvh.c and the partition code use are converted.
+ */
+static int
+ArcsDiskReadVh(EFI_BLOCK_IO_PROTOCOL *Bio, struct volume_header *Vh)
+{
+    unsigned char *Sec;
+    EFI_STATUS St;
+    int k;
+
+    if (Bio->Media->BlockSize != BLKSIZE)
+        return -1;
+    Sec = AllocatePool(BLKSIZE);
+    if (!Sec)
+        return -1;
+    St = Bio->ReadBlocks(Bio, Bio->Media->MediaId, 0, BLKSIZE, Sec);
+    if (EFI_ERROR(St) || be32(Sec + __builtin_offsetof(struct volume_header, vh_magic)) != VHMAGIC) {
+        FreePool(Sec);
+        return -1;
+    }
+    CopyMem(Vh, Sec, sizeof(*Vh));
+    Vh->vh_magic = be32(Sec + __builtin_offsetof(struct volume_header, vh_magic));
+    Vh->vh_rootpt = (short)((Sec[4] << 8) | Sec[5]);
+    Vh->vh_swappt = (short)((Sec[6] << 8) | Sec[7]);
+    Vh->vh_csum = be32(Sec + __builtin_offsetof(struct volume_header, vh_csum));
+    for (k = 0; k < NVDIR; k++) {
+        const unsigned char *Q = Sec + __builtin_offsetof(struct volume_header, vh_vd) +
+                                 k * sizeof(struct volume_directory);
+        Vh->vh_vd[k].vd_lbn = be32(Q + __builtin_offsetof(struct volume_directory, vd_lbn));
+        Vh->vh_vd[k].vd_nbytes = be32(Q + __builtin_offsetof(struct volume_directory, vd_nbytes));
+    }
+    for (k = 0; k < NPARTAB; k++) {
+        const unsigned char *Q = Sec + __builtin_offsetof(struct volume_header, vh_pt) +
+                                 k * sizeof(struct partition_table);
+        Vh->vh_pt[k].pt_nblks = be32(Q + __builtin_offsetof(struct partition_table, pt_nblks));
+        Vh->vh_pt[k].pt_firstlbn = be32(Q + __builtin_offsetof(struct partition_table, pt_firstlbn));
+        Vh->vh_pt[k].pt_type = be32(Q + __builtin_offsetof(struct partition_table, pt_type));
+    }
+    FreePool(Sec);
+    return 0;
+}
+
 /* Per-open state kept in iob->DevPtr. */
 struct ArcsDiskOpen {
     EFI_BLOCK_IO_PROTOCOL *Bio;
@@ -197,6 +246,23 @@ ArcsUefiDiskStrat(COMPONENT *Self, IOBLOCK *Iob)
     case FC_GETREADSTATUS:
         return ESUCCESS;
 
+    case FC_IOCTL:
+        D = (struct ArcsDiskOpen *)Iob->DevPtr;
+        if (!D)
+            return Iob->ErrorNumber = EINVAL;
+        switch ((unsigned long)Iob->IoctlCmd) {
+        case DIOCSETBLKSZ:
+            /* ARCS block I/O is fixed at BLKSIZE (512) here. */
+            return (D->Bio->Media->BlockSize == BLKSIZE) ? ESUCCESS
+                                                          : (Iob->ErrorNumber = EIO);
+        case DIOCGETVH:
+            if (ArcsDiskReadVh(D->Bio, (struct volume_header *)Iob->IoctlArg))
+                return Iob->ErrorNumber = EIO;
+            return ESUCCESS;
+        default:
+            return Iob->ErrorNumber = EINVAL;
+        }
+
     default:
         return Iob->ErrorNumber = EINVAL;
     }
@@ -214,6 +280,7 @@ ArcsUefiDiskInit(void)
     COMPONENT *Root, *Adap, *Ctlr, *Peri;
     COMPONENT T;
 
+    fs_init();
     init_cfgtree();
     Root = (COMPONENT *)ArcsRoot;
     if (!Root)
@@ -309,6 +376,20 @@ ArcsUefiDiskSelfTest(void)
     int d, i;
 
     ArcsDiskLogHex(L"disks found", (unsigned long long)ArcsDiskCount);
+    for (d = 0; d < ArcsDiskCount; d++) {
+        AsciiSPrint(Path, sizeof(Path), "scsi(0)disk(%d)rdisk(0)partition(8)hello", d);
+        Rc = Open(Path, OpenReadOnly, &Fd);
+        ArcsDiskLogHex(L"vh file open rc", (unsigned long long)(long long)Rc);
+        if (Rc == ESUCCESS) {
+            Got = 0;
+            Rc = Read(Fd, Buf, 16, &Got);
+            ArcsDiskLogHex(L"  read rc", (unsigned long long)(long long)Rc);
+            ArcsDiskLogHex(L"  bytes", Got);
+            Buf[15] = 0;
+            ArcsDiskLogHex(L"  text0", ((unsigned long long)Buf[0] << 24) | (Buf[1] << 16) | (Buf[2] << 8) | Buf[3]);
+            Close(Fd);
+        }
+    }
     for (d = 0; d < ArcsDiskCount; d++) {
         ArcsDiskLogHex(L"disk", (unsigned long long)d);
         ArcsDiskLogHex(L"  blocks", (unsigned long long)ArcsDisk[d]->Media->LastBlock + 1);

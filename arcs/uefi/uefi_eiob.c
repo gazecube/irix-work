@@ -54,3 +54,28 @@ void
 _scandevs(void)
 {
 }
+
+/*
+ * Block I/O buffers for filesystem drivers (saio.c _get_iobbuf).  Sized
+ * BLKSIZE*2 as in the original; the PROM heap stands in for the MIPS DMA
+ * buffer pool.
+ */
+char *
+_get_iobbuf(void)
+{
+    char *cp = (char *)malloc(BLKSIZE * 2);
+
+    if (cp)
+        return cp;
+    panic("out of io buffers");
+    return NULL;
+}
+
+void
+_free_iobbuf(char *cp)
+{
+    free(cp);
+}
+
+/* libsk debug level flag (libsk/lib/skutils.c on the original). */
+int Debug;
