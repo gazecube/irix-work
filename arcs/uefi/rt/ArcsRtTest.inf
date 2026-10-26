@@ -1,0 +1,28 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = ArcsRtTest
+  FILE_GUID                      = 69ac3536-d23e-475c-968f-714d82429465
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = ArcsRtTestMain
+
+[Sources]
+  ArcsRtTest.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArcsPkg/ArcsPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DevicePathLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadedImageProtocolGuid
+
+[BuildOptions]
+  GCC:*_*_*_CC_FLAGS = -std=gnu99 -fpermissive -Wno-error

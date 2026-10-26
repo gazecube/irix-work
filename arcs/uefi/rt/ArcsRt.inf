@@ -1,0 +1,32 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = ArcsRt
+  FILE_GUID                      = 12ad85e2-9536-4d18-bd7c-c7c7eb775ff8
+  MODULE_TYPE                    = DXE_RUNTIME_DRIVER
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = ArcsRtEntry
+
+[Sources]
+  ArcsRt.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArcsPkg/ArcsPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeLib
+  DxeServicesTableLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
+  gEfiLoadedImageProtocolGuid
+
+[Depex]
+  TRUE
+
+[BuildOptions]
+  GCC:*_*_*_CC_FLAGS = -std=gnu99 -fpermissive -Wno-error -D_STANDALONE -D_LANGUAGE_C -DLANGUAGE_C
