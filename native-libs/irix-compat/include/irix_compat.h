@@ -36,6 +36,43 @@ const char *const *irix_errlist(void);
 #define sys_nerr	133
 #define sys_errlist	(irix_errlist())
 
+#ifndef _PATH_ISSUE
+#define _PATH_ISSUE	"/etc/issue"		/* IRIX <paths.h> */
+#endif
+#ifndef _PATH_SCHEME
+#define _PATH_SCHEME	"/usr/lib/iaf/scheme"	/* IRIX <paths.h> */
+#endif
+#ifndef CDEL
+#define CDEL		0377			/* IRIX <sys/termios.h> */
+#endif
+
+/*
+ * SVR4 libc: after fclose(stdout), fdopen(1, ...) reattaches the standard
+ * stream (getty relies on it).  glibc leaves a closed stream dead, but
+ * stdin/stdout/stderr are assignable, so rebind them to the new FILE.
+ */
+static inline FILE *irix_fdopen(int fd, const char *mode)
+{
+	FILE *f = fdopen(fd, mode);
+
+	if (f && fd == 0)
+		stdin = f;
+	else if (f && fd == 1)
+		stdout = f;
+	else if (f && fd == 2)
+		stderr = f;
+	return f;
+}
+#define fdopen irix_fdopen
+
+/* syslog() also appends to $IRIX_SYSLOG_FILE when set (debugging aid). */
+#include <syslog.h>
+void irix_syslog(int, const char *, ...);
+#define syslog irix_syslog
+
+long sginap(long);		/* IRIX: sleep in clock ticks (100/s); 0 yields */
+int getdtablehi(void);		/* IRIX: highest possibly open descriptor + 1 */
+
 #ifndef MNTMAXSTR
 #define MNTMAXSTR	128		/* IRIX <mntent.h> */
 #endif

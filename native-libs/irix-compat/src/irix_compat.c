@@ -35,6 +35,13 @@
 #include <pfmt.h>
 #include <sat.h>
 #include <sys/syssgi.h>
+#include <dirent.h>
+#include <syslog.h>
+#include <sched.h>
+#include <time.h>
+#include <stdarg.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 #include <sys/systeminfo.h>
 
 /* ---- capabilities ---------------------------------------------------- */
@@ -102,6 +109,11 @@ static int last_cap(void)
 	return last;
 }
 
+/* A few IRIX capabilities cover more than one Linux capability. */
+static const struct { int bit, extra; } lin_extra[] = {
+	{ 37, 26 },	/* DEVICE_MGT also covers vhangup() and tty setup: SYS_TTY_CONFIG */
+};
+
 static int mapped(int bit)
 {
 	if (bit < 1 || bit > CAP_MAX_ID || !(lin[bit] || bit == 1))
@@ -117,6 +129,10 @@ static uint64_t to_linux(uint64_t m)
 	for (b = 1; b <= CAP_MAX_ID; b++)
 		if ((m >> b & 1) && mapped(b))
 			r |= 1ULL << lin[b];
+	for (b = 0; b < (int)(sizeof(lin_extra) / sizeof(lin_extra[0])); b++)
+		if ((m >> lin_extra[b].bit & 1) && mapped(lin_extra[b].bit) &&
+		    lin_extra[b].extra <= last_cap())
+			r |= 1ULL << lin_extra[b].extra;
 	return r;
 }
 
@@ -155,9 +171,17 @@ static int lset(uint64_t e, uint64_t p, uint64_t i)
 	return syscall(SYS_capset, &h, d);
 }
 
+/* A cap_t from cap_get_proc() also remembers the exact Linux sets so that
+ * cap_surrender() restores capabilities that have no IRIX bit. */
+struct cap_priv {
+	struct cap_set pub;
+	int exact;
+	uint64_t le;
+};
+
 cap_t cap_init(void)
 {
-	return calloc(1, sizeof(struct cap_set));
+	return calloc(1, sizeof(struct cap_priv));
 }
 
 int cap_free(void *p)
@@ -171,7 +195,7 @@ cap_t cap_dup(cap_t c)
 	cap_t n = cap_init();
 
 	if (n && c)
-		*n = *c;
+		*(struct cap_priv *)n = *(struct cap_priv *)c;
 	return n;
 }
 
@@ -180,8 +204,13 @@ cap_t cap_get_proc(void)
 	uint64_t e, p, i;
 	cap_t c;
 
-	if (lget(&e, &p, &i) < 0 || !(c = cap_init()))
+	struct cap_priv *pr;
+
+	if (lget(&e, &p, &i) < 0 || !(pr = calloc(1, sizeof(*pr))))
 		return NULL;
+	pr->exact = 1;
+	pr->le = e;
+	c = &pr->pub;
 	c->cap_effective = to_irix(e);
 	c->cap_permitted = to_irix(p);
 	c->cap_inheritable = to_irix(i);
@@ -232,8 +261,11 @@ int cap_surrender(cap_t old)
 
 	if (!old)
 		return 0;
-	if (lget(&e, &p, &i) == 0)
-		lset(to_linux(old->cap_effective) & p, p, i);
+	if (lget(&e, &p, &i) == 0) {
+		struct cap_priv *pr = (struct cap_priv *)old;
+
+		lset((pr->exact ? pr->le : to_linux(old->cap_effective)) & p, p, i);
+	}
 	free(old);
 	return 0;
 }
@@ -536,6 +568,138 @@ long irix_syssgi(int cmd, ...)
 	}
 	va_end(ap);
 	return r;
+}
+
+/* ---- termio over termios --------------------------------------------- */
+
+/* the IRIX struct termio, redeclared here because termio.h redirects ioctl */
+struct itermio {
+	unsigned int c_iflag, c_oflag, c_cflag, c_lflag, c_ospeed, c_ispeed;
+	char c_line;
+	unsigned char c_cc[23];
+};
+#define LDSETT_REQ	(('D' << 8) | 1)
+#define LDGETT_REQ	(('D' << 8) | 0)
+
+int irix_ioctl(int fd, unsigned long req, ...)
+{
+	va_list ap;
+	void *arg;
+	int r;
+
+	va_start(ap, req);
+	arg = va_arg(ap, void *);
+	va_end(ap);
+
+	if (req == LDSETT_REQ || req == LDGETT_REQ)
+		return 0;
+	if (req == TCGETA) {
+		struct itermio *t = arg;
+		struct termios k;
+
+		if (tcgetattr(fd, &k) < 0)
+			return -1;
+		memset(t, 0, sizeof(*t));
+		t->c_iflag = k.c_iflag;
+		t->c_oflag = k.c_oflag;
+		t->c_cflag = k.c_cflag;
+		t->c_lflag = k.c_lflag;
+		t->c_ospeed = cfgetospeed(&k);
+		t->c_ispeed = cfgetispeed(&k);
+		t->c_cc[0] = k.c_cc[VINTR];
+		t->c_cc[1] = k.c_cc[VQUIT];
+		t->c_cc[2] = k.c_cc[VERASE];
+		t->c_cc[3] = k.c_cc[VKILL];
+		t->c_cc[4] = k.c_cc[VEOF];
+		t->c_cc[5] = k.c_cc[VEOL];
+		return 0;
+	}
+	if (req == TCSETA || req == TCSETAW || req == TCSETAF) {
+		struct itermio *t = arg;
+		struct termios k;
+
+		if (tcgetattr(fd, &k) < 0)
+			return -1;
+		k.c_iflag = t->c_iflag;
+		k.c_oflag = t->c_oflag;
+		k.c_cflag = t->c_cflag & ~CBAUD;
+		k.c_lflag = t->c_lflag;
+		k.c_cc[VINTR] = t->c_cc[0];
+		k.c_cc[VQUIT] = t->c_cc[1];
+		k.c_cc[VERASE] = t->c_cc[2];
+		k.c_cc[VKILL] = t->c_cc[3];
+		k.c_cc[VEOF] = t->c_cc[4];
+		k.c_cc[VMIN] = t->c_cc[4];
+		k.c_cc[VEOL] = t->c_cc[5];
+		k.c_cc[VTIME] = t->c_cc[5];
+		cfsetospeed(&k, t->c_ospeed ? t->c_ospeed : (t->c_cflag & CBAUD));
+		cfsetispeed(&k, t->c_ospeed ? t->c_ospeed : (t->c_cflag & CBAUD));
+		r = tcsetattr(fd, req == TCSETA ? TCSANOW : req == TCSETAW ? TCSADRAIN : TCSAFLUSH, &k);
+		return r;
+	}
+	return ioctl(fd, req, arg);
+}
+
+/* ---- syslog debugging aid ----------------------------------------------- */
+
+void irix_syslog(int prio, const char *fmt, ...)
+{
+	va_list ap;
+	const char *path = getenv("IRIX_SYSLOG_FILE");
+
+	va_start(ap, fmt);
+	if (path) {
+		FILE *f = fopen(path, "a");
+
+		if (f) {
+			va_list ap2;
+
+			va_copy(ap2, ap);
+			fprintf(f, "[%d] ", prio);
+			vfprintf(f, fmt, ap2);
+			fputc('\n', f);
+			fclose(f);
+			va_end(ap2);
+		}
+	}
+	vsyslog(prio, fmt, ap);
+	va_end(ap);
+}
+
+/* ---- sginap, getdtablehi ------------------------------------------------ */
+
+long sginap(long ticks)
+{
+	struct timespec ts;
+
+	if (ticks <= 0)
+		return sched_yield();
+	ts.tv_sec = ticks / 100;
+	ts.tv_nsec = (ticks % 100) * 10000000L;
+	nanosleep(&ts, NULL);
+	return 0;
+}
+
+int getdtablehi(void)
+{
+	DIR *d = opendir("/proc/self/fd");
+	struct dirent *e;
+	int hi = 0, dfd;
+
+	if (!d) {
+		int n = getdtablesize();
+
+		return n > 65536 ? 65536 : n;
+	}
+	dfd = dirfd(d);
+	while ((e = readdir(d))) {
+		int fd = atoi(e->d_name);
+
+		if (e->d_name[0] != '.' && fd != dfd && fd + 1 > hi)
+			hi = fd + 1;
+	}
+	closedir(d);
+	return hi;
 }
 
 /* ---- sysinfo, sysconf -------------------------------------------------- */

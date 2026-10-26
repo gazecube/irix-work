@@ -11,7 +11,9 @@ SRCS_devnm     = src/devnm.c
 SRCS_uadmin    = $(SRC)/eoe/cmd/uadmin/uadmin.c
 SRCS_suattr    = $(SRC)/eoe/cmd/suattr/suattr.c
 SRCS_nvram     = $(SRC)/eoe/cmd/nvram/nvram.c
-PROGS = chkconfig setmnt devnm uadmin suattr nvram
+SRCS_getty     = $(SRC)/eoe/cmd/getty/getty.c
+CFLAGS_getty   = -I$(SRC)/eoe/cmd/getty
+PROGS = chkconfig setmnt devnm uadmin suattr nvram getty
 
 all: $(addprefix $(OUT)/,$(PROGS))
 
@@ -20,7 +22,7 @@ $(OUT)/libirixcompat.a: src/irix_compat.c | $(OUT)
 	ar rcs $@ $(OUT)/irix_compat.o
 
 $(OUT)/%: $(OUT)/libirixcompat.a | $(OUT)
-	$(CC) $(CFLAGS) -o $@ $(SRCS_$*) -L$(OUT) -lirixcompat
+	$(CC) $(CFLAGS) $(CFLAGS_$*) -o $@ $(SRCS_$*) -L$(OUT) -lirixcompat
 
 $(OUT):
 	mkdir -p $(OUT)
