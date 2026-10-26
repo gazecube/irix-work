@@ -8,6 +8,8 @@
  * largest one; log everything to \\EFI\\ARCS\\arcs.log on the ESP. */
 EFI_GRAPHICS_OUTPUT_PROTOCOL *ArcsUefiPickGop(void);
 
+EFI_GRAPHICS_OUTPUT_PROTOCOL *ArcsUefiGetGop(VOID);
+
 EFI_STATUS ArcsUefiPrepareDisplay(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop);
 
 #endif

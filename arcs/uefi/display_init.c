@@ -351,6 +351,14 @@ ArcsScoreGop(EFI_GRAPHICS_OUTPUT_PROTOCOL *G, EFI_HANDLE Handle,
     return BestScore;
 }
 
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *mPickedGop;
+
+EFI_GRAPHICS_OUTPUT_PROTOCOL *
+ArcsUefiGetGop(VOID)
+{
+    return mPickedGop;
+}
+
 EFI_GRAPHICS_OUTPUT_PROTOCOL *
 ArcsUefiPickGop(void)
 {
@@ -422,5 +430,6 @@ ArcsUefiPickGop(void)
         FreePool(Log);
     }
     FreePool(H);
+    mPickedGop = Best;
     return Best;
 }

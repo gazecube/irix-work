@@ -9,6 +9,8 @@
 #include <Protocol/SimpleFileSystem.h>
 
 #include "uefi_boot.h"
+#include "display_init.h"
+#include "rt/arcs_rt.h"
 
 /* Reconstructed x86-64/UEFI backend.
  *
@@ -19,6 +21,59 @@
  */
 
 static EFI_HANDLE ArcsImageHandle;
+
+extern char *getenv(const char *Name);
+extern void drawBackground(void);
+
+/*
+ * Leave the ARCS resident runtime behind for the OS: load ArcsRt.efi from our
+ * own ESP, draw the Command Monitor window frame, and point the resident
+ * console at it.  The OS kernel then prints through the SPB's Write(), like
+ * IRIX's arcs_write().  Silently does nothing if the driver is not installed
+ * or ArcsConsole=off.
+ */
+static VOID
+ArcsPrepareResidentConsole(VOID)
+{
+    EFI_LOADED_IMAGE_PROTOCOL *Img = NULL;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop = ArcsUefiGetGop();
+    ARCS_RT_PROTOCOL *Rt = NULL;
+    EFI_GUID RtGuid = ARCS_RT_PROTOCOL_GUID;
+    EFI_DEVICE_PATH_PROTOCOL *Path;
+    EFI_HANDLE Drv = NULL;
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL Light = { 0xD0, 0xD0, 0xD0, 0 };
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL Dark = { 0x30, 0x30, 0x30, 0 };
+    UINT32 X, Y, W, H, Sw, Sh;
+    char *Off = getenv("ArcsConsole");
+
+    if (!Gop || !ArcsImageHandle || (Off && *Off == 'o'))
+        return;
+    if (EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
+                                      (VOID **)&Img)) || !Img)
+        return;
+    if (EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt))) {
+        Path = FileDevicePath(Img->DeviceHandle, L"\\EFI\\ARCS\\ArcsRt.efi");
+        if (!Path || EFI_ERROR(gBS->LoadImage(FALSE, ArcsImageHandle, Path, NULL, 0, &Drv)) ||
+            EFI_ERROR(gBS->StartImage(Drv, NULL, NULL)) ||
+            EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt)))
+            return;
+    }
+
+    /* clear the countdown dialog off the screen before the window goes up */
+    drawBackground();
+
+    Sw = Gop->Mode->Info->HorizontalResolution;
+    Sh = Gop->Mode->Info->VerticalResolution;
+    W = Sw * 3 / 5;
+    H = Sh * 3 / 5;
+    X = (Sw - W) / 2;
+    Y = (Sh - H) / 2;
+    Gop->Blt(Gop, &Light, EfiBltVideoFill, 0, 0, X - 2, Y - 2, W + 4, 2, 0);
+    Gop->Blt(Gop, &Light, EfiBltVideoFill, 0, 0, X - 2, Y - 2, 2, H + 4, 0);
+    Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X - 2, Y + H, W + 4, 2, 0);
+    Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X + W, Y - 2, 2, H + 4, 0);
+    (VOID)Rt->Configure(Rt, Gop, X, Y, W, H, 0xE8E8E8, 0x101830);
+}
 
 extern char *getenv(const char *Name);
 extern int setenv(char *Name, char *Value);
@@ -208,6 +263,8 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
             }
         }
     }
+
+    ArcsPrepareResidentConsole();
 
     Status = gBS->StartImage(ChildImage, NULL, NULL);
 

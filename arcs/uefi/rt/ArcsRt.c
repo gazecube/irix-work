@@ -57,6 +57,8 @@ static struct {
     UINT32 Fg, Bg;		/* device pixel values */
     UINT32 Col, Row;
     BOOLEAN Ready;
+    BOOLEAN Redraw;		/* a scroll happened during this Write() */
+    BOOLEAN Deferred;		/* inside Write(): redraw once at the end */
     CHAR8 Grid[MAXROWS][MAXCOLS];
 } mCon;
 
@@ -129,7 +131,12 @@ Newline(VOID)
         for (Row = 1; Row < mCon.Rows; Row++)
             CopyMem(mCon.Grid[Row - 1], mCon.Grid[Row], MAXCOLS);
         SetMem(mCon.Grid[mCon.Rows - 1], MAXCOLS, ' ');
-        RedrawAll();
+        /* Framebuffer memory is slow: during a Write() call redraw once at
+         * the end instead of once per scrolled line. */
+        if (mCon.Deferred)
+            mCon.Redraw = TRUE;
+        else
+            RedrawAll();
     }
 }
 
@@ -152,7 +159,8 @@ PutChar(CHAR8 Ch)
             if (mCon.Col >= mCon.Cols)
                 break;
             mCon.Grid[mCon.Row][mCon.Col] = ' ';
-            DrawCell(mCon.Col, mCon.Row, ' ');
+            if (!mCon.Redraw)
+                DrawCell(mCon.Col, mCon.Row, ' ');
             mCon.Col++;
         } while (mCon.Col & 7);
         return;
@@ -164,7 +172,8 @@ PutChar(CHAR8 Ch)
     if (mCon.Col >= mCon.Cols)
         Newline();
     mCon.Grid[mCon.Row][mCon.Col] = Ch;
-    DrawCell(mCon.Col, mCon.Row, Ch);
+    if (!mCon.Redraw)
+        DrawCell(mCon.Col, mCon.Row, Ch);
     mCon.Col++;
 }
 
@@ -180,8 +189,15 @@ ArcsRtWrite(UINT32 Fd, VOID *Buf, UINT32 N, UINT32 *Cnt)
         *Cnt = 0;
     if (!mCon.Ready || !Buf)
         return 13;			/* ENODEV */
+    mCon.Deferred = TRUE;
+    mCon.Redraw = FALSE;
     for (I = 0; I < N; I++)
         PutChar(P[I]);
+    mCon.Deferred = FALSE;
+    if (mCon.Redraw) {
+        RedrawAll();
+        mCon.Redraw = FALSE;
+    }
     if (Cnt)
         *Cnt = N;
     return 0;

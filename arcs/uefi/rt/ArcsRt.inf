@@ -30,3 +30,7 @@
 
 [BuildOptions]
   GCC:*_*_*_CC_FLAGS = -std=gnu99 -fpermissive -Wno-error -D_STANDALONE -D_LANGUAGE_C -DLANGUAGE_C
+  # Runtime images must be 4K section-aligned so the firmware can describe
+  # .text (RX) and .data/.bss (RW, no-exec) separately in the memory attributes
+  # table; otherwise the whole image ends up read-only and non-executable.
+  GCC:*_*_*_DLINK_FLAGS = -z common-page-size=0x1000 -z max-page-size=0x1000
