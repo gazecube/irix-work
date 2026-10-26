@@ -18,6 +18,24 @@
 #ifndef _PATH_CONFIG
 #define _PATH_CONFIG	"/etc/config"	/* IRIX <paths.h> */
 #endif
+#ifndef _PATH_USERPATH
+#define _PATH_USERPATH	"/usr/sbin:/usr/bsd:/sbin:/usr/bin:/usr/bin/X11:/usr/local/bin"
+#endif
+#ifndef _PATH_ROOTPATH
+#define _PATH_ROOTPATH	"/usr/sbin:/usr/bsd:/sbin:/usr/bin:/etc:/usr/etc:/usr/bin/X11:/usr/local/bin"
+#endif
+
+/* sysconf(_SC_CAP) and sysconf(_SC_MAC) are answered by libirixcompat. */
+#define _SC_CAP		0x10001
+#define _SC_MAC		0x10002
+long irix_sysconf(int);
+#define sysconf		irix_sysconf
+
+/* sys_errlist[] and sys_nerr were dropped from glibc. */
+const char *const *irix_errlist(void);
+#define sys_nerr	133
+#define sys_errlist	(irix_errlist())
+
 #ifndef MNTMAXSTR
 #define MNTMAXSTR	128		/* IRIX <mntent.h> */
 #endif
