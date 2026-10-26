@@ -9,6 +9,7 @@
 #include "uefi_boot.h"
 #include "display_init.h"
 
+extern void drawBackground(void);
 extern int ArcsUefiDiskInit(void);
 extern void ArcsUefiDiskSelfTest(void);
 
@@ -43,7 +44,14 @@ UefiMain(
      * If Escape interrupts it, or a child returns/fails, startup() returns and
      * only then is the System Maintenance Menu displayed.
      */
+    /* Discover the mouse now so the autoboot dialog's Stop button works. */
+    (VOID)ArcsInputInit(SystemTable);
+
     startup();
+
+    /* startup() returns only when autoboot was stopped or failed; repaint the
+     * background so the (deleted) autoboot dialog does not stay on screen. */
+    drawBackground();
 
     ArcsDrawMaintenanceMenuBringup();
 

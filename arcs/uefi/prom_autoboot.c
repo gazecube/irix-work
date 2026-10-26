@@ -7,6 +7,7 @@
 #include <style.h>
 
 #include "uefi_boot.h"
+#include "input_bringup.h"
 
 extern char *make_bootfile(int rewind);
 extern char *getenv(const char *Name);
@@ -67,7 +68,8 @@ static int
 ArcsAutobootPause(int Delay)
 {
     EFI_EVENT Timer;
-    EFI_EVENT Events[2];
+    EFI_EVENT Tick;
+    EFI_EVENT Events[3];
     EFI_INPUT_KEY Key;
     EFI_STATUS Status;
     UINTN Count;
@@ -93,14 +95,28 @@ ArcsAutobootPause(int Delay)
         return 0;
     }
 
+    /* 10 ms tick: the original PROM services the mouse during the countdown,
+     * so the "Stop for Maintenance" button can be clicked. */
+    Tick = NULL;
+    if (EFI_ERROR(gBS->CreateEvent(EVT_TIMER, 0, NULL, NULL, &Tick)) ||
+        EFI_ERROR(gBS->SetTimer(Tick, TimerPeriodic, 100000ULL))) {
+        if (Tick)
+            gBS->CloseEvent(Tick);
+        Tick = NULL;
+    }
+
     Count = 0;
     if (ArcsAutobootSystemTable->ConIn->WaitForKey)
         Events[Count++] = ArcsAutobootSystemTable->ConIn->WaitForKey;
     Events[Count++] = Timer;
+    if (Tick)
+        Events[Count++] = Tick;
 
     for (;;) {
         if (ArcsAutobootStopRequested) {
             gBS->CloseEvent(Timer);
+            if (Tick)
+                gBS->CloseEvent(Tick);
             return 1;
         }
 
@@ -110,17 +126,25 @@ ArcsAutobootPause(int Delay)
 
         if (Events[Which] == Timer)
             break;
+        if (Tick && Events[Which] == Tick) {
+            (VOID)ArcsInputPollPointers();
+            continue;
+        }
 
         while (!EFI_ERROR(ArcsAutobootSystemTable->ConIn->ReadKeyStroke(
                     ArcsAutobootSystemTable->ConIn, &Key))) {
             if (Key.ScanCode == SCAN_ESC) {
                 gBS->CloseEvent(Timer);
+                if (Tick)
+                    gBS->CloseEvent(Tick);
                 return 1;
             }
         }
     }
 
     gBS->CloseEvent(Timer);
+    if (Tick)
+        gBS->CloseEvent(Tick);
     return ArcsAutobootStopRequested ? 1 : 0;
 }
 

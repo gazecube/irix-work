@@ -8,4 +8,9 @@ ArcsRunInputBringup(
     EFI_SYSTEM_TABLE *SystemTable
     );
 
+/* Discover pointers (idempotent) and service them once without blocking, so
+ * the autoboot countdown can use the mouse before the maintenance loop runs. */
+EFI_STATUS ArcsInputInit(EFI_SYSTEM_TABLE *SystemTable);
+BOOLEAN ArcsInputPollPointers(VOID);
+
 #endif

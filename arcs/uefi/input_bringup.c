@@ -1,3 +1,6 @@
+#include "uefi_boot.h"
+#include <Library/BaseLib.h>
+#include <Library/PrintLib.h>
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/MemoryAllocationLib.h>
@@ -275,30 +278,31 @@ DrainUsbHid(
     return TRUE;
 }
 
+/* Pointer state shared by the autoboot countdown and the maintenance loop. */
+static EFI_SIMPLE_POINTER_PROTOCOL *Simple[MAX_POINTER_PROTOCOLS];
+static EFI_ABSOLUTE_POINTER_PROTOCOL *Absolute[MAX_POINTER_PROTOCOLS];
+static UINTN SimpleCount;
+static UINTN AbsoluteCount;
+static INT32 CurrentX;
+static INT32 CurrentY;
+static INT32 Width;
+static INT32 Height;
+static ARCS_INPUT_DIAG Diag;
+static BOOLEAN InputReady;
+
 EFI_STATUS
-ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
+ArcsInputInit(EFI_SYSTEM_TABLE *SystemTable)
 {
-    EFI_SIMPLE_POINTER_PROTOCOL *Simple[MAX_POINTER_PROTOCOLS];
-    EFI_ABSOLUTE_POINTER_PROTOCOL *Absolute[MAX_POINTER_PROTOCOLS];
-    EFI_EVENT WaitEvents[MAX_INPUT_EVENTS];
-    UINT8 WaitKinds[MAX_INPUT_EVENTS];
-    UINTN WaitIndices[MAX_INPUT_EVENTS];
     EFI_HANDLE *Handles;
     EFI_STATUS Status;
-    EFI_STATUS ReturnStatus = EFI_SUCCESS;
-    EFI_INPUT_KEY Key;
-    UINTN SimpleCount;
-    UINTN AbsoluteCount;
     UINTN HandleCount;
     UINTN I;
-    INT32 CurrentX;
-    INT32 CurrentY;
-    INT32 Width;
-    INT32 Height;
-    ARCS_INPUT_DIAG Diag;
     EFI_ABSOLUTE_POINTER_PROTOCOL *ConsoleAbsolute = NULL;
     EFI_SIMPLE_POINTER_PROTOCOL *ConsoleSimple = NULL;
     BOOLEAN HaveDirectPointer;
+
+    if (InputReady)
+        return EFI_SUCCESS;
 
     if (!SystemTable || !SystemTable->ConIn)
         return EFI_INVALID_PARAMETER;
@@ -425,6 +429,70 @@ ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
     Diag.SimpleWaitStatus = SimpleCount ? EFI_NOT_READY : EFI_NOT_FOUND;
     Diag.CurrentX = CurrentX;
     Diag.CurrentY = CurrentY;
+    {
+        /* What did the firmware offer?  Real hardware has no serial console,
+         * so leave a note on the ESP. */
+        CHAR8 *Msg = AllocateZeroPool(1024);
+
+        if (Msg) {
+            AsciiSPrint(Msg, 1024,
+                "pointer discovery:\n"
+                "  SimplePointer handles: %u (usable %u)  ConsoleIn simple: %a\n"
+                "  AbsolutePointer handles: %u (usable %u)  ConsoleIn absolute: %a\n"
+                "  USB fallback: %a (%a)  UsbIo handles: %u  HID interfaces: %u  status: %r\n",
+                (UINT32)Diag.EnumeratedSimpleCount, (UINT32)SimpleCount,
+                Diag.ConsoleSimple ? "yes" : "no",
+                (UINT32)Diag.EnumeratedAbsoluteCount, (UINT32)AbsoluteCount,
+                Diag.ConsoleAbsolute ? "yes" : "no",
+                Diag.UsbFallbackActive ? "active" : "inactive",
+                Diag.UsbFallbackAbsolute ? "absolute" : "relative",
+                (UINT32)Diag.UsbIoCount, (UINT32)Diag.UsbHidCount,
+                Diag.UsbStatus);
+            ArcsUefiWriteFile(L"\\EFI\\ARCS\\arcs-input.log", Msg, AsciiStrLen(Msg));
+            FreePool(Msg);
+        }
+    }
+    InputReady = TRUE;
+    return EFI_SUCCESS;
+}
+
+/* Service every pointer once without blocking (used during autoboot). */
+BOOLEAN
+ArcsInputPollPointers(VOID)
+{
+    BOOLEAN DidWork = FALSE;
+    UINTN I;
+
+    if (!InputReady)
+        return FALSE;
+    for (I = 0; I < AbsoluteCount; ++I)
+        if (DrainAbsolute(Absolute[I], Width, Height, &CurrentX, &CurrentY, &Diag))
+            DidWork = TRUE;
+    for (I = 0; I < SimpleCount; ++I)
+        if (DrainSimple(Simple[I], Width, Height, &CurrentX, &CurrentY, &Diag))
+            DidWork = TRUE;
+    if (Diag.UsbFallbackActive &&
+        DrainUsbHid(Width, Height, &CurrentX, &CurrentY, &Diag))
+        DidWork = TRUE;
+    return DidWork;
+}
+
+EFI_STATUS
+ArcsRunInputBringup(EFI_SYSTEM_TABLE *SystemTable)
+{
+    EFI_EVENT WaitEvents[MAX_INPUT_EVENTS];
+    UINT8 WaitKinds[MAX_INPUT_EVENTS];
+    UINTN WaitIndices[MAX_INPUT_EVENTS];
+    EFI_STATUS Status;
+    EFI_STATUS ReturnStatus = EFI_SUCCESS;
+    EFI_INPUT_KEY Key;
+    UINTN I;
+
+    if (!SystemTable || !SystemTable->ConIn)
+        return EFI_INVALID_PARAMETER;
+    Status = ArcsInputInit(SystemTable);
+    if (EFI_ERROR(Status))
+        return Status;
     ArcsInputDiagDraw(SystemTable, &Diag);
 
     for (;;) {
