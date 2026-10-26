@@ -76,6 +76,8 @@
 
 [Protocols]
   gEfiGraphicsOutputProtocolGuid
+  gEfiEdidDiscoveredProtocolGuid
+  gEfiEdidActiveProtocolGuid
   gEfiSimplePointerProtocolGuid
   gEfiAbsolutePointerProtocolGuid
   gEfiDevicePathProtocolGuid
