@@ -24,3 +24,5 @@ Linux-correct version first):
 
 Install by copying the symlinks into the target's /etc/rc2.d; nothing installs
 them automatically.
+
+    S97gpu         load radeon/nouveau right before xdm (see init.d/gpu)
