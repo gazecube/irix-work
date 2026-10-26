@@ -341,12 +341,24 @@ ArcsUefiDiskInit(void)
 
 /* ---- bring-up self test: exercises the original Open/Read/Close path ---- */
 
+/* Diagnostics go to the debug log only (a build with ARCS_DISK_VERBOSE also
+ * writes them to the screen); the PROM screen stays clean. */
+static void
+ArcsDiskOut(const CHAR16 *Text)
+{
+#ifdef ARCS_DISK_VERBOSE
+    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)Text);
+#else
+    (void)Text;
+#endif
+}
+
 static void
 ArcsDiskLog(const CHAR16 *Msg)
 {
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)L"ARCSDISK: ");
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)Msg);
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)L"\r\n");
+    ArcsDiskOut(L"ARCSDISK: ");
+    ArcsDiskOut(Msg);
+    ArcsDiskOut(L"\r\n");
 }
 
 static void
@@ -358,11 +370,11 @@ ArcsDiskLogHex(const CHAR16 *Label, unsigned long long V)
     for (i = 0; i < 16; i++)
         B[i] = L"0123456789abcdef"[(V >> (60 - 4 * i)) & 0xf];
     B[16] = 0;
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)L"ARCSDISK: ");
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)Label);
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)L" 0x");
-    gST->ConOut->OutputString(gST->ConOut, B);
-    gST->ConOut->OutputString(gST->ConOut, (CHAR16 *)L"\r\n");
+    ArcsDiskOut(L"ARCSDISK: ");
+    ArcsDiskOut(Label);
+    ArcsDiskOut(L" 0x");
+    ArcsDiskOut(B);
+    ArcsDiskOut(L"\r\n");
 }
 
 void

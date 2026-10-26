@@ -24,10 +24,9 @@ UefiMain(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop;
 
     ArcsUefiBootInit(ImageHandle);
-    ArcsUefiDiskInit();
-    ArcsUefiDiskSelfTest();
-    ArcsPromAutobootInit(SystemTable);
 
+    /* Set the display mode and paint the gradient before any slow work (disk
+     * probing), so the firmware's text never scrolls past on the screen. */
     Gop = ArcsUefiPickGop();
     if (Gop == NULL) {
         Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
@@ -38,6 +37,10 @@ UefiMain(
     Status = ArcsDrawBackgroundBringup(Gop);
     if (EFI_ERROR(Status))
         return Status;
+
+    ArcsUefiDiskInit();
+    ArcsUefiDiskSelfTest();
+    ArcsPromAutobootInit(SystemTable);
 
     /* Follow the original PROM startup policy before entering maintenance:
      * AutoLoad=Y and no NoAutoLoad -> five-second interruptible autoboot.
