@@ -8,6 +8,7 @@
 
 [Sources]
   entry.c
+  display_init.c
   htp_gop.c
   gfxgui_bringup.c
   bootstrap_compat.c

@@ -7,6 +7,7 @@
 #include "maintenance_menu_bringup.h"
 #include "prom_startup.h"
 #include "uefi_boot.h"
+#include "display_init.h"
 
 extern int ArcsUefiDiskInit(void);
 extern void ArcsUefiDiskSelfTest(void);
@@ -26,10 +27,12 @@ UefiMain(
     ArcsUefiDiskSelfTest();
     ArcsPromAutobootInit(SystemTable);
 
-    Gop = NULL;
-    Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
-    if (EFI_ERROR(Status))
-        return Status;
+    Gop = ArcsUefiPickGop();
+    if (Gop == NULL) {
+        Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
+        if (EFI_ERROR(Status))
+            return Status;
+    }
 
     Status = ArcsDrawBackgroundBringup(Gop);
     if (EFI_ERROR(Status))

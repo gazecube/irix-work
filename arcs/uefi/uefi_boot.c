@@ -385,3 +385,37 @@ ArcsUefiLoadEnvFile(void)
     File->Close(File);
     Root->Close(Root);
 }
+
+/*
+ * Write (replace) a file on the ESP the PROM was loaded from.  Used for the
+ * diagnostic log, since real hardware has no serial console to read.
+ */
+void
+ArcsUefiWriteFile(CONST CHAR16 *Path, CONST CHAR8 *Data, UINTN Size)
+{
+    EFI_LOADED_IMAGE_PROTOCOL *Img = NULL;
+    EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
+    EFI_FILE_PROTOCOL *Root = NULL, *File = NULL;
+
+    if (!ArcsImageHandle ||
+        EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
+                                      (VOID **)&Img)) || !Img ||
+        EFI_ERROR(gBS->HandleProtocol(Img->DeviceHandle, &gEfiSimpleFileSystemProtocolGuid,
+                                      (VOID **)&Fs)) || !Fs ||
+        EFI_ERROR(Fs->OpenVolume(Fs, &Root)))
+        return;
+
+    /* Remove any previous copy so a shorter log does not leave old tail bytes. */
+    if (!EFI_ERROR(Root->Open(Root, &File, (CHAR16 *)Path,
+                              EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0)) && File)
+        File->Delete(File);
+    File = NULL;
+    if (!EFI_ERROR(Root->Open(Root, &File, (CHAR16 *)Path,
+                              EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                              0)) && File) {
+        File->Write(File, &Size, (VOID *)Data);
+        File->Flush(File);
+        File->Close(File);
+    }
+    Root->Close(Root);
+}

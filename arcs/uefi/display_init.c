@@ -4,7 +4,11 @@
 #include <Protocol/EdidActive.h>
 #include <Protocol/GraphicsOutput.h>
 
+#include <Library/BaseLib.h>
+#include <Library/PrintLib.h>
+
 #include "display_init.h"
+#include "uefi_boot.h"
 
 /* Reconstructed UEFI display glue.
  *
@@ -127,4 +131,95 @@ ArcsUefiPrepareDisplay(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
         return Status;
 
     return ArcsClearFramebuffer(Gop);
+}
+
+#define ARCS_LOGSZ 16384
+
+EFI_GRAPHICS_OUTPUT_PROTOCOL *
+ArcsUefiPickGop(void)
+{
+    EFI_HANDLE *H = NULL;
+    UINTN N = 0, i;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *Best = NULL;
+    UINT32 BestMode = 0;
+    UINT64 BestScore = 0;
+    UINTN BestIdx = 0;
+    CHAR8 *Log = AllocateZeroPool(ARCS_LOGSZ);
+    UINTN L = 0;
+
+    if (EFI_ERROR(gBS->LocateHandleBuffer(ByProtocol, &gEfiGraphicsOutputProtocolGuid,
+                                          NULL, &N, &H)) || N == 0) {
+        if (Log) {
+            AsciiSPrint(Log, ARCS_LOGSZ, "no GOP handles found\n");
+            ArcsUefiWriteFile(L"\\EFI\\ARCS\\arcs.log", Log, AsciiStrLen(Log));
+            FreePool(Log);
+        }
+        return NULL;
+    }
+    if (Log)
+        L += AsciiSPrint(Log + L, ARCS_LOGSZ - L, "GOP handles: %u\n", (UINT32)N);
+
+    for (i = 0; i < N; i++) {
+        EFI_GRAPHICS_OUTPUT_PROTOCOL *G = NULL;
+        UINT32 M;
+        UINT64 HBest = 0;
+        UINT32 HBestMode = 0;
+
+        if (EFI_ERROR(gBS->HandleProtocol(H[i], &gEfiGraphicsOutputProtocolGuid,
+                                          (VOID **)&G)) || !G || !G->Mode)
+            continue;
+        if (Log)
+            L += AsciiSPrint(Log + L, ARCS_LOGSZ - L,
+                             "gop %u: MaxMode=%u current=%u %ux%u pixfmt=%u fb=0x%lx\n",
+                             (UINT32)i, G->Mode->MaxMode, G->Mode->Mode,
+                             G->Mode->Info->HorizontalResolution,
+                             G->Mode->Info->VerticalResolution,
+                             (UINT32)G->Mode->Info->PixelFormat,
+                             (UINT64)G->Mode->FrameBufferBase);
+        for (M = 0; M < G->Mode->MaxMode; M++) {
+            EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info = NULL;
+            UINTN Sz = 0;
+            UINT64 Score;
+
+            if (EFI_ERROR(G->QueryMode(G, M, &Sz, &Info)) || !Info)
+                continue;
+            if (Log && M < 64)
+                L += AsciiSPrint(Log + L, ARCS_LOGSZ - L, "  mode %u: %ux%u pixfmt=%u\n",
+                                 M, Info->HorizontalResolution,
+                                 Info->VerticalResolution, (UINT32)Info->PixelFormat);
+            if (Info->PixelFormat == PixelBltOnly)
+                Score = 0;
+            else if (Info->HorizontalResolution == 1280 && Info->VerticalResolution == 1024)
+                Score = (1ULL << 40);
+            else
+                Score = (UINT64)Info->HorizontalResolution * Info->VerticalResolution;
+            if (Score > HBest) {
+                HBest = Score;
+                HBestMode = M;
+            }
+            FreePool(Info);
+        }
+        if (HBest > BestScore) {
+            BestScore = HBest;
+            Best = G;
+            BestMode = HBestMode;
+            BestIdx = i;
+        }
+    }
+
+    if (Best) {
+        if (Best->Mode->Mode != BestMode)
+            (VOID)Best->SetMode(Best, BestMode);
+        if (Log)
+            L += AsciiSPrint(Log + L, ARCS_LOGSZ - L, "chosen: gop %u mode %u -> now %ux%u\n",
+                             (UINT32)BestIdx, BestMode,
+                             Best->Mode->Info->HorizontalResolution,
+                             Best->Mode->Info->VerticalResolution);
+    }
+    if (Log) {
+        ArcsUefiWriteFile(L"\\EFI\\ARCS\\arcs.log", Log, AsciiStrLen(Log));
+        FreePool(Log);
+    }
+    FreePool(H);
+    return Best;
 }
