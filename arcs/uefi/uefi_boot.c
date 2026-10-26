@@ -256,7 +256,8 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
 
         /* With the window up, the VT console should use the textport font. */
         if (Resident) {
-            AsciiSPrint(Joined, sizeof(Joined), "%a%afbcon=font:ScrB18",
+            /* console=tty0 goes last so /dev/console is the textport, as on IRIX */
+            AsciiSPrint(Joined, sizeof(Joined), "%a%afbcon=font:ScrB18 console=tty0",
                         Opts ? Opts : "", (Opts && *Opts) ? " " : "");
             Opts = Joined;
         }
