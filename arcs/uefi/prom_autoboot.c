@@ -160,6 +160,7 @@ autoboot(int delay, char *message1, char *message2)
 {
     struct Dialog *d = 0;
     char *startingmsg;
+    extern int ArcsBootVerbose;
     char *bf;
     int bfcount = 0;
     INT32 rc = 1;
@@ -169,7 +170,7 @@ autoboot(int delay, char *message1, char *message2)
     startingmsg = message1 ? message1 : defaultmsg;
     ArcsAutobootStopRequested = 0;
 
-    if (isGuiMode()) {
+    if (isGuiMode() && !ArcsBootVerbose) {
         d = createDialog(startingmsg,DIALOGPROGRESS,DIALOGBIGFONT);
         moveObject(guiobj(d),d->gui.x1,
                    MSGY1-((d->gui.y2-d->gui.y1)>>1));

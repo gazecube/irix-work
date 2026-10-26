@@ -12,6 +12,7 @@
 #include "manualmode_bringup.h"
 
 extern int menu_boot_sys(void);
+extern int ArcsBootVerbose;
 
 static const char *MenuItems[] = {
     "Start System",
@@ -59,7 +60,10 @@ ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
      * UEFI only at the reconstructed Execute() boundary.
      */
     if (OneBasedIndex == 1) {
+        /* The fallback boot: textport only, full boot sequence, no dialog. */
+        ArcsBootVerbose = 1;
         (void)menu_boot_sys();
+        ArcsBootVerbose = 0;
 
         /* A booted OS does not return.  If an EFI utility/loader does return,
          * the Execute backend has restored GOP.  Release the latched Start

@@ -27,11 +27,36 @@ extern char *getenv(const char *Name);
 extern void drawBackground(void);
 
 /*
+ * Set while the system is being started from the maintenance menu ("Start
+ * System", the fallback after Stop for Maintenance): no graphical progress
+ * dialog; the textport is shown at once and the kernel is told arcs.verbose=1,
+ * so the whole boot sequence (kernel log and init output) is visible.
+ */
+int ArcsBootVerbose = 0;
+
+extern void ArcsUefiWriteFile(CONST CHAR16 *Path, CONST CHAR8 *Data, UINTN Size);
+
+/* Step-by-step record of loading the resident runtime, kept on the ESP. */
+static CHAR8 RtLog[2048];
+
+static VOID EFIAPI
+RtLogf(CONST CHAR8 *Fmt, ...)
+{
+    VA_LIST Args;
+    UINTN Len = AsciiStrLen(RtLog);
+
+    VA_START(Args, Fmt);
+    AsciiVSPrint(RtLog + Len, sizeof(RtLog) - Len, Fmt, Args);
+    VA_END(Args);
+    ArcsUefiWriteFile(L"\\EFI\\ARCS\\arcs-rt.log", RtLog, AsciiStrLen(RtLog));
+}
+
+/*
  * Leave the ARCS resident runtime behind for the OS: load ArcsRt.efi from our
- * own ESP, draw the Command Monitor window frame, and point the resident
- * console at it.  The OS kernel then prints through the SPB's Write(), like
- * IRIX's arcs_write().  Silently does nothing if the driver is not installed
- * or ArcsConsole=off.
+ * own ESP and point the resident console at the Command Monitor window.  The
+ * OS kernel then prints through the SPB's Write(), like IRIX's arcs_write().
+ * Every step is logged to \EFI\ARCS\arcs-rt.log.  Does nothing if the driver
+ * is not installed or ArcsConsole=off.
  */
 static BOOLEAN
 ArcsPrepareResidentConsole(VOID)
@@ -42,24 +67,42 @@ ArcsPrepareResidentConsole(VOID)
     EFI_GUID RtGuid = ARCS_RT_PROTOCOL_GUID;
     EFI_DEVICE_PATH_PROTOCOL *Path;
     EFI_HANDLE Drv = NULL;
+    EFI_STATUS St;
     UINT32 X, Y, W, H, Sw, Sh;
     char *Off = getenv("ArcsConsole");
 
+    RtLog[0] = 0;
+    RtLogf("ArcsRt: verbose=%d ArcsConsole=%a gop=%a\n", ArcsBootVerbose,
+           Off ? Off : "(unset)", Gop ? "yes" : "NO");
     if (!Gop || !ArcsImageHandle || (Off && *Off == 'o'))
         return FALSE;
-    if (EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
-                                      (VOID **)&Img)) || !Img)
+    St = gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&Img);
+    if (EFI_ERROR(St) || !Img) {
+        RtLogf("ArcsRt: LoadedImage: %r\n", St);
         return FALSE;
+    }
     if (EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt))) {
         Path = FileDevicePath(Img->DeviceHandle, L"\\EFI\\ARCS\\ArcsRt.efi");
-        if (!Path || EFI_ERROR(gBS->LoadImage(FALSE, ArcsImageHandle, Path, NULL, 0, &Drv)) ||
-            EFI_ERROR(gBS->StartImage(Drv, NULL, NULL)) ||
-            EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt)))
+        if (!Path) {
+            RtLogf("ArcsRt: no device path for ArcsRt.efi\n");
             return FALSE;
+        }
+        St = gBS->LoadImage(FALSE, ArcsImageHandle, Path, NULL, 0, &Drv);
+        RtLogf("ArcsRt: LoadImage: %r\n", St);
+        if (EFI_ERROR(St))
+            return FALSE;
+        St = gBS->StartImage(Drv, NULL, NULL);
+        RtLogf("ArcsRt: StartImage: %r\n", St);
+        if (EFI_ERROR(St))
+            return FALSE;
+        St = gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt);
+        RtLogf("ArcsRt: LocateProtocol: %r\n", St);
+        if (EFI_ERROR(St))
+            return FALSE;
+    } else {
+        RtLogf("ArcsRt: already loaded\n");
     }
 
-    /* The countdown dialog stays up while the kernel loads; the window is
-     * only shown when the OS asks (init started). */
     Sw = Gop->Mode->Info->HorizontalResolution;
     Sh = Gop->Mode->Info->VerticalResolution;
     /* Textport geometry of IRIX htport.c: TP_MAXCOLS x TP_MAXROWS cells of
@@ -77,7 +120,21 @@ ArcsPrepareResidentConsole(VOID)
     }
     X = (Sw - W) / 2;
     Y = (Sh - H) / 2;
-    return !EFI_ERROR(Rt->Configure(Rt, Gop, X, Y, W, H, 0xF0F0F0, 0x606070));
+    St = Rt->Configure(Rt, Gop, X, Y, W, H, 0xF0F0F0, 0x606070);
+    RtLogf("ArcsRt: Configure %ux%u at %u,%u on %ux%u fb=0x%lx fmt=%d: %r\n", W, H, X, Y, Sw, Sh,
+           (UINT64)Gop->Mode->FrameBufferBase, (INT32)Gop->Mode->Info->PixelFormat, St);
+    if (EFI_ERROR(St))
+        return FALSE;
+    if (ArcsBootVerbose) {
+        ARCS_RT_PRIVATE *P = (ARCS_RT_PRIVATE *)(UINTN)Rt->Spb->PrivateVector;
+
+        if (P && P->ShowFn) {
+            ((VOID (EFIAPI *)(VOID))(UINTN)P->ShowFn)();	/* textport up at once */
+            RtLogf("ArcsRt: textport shown\n");
+        }
+    }
+    RtLogf("ArcsRt: ready\n");
+    return TRUE;
 }
 
 extern char *getenv(const char *Name);
@@ -257,8 +314,9 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
         /* With the window up, the VT console should use the textport font. */
         if (Resident) {
             /* console=tty0 goes last so /dev/console is the textport, as on IRIX */
-            AsciiSPrint(Joined, sizeof(Joined), "%a%afbcon=font:ScrB18 console=tty0",
-                        Opts ? Opts : "", (Opts && *Opts) ? " " : "");
+            AsciiSPrint(Joined, sizeof(Joined), "%a%afbcon=font:ScrB18 console=tty0%a",
+                        Opts ? Opts : "", (Opts && *Opts) ? " " : "",
+                        ArcsBootVerbose ? " arcs.verbose=1" : "");
             Opts = Joined;
         }
         if (Opts && *Opts &&
