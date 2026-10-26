@@ -15,7 +15,7 @@
 
 #define ARCS_SPBMAGIC		0x53435241	/* SPBMAGIC, "ARCS" */
 #define ARCS_RT_VERSION		1
-#define ARCS_RT_REVISION	10
+#define ARCS_RT_REVISION	11
 
 /* Firmware vector, in the exact order of IRIX's FirmwareVector.  Each entry is
  * the 64-bit address of an EFIAPI function, or 0 if not provided. */
@@ -48,6 +48,7 @@ typedef struct {
     UINT32 FbPixelFormat;		/* EFI_GRAPHICS_PIXEL_FORMAT */
     UINT32 WinX, WinY, WinW, WinH;	/* console window, pixels */
     UINT32 Cols, Rows;
+    UINT64 ShowFn;			/* void EFIAPI (void): draw+clear the window */
 } ARCS_RT_PRIVATE;
 
 typedef struct {

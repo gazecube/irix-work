@@ -37,7 +37,7 @@ struct fontinfo {
 
 #define CELLW		9		/* ScrB18 xmove */
 #define CELLH		ScrB18_ht	/* 17 */
-#define PAD		4
+#define PAD		2		/* XBORDER */
 #define MAXCOLS		200
 #define MAXROWS		100
 
@@ -57,6 +57,7 @@ static struct {
     UINT32 Fg, Bg;		/* device pixel values */
     UINT32 Col, Row;
     BOOLEAN Ready;
+    BOOLEAN Visible;		/* the window has been shown by the OS */
     BOOLEAN Redraw;		/* a scroll happened during this Write() */
     BOOLEAN Deferred;		/* inside Write(): redraw once at the end */
     CHAR8 Grid[MAXROWS][MAXCOLS];
@@ -189,6 +190,11 @@ ArcsRtWrite(UINT32 Fd, VOID *Buf, UINT32 N, UINT32 *Cnt)
         *Cnt = 0;
     if (!mCon.Ready || !Buf)
         return 13;			/* ENODEV */
+    if (!mCon.Visible) {		/* dialog phase: kernel text is not shown */
+        if (Cnt)
+            *Cnt = N;
+        return 0;
+    }
     mCon.Deferred = TRUE;
     mCon.Redraw = FALSE;
     for (I = 0; I < N; I++)
@@ -201,6 +207,142 @@ ArcsRtWrite(UINT32 Fd, VOID *Buf, UINT32 N, UINT32 *Cnt)
     if (Cnt)
         *Cnt = N;
     return 0;
+}
+
+
+/*
+ * The Command Monitor view, drawn exactly as IRIX's libsk/graphics/htport.c
+ * does: drawShadedBackground() ramp over the whole screen, then the textport
+ * outline of txShdOutline() around the 80x40 text area.  Colours are the
+ * original grays and ramp ends (stand_htport.h, style.h, htport.c txMap()).
+ * y is screen y (down); the original's GL y (up) is mirrored.
+ */
+#define LRT_WIDTH	16
+#define IN_WIDTH	3
+#define OUT_WIDTH	4
+#define LRT_BDR		(LRT_WIDTH - OUT_WIDTH)
+#define XBORDER		2
+#define YBORDER		2
+#define TP_XBORDER	96
+#define TP_YBORDER	90
+#define G_WHITE		0xF0F0F0
+#define G_VLIGHT	0xD5D5D5	/* GRAY213 */
+#define G_LIGHT		0xAAAAAA	/* GRAY170 */
+#define G_MEDIUM	0x808080	/* GRAY128 */
+#define G_DARK		0x555555	/* GRAY85  */
+#define G_VDARK		0x2A2A2A	/* GRAY42  */
+#define G_BLACK		0x000000
+
+static VOID
+Box(INT32 X1, INT32 Y1, INT32 X2, INT32 Y2, UINT32 Rgb)
+{
+    UINT32 V = PixelValue(Rgb);
+    INT32 X, Y;
+
+    if (X1 > X2) { X = X1; X1 = X2; X2 = X; }
+    if (Y1 > Y2) { Y = Y1; Y1 = Y2; Y2 = Y; }
+    if (X1 < 0) X1 = 0;
+    if (Y1 < 0) Y1 = 0;
+    if (X2 >= (INT32)mPriv.FbWidth) X2 = mPriv.FbWidth - 1;
+    if (Y2 >= (INT32)mPriv.FbHeight) Y2 = mPriv.FbHeight - 1;
+    for (Y = Y1; Y <= Y2; Y++) {
+        UINT32 *P = (UINT32 *)(mCon.Fb + (UINTN)Y * mCon.Pitch);
+
+        for (X = X1; X <= X2; X++)
+            P[X] = V;
+    }
+}
+
+static VOID
+ShadedBackground(VOID)
+{
+    UINT32 H = mPriv.FbHeight, Y;
+    /* RAMPSIZE ramp entries from BOTTOMCOLOR (GL y = 0) to TOPCOLOR */
+    INT32 Inc = (INT32)(((UINT32)160 << 16) / (H - 1));
+    INT32 R0 = 0x5f << 16, G0 = 0x5f << 16, B0 = 0x8f << 16;
+    INT32 IR = ((0xb0 - 0x5f) << 16) / 160;
+    INT32 IG = ((0xd2 - 0x5f) << 16) / 160;
+    INT32 IB = ((0xff - 0x8f) << 16) / 160;
+
+    for (Y = 0; Y < H; Y++) {
+        UINT32 Rgb;
+
+        /* GL row y has index (y * 160/(H-1)); screen row Y is GL y = H-1-Y */
+        {
+            INT32 Idx = (INT32)(((UINT64)(H - 1 - Y) * (UINT64)Inc) >> 16);
+
+            Rgb = (UINT32)(((R0 + IR * Idx) >> 16) & 0xFF) << 16 |
+                  (UINT32)(((G0 + IG * Idx) >> 16) & 0xFF) << 8 |
+                  (UINT32)(((B0 + IB * Idx) >> 16) & 0xFF);
+        }
+        Box(0, Y, mPriv.FbWidth - 1, Y, Rgb);
+    }
+}
+
+/* txShdOutline() with the done button off: x1,x2 are the outline's left and
+ * right, yt (GL y2) and yb (GL y1) its top and bottom, in screen y. */
+static VOID
+ShdOutline(INT32 x1, INT32 yt, INT32 x2, INT32 yb)
+{
+    INT32 bottomy = yb + LRT_BDR + 1;	/* GL: y1 - LRT_BDR - 1 */
+    INT32 i;
+
+    /* thick gray border: right, left, top, bottom */
+    Box(x2 + IN_WIDTH, yt - IN_WIDTH, x2 + LRT_BDR - 1, yb + IN_WIDTH, G_VLIGHT);
+    Box(x1 - LRT_BDR + 1, yt - IN_WIDTH, x1 - IN_WIDTH, yb + IN_WIDTH, G_VLIGHT);
+    Box(x1 - LRT_BDR + 1, yt - (LRT_BDR - 1), x2 + LRT_BDR - 1, yt - IN_WIDTH, G_VLIGHT);
+    Box(x1 - LRT_BDR + 1, yb + IN_WIDTH, x2 + LRT_BDR - 1, bottomy, G_VLIGHT);
+
+    {
+        CONST UINT32 BR[4] = { G_LIGHT, G_MEDIUM, G_DARK, G_BLACK };
+        CONST UINT32 TL[4] = { G_WHITE, G_WHITE, G_WHITE, G_BLACK };
+
+        for (i = 0; i < OUT_WIDTH; i++) {	/* bottom and right */
+            Box(x1 - LRT_BDR - i, bottomy + i, x2 + LRT_BDR + i, bottomy + i, BR[i]);
+            Box(x2 + LRT_BDR + i, bottomy + i, x2 + LRT_BDR + i, yt - LRT_BDR - i, BR[i]);
+        }
+        for (i = 0; i < OUT_WIDTH; i++) {	/* top and left */
+            Box(x1 - LRT_BDR - i, yt - LRT_BDR - i, x2 + LRT_BDR + i, yt - LRT_BDR - i, TL[i]);
+            Box(x1 - LRT_BDR - i, bottomy + i, x1 - LRT_BDR - i, yt - LRT_BDR - i, TL[i]);
+        }
+    }
+    {
+        CONST UINT32 BR[3] = { G_DARK, G_VLIGHT, G_WHITE };
+        CONST UINT32 TL[3] = { G_VDARK, G_DARK, G_MEDIUM };
+
+        for (i = 0; i < IN_WIDTH; i++) {	/* inner: bottom and right */
+            Box(x1 - i, yb + i, x2 + i, yb + i, BR[i]);
+            Box(x2 + i, yb + i, x2 + i, yt - i, BR[i]);
+        }
+        for (i = 0; i < IN_WIDTH; i++) {	/* inner: top and left */
+            Box(x1 - i, yt - i, x2 + i, yt - i, TL[i]);
+            Box(x1 - i, yb + i, x1 - i, yt - i, TL[i]);
+        }
+    }
+}
+
+/* Switch from the PROM dialog to the Command Monitor view. */
+static VOID EFIAPI
+ArcsRtShowWindow(VOID)
+{
+    UINT32 Row;
+    INT32 Llx, Top, W, H;
+
+    if (!mCon.Ready)
+        return;
+    ShadedBackground();
+    Llx = mPriv.WinX - XBORDER;		/* original llx; text at llx + XBORDER */
+    Top = mPriv.WinY - YBORDER;
+    W = (INT32)(mCon.Cols * CELLW) + XBORDER * 2;
+    H = (INT32)(mCon.Rows * CELLH) + YBORDER * 2;
+    ShdOutline(Llx - 2, Top - 2, Llx + W + 1, Top + H + 1);
+    Box(Llx, Top, Llx + W - 1, Top + H - 1, 0x606070);	/* TP_DF 96,96,112 */
+    mCon.Col = mCon.Row = 0;
+    for (Row = 0; Row < MAXROWS; Row++)
+        SetMem(mCon.Grid[Row], MAXCOLS, ' ');
+    mCon.Visible = TRUE;
+    mCon.Redraw = FALSE;
+    RedrawAll();
 }
 
 static EFI_STATUS EFIAPI
@@ -254,14 +396,16 @@ ArcsRtConfigure(ARCS_RT_PROTOCOL *This, EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop,
     mPriv.FbWidth = Gop->Mode->Info->HorizontalResolution;
     mPriv.FbHeight = Gop->Mode->Info->VerticalResolution;
     mPriv.FbPixelFormat = Gop->Mode->Info->PixelFormat;
-    mPriv.WinX = X;
-    mPriv.WinY = Y;
-    mPriv.WinW = W;
-    mPriv.WinH = H;
+    /* The published window is the text area; the outline surrounds it. */
+    mPriv.WinX = X + PAD;
+    mPriv.WinY = Y + PAD;
+    mPriv.WinW = W - 2 * PAD;
+    mPriv.WinH = H - 2 * PAD;
     mPriv.Cols = mCon.Cols;
     mPriv.Rows = mCon.Rows;
 
-    RedrawAll();		/* clears the window to the background colour */
+    mCon.Visible = FALSE;	/* the PROM dialog stays up until ShowFn */
+    mPriv.ShowFn = (UINT64)(UINTN)ArcsRtShowWindow;
     mCon.Ready = TRUE;
     return EFI_SUCCESS;
 }

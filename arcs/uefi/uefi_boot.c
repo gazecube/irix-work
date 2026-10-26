@@ -42,8 +42,6 @@ ArcsPrepareResidentConsole(VOID)
     EFI_GUID RtGuid = ARCS_RT_PROTOCOL_GUID;
     EFI_DEVICE_PATH_PROTOCOL *Path;
     EFI_HANDLE Drv = NULL;
-    EFI_GRAPHICS_OUTPUT_BLT_PIXEL Light = { 0xD0, 0xD0, 0xD0, 0 };
-    EFI_GRAPHICS_OUTPUT_BLT_PIXEL Dark = { 0x30, 0x30, 0x30, 0 };
     UINT32 X, Y, W, H, Sw, Sh;
     char *Off = getenv("ArcsConsole");
 
@@ -60,20 +58,26 @@ ArcsPrepareResidentConsole(VOID)
             return FALSE;
     }
 
-    /* clear the countdown dialog off the screen before the window goes up */
-    drawBackground();
-
+    /* The countdown dialog stays up while the kernel loads; the window is
+     * only shown when the OS asks (init started). */
     Sw = Gop->Mode->Info->HorizontalResolution;
     Sh = Gop->Mode->Info->VerticalResolution;
-    W = Sw * 3 / 5;
-    H = Sh * 3 / 5;
+    /* Textport geometry of IRIX htport.c: TP_MAXCOLS x TP_MAXROWS cells of
+     * ScrB18 (9x17), shrunk (rows by 4, columns by 8) until it fits inside
+     * the screen minus TP_XBORDER/TP_YBORDER, centred, 2 pixels of padding. */
+    {
+        UINT32 Cols = 80, Rows = 40;
+
+        while (17 * Rows >= Sh - 90 && Rows > 4)
+            Rows -= 4;
+        while (9 * Cols >= Sw - 96 && Cols > 8)
+            Cols -= 8;
+        W = 9 * Cols + 4;
+        H = 17 * Rows + 4;
+    }
     X = (Sw - W) / 2;
     Y = (Sh - H) / 2;
-    Gop->Blt(Gop, &Light, EfiBltVideoFill, 0, 0, X - 2, Y - 2, W + 4, 2, 0);
-    Gop->Blt(Gop, &Light, EfiBltVideoFill, 0, 0, X - 2, Y - 2, 2, H + 4, 0);
-    Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X - 2, Y + H, W + 4, 2, 0);
-    Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X + W, Y - 2, 2, H + 4, 0);
-    return !EFI_ERROR(Rt->Configure(Rt, Gop, X, Y, W, H, 0xE8E8E8, 0x000000));
+    return !EFI_ERROR(Rt->Configure(Rt, Gop, X, Y, W, H, 0xF0F0F0, 0x606070));
 }
 
 extern char *getenv(const char *Name);
