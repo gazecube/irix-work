@@ -5,7 +5,7 @@ Native x86-64 Linux builds of IRIX userland commands. The IRIX sources
 this layer. Build with `make`; binaries land in `build/`.
 
 Built so far: chkconfig, setmnt, devnm (new, IRIX ships no source), uadmin,
-suattr, nvram, getty, init.
+suattr, nvram, getty, init, fsstat, ioconfig, mount.
 
 - `include/irix_compat.h` is force-included. It supplies IRIX-only constants
   and redirects `sysconf`, `statvfs64`, `sys_errlist`.
@@ -54,3 +54,14 @@ initramfs; the QEMU guest used for that lives outside the repo.
 - `sysmp(MP_KERNADDR, ...)` fails, so init keeps its default process table size.
 - Verified in QEMU as PID 1: sysinit entries, run level 2 wait entry, getty
   respawn, `initstate=s` single-user mode.
+
+Commands written for this port (IRIX's own are EFS/NFS/hwgraph specific):
+
+- `fsstat`: IRIX exit codes (0 okay, 1 needs checking, 2 mounted, 3 error);
+  XFS counts as okay (journal replay), ext2/3/4 report their state flag, a
+  mounted root is never dirty.
+- `ioconfig`: makes sure /hw is mounted (hwgfs) and that /dev/dsk aliases
+  exist; the kernel (patch 0001) and udev create them, so there is no ioctl
+  alias dance.
+- `mount`: translates IRIX options (`-T types`, `-c`, `-t fd`, IRIX-only fs
+  types) and runs the system mount ($IRIX_REAL_MOUNT overrides it).

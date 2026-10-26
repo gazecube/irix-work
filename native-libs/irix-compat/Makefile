@@ -1,4 +1,5 @@
 # Native x86-64 Linux build of IRIX userland commands against glibc plus a thin
+.DEFAULT_GOAL := all
 # compat layer.  The IRIX sources are used unmodified from SRC.
 SRC   ?= $(HOME)/Projects/irix-657m-src
 OUT   ?= build
@@ -15,7 +16,10 @@ SRCS_getty     = $(SRC)/eoe/cmd/getty/getty.c
 CFLAGS_getty   = -I$(SRC)/eoe/cmd/getty
 SRCS_init      = $(OUT)/init.c
 CFLAGS_init    = -I$(SRC)/eoe/cmd/init
-PROGS = chkconfig setmnt devnm uadmin suattr nvram getty init
+SRCS_fsstat    = src/fsstat.c
+SRCS_ioconfig  = src/ioconfig.c
+SRCS_mount     = src/mount.c
+PROGS = chkconfig setmnt devnm uadmin suattr nvram getty init fsstat ioconfig mount
 
 # init.c needs two source transforms, applied to a copy in $(OUT):
 #  - SVR4 FILE internals (fp->_flag) -> irix_fflag(fp)
