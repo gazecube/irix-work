@@ -1,5 +1,6 @@
 #include <Uefi.h>
 #include <Library/BaseLib.h>
+#include <Library/PrintLib.h>
 #include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -32,7 +33,7 @@ extern void drawBackground(void);
  * IRIX's arcs_write().  Silently does nothing if the driver is not installed
  * or ArcsConsole=off.
  */
-static VOID
+static BOOLEAN
 ArcsPrepareResidentConsole(VOID)
 {
     EFI_LOADED_IMAGE_PROTOCOL *Img = NULL;
@@ -47,16 +48,16 @@ ArcsPrepareResidentConsole(VOID)
     char *Off = getenv("ArcsConsole");
 
     if (!Gop || !ArcsImageHandle || (Off && *Off == 'o'))
-        return;
+        return FALSE;
     if (EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
                                       (VOID **)&Img)) || !Img)
-        return;
+        return FALSE;
     if (EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt))) {
         Path = FileDevicePath(Img->DeviceHandle, L"\\EFI\\ARCS\\ArcsRt.efi");
         if (!Path || EFI_ERROR(gBS->LoadImage(FALSE, ArcsImageHandle, Path, NULL, 0, &Drv)) ||
             EFI_ERROR(gBS->StartImage(Drv, NULL, NULL)) ||
             EFI_ERROR(gBS->LocateProtocol(&RtGuid, NULL, (VOID **)&Rt)))
-            return;
+            return FALSE;
     }
 
     /* clear the countdown dialog off the screen before the window goes up */
@@ -72,7 +73,7 @@ ArcsPrepareResidentConsole(VOID)
     Gop->Blt(Gop, &Light, EfiBltVideoFill, 0, 0, X - 2, Y - 2, 2, H + 4, 0);
     Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X - 2, Y + H, W + 4, 2, 0);
     Gop->Blt(Gop, &Dark, EfiBltVideoFill, 0, 0, X + W, Y - 2, 2, H + 4, 0);
-    (VOID)Rt->Configure(Rt, Gop, X, Y, W, H, 0xE8E8E8, 0x101830);
+    return !EFI_ERROR(Rt->Configure(Rt, Gop, X, Y, W, H, 0xE8E8E8, 0x000000));
 }
 
 extern char *getenv(const char *Name);
@@ -246,7 +247,15 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
     {
         EFI_LOADED_IMAGE_PROTOCOL *Child = NULL;
         char *Opts = getenv("OSLoadOptions");
+        BOOLEAN Resident = ArcsPrepareResidentConsole();
+        CHAR8 Joined[512];
 
+        /* With the window up, the VT console should use the textport font. */
+        if (Resident) {
+            AsciiSPrint(Joined, sizeof(Joined), "%a%afbcon=font:ScrB18",
+                        Opts ? Opts : "", (Opts && *Opts) ? " " : "");
+            Opts = Joined;
+        }
         if (Opts && *Opts &&
             !EFI_ERROR(gBS->HandleProtocol(ChildImage, &gEfiLoadedImageProtocolGuid,
                                            (VOID **)&Child)) && Child) {
@@ -263,8 +272,6 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
             }
         }
     }
-
-    ArcsPrepareResidentConsole();
 
     Status = gBS->StartImage(ChildImage, NULL, NULL);
 
