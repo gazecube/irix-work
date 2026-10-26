@@ -336,7 +336,8 @@ ArcsRtShowWindow(VOID)
     W = (INT32)(mCon.Cols * CELLW) + XBORDER * 2;
     H = (INT32)(mCon.Rows * CELLH) + YBORDER * 2;
     ShdOutline(Llx - 2, Top - 2, Llx + W + 1, Top + H + 1);
-    Box(Llx, Top, Llx + W - 1, Top + H - 1, 0x606070);	/* TP_DF 96,96,112 */
+    /* page colour, including the 1 pixel ring the original paints inside the outline */
+    Box(Llx - 1, Top - 1, Llx + W, Top + H, 0x606070);	/* TP_DF 96,96,112 */
     mCon.Col = mCon.Row = 0;
     for (Row = 0; Row < MAXROWS; Row++)
         SetMem(mCon.Grid[Row], MAXCOLS, ' ');
