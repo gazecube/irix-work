@@ -73,6 +73,54 @@ void irix_syslog(int, const char *, ...);
 long sginap(long);		/* IRIX: sleep in clock ticks (100/s); 0 yields */
 int getdtablehi(void);		/* IRIX: highest possibly open descriptor + 1 */
 
+/* <termio.h>/<sys/termios.h> defaults used by init's default gettydefs */
+#ifndef SSPEED
+#define SSPEED		B9600
+#endif
+#ifndef CNSWTCH
+#define CNSWTCH		0
+#endif
+
+/* utmp locations in an IRIX tree, and the message strings of IRIX <utmp.h> */
+#include <utmp.h>
+#ifndef UTMP_FILE
+#define UTMP_FILE	"/var/adm/utmp"
+#endif
+#ifndef WTMP_FILE
+#define WTMP_FILE	"/var/adm/wtmp"
+#endif
+#ifndef RUNLVL_MSG
+#define RUNLVL_MSG	"run-level %c"
+#endif
+#ifndef BOOT_MSG
+#define BOOT_MSG	"system boot"
+#endif
+
+typedef unsigned int major_t;
+typedef unsigned int minor_t;
+#ifndef SIGEMT
+#define SIGEMT		SIGSTKFLT	/* no SIGEMT on Linux/x86 */
+#endif
+
+/* SVR4 FILE flag tests (fp->_flag & _IORW ...): the Makefile rewrites
+ * fp->_flag to irix_fflag(fp), which reports the stream's access mode. */
+#include <fcntl.h>
+#define _IOREAD		0x01
+#define _IOWRT		0x02
+#define _IORW		0x80
+static inline int irix_fflag(FILE *fp)
+{
+	int m = fcntl(fileno(fp), F_GETFL);
+
+	if (m < 0)
+		return 0;
+	switch (m & O_ACCMODE) {
+	case O_RDWR: return _IORW;
+	case O_WRONLY: return _IOWRT;
+	default: return _IOREAD;
+	}
+}
+
 #ifndef MNTMAXSTR
 #define MNTMAXSTR	128		/* IRIX <mntent.h> */
 #endif

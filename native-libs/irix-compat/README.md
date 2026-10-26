@@ -5,7 +5,7 @@ Native x86-64 Linux builds of IRIX userland commands. The IRIX sources
 this layer. Build with `make`; binaries land in `build/`.
 
 Built so far: chkconfig, setmnt, devnm (new, IRIX ships no source), uadmin,
-suattr, nvram, getty.
+suattr, nvram, getty, init.
 
 - `include/irix_compat.h` is force-included. It supplies IRIX-only constants
   and redirects `sysconf`, `statvfs64`, `sys_errlist`.
@@ -41,3 +41,16 @@ Behaviour worth knowing:
 
 Testing: `make CFLAGS="... -static ..."` builds static binaries for a bare
 initramfs; the QEMU guest used for that lives outside the repo.
+
+`init` (built as `build/init`; install it only under another name, e.g.
+`irix-init`, and boot it with `init=` / `rdinit=`; it does not replace OpenRC):
+
+- Two transforms are applied to a copy of init.c in `build/` by the Makefile:
+  SVR4 FILE internals (`fp->_flag` -> `irix_fflag(fp)`) and the console
+  device numbers (IRIX duart 58,0 -> Linux /dev/console 5,1).
+- `sgikopt()` reads `name=value` from `/proc/cmdline`, so `initstate=s` on the
+  kernel command line boots single user, like a PROM `setenv initstate s`.
+- STREAMS `I_SETSIG` on `/etc/initpipe` becomes O_ASYNC + F_SETOWN.
+- `sysmp(MP_KERNADDR, ...)` fails, so init keeps its default process table size.
+- Verified in QEMU as PID 1: sysinit entries, run level 2 wait entry, getty
+  respawn, `initstate=s` single-user mode.

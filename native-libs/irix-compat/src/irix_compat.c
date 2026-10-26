@@ -35,6 +35,8 @@
 #include <pfmt.h>
 #include <sat.h>
 #include <sys/syssgi.h>
+#include <sys/stropts.h>
+#include <sys/sysmp.h>
 #include <dirent.h>
 #include <syslog.h>
 #include <sched.h>
@@ -593,6 +595,15 @@ int irix_ioctl(int fd, unsigned long req, ...)
 
 	if (req == LDSETT_REQ || req == LDGETT_REQ)
 		return 0;
+	if (req == I_SRDOPT)			/* message discard mode: nothing to do */
+		return 0;
+	if (req == I_SETSIG) {			/* SIGPOLL when the FIFO has input */
+		int fl = fcntl(fd, F_GETFL);
+
+		if (fl < 0 || fcntl(fd, F_SETOWN, getpid()) < 0)
+			return -1;
+		return fcntl(fd, F_SETFL, fl | O_ASYNC);
+	}
 	if (req == TCGETA) {
 		struct itermio *t = arg;
 		struct termios k;
@@ -664,6 +675,57 @@ void irix_syslog(int prio, const char *fmt, ...)
 	}
 	vsyslog(prio, fmt, ap);
 	va_end(ap);
+}
+
+/* ---- sysmp: nothing here is the kernel's; ask for the defaults ----------- */
+
+long irix_sysmp(int cmd, ...)
+{
+	(void)cmd;
+	return errno = EINVAL, -1;
+}
+
+/* ---- kernel options, argv saving, availmon --------------------------------- */
+
+/* IRIX sgikopt(): a boot option passed to the kernel.  Here: name=value on the
+ * kernel command line (the ARCS PROM puts OSLoadOptions there). */
+int sgikopt(const char *name, char *buf, int len)
+{
+	FILE *f = fopen("/proc/cmdline", "r");
+	char cmd[4096];
+	size_t n = strlen(name);
+	char *p, *save = NULL;
+
+	if (!f)
+		return errno = EINVAL, -1;
+	if (!fgets(cmd, sizeof(cmd), f))
+		cmd[0] = 0;
+	fclose(f);
+	cmd[strcspn(cmd, "\n")] = 0;
+	for (p = strtok_r(cmd, " \t", &save); p; p = strtok_r(NULL, " \t", &save)) {
+		if (!strncmp(p, name, n) && p[n] == '=') {
+			strncpy(buf, p + n + 1, len - 1);
+			buf[len - 1] = 0;
+			return (int)strlen(buf);
+		}
+	}
+	return errno = EINVAL, -1;
+}
+
+/* audit-record argv saving: not kept */
+char *argvtostr(char **argv)
+{
+	static char one[] = "";
+
+	(void)argv;
+	return one;
+}
+
+/* init's availability-monitor hook (availmon is not part of this port) */
+int doavailmon(char state)
+{
+	(void)state;
+	return 0;
 }
 
 /* ---- sginap, getdtablehi ------------------------------------------------ */
