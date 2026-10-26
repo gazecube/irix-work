@@ -23,6 +23,23 @@ isGuiMode(void)
     return(gfxgui.htp && (gfxgui.htp->textport.state == GUI));
 }
 
+/* Original IRIX 6.5.7m libsc/gui/gutil.c implementation: turns on gui mode.
+ * ESC[35h makes htp_write() put the textport into GUI state. */
+void
+setGuiMode(int on, int flags)
+{
+	gfxgui.flags = flags | (gfxgui.flags & 0x7fff0000);
+	if (on) {
+		puts("\033[35h");
+		drawBackground();
+	}
+	else {
+		cleanGfxGui();
+		if (flags & GUI_RESET)
+			gfxgui.htp->textport.state = DIRTY;
+	}
+}
+
 void
 ArcsPromAutobootInit(EFI_SYSTEM_TABLE *SystemTable)
 {

@@ -4,6 +4,9 @@
 
 extern char *getenv(const char *Name);
 extern int autoboot(int delay, char *message1, char *message2);
+extern int isGuiMode(void);
+extern void setGuiMode(int on, int flags);
+extern int isgraphic(unsigned long fd);
 
 #define AUTO_DELAY 5
 #define AUTO_MESSAGE1 0
@@ -33,6 +36,11 @@ startup(void)
     bootchar = cp ? *cp : 0;
     stopboot = getenv("NoAutoLoad");
 
-    if (!stopboot && (bootchar == 'y' || bootchar == 'Y'))
+    if (!stopboot && (bootchar == 'y' || bootchar == 'Y')) {
+        /* Original libsk/ml/startup.c: make sure the screen is up (the
+         * autoboot dialog is only drawn in GUI mode). */
+        if (isgraphic(1) && !isGuiMode())
+            setGuiMode(1, 0);
         (void)autoboot(AUTO_DELAY, AUTO_MESSAGE1, 0);
+    }
 }
