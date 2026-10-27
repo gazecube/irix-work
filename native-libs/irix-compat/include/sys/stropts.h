@@ -1,13 +1,23 @@
-/* SVR4 STREAMS ioctls used for plain FIFOs: I_SETSIG becomes O_ASYNC +
- * F_SETOWN (SIGPOLL == SIGIO on Linux); I_SRDOPT is a no-op. */
+/* IRIX <stropts.h>: the real STREAMS numbers and structures (a copy of the
+ * kernel's uapi header, patch 0011), plus getmsg/putmsg over the IRIX syscall
+ * block.  libirixcompat's ioctl falls back to a FIFO emulation of I_SETSIG
+ * and I_SRDOPT when the descriptor is not a stream. */
 #ifndef _IRIX_SYS_STROPTS_H
 #define _IRIX_SYS_STROPTS_H
-#define I_SETSIG	(('S' << 8) | 9)
-#define I_SRDOPT	(('S' << 8) | 3)
-#define S_INPUT		0x0001
-#define S_HIPRI		0x0002
-#define S_OUTPUT	0x0004
-#define RNORM		0x0001
-#define RMSGD		0x0002
-#define RMSGN		0x0004
+#include <sys/irix_stropts_uapi.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+int irix_getmsg(int fd, struct strbuf *ctl, struct strbuf *dat, int *flagsp);
+int irix_putmsg(int fd, const struct strbuf *ctl, const struct strbuf *dat, int flags);
+int irix_getpmsg(int fd, struct strbuf *ctl, struct strbuf *dat, int *bandp, int *flagsp);
+int irix_putpmsg(int fd, const struct strbuf *ctl, const struct strbuf *dat, int band, int flags);
+#ifdef __cplusplus
+}
+#endif
+#define getmsg(fd, c, d, f)		irix_getmsg((fd), (c), (d), (f))
+#define putmsg(fd, c, d, f)		irix_putmsg((fd), (c), (d), (f))
+#define getpmsg(fd, c, d, b, f)		irix_getpmsg((fd), (c), (d), (b), (f))
+#define putpmsg(fd, c, d, b, f)		irix_putpmsg((fd), (c), (d), (b), (f))
 #endif

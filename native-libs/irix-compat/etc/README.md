@@ -9,6 +9,7 @@ the real init:
     S00announce    boot banner
     S58rmtmpfiles  clean /tmp, /var/tmp
     S88configmsg   configuration messages
+    S20syslogd     syslogd + logbridge (STREAMS log driver and /dev/log)
     S98xdm         the graphical login (xdm / Xsgi)
 
 Held back until the IRIX init replaces OpenRC (each fights Linux or needs a

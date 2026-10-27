@@ -19,7 +19,10 @@ CFLAGS_init    = -I$(SRC)/eoe/cmd/init
 SRCS_fsstat    = src/fsstat.c
 SRCS_ioconfig  = src/ioconfig.c
 SRCS_mount     = src/mount.c
-PROGS = chkconfig setmnt devnm uadmin suattr nvram getty init fsstat ioconfig mount
+SRCS_syslogd   = $(OUT)/syslogd.c
+SRCS_logbridge = src/logbridge.c
+CFLAGS_syslogd = -I$(SRC)/eoe/cmd/bsd
+PROGS = chkconfig setmnt devnm uadmin suattr nvram getty init fsstat ioconfig mount syslogd logbridge
 
 # init.c needs two source transforms, applied to a copy in $(OUT):
 #  - SVR4 FILE internals (fp->_flag) -> irix_fflag(fp)
@@ -47,3 +50,16 @@ clean:
 .PHONY: all clean
 
 $(OUT)/init: $(OUT)/init.c
+
+# syslogd reads its messages from the STREAMS log driver; on Linux that is
+# /dev/streams/log (kernel patch 0011), not the /dev/log socket glibc uses.
+$(OUT)/syslogd.c: $(SRC)/eoe/cmd/bsd/syslogd.c Makefile | $(OUT)
+	sed -e 's#open(_PATH_LOG, O_RDWR)#open("/dev/streams/log", O_RDWR)#' \
+	    -e 's#^char\t\*malloc();$$##' \
+	    -e 's#union wait status;#int status;#' \
+	    -e 's#status\.w_retcode#WEXITSTATUS(status)#g' \
+	    -e 's#status\.w_termsig#(WIFSIGNALED(status) ? WTERMSIG(status) : 0)#g' \
+	    -e '1i #include "syslogd_compat.h"' $< > $@
+	grep -q '/dev/streams/log' $@
+
+$(OUT)/syslogd: $(OUT)/syslogd.c

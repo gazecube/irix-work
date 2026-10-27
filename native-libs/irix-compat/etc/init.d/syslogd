@@ -1,0 +1,24 @@
+#!/bin/sh
+# Start the IRIX syslogd and the bridge that feeds it glibc syslog() traffic.
+#
+# On IRIX, S20sysetup starts syslogd and libc syslog() reaches it through the
+# STREAMS log driver.  Linux programs log to the /dev/log socket instead, so
+# logbridge owns that socket and forwards every datagram into the same driver
+# (/dev/streams/log, kernel patch 0011); one syslogd sees both.
+#
+# Options come from /etc/config/syslogd.options, like the original.  The
+# config file is /etc/syslog.conf; the IRIX default log file is /var/adm/SYSLOG.
+case "$1" in
+'start')
+	[ -c /dev/streams/log ] || { echo "syslogd: no /dev/streams/log (kernel without IRIX_STREAMS)"; exit 1; }
+	mkdir -p /var/adm
+	/usr/local/sbin/logbridge
+	/usr/local/sbin/syslogd `cat /etc/config/syslogd.options 2> /dev/null`
+	;;
+'stop')
+	killall syslogd logbridge > /dev/null 2>&1
+	;;
+*)
+	echo "usage: /etc/init.d/syslogd {start|stop}"
+	;;
+esac

@@ -1,0 +1,40 @@
+# /etc/inittab for the IRIX init on Gentoo (staged, not installed).
+#
+# Step 1 of replacing sysvinit: this is the stock Gentoo inittab, so OpenRC does
+# exactly what it does today, with the entries the IRIX init cannot parse left
+# out (ctrlaltdel, the sysvinit-only "telinit u" re-exec).  Entries are then
+# replaced one at a time by IRIX rc scripts (/etc/rc2.d, see etc/README.md).
+#
+# Boot with the IRIX init from a second boot entry (init=/sbin/init-irix); the
+# normal entry keeps booting with sysvinit.
+#
+# id:levels:action:process
+id:3:initdefault:
+
+# system initialization
+si::sysinit:/sbin/openrc sysinit
+rc::bootwait:/sbin/openrc boot
+
+# run levels (OpenRC runlevels: 3,4,5 = default; 2 = nonetwork; 1 = single)
+l0:0:wait:/sbin/openrc shutdown
+l0s:0:wait:/sbin/halt.sh
+l1:1:wait:/sbin/openrc single
+l2:2:wait:/sbin/openrc nonetwork
+l3:3:wait:/sbin/openrc default
+l4:4:wait:/sbin/openrc default
+l5:5:wait:/sbin/openrc default
+l6:6:wait:/sbin/openrc reboot
+l6r:6:wait:/sbin/reboot -dkn
+su0:S:wait:/sbin/openrc single
+su1:S:wait:/sbin/sulogin
+
+# consoles (agetty for now; the IRIX getty needs an iaf "scheme" first)
+c1:12345:respawn:/sbin/agetty --autologin nekron --noclear 38400 tty1 linux
+c2:2345:respawn:/sbin/agetty 38400 tty2 linux
+c3:2345:respawn:/sbin/agetty 38400 tty3 linux
+c4:2345:respawn:/sbin/agetty 38400 tty4 linux
+c5:2345:respawn:/sbin/agetty 38400 tty5 linux
+c6:2345:respawn:/sbin/agetty 38400 tty6 linux
+
+# display manager, only when asked for (telinit a)
+x:a:once:/usr/bin/startDM

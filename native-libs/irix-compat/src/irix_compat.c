@@ -572,6 +572,28 @@ long irix_syssgi(int cmd, ...)
 	return r;
 }
 
+/* ---- STREAMS message calls (IRIX syscall block, patch 0011) ------------ */
+
+int irix_getmsg(int fd, struct strbuf *ctl, struct strbuf *dat, int *flagsp)
+{
+	return syscall(__NR_irix_getmsg, fd, ctl, dat, flagsp);
+}
+
+int irix_putmsg(int fd, const struct strbuf *ctl, const struct strbuf *dat, int flags)
+{
+	return syscall(__NR_irix_putmsg, fd, ctl, dat, flags);
+}
+
+int irix_getpmsg(int fd, struct strbuf *ctl, struct strbuf *dat, int *bandp, int *flagsp)
+{
+	return syscall(__NR_irix_getpmsg, fd, ctl, dat, bandp, flagsp);
+}
+
+int irix_putpmsg(int fd, const struct strbuf *ctl, const struct strbuf *dat, int band, int flags)
+{
+	return syscall(__NR_irix_putpmsg, fd, ctl, dat, band, flags);
+}
+
 /* ---- termio over termios --------------------------------------------- */
 
 /* the IRIX struct termio, redeclared here because termio.h redirects ioctl */
@@ -595,6 +617,13 @@ int irix_ioctl(int fd, unsigned long req, ...)
 
 	if (req == LDSETT_REQ || req == LDGETT_REQ)
 		return 0;
+	if (req == I_SRDOPT || req == I_SETSIG) {
+		/* a real stream (kernel STREAMS) takes these itself; anything
+		 * else is a plain FIFO or a kernel without STREAMS */
+		r = syscall(SYS_ioctl, fd, req, arg);
+		if (r == 0 || (errno != ENOTTY && errno != EINVAL))
+			return r;
+	}
 	if (req == I_SRDOPT)			/* message discard mode: nothing to do */
 		return 0;
 	if (req == I_SETSIG) {			/* SIGPOLL when the FIFO has input */
