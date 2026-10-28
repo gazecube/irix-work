@@ -15,8 +15,12 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#ifdef IRIX_AL_ALSA
+#include <alsa/asoundlib.h>
+#else
 #include <pulse/error.h>
 #include <pulse/simple.h>
+#endif
 #ifdef IRIX_HAVE_AUDIOFILE
 #include <audiofile.h>
 #endif
@@ -63,11 +67,128 @@ typedef struct {
     int queuesize;  /* in samples */
 } AlConfig;
 
+/* ---- audio output: PulseAudio by default, ALSA when built with IRIX_AL_ALSA ---- */
+typedef struct AlOut AlOut;
+enum { AL_OUT_U8, AL_OUT_S16, AL_OUT_S32, AL_OUT_F32 };
+
+#ifdef IRIX_AL_ALSA
+/* Plays straight to ALSA (IRIX_AL_ALSA_DEVICE, default "default"), for hosts
+ * without a PulseAudio/PipeWire server. */
+struct AlOut { snd_pcm_t *pcm; unsigned rate; unsigned frame; };
+
+static AlOut *al_out_open(unsigned rate, unsigned ch, int fmt, const char *name)
+{
+    static const snd_pcm_format_t map[] = {
+        SND_PCM_FORMAT_U8, SND_PCM_FORMAT_S16_LE, SND_PCM_FORMAT_S32_LE, SND_PCM_FORMAT_FLOAT_LE };
+    static const unsigned width[] = { 1, 2, 4, 4 };
+    const char *dev = getenv("IRIX_AL_ALSA_DEVICE");
+    snd_pcm_t *pcm = 0;
+    AlOut *o;
+    int err;
+    (void)name;
+    if (!dev || !dev[0]) dev = "default";
+    err = snd_pcm_open(&pcm, dev, SND_PCM_STREAM_PLAYBACK, 0);
+    if (err < 0) {
+        fprintf(stderr, "IRIX AL: cannot open ALSA device %s: %s\n", dev, snd_strerror(err));
+        return 0;
+    }
+    err = snd_pcm_set_params(pcm, map[fmt], SND_PCM_ACCESS_RW_INTERLEAVED, ch, rate, 1, 100000);
+    if (err < 0) {
+        fprintf(stderr, "IRIX AL: ALSA %s rejects %u Hz x %u: %s\n", dev, rate, ch, snd_strerror(err));
+        snd_pcm_close(pcm);
+        return 0;
+    }
+    o = calloc(1, sizeof *o);
+    if (!o) { snd_pcm_close(pcm); return 0; }
+    o->pcm = pcm;
+    o->rate = rate;
+    o->frame = ch * width[fmt];
+    return o;
+}
+
+static int al_out_write(AlOut *o, const void *buf, size_t bytes)
+{
+    const uint8_t *p = buf;
+    snd_pcm_uframes_t left = bytes / o->frame;
+    while (left) {
+        snd_pcm_sframes_t n = snd_pcm_writei(o->pcm, p, left);
+        if (n < 0) {
+            n = snd_pcm_recover(o->pcm, (int)n, 1);     /* underrun, suspend */
+            if (n < 0) return -1;
+            continue;
+        }
+        p += (size_t)n * o->frame;
+        left -= (snd_pcm_uframes_t)n;
+    }
+    return 0;
+}
+
+static uint64_t al_out_latency_us(AlOut *o)
+{
+    snd_pcm_sframes_t d = 0;
+    if (snd_pcm_delay(o->pcm, &d) < 0 || d < 0) return 0;
+    return (uint64_t)d * 1000000u / (o->rate ? o->rate : 44100u);
+}
+
+static void al_out_close(AlOut *o)
+{
+    snd_pcm_drain(o->pcm);
+    snd_pcm_close(o->pcm);
+    free(o);
+}
+#else
+struct AlOut { pa_simple *pa; };
+
+static AlOut *al_out_open(unsigned rate, unsigned ch, int fmt, const char *name)
+{
+    pa_sample_spec ss;
+    pa_buffer_attr attr;
+    AlOut *o;
+    int err = 0;
+    memset(&ss, 0, sizeof ss);
+    ss.format = fmt == AL_OUT_U8 ? PA_SAMPLE_U8 : fmt == AL_OUT_S16 ? PA_SAMPLE_S16LE
+              : fmt == AL_OUT_S32 ? PA_SAMPLE_S32LE : PA_SAMPLE_FLOAT32LE;
+    ss.rate = rate;
+    ss.channels = (uint8_t)ch;
+    attr.maxlength = (uint32_t)-1;
+    attr.tlength = pa_usec_to_bytes(100000, &ss);
+    attr.prebuf = (uint32_t)-1;
+    attr.minreq = (uint32_t)-1;
+    attr.fragsize = (uint32_t)-1;
+    o = calloc(1, sizeof *o);
+    if (!o) return 0;
+    o->pa = pa_simple_new(0, "IRIX", PA_STREAM_PLAYBACK, 0, name, &ss, 0, &attr, &err);
+    if (!o->pa) {
+        fprintf(stderr, "IRIX AL: cannot open PulseAudio stream: %s\n", pa_strerror(err));
+        free(o);
+        return 0;
+    }
+    return o;
+}
+
+static int al_out_write(AlOut *o, const void *buf, size_t bytes)
+{
+    return pa_simple_write(o->pa, buf, bytes, 0) < 0 ? -1 : 0;
+}
+
+static uint64_t al_out_latency_us(AlOut *o)
+{
+    return (uint64_t)pa_simple_get_latency(o->pa, 0);
+}
+
+static void al_out_close(AlOut *o)
+{
+    pa_simple_drain(o->pa, 0);
+    pa_simple_free(o->pa);
+    free(o);
+}
+#endif
+
 typedef struct {
     int used;
     int output;
     AlConfig cfg;
-    pa_simple *pa;
+    AlOut *pa;
     int pa_rate;
     int fd;
     char name[32];
@@ -189,8 +310,7 @@ static void b_ALopenport(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 static void pa_close(AlPort *p)
 {
     if (!p->pa) return;
-    pa_simple_drain(p->pa, 0);
-    pa_simple_free(p->pa);
+    al_out_close(p->pa);
     p->pa = 0;
 }
 
@@ -236,29 +356,17 @@ static void b_ALgetconfig(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static int pa_start(AlPort *p)
 {
-    pa_sample_spec ss;
-    pa_buffer_attr attr;
-    int err = 0, ch = p->cfg.channels > 0 ? p->cfg.channels : 2;
+    int ch = p->cfg.channels > 0 ? p->cfg.channels : 2;
     int rate = g_param[AL_OUTPUT_RATE] > 0 ? g_param[AL_OUTPUT_RATE] : 44100;
+    int fmt;
     if (p->pa && p->pa_rate == rate) return 0;
     pa_close(p);
-    memset(&ss, 0, sizeof ss);
-    ss.format = (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP && p->cfg.width == 1) ? PA_SAMPLE_U8
-              : (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP && p->cfg.width == 2) ? PA_SAMPLE_S16LE
-              : (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP) ? PA_SAMPLE_S32LE
-              : PA_SAMPLE_FLOAT32LE;
-    ss.rate = (uint32_t)rate;
-    ss.channels = (uint8_t)ch;
-    attr.maxlength = (uint32_t)-1;
-    attr.tlength = pa_usec_to_bytes(100000, &ss);
-    attr.prebuf = (uint32_t)-1;
-    attr.minreq = (uint32_t)-1;
-    attr.fragsize = (uint32_t)-1;
-    p->pa = pa_simple_new(0, "IRIX", PA_STREAM_PLAYBACK, 0, p->name, &ss, 0, &attr, &err);
-    if (!p->pa) {
-        fprintf(stderr, "IRIX AL: cannot open PulseAudio stream: %s\n", pa_strerror(err));
-        return -1;
-    }
+    fmt = (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP && p->cfg.width == 1) ? AL_OUT_U8
+        : (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP && p->cfg.width == 2) ? AL_OUT_S16
+        : (p->cfg.sampfmt == AL_SAMPFMT_TWOSCOMP) ? AL_OUT_S32
+        : AL_OUT_F32;
+    p->pa = al_out_open((unsigned)rate, (unsigned)ch, fmt, p->name);
+    if (!p->pa) return -1;
     p->pa_rate = rate;
     return 0;
 }
@@ -321,7 +429,7 @@ static void b_ALwritesamps(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             memcpy(d, &f, 4);
         }
     }
-    if (pa_simple_write(p->pa, dst, (size_t)n * (size_t)out_w, 0) < 0) {
+    if (al_out_write(p->pa, dst, (size_t)n * (size_t)out_w) < 0) {
         free(dst);
         RET(-1);
         return;
@@ -351,10 +459,10 @@ static void b_ALreadsamps(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
 
 static int port_filled(AlPort *p)
 {
-    pa_usec_t us;
+    uint64_t us;
     int ch, rate;
     if (!p->pa) return 0;
-    us = pa_simple_get_latency(p->pa, 0);
+    us = al_out_latency_us(p->pa);
     ch = p->cfg.channels > 0 ? p->cfg.channels : 2;
     rate = p->pa_rate > 0 ? p->pa_rate : 44100;
     return (int)((uint64_t)us * (uint64_t)rate * (uint64_t)ch / 1000000u);
