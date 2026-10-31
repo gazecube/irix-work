@@ -24,6 +24,7 @@
   input_diag.c
   usb_hid_pointer.c
   uefi_boot.c
+  bootmenu.c
   prom_autoboot.c
   prom_startup.c
   dialog_autoboot.c

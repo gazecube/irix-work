@@ -8,6 +8,7 @@
 #include "prom_startup.h"
 #include "uefi_boot.h"
 #include "display_init.h"
+#include "bootmenu.h"
 
 extern void drawBackground(void);
 extern int ArcsUefiDiskInit(void);
@@ -49,6 +50,9 @@ UefiMain(
      */
     /* Discover the mouse now so the autoboot dialog's Stop button works. */
     (VOID)ArcsInputInit(SystemTable);
+
+    /* Boot manager: pick between kernels / other OSes when there is a choice. */
+    (VOID)ArcsBootMenuRun(SystemTable);
 
     startup();
 

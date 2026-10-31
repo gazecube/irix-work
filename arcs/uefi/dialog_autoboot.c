@@ -17,7 +17,7 @@
 
 extern void free(void *);
 
-static void dialogIntBoarder(int x1, int y1, int x2, int y2, int leftshade);
+void dialogIntBoarder(int x1, int y1, int x2, int y2, int leftshade);
 static void drawDialog(struct Dialog *d);
 
 #define dialogfont(d) (((d)->flags & DIALOGBIGFONT) ? ncenB18 : helvR10)
@@ -276,7 +276,7 @@ drawDialog(struct Dialog *d)
     putctext(d->msg,cx,cy,d->textw,dialogfont(d));
 }
 
-static void
+void
 dialogIntBoarder(int x1, int y1, int x2, int y2, int leftshade)
 {
     int i,ramp[DIALOGINTBDW];

@@ -263,7 +263,7 @@ ArcsFindFileSystemImage(
 }
 
 static EFI_STATUS
-ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
+ArcsStartDevicePathEx(EFI_DEVICE_PATH_PROTOCOL *DevicePath, const char *OptsIn, BOOLEAN Kernel)
 {
     EFI_STATUS Status;
     EFI_STATUS RestoreStatus;
@@ -307,8 +307,8 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
      */
     {
         EFI_LOADED_IMAGE_PROTOCOL *Child = NULL;
-        char *Opts = getenv("OSLoadOptions");
-        BOOLEAN Resident = ArcsPrepareResidentConsole();
+        const char *Opts = OptsIn;
+        BOOLEAN Resident = Kernel ? ArcsPrepareResidentConsole() : FALSE;
         CHAR8 Joined[512];
 
         /* With the window up, the VT console should use the textport font. */
@@ -351,6 +351,12 @@ ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
         return RestoreStatus;
 
     return Status;
+}
+
+static EFI_STATUS
+ArcsStartDevicePath(EFI_DEVICE_PATH_PROTOCOL *DevicePath)
+{
+    return ArcsStartDevicePathEx(DevicePath, getenv("OSLoadOptions"), TRUE);
 }
 
 static EFI_STATUS
@@ -545,4 +551,40 @@ ArcsUefiWriteFile(CONST CHAR16 *Path, CONST CHAR8 *Data, UINTN Size)
         File->Close(File);
     }
     Root->Close(Root);
+}
+
+
+/* ---- boot manager support (bootmenu.c) ---- */
+
+EFI_HANDLE
+ArcsUefiOwnVolume(VOID)
+{
+    EFI_LOADED_IMAGE_PROTOCOL *Img = NULL;
+
+    if (ArcsImageHandle == NULL ||
+        EFI_ERROR(gBS->HandleProtocol(ArcsImageHandle, &gEfiLoadedImageProtocolGuid,
+                                      (VOID **)&Img)) || Img == NULL)
+        return NULL;
+    return Img->DeviceHandle;
+}
+
+VOID
+ArcsUefiConnectAll(VOID)
+{
+    ArcsConnectAllControllers();
+}
+
+/* Start an EFI image from a given volume.  Chainloaded loaders get no kernel
+ * command line and no resident-console setup. */
+EFI_STATUS
+ArcsUefiStartImageAt(EFI_HANDLE Volume, CHAR16 *Path, const char *Options, BOOLEAN Kernel)
+{
+    EFI_DEVICE_PATH_PROTOCOL *DevicePath = FileDevicePath(Volume, Path);
+    EFI_STATUS Status;
+
+    if (DevicePath == NULL)
+        return EFI_OUT_OF_RESOURCES;
+    Status = ArcsStartDevicePathEx(DevicePath, Options, Kernel);
+    FreePool(DevicePath);
+    return Status;
 }

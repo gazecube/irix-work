@@ -7,6 +7,7 @@
 #include <style.h>
 
 #include "uefi_boot.h"
+#include "bootmenu.h"
 #include "input_bringup.h"
 
 extern char *make_bootfile(int rewind);
@@ -15,6 +16,8 @@ extern int setenv(const char *Name, const char *Value);
 
 static EFI_SYSTEM_TABLE *ArcsAutobootSystemTable;
 static volatile int ArcsAutobootStopRequested;
+
+int ArcsBootPickerChose;
 static char *defaultmsg = "\n\nStarting up the system...\n\n";
 
 /* Original IRIX 6.5.7m libsc/gui/gutil.c implementation. */
@@ -168,6 +171,8 @@ autoboot(int delay, char *message1, char *message2)
     (void)message2;
 
     startingmsg = message1 ? message1 : defaultmsg;
+    if (ArcsBootPickerChose)
+        delay = 0;   /* the boot picker already waited */
     ArcsAutobootStopRequested = 0;
 
     if (isGuiMode() && !ArcsBootVerbose) {
