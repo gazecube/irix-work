@@ -641,10 +641,21 @@ FitTitle(CHAR8 *Dst, CONST CHAR8 *Src)
     int Max = ROW_W - 8 - WELLW - 14 - 36;
 
     AsciiStrnCpyS(Dst, TITLE_MAX, Src, TITLE_MAX - 1);
+    if (textWidth(Dst, ncenB18) <= Max)
+        return;
+    /* too long: cut it and say so with an ellipsis */
     L = AsciiStrLen(Dst);
-    while (L > 3 && textWidth(Dst, ncenB18) > Max) {
+    while (L > 1) {
         Dst[--L] = 0;
-        Dst[L - 1] = '.';
+        if (L + 3 < TITLE_MAX) {
+            Dst[L] = '.';
+            Dst[L + 1] = '.';
+            Dst[L + 2] = '.';
+            Dst[L + 3] = 0;
+        }
+        if (textWidth(Dst, ncenB18) <= Max)
+            return;
+        Dst[L] = 0;
     }
 }
 
