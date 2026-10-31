@@ -14,14 +14,16 @@
  * are composed in memory and blitted.  The resting states are always drawn by
  * the original GUI code.
  *
- * One motion, start to finish (650 ms): a single ease-in-out master curve drives
- * everything.  The clicked option travels along it to its place beside the
- * flyout; the other options are pulled into it as it moves, nearest first,
- * tucking behind it at full size and fading; a fast vertical raster line
- * flashes in at the flyout panel's edge and sweeps it out as the title
- * arrives (the panel does not fade).  No bounce.  Progress follows the
- * clock, not the frame count; any key skips to the end; the reverse plays the
- * same curve backwards.
+ * One motion, start to finish (850 ms).  The clicked option travels first: it drops
+ * down to its height, then slides across and lands beside the flyout at 45% of
+ * the time (ease-in-out on each leg); the other options
+ * are pulled into it as it moves, nearest first -- labels behind it, icons
+ * dissolving inside its icon, each one's opacity tied to how far it has
+ * travelled.  Only once the title is in place does the flyout open: a fast
+ * vertical raster line flashes in at the panel's edge and sweeps it out (the
+ * panel itself does not fade).  No bounce.  Progress follows the clock, not
+ * the frame count; any key skips to the end; the reverse plays the same
+ * timeline backwards.
  */
 
 typedef struct {

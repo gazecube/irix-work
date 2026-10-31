@@ -23,7 +23,7 @@ typedef EFI_GRAPHICS_OUTPUT_BLT_PIXEL PIX;
 
 #define ONE         65536
 #define NITEMS      5
-#define T_TOTAL     650         /* one motion, start to finish */
+#define T_TOTAL     850         /* one motion, start to finish */
 #define ICON_W      50          /* a menu item's icon button; the label follows */
 
 typedef struct { INTN X, Y, W, H; } GR;     /* GOP-coordinate rectangle */
@@ -115,6 +115,12 @@ EaseInOut(INT32 X)                      /* cubic ease-in-out */
     if (X < ONE / 2)
         return 4 * Cube(X);
     return ONE - 4 * Cube(ONE - X);
+}
+
+static INT32
+EaseOut(INT32 X)                        /* cubic ease-out */
+{
+    return ONE - Cube(ONE - X);
 }
 
 /* A stretch of the master curve: 0 until A, 1 from B, linear between (A, B in
@@ -262,24 +268,35 @@ DrawPanel(INT32 Sweep, INT32 Lit)
 static VOID
 Compose(INTN T)
 {
-    /* The one master curve: everything below is a stretch of it. */
-    INT32 U = EaseInOut(Progress(T, 0, T_TOTAL));
+    /*
+     * The clock runs 0..ONE (X).  The clicked option travels first -- it drops
+     * down, then slides across, landing at 45% -- and the others are pulled into
+     * it by its progress (Pt), so their motion and fade follow the title's; the panel opens only after the title is in
+     * place: the raster line flashes in as it settles and sweeps out over the
+     * rest of the time.
+     */
+    INT32 X = Progress(T, 0, T_TOTAL);
+    /* the title drops down to its height first, then slides across to its place */
+    INT32 Pv = EaseInOut(Seg(X, 0, ONE * 22 / 100));
+    INT32 Ph = EaseInOut(Seg(X, ONE * 22 / 100, ONE * 45 / 100));
+    INT32 Pt = (Pv + Ph) / 2;               /* its overall progress: pulls the others */
     CONST GR *C = &Item[ClickedItem];
     INTN Y, I;
     /* the clicked option's icon centre, now: this is what pulls the others in */
-    INTN ClkCx = Lerp(C->X + 25, Title.X + 25, U);
-    INTN ClkCy = Lerp(C->Y + 25, Title.Y + 25, U);
+    INTN ClkCx = Lerp(C->X + 25, Title.X + 25, Ph);
+    INTN ClkCy = Lerp(C->Y + 25, Title.Y + 25, Pv);
 
     for (Y = 0; Y < Rgn.H; Y++)
         CopyMem(&Work[Y * Rgn.W], &Back[(Rgn.Y + Y) * SW + Rgn.X], Rgn.W * sizeof(PIX));
 
-    /* the raster line flashes in at the panel's edge, sweeps out across it as
-     * the title arrives, and goes out; the panel itself never fades */
+    /* the raster line flashes in at the panel's edge as the title settles, then
+     * sweeps out across it; the panel itself never fades */
     {
-        INT32 Flash = Seg(U, ONE * 22 / 100, ONE * 35 / 100);
-        INT32 Out = Seg(U, ONE * 93 / 100, ONE);
+        INT32 Flash = Seg(X, ONE * 45 / 100, ONE * 52 / 100);
+        INT32 Out = Seg(X, ONE * 96 / 100, ONE);
 
-        DrawPanel(Seg(U, ONE * 35 / 100, ONE), (INT32)(((INT64)Flash * (ONE - Out)) >> 16));
+        DrawPanel(EaseOut(Seg(X, ONE * 52 / 100, ONE)),
+                  (INT32)(((INT64)Flash * (ONE - Out)) >> 16));
     }
 
     /*
@@ -292,7 +309,7 @@ Compose(INTN T)
      */
     for (I = (INTN)OrderCount - 1; I >= 0; I--) {
         CONST GR *S = &Item[Order[I]];
-        INT32 Q = Seg(U, (INT32)I * (ONE / 20), ONE * 4 / 5);
+        INT32 Q = Seg(Pt, (INT32)I * (ONE / 20), ONE * 9 / 10);
         GR L = { S->X + ICON_W, S->Y, S->W - ICON_W, S->H };
         INTN Cx = Lerp(L.X + L.W / 2, ClkCx, Q);
         INTN Cy = Lerp(L.Y + L.H / 2, ClkCy, Q);
@@ -301,13 +318,13 @@ Compose(INTN T)
     }
 
     /* the clicked option travels the whole way on the master curve */
-    DrawSprite(C, Lerp(C->X + C->W / 2, Title.X + C->W / 2, U),
-               Lerp(C->Y + C->H / 2, Title.Y + C->H / 2, U), ONE, 256);
+    DrawSprite(C, Lerp(C->X + C->W / 2, Title.X + C->W / 2, Ph),
+               Lerp(C->Y + C->H / 2, Title.Y + C->H / 2, Pv), ONE, 256);
 
     /* the icons go inside it */
     for (I = (INTN)OrderCount - 1; I >= 0; I--) {
         CONST GR *S = &Item[Order[I]];
-        INT32 Q = Seg(U, (INT32)I * (ONE / 20), ONE * 4 / 5);
+        INT32 Q = Seg(Pt, (INT32)I * (ONE / 20), ONE * 9 / 10);
         GR Ic = { S->X, S->Y, ICON_W, S->H };
         INTN Cx = Lerp(Ic.X + ICON_W / 2, ClkCx, Q);
         INTN Cy = Lerp(Ic.Y + Ic.H / 2, ClkCy, Q);
