@@ -311,10 +311,14 @@ Compose(INTN T)
         CONST GR *S = &Item[Order[I]];
         INT32 Q = Seg(Pt, (INT32)I * (ONE / 20), ONE * 9 / 10);
         GR L = { S->X + ICON_W, S->Y, S->W - ICON_W, S->H };
-        INTN Cx = Lerp(L.X + L.W / 2, ClkCx, Q);
-        INTN Cy = Lerp(L.Y + L.H / 2, ClkCy, Q);
+        /* the labels only drift a short way and are gone by half-way: they
+         * must not be seen crossing the title's own text */
+        INT32 Drift = (INT32)(((INT64)Q * (ONE / 4)) >> 16);
+        INTN Cx = Lerp(L.X + L.W / 2, ClkCx, Drift);
+        INTN Cy = Lerp(L.Y + L.H / 2, ClkCy, Drift);
+        INT32 Gone = EaseOut(Seg(Q, 0, ONE / 2));
 
-        DrawSprite(&L, Cx, Cy, ONE, 256 - ((Seg(Q, 0, ONE * 6 / 10) * 256) >> 16));
+        DrawSprite(&L, Cx, Cy, ONE, 256 - ((Gone * 256) >> 16));
     }
 
     /* the clicked option travels the whole way on the master curve */
