@@ -30,6 +30,8 @@
 #include <pcbm/pcbm.h>
 
 #include "bootmenu.h"
+#include "bootanim.h"
+#include "maintenance_menu_bringup.h"
 #include "input_bringup.h"
 
 extern char *getenv(const char *Name);
@@ -1147,11 +1149,34 @@ ArcsBootMenuShiftHeld(EFI_SYSTEM_TABLE *St)
  * Start System: the picker when there is a choice, then hand the chosen
  * kernel to the normal autoboot path.
  */
-ARCS_START_RESULT
-ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
+static VOID
+GetGeom(ARCS_ANIM_GEOM *G)
+{
+    struct gui_obj *T = guiobj(TitleBtn);
+    int PairW = MENUBUTTW + 10 + textWidth(TitleText, ncenB18);
+
+    G->Title.X1 = T->x1;
+    G->Title.Y1 = T->y1;
+    G->Title.X2 = T->x1 + PairW - 1;
+    G->Title.Y2 = T->y2;
+    G->Panel.X1 = Pop->gui.x1;
+    G->Panel.Y1 = Pop->gui.y1;
+    G->Panel.X2 = Pop->gui.x2;
+    G->Panel.Y2 = Pop->gui.y2;
+}
+
+static VOID
+DestroyPickerFn(VOID)
+{
+    DestroyPicker();
+}
+
+static ARCS_START_RESULT
+StartSystemInner(EFI_SYSTEM_TABLE *SystemTable)
 {
     INTN Pick;
     BOOT_ENTRY *E;
+    BOOLEAN AnimTried = FALSE, AnimOn = FALSE;
 
     if (gfxgui.htp == NULL)
         return ARCS_START_PROCEED;
@@ -1163,14 +1188,26 @@ ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
         if (EntryCount == 1) {
             Pick = 0;
         } else {
+            BOOLEAN Built = FALSE;
+
             Sel = -1;
             Clicked = -1;
             Offset = 0;
-            BuildPicker();
+            if (!AnimTried) {               /* the menu -> flyout transition, once */
+                AnimTried = TRUE;
+                AnimOn = Built = ArcsAnimOpen(BuildPicker, GetGeom, 0, SystemTable);
+            }
+            if (!Built)
+                BuildPicker();
             Pick = PickLoop(SystemTable, 1);
+            if (Pick < 0) {                 /* Escape or the title: back to the menu */
+                if (AnimOn)
+                    ArcsAnimClose(DestroyPickerFn, SystemTable);
+                else
+                    DestroyPicker();
+                return ARCS_START_CANCELLED;
+            }
             DestroyPicker();
-            if (Pick < 0)
-                return ARCS_START_CANCELLED;   /* Escape: back to the menu */
         }
 
         E = &Entries[Pick];
@@ -1187,9 +1224,24 @@ ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
             }
             if (EntryCount == 1)
                 return ARCS_START_CANCELLED;
-            continue;                           /* back to the picker */
+            AnimOn = FALSE;                 /* the picker returns without animation */
+            continue;                       /* back to the picker */
         }
         PrepareKernelEnv(E);
         return ARCS_START_PROCEED;
     }
+}
+
+/*
+ * Start System: the picker when there is a choice, then hand the chosen
+ * kernel to the normal autoboot path.
+ */
+ARCS_START_RESULT
+ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
+{
+    ARCS_START_RESULT R = StartSystemInner(SystemTable);
+
+    ArcsMenuPark(0);                        /* the menu items back where they were */
+    ArcsAnimEnd();
+    return R;
 }

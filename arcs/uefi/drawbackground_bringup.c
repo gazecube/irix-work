@@ -30,6 +30,12 @@ ArcsDrawBackgroundBringup(EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop)
     return EFI_SUCCESS;
 }
 
+ARCS_GOP_HTP *
+ArcsGopBackend(VOID)
+{
+    return &Bringup.GopBackend;
+}
+
 void
 ArcsRedrawAfterReturnedImage(void)
 {

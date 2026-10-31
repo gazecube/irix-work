@@ -33,6 +33,8 @@ static struct pcbm *MenuIcons[] = {
 };
 
 static struct Button *MenuButtons[5];
+static struct Text *MenuTexts[5];
+static int MenuParkDy;      /* nonzero while the items are parked off screen */
 
 static void
 MaintenanceMenuCallBack(struct Button *Button, __scunsigned_t Value)
@@ -124,10 +126,48 @@ ArcsDrawMaintenanceMenuBringup(void)
             );
 
         moveTextPoint(Bx + MENUBUTTW + 10, Base + 15);
-        (void)createText((char *)MenuItems[I], ncenB18);
+        MenuTexts[I] = createText((char *)MenuItems[I], ncenB18);
 
         Base -= MENUBUTTH + MENUVSPACE;
     }
 
     guiRefresh();
+}
+
+/* Screen rectangle (GUI coordinates, inclusive) of a menu item: its icon button
+ * and the label to the right of it.  Used by the boot menu's transitions. */
+int
+ArcsMenuItemRect(int Index, int *X1, int *Y1, int *X2, int *Y2)
+{
+    struct gui_obj *G;
+
+    if (Index < 0 || Index > 4 || MenuButtons[Index] == 0 || MenuParkDy)
+        return 0;
+    G = guiobj(MenuButtons[Index]);
+    *X1 = G->x1;
+    *Y1 = G->y1;
+    *X2 = G->x2 + 10 + textWidth(MenuItems[Index], ncenB18);
+    *Y2 = G->y2;
+    return 1;
+}
+
+/* Move the items off screen (their pixels are being replaced by the flyout) or
+ * back.  Nothing is drawn; hover and clicks cannot reach a parked item. */
+void
+ArcsMenuPark(int Park)
+{
+    int I;
+    int Dy = 4000;
+
+    if ((Park != 0) == (MenuParkDy != 0))
+        return;
+    for (I = 0; I < 5; ++I) {
+        if (MenuButtons[I])
+            moveObject(guiobj(MenuButtons[I]), guiobj(MenuButtons[I])->x1,
+                       guiobj(MenuButtons[I])->y1 + (Park ? Dy : -Dy));
+        if (MenuTexts[I])
+            moveObject(guiobj(MenuTexts[I]), guiobj(MenuTexts[I])->x1,
+                       guiobj(MenuTexts[I])->y1 + (Park ? Dy : -Dy));
+    }
+    MenuParkDy = Park ? Dy : 0;
 }

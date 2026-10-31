@@ -346,6 +346,33 @@ ArcsGopCursorRefresh(ARCS_GOP_HTP *Backend)
     GopCursorCompose(Backend);
 }
 
+EFI_GRAPHICS_OUTPUT_PROTOCOL *
+ArcsGopRedirectBegin(ARCS_GOP_HTP *B, EFI_GRAPHICS_OUTPUT_PROTOCOL *New, BOOLEAN *SavedVisible)
+{
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *Old = B->Gop;
+
+    GopCursorRestore(B);                /* take the cursor off the real screen */
+    *SavedVisible = B->CursorVisible;
+    B->CursorVisible = FALSE;
+    B->CursorDrawn = FALSE;
+    B->CursorSaveW = 0;
+    B->CursorSaveH = 0;
+    B->Gop = New;
+    return Old;
+}
+
+VOID
+ArcsGopRedirectEnd(ARCS_GOP_HTP *B, EFI_GRAPHICS_OUTPUT_PROTOCOL *Old, BOOLEAN SavedVisible, BOOLEAN Compose)
+{
+    B->Gop = Old;
+    B->CursorVisible = SavedVisible;
+    B->CursorDrawn = FALSE;
+    B->CursorSaveW = 0;
+    B->CursorSaveH = 0;
+    if (Compose)
+        GopCursorCompose(B);
+}
+
 struct htp_fncs ArcsGopHtpFncs = {
     GopBlankScreen,
     GopColor,

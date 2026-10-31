@@ -36,6 +36,18 @@ ArcsGopHtpAttach(
     struct htp_state *Htp
     );
 
+/* The backend of the PROM's GUI (gfxgui) over the real GOP. */
+ARCS_GOP_HTP *ArcsGopBackend(VOID);
+
+/* Draw somewhere else for a while: removes the software cursor from the real
+ * screen, hides it, and points every GUI primitive at New.  Redirect back
+ * with the saved state; Compose redraws the cursor at the end. */
+EFI_GRAPHICS_OUTPUT_PROTOCOL *
+ArcsGopRedirectBegin(ARCS_GOP_HTP *Backend, EFI_GRAPHICS_OUTPUT_PROTOCOL *New, BOOLEAN *SavedVisible);
+
+VOID
+ArcsGopRedirectEnd(ARCS_GOP_HTP *Backend, EFI_GRAPHICS_OUTPUT_PROTOCOL *Old, BOOLEAN SavedVisible, BOOLEAN Compose);
+
 VOID
 ArcsGopCursorRefresh(
     ARCS_GOP_HTP *Backend
