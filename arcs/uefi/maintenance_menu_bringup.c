@@ -9,6 +9,8 @@
 
 #include "drawbackground_bringup.h"
 #include "maintenance_menu_bringup.h"
+#include "bootmenu.h"
+#include <Library/UefiBootServicesTableLib.h>
 #include "manualmode_bringup.h"
 
 extern int menu_boot_sys(void);
@@ -60,10 +62,16 @@ ArcsMaintenanceMenuSelect(UINTN OneBasedIndex)
      * UEFI only at the reconstructed Execute() boundary.
      */
     if (OneBasedIndex == 1) {
-        /* The fallback boot: textport only, full boot sequence, no dialog. */
-        ArcsBootVerbose = 1;
-        (void)menu_boot_sys();
-        ArcsBootVerbose = 0;
+        /* Start System: the picker when there is a choice, then the normal
+         * autoboot path with its "Starting up the system..." box.  Holding
+         * Shift skips the box and boots the verbose textport. */
+        BOOLEAN Shift = ArcsBootMenuShiftHeld(gST);
+
+        if (ArcsBootMenuStartSystem(gST) == ARCS_START_PROCEED) {
+            ArcsBootVerbose = Shift ? 1 : 0;
+            (void)menu_boot_sys();
+            ArcsBootVerbose = 0;
+        }
 
         /* A booted OS does not return.  If an EFI utility/loader does return,
          * the Execute backend has restored GOP.  Release the latched Start

@@ -86,6 +86,7 @@
   gEfiSimpleFileSystemProtocolGuid
   gEfiBlockIoProtocolGuid
   gEfiUsbIoProtocolGuid
+  gEfiSimpleTextInputExProtocolGuid
 
 [BuildOptions]
   # IRIX 6.5.7m ARCS is late-1990s C.  Compile it in the language mode it

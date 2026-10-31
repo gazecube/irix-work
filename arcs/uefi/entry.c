@@ -51,8 +51,10 @@ UefiMain(
     /* Discover the mouse now so the autoboot dialog's Stop button works. */
     (VOID)ArcsInputInit(SystemTable);
 
-    /* Boot manager: pick between kernels / other OSes when there is a choice. */
-    (VOID)ArcsBootMenuRun(SystemTable);
+    /* Boot manager power-on policy: one entry (or a boot.conf default=) takes
+     * the normal autoboot path; several entries skip autoboot and show the
+     * maintenance menu, where Start System opens the picker. */
+    (VOID)ArcsBootMenuPowerOn();
 
     startup();
 

@@ -22,14 +22,23 @@
  * With no boot.conf, one entry is made from arcs.env (the previous behaviour).
  */
 
-/* Show the picker (if there is anything to pick, or a key is held) and run
- * the chosen entry.  Chainload entries are started here and never return on
- * success.  A kernel entry sets OSLoadOptions and returns so the normal
- * autoboot path starts it.  Returns TRUE if the picker took over the choice. */
-BOOLEAN ArcsBootMenuRun(EFI_SYSTEM_TABLE *SystemTable);
+typedef enum {
+    ARCS_START_PROCEED,     /* kernel chosen: run the normal autoboot path */
+    ARCS_START_CANCELLED,   /* Escape / nothing started: back to the menu  */
+    ARCS_START_RAN          /* another image ran and returned              */
+} ARCS_START_RESULT;
 
-/* Set once the user (or the picker timeout) has chosen: autoboot skips its
- * own countdown. */
+/* Power-on: TRUE = let the normal autoboot path run (one entry, or boot.conf
+ * names a default=).  FALSE = several entries: skip autoboot, show the
+ * maintenance menu. */
+BOOLEAN ArcsBootMenuPowerOn(VOID);
+
+/* Maintenance menu "Start System": show the picker when there is a choice. */
+ARCS_START_RESULT ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable);
+
+/* Shift held (best effort): Start System then boots verbose into the textport. */
+BOOLEAN ArcsBootMenuShiftHeld(EFI_SYSTEM_TABLE *SystemTable);
+
 extern int ArcsBootPickerChose;
 
 #endif

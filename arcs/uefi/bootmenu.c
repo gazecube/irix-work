@@ -20,6 +20,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/SimpleFileSystem.h>
+#include <Protocol/SimpleTextInEx.h>
 #include <Guid/FileInfo.h>
 
 #include <stand_htport.h>
@@ -839,17 +840,22 @@ Message(CONST CHAR8 *Text)
     drawObject(guiobj(D));
     gBS->Stall(2500000);
     deleteObject(guiobj(D));
+    drawBackground();       /* the dialog leaves its pixels behind */
 }
 
-BOOLEAN
-ArcsBootMenuRun(EFI_SYSTEM_TABLE *SystemTable)
+static BOOLEAN Loaded;
+static BOOLEAN ExplicitDefault;     /* boot.conf names a default= entry */
+
+static VOID
+LoadEntries(VOID)
 {
-    UINTN I, Cols, Rows;
-    INTN Pick;
+    UINTN I;
     BOOT_ENTRY *E;
 
-    if (gfxgui.htp == NULL)
-        return FALSE;
+    if (Loaded)
+        return;
+    Loaded = TRUE;
+    TimeoutSec = 0;                 /* the picker is manual: Start System */
 
     ArcsUefiConnectAll();
     ParseConf();
@@ -893,9 +899,46 @@ ArcsBootMenuRun(EFI_SYSTEM_TABLE *SystemTable)
         }
     }
 
-    if (EntryCount <= 1) {
-        /* nothing to choose between: keep the old straight-through boot */
-        return FALSE;
+    /* identical labels (several kernels of one version) get the directory
+     * they were found in, then a number */
+    for (I = 0; I < EntryCount; I++) {
+        UINTN J, Dup = 0;
+
+        for (J = 0; J < EntryCount; J++)
+            if (J != I && AsciiStrCmp(Entries[I].Title, Entries[J].Title) == 0)
+                Dup++;
+        if (Dup && Entries[I].Auto) {
+            CHAR16 *Last = Entries[I].Path, *P;
+            CHAR16 *Prev = Entries[I].Path;
+            CHAR8 Suffix[24];
+            UINTN K = 0;
+
+            for (P = Entries[I].Path; *P; P++)
+                if (*P == L'\\') {
+                    Prev = Last;
+                    Last = P;
+                }
+            /* Prev..Last is the parent directory name (with its leading '\\') */
+            for (P = Prev + (*Prev == L'\\'); P < Last && K + 1 < sizeof(Suffix); P++)
+                Suffix[K++] = (CHAR8)*P;
+            Suffix[K] = 0;
+            if (K && AsciiStrLen(Entries[I].Title) + K + 4 < TITLE_MAX)
+                AsciiSPrint(Entries[I].Title + AsciiStrLen(Entries[I].Title),
+                            TITLE_MAX - AsciiStrLen(Entries[I].Title), " (%a)", Suffix);
+        }
+    }
+    {
+        UINTN J, N;
+
+        for (I = 0; I < EntryCount; I++) {
+            N = 1;
+            for (J = 0; J < I; J++)
+                if (AsciiStrCmp(Entries[I].Title, Entries[J].Title) == 0)
+                    N++;
+            if (N > 1 && AsciiStrLen(Entries[I].Title) + 5 < TITLE_MAX)
+                AsciiSPrint(Entries[I].Title + AsciiStrLen(Entries[I].Title),
+                            TITLE_MAX - AsciiStrLen(Entries[I].Title), " #%d", (INT32)N);
+        }
     }
 
     DefaultIndex = 0;
@@ -903,51 +946,148 @@ ArcsBootMenuRun(EFI_SYSTEM_TABLE *SystemTable)
         if (DefaultTitle[0] && AsciiStrCmp(Entries[I].Title, DefaultTitle) == 0)
             DefaultIndex = (INTN)I;
 
+    ExplicitDefault = FALSE;
+    for (I = 0; I < EntryCount; I++)
+        if (DefaultTitle[0] && AsciiStrCmp(Entries[I].Title, DefaultTitle) == 0)
+            ExplicitDefault = TRUE;
+}
+
+/* Point the normal autoboot path (OSLoader / OSLoadOptions) at a kernel on
+ * the PROM's own ESP. */
+static VOID
+PrepareKernelEnv(BOOT_ENTRY *E)
+{
+    CHAR8 Loader[PATH_MAX_W];
+    UINTN K = 0, S = (E->Path[0] == L'\\') ? 1 : 0;
+
+    for (; E->Path[S] && K + 1 < sizeof(Loader); S++, K++)
+        Loader[K] = (E->Path[S] == L'\\') ? '/' : (CHAR8)E->Path[S];
+    Loader[K] = 0;
+    setenv("OSLoader", Loader);
+    if (E->Options[0])
+        setenv("OSLoadOptions", E->Options);
+}
+
+static BOOLEAN
+NeedsDirectStart(BOOT_ENTRY *E)
+{
+    return E->Kind == KIND_CHAIN || !SameVolume(E->Volume, NULL);
+}
+
+static EFI_STATUS
+StartDirect(BOOT_ENTRY *E)
+{
+    EFI_STATUS St = ArcsUefiStartImageAt(E->Volume ? E->Volume : ArcsUefiOwnVolume(),
+                                         E->Path, E->Options[0] ? E->Options : NULL,
+                                         E->Kind == KIND_KERNEL);
+
+    drawBackground();
+    return St;
+}
+
+/*
+ * Power-on policy.  One entry (or an explicit default= in boot.conf): the
+ * normal autoboot path runs and boots it.  Several entries and no explicit
+ * default: autoboot is skipped and the maintenance menu is shown, where
+ * Start System opens the picker.
+ */
+BOOLEAN
+ArcsBootMenuPowerOn(VOID)
+{
+    BOOT_ENTRY *E;
+
+    if (gfxgui.htp == NULL)
+        return TRUE;
+    LoadEntries();
+    if (EntryCount > 1 && !ExplicitDefault) {
+        setenv("NoAutoLoad", "y");
+        return FALSE;
+    }
+    if (EntryCount == 0)
+        return TRUE;
+
+    E = &Entries[DefaultIndex];
+    if (NeedsDirectStart(E)) {
+        /* not something the SGI autoboot path can start: do it here */
+        if (!EFI_ERROR(StartDirect(E)))
+            return FALSE;
+        setenv("NoAutoLoad", "y");
+        return FALSE;
+    }
+    PrepareKernelEnv(E);
+    return TRUE;
+}
+
+/* Best effort: is Shift held right now?  Uses the extended text input
+ * protocol; not every firmware reports a bare modifier. */
+BOOLEAN
+ArcsBootMenuShiftHeld(EFI_SYSTEM_TABLE *St)
+{
+    EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *Ex = NULL;
+    EFI_KEY_DATA Key;
+    BOOLEAN Shift = FALSE;
+    UINTN Guard = 0;
+
+    if (EFI_ERROR(gBS->HandleProtocol(St->ConsoleInHandle, &gEfiSimpleTextInputExProtocolGuid,
+                                      (VOID **)&Ex)) || Ex == NULL)
+        return FALSE;
+    while (Guard++ < 16 && !EFI_ERROR(Ex->ReadKeyStrokeEx(Ex, &Key)))
+        if ((Key.KeyState.KeyShiftState & EFI_SHIFT_STATE_VALID) &&
+            (Key.KeyState.KeyShiftState & (EFI_LEFT_SHIFT_PRESSED | EFI_RIGHT_SHIFT_PRESSED)))
+            Shift = TRUE;
+    return Shift;
+}
+
+/*
+ * Start System: the picker when there is a choice, then hand the chosen
+ * kernel to the normal autoboot path.
+ */
+ARCS_START_RESULT
+ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
+{
+    UINTN Cols, Rows;
+    INTN Pick;
+    BOOT_ENTRY *E;
+
+    if (gfxgui.htp == NULL)
+        return ARCS_START_PROCEED;
+    LoadEntries();
+    if (EntryCount == 0)
+        return ARCS_START_PROCEED;
+
     Cols = EntryCount < 4 ? EntryCount : 4;
     Rows = (EntryCount + Cols - 1) / Cols;
-    Sel = -1;
-    Clicked = -1;
 
     for (;;) {
-        BuildPicker(Cols, Rows);
-        Pick = PickLoop(SystemTable, Cols);
-        DestroyPicker();
-        if (Pick < 0)
-            return FALSE;                   /* Escape: maintenance menu */
+        if (EntryCount == 1) {
+            Pick = 0;
+        } else {
+            Sel = -1;
+            Clicked = -1;
+            BuildPicker(Cols, Rows);
+            Pick = PickLoop(SystemTable, Cols);
+            DestroyPicker();
+            if (Pick < 0)
+                return ARCS_START_CANCELLED;   /* Escape: back to the menu */
+        }
 
         E = &Entries[Pick];
-        ArcsBootPickerChose = 1;
-        if (E->Kind == KIND_CHAIN || !SameVolume(E->Volume, NULL)) {
-            EFI_STATUS St = ArcsUefiStartImageAt(E->Volume ? E->Volume : ArcsUefiOwnVolume(),
-                                                 E->Path, E->Options[0] ? E->Options : NULL,
-                                                 E->Kind == KIND_KERNEL);
+        if (NeedsDirectStart(E)) {
+            EFI_STATUS St = StartDirect(E);
 
-            drawBackground();
-            if (EFI_ERROR(St)) {
+            if (!EFI_ERROR(St))
+                return ARCS_START_RAN;
+            {
                 CHAR8 Msg[96];
 
                 AsciiSPrint(Msg, sizeof(Msg), "\n%a could not be started (%r).", E->Title, St);
                 Message(Msg);
-                Clicked = -1;
-                Sel = -1;
-                continue;                   /* back to the picker */
             }
-            return TRUE;
+            if (EntryCount == 1)
+                return ARCS_START_CANCELLED;
+            continue;                           /* back to the picker */
         }
-
-        /* kernel on our own ESP: hand it to the normal autoboot path so the
-         * "Starting up the system" dialog shows */
-        {
-            CHAR8 Loader[PATH_MAX_W];
-            UINTN K = 0, S = (E->Path[0] == L'\\') ? 1 : 0;
-
-            for (; E->Path[S] && K + 1 < sizeof(Loader); S++, K++)
-                Loader[K] = (E->Path[S] == L'\\') ? '/' : (CHAR8)E->Path[S];
-            Loader[K] = 0;
-            setenv("OSLoader", Loader);
-            if (E->Options[0])
-                setenv("OSLoadOptions", E->Options);
-        }
-        return TRUE;
+        PrepareKernelEnv(E);
+        return ARCS_START_PROCEED;
     }
 }
