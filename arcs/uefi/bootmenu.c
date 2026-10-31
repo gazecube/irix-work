@@ -27,6 +27,7 @@
 #include <gfxgui.h>
 #include <guicore.h>
 #include <style.h>
+#include <pcbm/pcbm.h>
 
 #include "bootmenu.h"
 #include "input_bringup.h"
@@ -567,8 +568,9 @@ DrawGlyph(int Icon, int X, int Y)     /* X,Y = lower-left of the ICONBOX well */
 /* picker                                                              */
 /* ------------------------------------------------------------------ */
 
-#define TILE_W   156
-#define TILE_H   88
+#define ROW_W    460
+#define ROW_H    62
+#define MAXROWS  7
 #define GAP      8
 #define MARG     (DIALOGBDW + DIALOGMARGIN)
 
@@ -591,18 +593,26 @@ TileIndex(struct gui_obj *o)
 
 static int WellColor[] = { lightBlue, lightGrayGreen, SlateBlue, lightGrayMagenta };
 
+static CHAR8 Fitted[MAX_ENTRIES][TITLE_MAX];
+
+#define WELLW  (ICONBOX + 2 * DIALOGINTBDW)
+
 static VOID
 DrawTileIcon(INTN I)
 {
     struct gui_obj *g = guiobj(Tile[I]);
-    int Wx = g->x1 + (TILE_W - (ICONBOX + 2 * DIALOGINTBDW)) / 2;
-    int Wy = g->y1 + 26;
+    int Wx = g->x1 + 8;
+    int Wy = g->y1 + (ROW_H - WELLW) / 2;
+    struct htp_font *F = &gfxgui.htp->fonts[ncenB18];
 
     color(WellColor[Entries[I].Icon]);
-    sboxfi(Wx, Wy, Wx + ICONBOX + 2 * DIALOGINTBDW - 1, Wy + ICONBOX + 2 * DIALOGINTBDW - 1);
+    sboxfi(Wx, Wy, Wx + WELLW - 1, Wy + WELLW - 1);
     DrawGlyph(Entries[I].Icon, Wx + DIALOGINTBDW, Wy + DIALOGINTBDW);
-    dialogIntBoarder(Wx, Wy, Wx + ICONBOX + 2 * DIALOGINTBDW - 1,
-                     Wy + ICONBOX + 2 * DIALOGINTBDW - 1, 0);
+    dialogIntBoarder(Wx, Wy, Wx + WELLW - 1, Wy + WELLW - 1, 0);
+
+    color(BLACK);
+    cmov2i(Wx + WELLW + 14, g->y1 + (ROW_H - (F->height - F->descender)) / 2 + F->descender);
+    puttext(Fitted[I], ncenB18);
 }
 
 static void
@@ -628,16 +638,15 @@ static VOID
 FitTitle(CHAR8 *Dst, CONST CHAR8 *Src)
 {
     UINTN L;
+    int Max = ROW_W - 8 - WELLW - 14 - 36;
 
     AsciiStrnCpyS(Dst, TITLE_MAX, Src, TITLE_MAX - 1);
     L = AsciiStrLen(Dst);
-    while (L > 3 && textWidth(Dst, BUTTONFONT) > TILE_W - 6) {
+    while (L > 3 && textWidth(Dst, ncenB18) > Max) {
         Dst[--L] = 0;
         Dst[L - 1] = '.';
     }
 }
-
-static CHAR8 Fitted[MAX_ENTRIES][TITLE_MAX];
 
 static VOID
 SelectTile(INTN New)
@@ -662,64 +671,112 @@ DrawStatus(CONST CHAR8 *Msg)
     putctext(Msg, StatusX1, StatusY1 + 4, StatusW, helvR10);
 }
 
-static VOID
-BuildPicker(UINTN Cols, UINTN Rows)
-{
-    int FontH = gfxgui.htp->fonts[ncenB18].height;
-    int StatH = gfxgui.htp->fonts[helvR10].height + 10;
-    int TitleH = FontH + 8;
-    int W = (int)Cols * (TILE_W + GAP) - GAP + 2 * MARG;
-    int H = 2 * MARG + TitleH + (int)Rows * (TILE_H + GAP) - GAP + StatH;
-    UINTN I;
-    int Top;
+/* The clicked menu item becomes the flyout's side title: same icon and
+ * label as the maintenance menu entry, here at the panel's left end. */
+extern struct pcbm sysstart;
+static CONST char *TitleText = "Start System";
+static struct Button *TitleBtn;
+static int TilesX;
 
-    Pop = createCanvas(W, H);
+static void
+TitleClicked(struct Button *B, __scunsigned_t Value)
+{
+    (void)B;
+    (void)Value;
+    Clicked = -2;                   /* click the title: back to the menu */
+}
+
+/* One width for every option's flyout (the longest of the five names), so the
+ * geometry does not change with which item opened it; the label centres in
+ * the space beside the icon. */
+static CONST char *MenuNames[] = {
+    "Start System", "Install System Software", "Run Diagnostics",
+    "Recover System", "Enter Command Monitor"
+};
+
+static int
+TitleLabelW(VOID)
+{
+    int W = 0;
+    UINTN I;
+
+    for (I = 0; I < sizeof(MenuNames) / sizeof(MenuNames[0]); I++)
+        if (textWidth(MenuNames[I], ncenB18) > W)
+            W = textWidth(MenuNames[I], ncenB18);
+    return W;
+}
+
+static int
+TitleCellW(VOID)
+{
+    return MENUBUTTW + 14 + TitleLabelW();
+}
+
+static int PX, PY;
+static UINTN Offset, Visible;       /* the window of entries shown (scrolls) */
+
+/* Layout: [ title floating on the gradient ]  [ raised panel: a list ] */
+static VOID
+BuildPicker(VOID)
+{
+    int StatH = gfxgui.htp->fonts[helvR10].height + 10;
+    int ListH, PanelW, PanelH, CellW, W;
+    /* centred on the menu block, which sits in the upper two thirds, so the
+     * logo below stays clear */
+    int CenterY = gfxHeight() - (((gfxHeight() * 2) / 3) >> 1);
+    int PairW = MENUBUTTW + 10 + textWidth(TitleText, ncenB18);
+    int Tx, Ty, Top, PanelX;
+    UINTN I;
+
+    Visible = EntryCount - Offset;
+    if (Visible > MAXROWS)
+        Visible = MAXROWS;
+    ListH = (int)Visible * ROW_H + ((int)Visible - 1) * GAP;
+    PanelW = 2 * MARG + ROW_W;
+    PanelH = 2 * MARG + ListH + StatH;
+    CellW = TitleCellW();
+    W = CellW + 2 * MARG + PanelW;
+
+    PX = (gfxWidth() - W) / 2;
+    PY = CenterY - PanelH / 2;
+    PanelX = PX + CellW + 2 * MARG;
+
+    /* the panel holds only the choices */
+    Pop = createCanvas(PanelW, PanelH);
+    moveObject(guiobj(Pop), PanelX, PY);
     drawObject(guiobj(Pop));
 
+    /* the clicked option, icon + label as one unit, centred in its cell */
+    Tx = PX + (CellW - PairW) / 2;
+    Ty = PY + PanelH / 2 - MENUBUTTH / 2;
+    TitleBtn = createButton(Tx, Ty, MENUBUTTW, MENUBUTTH);
+    addButtonImage(TitleBtn, &sysstart);
+    addButtonCallBack(TitleBtn, TitleClicked, 0);
+    drawObject(guiobj(TitleBtn));
     color(BLACK);
-    putctext("Select a system to start", Pop->gui.x1, Pop->gui.y2 - MARG - FontH + 4, W, ncenB18);
+    cmov2i(Tx + MENUBUTTW + 10, Ty + 15);
+    puttext((char *)TitleText, ncenB18);
 
-    Top = Pop->gui.y2 - MARG - TitleH;
-    for (I = 0; I < EntryCount; I++) {
-        UINTN R = I / Cols, C = I % Cols;
-        int X = Pop->gui.x1 + MARG + (int)C * (TILE_W + GAP);
-        int Y = Top - (int)R * (TILE_H + GAP) - TILE_H + 1;
-        struct Button *B = createButton(X, Y, TILE_W, TILE_H);
+    TilesX = PanelX + MARG;
+    Top = PY + PanelH - 1 - MARG;
+    for (I = Offset; I < Offset + Visible; I++) {
+        int Y = Top - (int)(I - Offset) * (ROW_H + GAP) - ROW_H + 1;
+        struct Button *B = createButton(TilesX, Y, ROW_W, ROW_H);
 
         FitTitle(Fitted[I], Entries[I].Title);
-        addButtonText(B, Fitted[I]);
         addButtonCallBack(B, TileClicked, (__scunsigned_t)I);
-        if ((INTN)I == DefaultIndex)
-            setDefaultButton(B, 0);
         TileOrigHandler = B->gui.eventHandler;
         B->gui.eventHandler = TileHandler;
         Tile[I] = B;
     }
-    for (I = 0; I < EntryCount; I++)
+    for (I = Offset; I < Offset + Visible; I++)
         drawObject(guiobj(Tile[I]));
 
-    StatusX1 = Pop->gui.x1 + MARG;
-    StatusX2 = Pop->gui.x2 - MARG;
-    StatusY1 = Pop->gui.y1 + MARG;
+    StatusX1 = TilesX;
+    StatusX2 = TilesX + ROW_W - 1;
+    StatusY1 = PY + MARG;
     StatusY2 = StatusY1 + StatH - 4;
-    StatusW = StatusX2 - StatusX1 + 1;
-
-    /* Snow-Leopard-style stack tail under the popout */
-    {
-        int Cx = (Pop->gui.x1 + Pop->gui.x2) / 2, K;
-
-        for (K = 0; K < 14; K++) {
-            int Y = Pop->gui.y1 - 1 - K;
-
-            if (Y < 0)
-                break;
-            color(VeryLightGray);
-            sboxfi(Cx - (14 - K), Y, Cx + (14 - K), Y);
-            color(BLACK);
-            sboxfi(Cx - (14 - K), Y, Cx - (14 - K), Y);
-            sboxfi(Cx + (14 - K), Y, Cx + (14 - K), Y);
-        }
-    }
+    StatusW = ROW_W;
 }
 
 static VOID
@@ -727,6 +784,10 @@ DestroyPicker(VOID)
 {
     UINTN I;
 
+    if (TitleBtn) {
+        deleteObject(guiobj(TitleBtn));
+        TitleBtn = NULL;
+    }
     for (I = 0; I < EntryCount; I++)
         if (Tile[I]) {
             deleteObject(guiobj(Tile[I]));
@@ -737,6 +798,31 @@ DestroyPicker(VOID)
         Pop = NULL;
     }
     drawBackground();
+}
+
+static VOID DrawStatus(CONST CHAR8 *Msg);
+
+/* Select an entry, scrolling the list window if it is outside it. */
+static VOID
+ScrollTo(INTN New)
+{
+    if (Sel < 0 || (UINTN)New < Offset || (UINTN)New >= Offset + Visible) {
+        UINTN Want = (UINTN)New;
+
+        if (Sel < 0 || Want < Offset)
+            Offset = Want < MAXROWS / 2 ? 0 : Want - MAXROWS / 2;
+        else
+            Offset = Want + 1 > MAXROWS ? Want + 1 - MAXROWS : 0;
+        if (Offset + MAXROWS > EntryCount)
+            Offset = EntryCount > MAXROWS ? EntryCount - MAXROWS : 0;
+        if (Sel >= 0) {
+            DestroyPicker();
+            BuildPicker();
+            DrawStatus("Choose a system and press Return.");
+        }
+        Sel = -1;
+    }
+    SelectTile(New);
 }
 
 /* returns the chosen index, or -1 for Escape (go to the maintenance menu) */
@@ -760,7 +846,7 @@ PickLoop(EFI_SYSTEM_TABLE *St, UINTN Cols)
     Ev[N++] = Tick;
     Ev[N++] = Sec;
 
-    SelectTile(DefaultIndex);
+    ScrollTo(DefaultIndex);
     if (Counting) {
         AsciiSPrint(Msg, sizeof(Msg), "%a starts in %d seconds.  Press any key to stop.",
                     Entries[Sel].Title, (INT32)Remaining);
@@ -772,6 +858,10 @@ PickLoop(EFI_SYSTEM_TABLE *St, UINTN Cols)
     for (;;) {
         EFI_INPUT_KEY Key;
 
+        if (Clicked == -2) {
+            Result = -1;
+            break;
+        }
         if (Clicked >= 0) {
             Result = Clicked;
             break;
@@ -812,14 +902,18 @@ PickLoop(EFI_SYSTEM_TABLE *St, UINTN Cols)
                 Result = Sel;
                 goto out;
             }
-            if (Key.ScanCode == SCAN_RIGHT && Sel + 1 < (INTN)EntryCount) New = Sel + 1;
-            else if (Key.ScanCode == SCAN_LEFT && Sel > 0) New = Sel - 1;
-            else if (Key.ScanCode == SCAN_DOWN && Sel + (INTN)Cols < (INTN)EntryCount) New = Sel + (INTN)Cols;
-            else if (Key.ScanCode == SCAN_UP && Sel - (INTN)Cols >= 0) New = Sel - (INTN)Cols;
+            if ((Key.ScanCode == SCAN_DOWN || Key.ScanCode == SCAN_RIGHT) && Sel + 1 < (INTN)EntryCount)
+                New = Sel + 1;
+            else if ((Key.ScanCode == SCAN_UP || Key.ScanCode == SCAN_LEFT) && Sel > 0)
+                New = Sel - 1;
+            else if (Key.ScanCode == SCAN_PAGE_DOWN)
+                New = (Sel + (INTN)Visible < (INTN)EntryCount) ? Sel + (INTN)Visible : (INTN)EntryCount - 1;
+            else if (Key.ScanCode == SCAN_PAGE_UP)
+                New = (Sel > (INTN)Visible) ? Sel - (INTN)Visible : 0;
             else if (Key.ScanCode == SCAN_HOME) New = 0;
             else if (Key.ScanCode == SCAN_END) New = (INTN)EntryCount - 1;
             if (New != Sel)
-                SelectTile(New);
+                ScrollTo(New);
         }
     }
 out:
@@ -1045,7 +1139,6 @@ ArcsBootMenuShiftHeld(EFI_SYSTEM_TABLE *St)
 ARCS_START_RESULT
 ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
 {
-    UINTN Cols, Rows;
     INTN Pick;
     BOOT_ENTRY *E;
 
@@ -1055,17 +1148,15 @@ ArcsBootMenuStartSystem(EFI_SYSTEM_TABLE *SystemTable)
     if (EntryCount == 0)
         return ARCS_START_PROCEED;
 
-    Cols = EntryCount < 4 ? EntryCount : 4;
-    Rows = (EntryCount + Cols - 1) / Cols;
-
     for (;;) {
         if (EntryCount == 1) {
             Pick = 0;
         } else {
             Sel = -1;
             Clicked = -1;
-            BuildPicker(Cols, Rows);
-            Pick = PickLoop(SystemTable, Cols);
+            Offset = 0;
+            BuildPicker();
+            Pick = PickLoop(SystemTable, 1);
             DestroyPicker();
             if (Pick < 0)
                 return ARCS_START_CANCELLED;   /* Escape: back to the menu */
