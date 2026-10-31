@@ -17,9 +17,9 @@
  * One motion, start to finish (850 ms).  The clicked option travels first: it drops
  * down to its height, then slides across and lands beside the flyout at 45% of
  * the time (ease-in-out on each leg); the other options
- * are pulled into it as it moves, nearest first -- labels behind it, icons
- * dissolving inside its icon, each one's opacity tied to how far it has
- * travelled.  Only once the title is in place does the flyout open: a fast
+ * are pulled into it as it drops, nearest first -- labels fading in place,
+ * icons dissolving inside its icon, each one's opacity tied to how far it has
+ * travelled -- and are completely gone when it reaches its final height.  Only once the title is in place does the flyout open: a fast
  * vertical raster line flashes in at the panel's edge and sweeps it out (the
  * panel itself does not fade).  No bounce.  Progress follows the clock, not
  * the frame count; any key skips to the end; the reverse plays the same

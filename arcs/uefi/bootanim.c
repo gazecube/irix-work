@@ -271,7 +271,8 @@ Compose(INTN T)
     /*
      * The clock runs 0..ONE (X).  The clicked option travels first -- it drops
      * down, then slides across, landing at 45% -- and the others are pulled into
-     * it by its progress (Pt), so their motion and fade follow the title's; the panel opens only after the title is in
+     * it by the drop (Pv): they are completely gone when the title reaches its
+     * final height, then it slides on alone; the panel opens only after the title is in
      * place: the raster line flashes in as it settles and sweeps out over the
      * rest of the time.
      */
@@ -279,7 +280,6 @@ Compose(INTN T)
     /* the title drops down to its height first, then slides across to its place */
     INT32 Pv = EaseInOut(Seg(X, 0, ONE * 22 / 100));
     INT32 Ph = EaseInOut(Seg(X, ONE * 22 / 100, ONE * 45 / 100));
-    INT32 Pt = (Pv + Ph) / 2;               /* its overall progress: pulls the others */
     CONST GR *C = &Item[ClickedItem];
     INTN Y, I;
     /* the clicked option's icon centre, now: this is what pulls the others in */
@@ -309,7 +309,7 @@ Compose(INTN T)
      */
     for (I = (INTN)OrderCount - 1; I >= 0; I--) {
         CONST GR *S = &Item[Order[I]];
-        INT32 Q = Seg(Pt, (INT32)I * (ONE / 20), ONE * 9 / 10);
+        INT32 Q = Seg(Pv, (INT32)I * (ONE / 25), ONE);
         GR L = { S->X + ICON_W, S->Y, S->W - ICON_W, S->H };
         /* the labels only drift a short way and are gone by half-way: they
          * must not be seen crossing the title's own text */
@@ -328,7 +328,7 @@ Compose(INTN T)
     /* the icons go inside it */
     for (I = (INTN)OrderCount - 1; I >= 0; I--) {
         CONST GR *S = &Item[Order[I]];
-        INT32 Q = Seg(Pt, (INT32)I * (ONE / 20), ONE * 9 / 10);
+        INT32 Q = Seg(Pv, (INT32)I * (ONE / 25), ONE);
         GR Ic = { S->X, S->Y, ICON_W, S->H };
         INTN Cx = Lerp(Ic.X + ICON_W / 2, ClkCx, Q);
         INTN Cy = Lerp(Ic.Y + Ic.H / 2, ClkCy, Q);
