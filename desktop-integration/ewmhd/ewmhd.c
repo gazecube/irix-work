@@ -213,19 +213,39 @@ fullscreen_off(Window w)
 /* ---- _NET_WM_MOVERESIZE ---- */
 enum { SZ_TL, SZ_T, SZ_TR, SZ_R, SZ_BR, SZ_B, SZ_BL, SZ_L, MOVE, SZ_KB, MOVE_KB, CANCEL };
 
+static int
+buttons_down(unsigned mask)
+{
+    return (mask & (Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask)) != 0;
+}
+
+/*
+ * A drag.  The window follows the live pointer: each step reads where the pointer
+ * is now (not a queue of old motion events), sends one move, and waits for 4Dwm to
+ * apply it before sending the next, so the window never trails behind a backlog and
+ * never lurches.  The drag ends when no button is down, even if the release was
+ * missed, and does not start at all if the button is already up.
+ */
 static void
 drag(Window w, int px, int py, int dir)
 {
     XWindowAttributes wa;
-    int ox, oy, ow, oh;
+    int ox, oy, ow, oh, lastx = -1, lasty = -1, inflight = 0, done = 0;
+    Window rr, cc;
+    int rx, ry, wx, wy;
+    unsigned mask;
     Cursor cur;
-    XEvent ev;
+    struct timeval sent = { 0, 0 };
+    int fd = ConnectionNumber(dpy);
     int cursor_shape = XC_fleur;
 
-    if (!XGetWindowAttributes(dpy, w, &wa))
-        return;
     if (dir == CANCEL || dir == SZ_KB || dir == MOVE_KB)
         return;                                     /* keyboard moves not offered */
+    if (!XGetWindowAttributes(dpy, w, &wa))
+        return;
+    XQueryPointer(dpy, root, &rr, &cc, &rx, &ry, &wx, &wy, &mask);
+    if (!buttons_down(mask))
+        return;                                     /* released before we got the request */
     root_pos(w, &ox, &oy);
     ow = wa.width;
     oh = wa.height;
@@ -242,37 +262,64 @@ drag(Window w, int px, int py, int dir)
         return;
     }
     XGrabKeyboard(dpy, root, False, GrabModeAsync, GrabModeAsync, CurrentTime);
-    for (;;) {
-        int dx, dy, nx = ox, ny = oy, nw = ow, nh = oh;
+    XSelectInput(dpy, w, StructureNotifyMask | PropertyChangeMask);   /* 4Dwm's ConfigureNotify = "applied" */
+    /* where the pointer was when the app asked is the anchor, so the grab point stays under it */
+    while (!done) {
+        XEvent ev;
+        fd_set rd;
+        struct timeval tv = { 0, 8000 }, now;
 
-        XMaskEvent(dpy, ButtonReleaseMask | PointerMotionMask | KeyPressMask, &ev);
-        if (ev.type == KeyPress) {
-            if (XLookupKeysym(&ev.xkey, 0) == XK_Escape) {
+        while (XPending(dpy)) {
+            XNextEvent(dpy, &ev);
+            if (ev.type == ButtonRelease)
+                done = 1;
+            else if (ev.type == KeyPress && XLookupKeysym(&ev.xkey, 0) == XK_Escape) {
                 XMoveResizeWindow(dpy, w, ox, oy, (unsigned)ow, (unsigned)oh);
-                break;
-            }
-            continue;
+                done = 1;
+                lastx = -2;                         /* cancelled: no final move */
+            } else if (ev.type == ConfigureNotify && ev.xconfigure.window == w)
+                inflight = 0;
+            else if (ev.type == DestroyNotify && ev.xdestroywindow.window == w)
+                done = 1;
         }
-        if (ev.type == ButtonRelease)
+        if (done)
             break;
-        while (XCheckMaskEvent(dpy, PointerMotionMask, &ev))
-            ;                                       /* compress motion */
-        dx = ev.xmotion.x_root - px;
-        dy = ev.xmotion.y_root - py;
-        if (dir == MOVE) {
-            nx = ox + dx;
-            ny = oy + dy;
-            XMoveWindow(dpy, w, nx, ny);
-        } else {
-            if (dir == SZ_TL || dir == SZ_L || dir == SZ_BL) { nx = ox + dx; nw = ow - dx; }
-            if (dir == SZ_TR || dir == SZ_R || dir == SZ_BR) { nw = ow + dx; }
-            if (dir == SZ_TL || dir == SZ_T || dir == SZ_TR) { ny = oy + dy; nh = oh - dy; }
-            if (dir == SZ_BL || dir == SZ_B || dir == SZ_BR) { nh = oh + dy; }
-            if (nw < 80) { if (nx != ox) nx = ox + ow - 80; nw = 80; }
-            if (nh < 40) { if (ny != oy) ny = oy + oh - 40; nh = 40; }
-            XMoveResizeWindow(dpy, w, nx, ny, (unsigned)nw, (unsigned)nh);
+        XQueryPointer(dpy, root, &rr, &cc, &rx, &ry, &wx, &wy, &mask);
+        if (!buttons_down(mask)) {
+            done = 1;                               /* the release was missed */
         }
-        XFlush(dpy);
+        gettimeofday(&now, NULL);
+        if (inflight && ((now.tv_sec - sent.tv_sec) * 1000 + (now.tv_usec - sent.tv_usec) / 1000) > 60)
+            inflight = 0;                           /* 4Dwm sent no notify: do not stall */
+        if ((!inflight || done) && (rx != lastx || ry != lasty)) {
+            int dx = rx - px, dy = ry - py, nx = ox, ny = oy, nw = ow, nh = oh;
+
+            if (dir == MOVE) {
+                nx = ox + dx;
+                ny = oy + dy;
+            } else {
+                if (dir == SZ_TL || dir == SZ_L || dir == SZ_BL) { nx = ox + dx; nw = ow - dx; }
+                if (dir == SZ_TR || dir == SZ_R || dir == SZ_BR) { nw = ow + dx; }
+                if (dir == SZ_TL || dir == SZ_T || dir == SZ_TR) { ny = oy + dy; nh = oh - dy; }
+                if (dir == SZ_BL || dir == SZ_B || dir == SZ_BR) { nh = oh + dy; }
+                if (nw < 80) { if (nx != ox) nx = ox + ow - 80; nw = 80; }
+                if (nh < 40) { if (ny != oy) ny = oy + oh - 40; nh = 40; }
+            }
+            if (dir == MOVE)
+                XMoveWindow(dpy, w, nx, ny);
+            else
+                XMoveResizeWindow(dpy, w, nx, ny, (unsigned)nw, (unsigned)nh);
+            XFlush(dpy);
+            lastx = rx;
+            lasty = ry;
+            inflight = 1;
+            sent = now;
+        }
+        if (done)
+            break;
+        FD_ZERO(&rd);
+        FD_SET(fd, &rd);
+        select(fd + 1, &rd, NULL, NULL, &tv);
     }
     XUngrabKeyboard(dpy, CurrentTime);
     XUngrabPointer(dpy, CurrentTime);

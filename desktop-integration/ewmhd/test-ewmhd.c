@@ -63,6 +63,49 @@ int main(void) {
         pos(&bx, &by, &bw, &bh); printf("after drag: %d,%d (expected %d,%d)\n", bx, by, x + 120, y + 80);
         ok(abs(bx - (x + 120)) <= 4 && abs(by - (y + 80)) <= 4, "_NET_WM_MOVERESIZE move follows the pointer");
     }
+    /* a fast, long drag (a mouse moving at high rate): the window must end exactly under the pointer */
+    pos(&x, &y, &wd, &ht);
+    {
+        int px = x + 50, py = y + 20, bx, by, bw, bh;
+        XTestFakeMotionEvent(d, 0, px, py, 0); pause_ms(200);
+        XTestFakeButtonEvent(d, 1, True, 0); pause_ms(200);
+        XUngrabPointer(d, CurrentTime);
+        { XEvent e; memset(&e, 0, sizeof e);
+          e.xclient.type = ClientMessage; e.xclient.window = w;
+          e.xclient.message_type = XInternAtom(d, "_NET_WM_MOVERESIZE", False); e.xclient.format = 32;
+          e.xclient.data.l[0] = px; e.xclient.data.l[1] = py; e.xclient.data.l[2] = 8; e.xclient.data.l[3] = 1; e.xclient.data.l[4] = 1;
+          XSendEvent(d, root, False, SubstructureNotifyMask | SubstructureRedirectMask, &e); }
+        pause_ms(200);
+        for (i = 1; i <= 240; i++) { XTestFakeMotionEvent(d, 0, px + 3 * i, py + 2 * i, 0); XFlush(d); usleep(1500); }
+        pause_ms(250);                                              /* settle with the button still down */
+        pos(&bx, &by, &bw, &bh); printf("fast drag, button held: %d,%d (pointer-anchored target %d,%d)\n", bx, by, x + 720, y + 480);
+        ok(abs(bx - (x + 720)) <= 2 && abs(by - (y + 480)) <= 2, "fast drag: window ends exactly under the pointer");
+        XTestFakeButtonEvent(d, 1, False, 0); pause_ms(400);
+        x = bx; y = by;
+        XTestFakeMotionEvent(d, 0, 640, 500, 0); pause_ms(150);
+        { int ax, ay, aw, ah; pos(&ax, &ay, &aw, &ah); ok(ax == bx && ay == by, "after release the window stays put"); }
+    }
+    /* the button is already up when the request arrives (fast clicks, Electron): the
+     * daemon must not start a drag that waits for a release that never comes */
+    {
+        int px = x + 50, py = y + 20, bx, by, bw, bh, ax, ay, aw, ah;
+        pos(&ax, &ay, &aw, &ah);
+        XTestFakeMotionEvent(d, 0, px, py, 0); pause_ms(150);
+        XTestFakeButtonEvent(d, 1, True, 0); pause_ms(100);
+        XTestFakeButtonEvent(d, 1, False, 0); pause_ms(150);        /* released before the request */
+        { XEvent e; memset(&e, 0, sizeof e);
+          e.xclient.type = ClientMessage; e.xclient.window = w;
+          e.xclient.message_type = XInternAtom(d, "_NET_WM_MOVERESIZE", False); e.xclient.format = 32;
+          e.xclient.data.l[0] = px; e.xclient.data.l[1] = py; e.xclient.data.l[2] = 8; e.xclient.data.l[3] = 1; e.xclient.data.l[4] = 1;
+          XSendEvent(d, root, False, SubstructureNotifyMask | SubstructureRedirectMask, &e); }
+        pause_ms(300);
+        for (i = 1; i <= 6; i++) { XTestFakeMotionEvent(d, 0, px + 15 * i, py + 10 * i, 0); pause_ms(30); }
+        pause_ms(300);
+        pos(&bx, &by, &bw, &bh); printf("after stale request: %d,%d (should still be %d,%d)\n", bx, by, ax, ay);
+        ok(bx == ax && by == ay, "a request after the button is already up does not start a drag");
+        { Window gr = 0; (void)gr; }
+        XTestFakeButtonEvent(d, 1, True, 0); XTestFakeButtonEvent(d, 1, False, 0); pause_ms(200);   /* clear any stuck grab */
+    }
     /* a normal, decorated window (a game that did not ask for a frame to go away) */
     XDestroyWindow(d, w); pause_ms(300);
     w = XCreateSimpleWindow(d, root, 200, 150, 320, 220, 0, 0, 0x3366cc);
