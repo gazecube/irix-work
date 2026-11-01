@@ -213,6 +213,42 @@ fullscreen_off(Window w)
 /* ---- _NET_WM_MOVERESIZE ---- */
 enum { SZ_TL, SZ_T, SZ_TR, SZ_R, SZ_BR, SZ_B, SZ_BL, SZ_L, MOVE, SZ_KB, MOVE_KB, CANCEL };
 
+/* one diagnostic line per drag request: what the app is, what it asks for, and what limits it set */
+static void
+describe(const char *tag, Window w, int dir, int px, int py)
+{
+    XClassHint ch = { NULL, NULL };
+    XSizeHints sh_;
+    long supplied;
+    XWindowAttributes wa;
+    Atom type;
+    int fmt, ok = 0;
+    unsigned long n, after, mh[5] = { 0, 0, 0, 0, 0 };
+    unsigned char *data = NULL;
+    int x = 0, y = 0;
+
+    XGetClassHint(dpy, w, &ch);
+    memset(&sh_, 0, sizeof(sh_));
+    ok = XGetWMNormalHints(dpy, w, &sh_, &supplied);
+    if (XGetWindowProperty(dpy, w, A_MOTIF, 0, 5, False, A_MOTIF, &type, &fmt, &n, &after, &data) == Success && data) {
+        memcpy(mh, data, n < 5 ? n * sizeof(long) : sizeof(mh));
+        XFree(data);
+    }
+    XGetWindowAttributes(dpy, w, &wa);
+    root_pos(w, &x, &y);
+    fprintf(stderr, "ewmhd: %s 0x%lx %s/%s dir=%d ptr=%d,%d geom=%d,%d %dx%d", tag, w,
+            ch.res_class ? ch.res_class : "?", ch.res_name ? ch.res_name : "?", dir, px, py, x, y, wa.width, wa.height);
+    if (ok)
+        fprintf(stderr, " hints[flags=0x%lx min=%dx%d max=%dx%d inc=%dx%d base=%dx%d]", sh_.flags,
+                sh_.min_width, sh_.min_height, sh_.max_width, sh_.max_height,
+                sh_.width_inc, sh_.height_inc, sh_.base_width, sh_.base_height);
+    else
+        fprintf(stderr, " hints[none]");
+    fprintf(stderr, " motif[flags=0x%lx functions=0x%lx decorations=0x%lx]\n", mh[0], mh[1], mh[2]);
+    if (ch.res_class) XFree(ch.res_class);
+    if (ch.res_name) XFree(ch.res_name);
+}
+
 static int
 buttons_down(unsigned mask)
 {
@@ -231,6 +267,8 @@ drag(Window w, int px, int py, int dir)
 {
     XWindowAttributes wa;
     int ox, oy, ow, oh, lastx = -1, lasty = -1, inflight = 0, done = 0;
+    int minw = 1, minh = 1, maxw = 1 << 24, maxh = 1 << 24, incw = 1, inch = 1, basew = 0, baseh = 0;
+    int reqw = -1, reqh = -1;
     Window rr, cc;
     int rx, ry, wx, wy;
     unsigned mask;
@@ -239,27 +277,63 @@ drag(Window w, int px, int py, int dir)
     int fd = ConnectionNumber(dpy);
     int cursor_shape = XC_fleur;
 
+    describe("request", w, dir, px, py);
     if (dir == CANCEL || dir == SZ_KB || dir == MOVE_KB)
         return;                                     /* keyboard moves not offered */
     if (!XGetWindowAttributes(dpy, w, &wa))
         return;
     XQueryPointer(dpy, root, &rr, &cc, &rx, &ry, &wx, &wy, &mask);
-    if (!buttons_down(mask))
+    if (!buttons_down(mask)) {
+        fprintf(stderr, "ewmhd:   button already up, ignored\n");
         return;                                     /* released before we got the request */
+    }
     root_pos(w, &ox, &oy);
     ow = wa.width;
     oh = wa.height;
+    {   /* the app's own size limits (WM_NORMAL_HINTS): what 4Dwm will enforce anyway */
+        XSizeHints hs;
+        long supplied;
+
+        memset(&hs, 0, sizeof(hs));
+        if (XGetWMNormalHints(dpy, w, &hs, &supplied)) {
+            if (hs.flags & PMinSize) { minw = hs.min_width; minh = hs.min_height; }
+            if (hs.flags & PMaxSize) { maxw = hs.max_width; maxh = hs.max_height; }
+            if (hs.flags & PResizeInc) { incw = hs.width_inc > 0 ? hs.width_inc : 1; inch = hs.height_inc > 0 ? hs.height_inc : 1; }
+            if (hs.flags & PBaseSize) { basew = hs.base_width; baseh = hs.base_height; }
+            else if (hs.flags & PMinSize) { basew = hs.min_width; baseh = hs.min_height; }
+        }
+        if (minw < 16) minw = 16;
+        if (minh < 16) minh = 16;
+    }
     if (dir != MOVE) {
         static const int shapes[] = { XC_top_left_corner, XC_top_side, XC_top_right_corner, XC_right_side,
                                       XC_bottom_right_corner, XC_bottom_side, XC_bottom_left_corner, XC_left_side };
         cursor_shape = shapes[dir];
     }
     cur = XCreateFontCursor(dpy, (unsigned)cursor_shape);
-    /* the client has already let go of its own grab, as the spec requires */
-    if (XGrabPointer(dpy, root, False, ButtonReleaseMask | PointerMotionMask, GrabModeAsync, GrabModeAsync,
-                     None, cur, CurrentTime) != GrabSuccess) {
-        XFreeCursor(dpy, cur);
-        return;
+    /* The client has already let go of its own grab, as the spec requires, but 4Dwm may still
+     * be holding its click-to-focus grab for a moment (it is slow): retry briefly instead of
+     * giving up, and give up if the button comes up meanwhile. */
+    {
+        int tries, rc = AlreadyGrabbed;
+
+        for (tries = 0; tries < 60; tries++) {
+            rc = XGrabPointer(dpy, root, False, ButtonReleaseMask | PointerMotionMask, GrabModeAsync, GrabModeAsync,
+                              None, cur, CurrentTime);
+            if (rc == GrabSuccess)
+                break;
+            usleep(8000);
+            XQueryPointer(dpy, root, &rr, &cc, &rx, &ry, &wx, &wy, &mask);
+            if (!buttons_down(mask))
+                break;
+        }
+        if (rc != GrabSuccess) {
+            fprintf(stderr, "ewmhd:   pointer grab refused (%d tries)\n", tries);
+            XFreeCursor(dpy, cur);
+            return;
+        }
+        if (tries)
+            fprintf(stderr, "ewmhd:   grab after %d retries\n", tries);
     }
     XGrabKeyboard(dpy, root, False, GrabModeAsync, GrabModeAsync, CurrentTime);
     XSelectInput(dpy, w, StructureNotifyMask | PropertyChangeMask);   /* 4Dwm's ConfigureNotify = "applied" */
@@ -277,8 +351,18 @@ drag(Window w, int px, int py, int dir)
                 XMoveResizeWindow(dpy, w, ox, oy, (unsigned)ow, (unsigned)oh);
                 done = 1;
                 lastx = -2;                         /* cancelled: no final move */
-            } else if (ev.type == ConfigureNotify && ev.xconfigure.window == w)
+            } else if (ev.type == ConfigureNotify && ev.xconfigure.window == w) {
+                XWindowAttributes na;
+
                 inflight = 0;
+                /* if someone refused the size we asked for, that is the real limit: learn it */
+                if (dir != MOVE && reqw > 0 && XGetWindowAttributes(dpy, w, &na)) {
+                    if (na.width > reqw && na.width > minw) minw = na.width;
+                    if (na.height > reqh && na.height > minh) minh = na.height;
+                    if (na.width < reqw && na.width < maxw) maxw = na.width;
+                    if (na.height < reqh && na.height < maxh) maxh = na.height;
+                }
+            }
             else if (ev.type == DestroyNotify && ev.xdestroywindow.window == w)
                 done = 1;
         }
@@ -298,12 +382,28 @@ drag(Window w, int px, int py, int dir)
                 nx = ox + dx;
                 ny = oy + dy;
             } else {
-                if (dir == SZ_TL || dir == SZ_L || dir == SZ_BL) { nx = ox + dx; nw = ow - dx; }
-                if (dir == SZ_TR || dir == SZ_R || dir == SZ_BR) { nw = ow + dx; }
-                if (dir == SZ_TL || dir == SZ_T || dir == SZ_TR) { ny = oy + dy; nh = oh - dy; }
-                if (dir == SZ_BL || dir == SZ_B || dir == SZ_BR) { nh = oh + dy; }
-                if (nw < 80) { if (nx != ox) nx = ox + ow - 80; nw = 80; }
-                if (nh < 40) { if (ny != oy) ny = oy + oh - 40; nh = 40; }
+                int left = (dir == SZ_TL || dir == SZ_L || dir == SZ_BL);
+                int top = (dir == SZ_TL || dir == SZ_T || dir == SZ_TR);
+
+                if (left) nw = ow - dx;
+                if (dir == SZ_TR || dir == SZ_R || dir == SZ_BR) nw = ow + dx;
+                if (top) nh = oh - dy;
+                if (dir == SZ_BL || dir == SZ_B || dir == SZ_BR) nh = oh + dy;
+                /* sizes obey the app's limits and increments... */
+                if (nw < minw) nw = minw;
+                if (nw > maxw) nw = maxw;
+                if (nh < minh) nh = minh;
+                if (nh > maxh) nh = maxh;
+                if (incw > 1) nw = basew + ((nw - basew) / incw) * incw;
+                if (inch > 1) nh = baseh + ((nh - baseh) / inch) * inch;
+                if (nw < minw) nw += incw;
+                if (nh < minh) nh += inch;
+                /* ...and the edge opposite the one being dragged stays where it is: a window
+                 * already at its minimum does not slide when you push on it */
+                if (left) nx = ox + ow - nw;
+                if (top) ny = oy + oh - nh;
+                reqw = nw;
+                reqh = nh;
             }
             if (dir == MOVE)
                 XMoveWindow(dpy, w, nx, ny);
@@ -325,6 +425,14 @@ drag(Window w, int px, int py, int dir)
     XUngrabPointer(dpy, CurrentTime);
     XFreeCursor(dpy, cur);
     XSync(dpy, False);
+    {
+        XWindowAttributes na;
+        int nx = 0, ny = 0;
+
+        XGetWindowAttributes(dpy, w, &na);
+        root_pos(w, &nx, &ny);
+        fprintf(stderr, "ewmhd:   done: %d,%d %dx%d -> %d,%d %dx%d\n", ox, oy, ow, oh, nx, ny, na.width, na.height);
+    }
 }
 
 /* ---- advertising ---- */
