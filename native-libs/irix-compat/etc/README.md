@@ -10,6 +10,7 @@ the real init:
     S58rmtmpfiles  clean /tmp, /var/tmp
     S88configmsg   configuration messages
     S20syslogd     syslogd + logbridge (STREAMS log driver and /dev/log)
+    S33fam         portmapper + fam (the File Alteration Monitor the desktop needs; inetd starts it on IRIX)
     S98xdm         the graphical login (xdm / Xsgi)
 
 Held back until the IRIX init replaces OpenRC (each fights Linux or needs a

@@ -1,0 +1,30 @@
+#!/bin/sh
+# Start the portmapper and the File Alteration Monitor (fam).
+#
+# On IRIX, init.d/network starts rpcbind (or portmap) from /usr/etc and options
+# come from /etc/config/portmap.options; fam is then run by inetd on demand
+# (inetd.conf: "sgi_fam/1 stream rpc/tcp wait root ?/usr/etc/fam fam") and exits
+# after its inactivity timeout.  This port has no inetd, so fam runs standalone
+# with that timeout switched off.  The desktop (fm, the icon catalog, the
+# background icons) talks to fam through the portmapper, so both start here.
+#
+# Options: /etc/config/portmap.options (default: -h 127.0.0.1, local only;
+# the host rpcbind), /etc/config/fam.options (extra fam arguments).
+case "$1" in
+'start')
+	if ! pgrep -x rpcbind > /dev/null 2>&1; then
+		PMAP_OPTS="`cat /etc/config/portmap.options 2> /dev/null`"
+		[ -z "$PMAP_OPTS" ] && PMAP_OPTS="-h 127.0.0.1"
+		/usr/bin/rpcbind $PMAP_OPTS
+	fi
+	if ! pgrep -x fam > /dev/null 2>&1; then
+		/usr/sbin/fam -f -T 2147483647 `cat /etc/config/fam.options 2> /dev/null` > /dev/null 2>&1 &
+	fi
+	;;
+'stop')
+	killall fam > /dev/null 2>&1
+	;;
+*)
+	echo "usage: /etc/init.d/fam {start|stop}"
+	;;
+esac
