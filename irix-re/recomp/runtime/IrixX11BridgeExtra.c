@@ -15,6 +15,7 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 
 #define IRIX_X11_MAX_DISPLAYS 16u
@@ -1134,10 +1135,37 @@ void irix_x11_trace_event(const XEvent *e, const char *via)
     if (on < 0) on = getenv("IRIX_TRACE_GRAB") != 0;
     if (!on || !e) return;
     switch (e->type) {
+/*
+ * Some programs sync after every drawn line (xwsh: one XSync per terminal row, so a full-screen scroll
+ * is ~50 server round trips).  For those the runner sets irix_x11_lazy_sync_ms: a real round trip
+ * happens at most that often and in between the requests are only flushed, so the server still gets
+ * everything promptly.  0 (the default) keeps XSync exact.
+ */
+unsigned irix_x11_lazy_sync_ms;
+
+int irix_x11_lazy_sync_due(void)
+{
+    static struct timespec last;
+    struct timespec now;
+    long long ms;
+
+    if (!irix_x11_lazy_sync_ms) return 1;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    ms = (long long)(now.tv_sec - last.tv_sec) * 1000 + (now.tv_nsec - last.tv_nsec) / 1000000;
+    if (ms < (long long)irix_x11_lazy_sync_ms) return 0;
+    last = now;
+    return 1;
+}
+
     case ButtonPress:
     case ButtonRelease:
         fprintf(stderr, "EV[%s] %s win=%08lx sub=%08lx button=%u state=%04x t=%lu\n", via,
                 e->type == ButtonPress ? "ButtonPress" : "ButtonRelease",
+    if (d && !cpu->gpr[5] && !irix_x11_lazy_sync_due()) {
+        XFlush(d);
+        cpu->gpr[2] = 0;
+        return;
+    }
                 (unsigned long)e->xbutton.window, (unsigned long)e->xbutton.subwindow,
                 e->xbutton.button, e->xbutton.state, (unsigned long)e->xbutton.time);
         break;

@@ -168,9 +168,13 @@ static void compatible_write(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     xwsh_stream_feed(&t->stream, in, n, emit_output, &output);
     flush_output(&output);
 }
+extern unsigned irix_x11_lazy_sync_ms;
+
 void irix_xwsh_compat_init(IrixGuestRuntime *rt)
 {
     size_t i;
+    const char *lazy = getenv("IRIX_XWSH_LAZY_SYNC_MS");   /* a sync after every row is a round trip each: batch them */
+    irix_x11_lazy_sync_ms = lazy ? (unsigned)atoi(lazy) : 8u;
     for (i = 0; i < rt->function_count; ++i) {
         IrixGuestFunctionEntry *e = &rt->functions[i];
         if (e->name && !strcmp(e->name, "write__11TTYEmulatorGPCcUi")) {

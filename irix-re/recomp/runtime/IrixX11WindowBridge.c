@@ -168,6 +168,8 @@ int irix_x11_window_flush_guest_display(IrixGuestRuntime *rt,
     return !rt->trapped;
 }
 
+extern int irix_x11_lazy_sync_due(void);
+
 int irix_x11_window_sync_guest_display(IrixGuestRuntime *rt,
                                         IrixGuestCpu *caller,
                                         IrixGuestAddr guest_display)
@@ -186,6 +188,10 @@ int irix_x11_window_sync_guest_display(IrixGuestRuntime *rt,
 
     if (!rt || !caller || !guest_display)
         return 0;
+    /* programs that sync after every row (xwsh) get a real round trip at most every few ms; in between the
+     * guest connection's buffered requests are just written out */
+    if (!irix_x11_lazy_sync_due())
+        return irix_x11_window_flush_guest_display(rt, guest_display);
     use_cache = (cached_rt == rt && cached_count == rt->function_count);
 
     /*
