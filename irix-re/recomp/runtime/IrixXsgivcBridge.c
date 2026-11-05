@@ -449,7 +449,7 @@ static void vc_store_gamma(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int minor, i
 {
     Display *d = irix_x11_primary_display_from_guest(ARG(0));
     uint32_t count = ARG(3), mask = ARG(4), values = ARG(5);
-    int ncomp = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0);
+    int ncomp = 1;     /* "mask" is the component: 1 R, 2 G, 3 B, 4 alpha, 5 all; one table of values */
     size_t bytes = (size_t)count * ncomp * (sixteen ? 2 : 1), padded = (bytes + 3) & ~3u, i;
     xcb_connection_t *c;
     uint8_t *req;
@@ -458,7 +458,7 @@ static void vc_store_gamma(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int minor, i
     int major;
     uint32_t hdr[4];
 
-    if (!d || !count || count > 65536 || !ncomp || !values || !(major = vc_major(d))) { RET(0); return; }
+    if (!d || !count || count > 65536 || mask < 1 || mask > 5 || !values || !(major = vc_major(d))) { RET(0); return; }
     c = XGetXCBConnection(d);
     req = calloc(1, 20 + padded);
     if (!c || !req) { free(req); RET(0); return; }
