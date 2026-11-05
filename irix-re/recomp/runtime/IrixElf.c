@@ -70,26 +70,31 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
         return -1;
     if (fseek(fp, 0, SEEK_END) != 0) {
         fclose(fp);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     file_size_long = ftell(fp);
     if (file_size_long < 52) {
         fclose(fp);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     if (fseek(fp, 0, SEEK_SET) != 0) {
         fclose(fp);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     file_size = (size_t)file_size_long;
     file_data = (unsigned char *)malloc(file_size);
     if (!file_data) {
         fclose(fp);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     if (fread(file_data, 1, file_size, fp) != file_size) {
         free(file_data);
         fclose(fp);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     fclose(fp);
@@ -97,11 +102,13 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
     if (memcmp(file_data, "\177ELF", 4) != 0 ||
         file_data[4] != 1 || file_data[5] != 2) {
         free(file_data);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     machine = read_be16(file_data + 18);
     if (machine != 8) {
         free(file_data);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
 
@@ -116,11 +123,13 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
     info.phnum = phnum;
     if ((uint64_t)phoff + (uint64_t)phentsize * phnum > file_size) {
         free(file_data);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
     if (shoff && shentsize && shnum &&
         (uint64_t)shoff + (uint64_t)shentsize * shnum > file_size) {
         free(file_data);
+        if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
         return -1;
     }
 
@@ -141,6 +150,7 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
             size_t n;
             if ((uint64_t)offset + filesz > file_size || filesz == 0) {
                 free(file_data);
+                if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
                 return -1;
             }
             n = filesz;
@@ -170,6 +180,7 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
         if (!memsz || filesz > memsz ||
             (uint64_t)offset + filesz > file_size) {
             free(file_data);
+            if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
             return -1;
         }
         if (!info.load_base || vaddr < info.load_base)
@@ -179,11 +190,13 @@ irix_guest_load_elf32be_info(IrixGuestRuntime *rt, const char *path,
             info.phdr = vaddr + (phoff - offset);
         if (irix_guest_map(rt, vaddr, memsz, flags) != 0) {
             free(file_data);
+            if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
             return -1;
         }
         dst = irix_guest_ptr(rt, vaddr, memsz);
         if (!dst) {
             free(file_data);
+            if (getenv("IRIX_TRACE_ELF")) { fprintf(stderr, "IrixElf: rejected at line %d (%s)\n", __LINE__, path); }
             return -1;
         }
         memcpy(dst, file_data + offset, filesz);
