@@ -176,9 +176,17 @@ int irix_x11_window_sync_guest_display(IrixGuestRuntime *rt,
     IrixGuestCpu call;
     IrixGuestAddr saved_pc;
     size_t i;
+    /* The scan below walks every registered guest function with a string compare each; apps that sync
+     * once per drawn line (xwsh) paid for it on every line.  Remember the answer (also "none") until
+     * more functions are registered. */
+    static IrixGuestRuntime *cached_rt;
+    static size_t cached_count;
+    static IrixGuestFunctionEntry *cached_target;
+    int use_cache;
 
     if (!rt || !caller || !guest_display)
         return 0;
+    use_cache = (cached_rt == rt && cached_count == rt->function_count);
 
     /*
      * FM owns its SGI Xlib Display and X socket. A host XSync on the font
@@ -187,21 +195,28 @@ int irix_x11_window_sync_guest_display(IrixGuestRuntime *rt,
      * the protocol round trip on the correct socket and drains its events
      * through the matching Xlib state.
      */
-    for (i = 0; i < rt->function_count; ++i) {
-        IrixGuestFunctionEntry *entry = &rt->functions[i];
-        const char *name = entry->name;
-        const char *symbol;
-        if (!name)
-            continue;
-        symbol = strrchr(name, ':');
-        symbol = symbol ? symbol + 1 : name;
-        if (strcmp(symbol, "XSync") != 0 ||
-            (entry->flags & IRIX_GUEST_FUNCTION_NATIVE) ||
-            entry->address >= 0x20000000u ||
-            !irix_guest_ptr(rt, entry->address, 4u))
-            continue;
-        target = entry;
-        break;
+    if (use_cache) {
+        target = cached_target;
+    } else {
+        for (i = 0; i < rt->function_count; ++i) {
+            IrixGuestFunctionEntry *entry = &rt->functions[i];
+            const char *name = entry->name;
+            const char *symbol;
+            if (!name)
+                continue;
+            symbol = strrchr(name, ':');
+            symbol = symbol ? symbol + 1 : name;
+            if (strcmp(symbol, "XSync") != 0 ||
+                (entry->flags & IRIX_GUEST_FUNCTION_NATIVE) ||
+                entry->address >= 0x20000000u ||
+                !irix_guest_ptr(rt, entry->address, 4u))
+                continue;
+            target = entry;
+            break;
+        }
+        cached_rt = rt;
+        cached_count = rt->function_count;
+        cached_target = target;
     }
 
     if (!target)

@@ -15,6 +15,8 @@
 #include "IrixGuest.h"
 
 #include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <signal.h>
 #include <stdint.h>
 #include <string.h>
@@ -62,6 +64,7 @@ static void host_handler(int host_sig)
 {
     int s = host_to_irix(host_sig);
     if (s > 0) {
+        if (getenv("IRIX_TRACE_SIG")) { char m[48]; int n = snprintf(m, sizeof m, "SIG host signal %d -> irix %d pending\n", host_sig, s); if (n > 0) (void)!write(2, m, (size_t)n); }
         g_pending[s] = 1;
         irix_guest_signals_pending = 1;
     }
@@ -86,6 +89,7 @@ int irix_signal_install(int irix_sig, uint32_t handler)
         return -1;
     ensure_init();
     g_handler[irix_sig] = handler;
+    if (getenv("IRIX_TRACE_SIG")) fprintf(stderr, "SIG install irix %d handler 0x%x\n", irix_sig, handler);
     memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
     if (handler == IRIX_SIG_DFL) {
@@ -128,6 +132,7 @@ static void dispatch(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
             if (!g_pending[s] || guest_blocked(s)) continue;
             g_pending[s] = 0;
             h = g_handler[s];
+            if (getenv("IRIX_TRACE_SIG")) fprintf(stderr, "SIG dispatch irix %d handler 0x%x\n", s, h);
             if (h > 2u && !rt->trapped) {
                 IrixGuestCpu c = *cpu;
                 c.gpr[4] = (uint64_t)s;

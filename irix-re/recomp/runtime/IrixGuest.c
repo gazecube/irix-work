@@ -61,6 +61,8 @@ extern IrixGuestAddr irix_libc_guest_malloc(uint32_t size);
 
 typedef struct IrixKernelSigAction {
     uint32_t flags;
+int irix_signal_install(int irix_sig, uint32_t handler);
+
     uint32_t handler;
     uint32_t mask[4];
     uint32_t sigtramp;
@@ -4385,6 +4387,16 @@ exec_syscall_failed:
     case SYS_getdomainname: { /* getdomainname(char *name, size_t len) */
         IrixGuestAddr name_addr = (IrixGuestAddr)(uint32_t)cpu->gpr[4];
         size_t len = (size_t)(uint32_t)cpu->gpr[5];
+            /*
+             * signal()/sigset() in the translated libc end here.  Only recording the setting meant a
+             * guest handler never ran: xwsh never saw its shell exit (SIGCLD) and kept polling the dead
+             * pty at 100% CPU.  SIGALRM has its own mechanism above; the dispositions that mean
+             * something (default, ignore, a real handler address) get a host handler.
+             */
+            if ((unsigned)sig != IRIX_SIGALRM &&
+                sig != 4 && sig != 5 && sig != 8 && sig != 10 && sig != 11 &&   /* synchronous faults stay with the host */
+                (next.handler == 0u || next.handler == 1u || next.handler >= 0x1000u))
+                (void)irix_signal_install(sig, next.handler);
         char *name;
 
         if (!len) {
