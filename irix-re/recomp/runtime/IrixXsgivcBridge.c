@@ -438,6 +438,8 @@ static void b_XSGIvcQueryGammaColors(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         irix_guest_write8(rt, g + 2 * i, (uint8_t)(v >> 8));
         irix_guest_write8(rt, g + 2 * i + 1, (uint8_t)v);
     }
+    if (getenv("IRIX_VC_TRACE"))
+        fprintf(stderr, "QueryGammaColors map=%u component=%u -> n=%u first=%u mid=%u last=%u\n", ARG(2), ARG(3), n, rd16(r, 32), rd16(r, 32 + n), rd16(r, 32 + 2 * (n - 1)));
     if (ARG(4)) irix_guest_write32be(rt, ARG(4), n);
     if (ARG(5)) irix_guest_write32be(rt, ARG(5), g);
     free(r);
@@ -449,7 +451,7 @@ static void vc_store_gamma(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int minor, i
 {
     Display *d = irix_x11_primary_display_from_guest(ARG(0));
     uint32_t count = ARG(3), mask = ARG(4), values = ARG(5);
-    int ncomp = 1;     /* "mask" is the component: 1 R, 2 G, 3 B, 4 alpha, 5 all; one table of values */
+    int ncomp = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0);   /* loadTables: 1 R, 2 G, 4 B */
     size_t bytes = (size_t)count * ncomp * (sixteen ? 2 : 1), padded = (bytes + 3) & ~3u, i;
     xcb_connection_t *c;
     uint8_t *req;
@@ -458,11 +460,18 @@ static void vc_store_gamma(IrixGuestRuntime *rt, IrixGuestCpu *cpu, int minor, i
     int major;
     uint32_t hdr[4];
 
-    if (!d || !count || count > 65536 || mask < 1 || mask > 5 || !values || !(major = vc_major(d))) { RET(0); return; }
+    if (!d || !count || count > 65536 || !ncomp || !values || !(major = vc_major(d))) { RET(0); return; }
     c = XGetXCBConnection(d);
     req = calloc(1, 20 + padded);
     if (!c || !req) { free(req); RET(0); return; }
     hdr[0] = ARG(1); hdr[1] = ARG(2); hdr[2] = count; hdr[3] = mask;
+    if (getenv("IRIX_VC_TRACE")) {
+        uint32_t k;
+        fprintf(stderr, "StoreGammaColors%d map=%u component=%u count=%u values:", sixteen ? 16 : 8, ARG(2), mask, count);
+        for (k = 0; k < 6 && k < count; k++)
+            fprintf(stderr, " %u", sixteen ? (irix_guest_read8(rt, values + 2 * k) << 8 | irix_guest_read8(rt, values + 2 * k + 1)) : irix_guest_read8(rt, values + k));
+        fprintf(stderr, " ... last=%u\n", sixteen ? (irix_guest_read8(rt, values + 2 * (count - 1)) << 8 | irix_guest_read8(rt, values + 2 * (count - 1) + 1)) : irix_guest_read8(rt, values + count - 1));
+    }
     req[0] = (uint8_t)major; req[1] = (uint8_t)minor;
     req[2] = (uint8_t)((5 + padded / 4) & 0xff); req[3] = (uint8_t)((5 + padded / 4) >> 8);
     memcpy(req + 4, hdr, 16);
