@@ -21,4 +21,6 @@ export LD_PRELOAD="$NS/lib32/libirixshim32.so"
 export LD_LIBRARY_PATH="$NS/lib32:/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 [ -n "$VLCMOTIF_HELPER" ] || VLCMOTIF_HELPER="$D/bin/vlcd"
 export VLCMOTIF_HELPER
+# local settings (extra environment for the player and libvlc), plain sh syntax; optional
+[ -r "$HOME/.vlcmotif/env" ] && . "$HOME/.vlcmotif/env"
 exec "$D/bin/vlcmotif" "$@"
