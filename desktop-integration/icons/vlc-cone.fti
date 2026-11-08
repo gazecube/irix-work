@@ -1,0 +1,44 @@
+#	path
+		color(outlinecolor);
+		bgnpolygon();
+			vertex(28.00, 8.00);
+			vertex(72.00, 8.00);
+			vertex(72.00, 16.00);
+			vertex(28.00, 16.00);
+		endpolygon();
+
+#	path
+		color(-19);
+		bgnpolygon();
+			vertex(45.00, 64.00);
+			vertex(55.00, 64.00);
+			vertex(68.00, 16.00);
+			vertex(32.00, 16.00);
+		endpolygon();
+
+#	path
+		color(-119);
+		bgnpolygon();
+			vertex(47.60, 54.00);
+			vertex(52.40, 54.00);
+			vertex(55.60, 42.00);
+			vertex(44.40, 42.00);
+		endpolygon();
+
+#	path
+		color(-119);
+		bgnpolygon();
+			vertex(42.40, 34.00);
+			vertex(57.60, 34.00);
+			vertex(60.70, 23.00);
+			vertex(39.30, 23.00);
+		endpolygon();
+
+#	path
+		color(-19);
+		bgnpolygon();
+			vertex(45.00, 64.00);
+			vertex(55.00, 64.00);
+			vertex(53.00, 70.00);
+			vertex(47.00, 70.00);
+		endpolygon();
