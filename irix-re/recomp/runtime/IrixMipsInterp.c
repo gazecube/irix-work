@@ -1257,12 +1257,15 @@ static int mapped_exec(IrixGuestRuntime *rt, IrixGuestAddr pc)
     return 0;
 }
 
-/* gp of the caller at each pending lazy-binding stub call, keyed by the
- * original return address (the stub passes it to rld in $t7).  rld's
- * resolver tail-calls the resolved function without restoring the caller's
- * gp, so the callee saves/restores rld's gp and the caller resumes with the
- * wrong one.  The matching jr $ra puts it back. */
-#define LAZY_GP_MAX 64u
+/* gp of the caller at each pending call, keyed by the return address.  For a
+ * lazy-binding stub call that is the original return address (the stub passes
+ * it to rld in $t7): rld's resolver tail-calls the resolved function without
+ * restoring the caller's gp, so the callee saves/restores rld's gp and the
+ * caller resumes with the wrong one.  The same happens for an ordinary jalr
+ * whose callee runs on in this interpreter loop and so never gets back to the
+ * jalr handler (libc dlopen from a relocated DSO).  The matching jr $ra puts
+ * the gp back. */
+#define LAZY_GP_MAX 4096u
 static struct { IrixGuestAddr ra; uint32_t gp; } lazy_gp[LAZY_GP_MAX];
 static unsigned lazy_gp_n;
 
@@ -1300,6 +1303,32 @@ static int is_lazy_plt_call(IrixGuestRuntime *rt, IrixGuestAddr pc)
            (irix_guest_read32be(rt, pc + 4u) & 0xffff0000u) == 0x34180000u;
 }
 
+/* IRIX_WATCH_PC=pc[,pc...] (hex): print the main registers each time one of
+ * these PCs is about to execute. */
+static void watch_pc(const IrixGuestCpu *cpu, IrixGuestAddr pc)
+{
+    static const char *watch;
+    static int watch_init;
+    const char *w;
+
+    if (!watch_init) {
+        watch = getenv("IRIX_WATCH_PC");
+        watch_init = 1;
+    }
+    for (w = watch; w && *w;) {
+        char *e;
+        unsigned long v = strtoul(w, &e, 16);
+        if (e == w)
+            break;
+        if (v == pc)
+            fprintf(stderr, "watch pc=%08x gp=%08x sp=%08x ra=%08x t9=%08x v0=%08x a0=%08x\n",
+                    (unsigned)pc, (unsigned)cpu->gpr[28], (unsigned)cpu->gpr[29],
+                    (unsigned)cpu->gpr[31], (unsigned)cpu->gpr[25],
+                    (unsigned)cpu->gpr[2], (unsigned)cpu->gpr[4]);
+        w = *e == ',' ? e + 1 : e;
+    }
+}
+
 /* Opt-in ring of the most recent guest PCs (IRIX_TRACE_SYSCALLS=1); the
  * syscall tracer prints it at exit() to show where a program was. */
 uint32_t irix_pc_ring[8192];
@@ -1317,6 +1346,7 @@ int irix_mips_interp_step(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         return -1;
 
     irix_pc_ring[irix_pc_ring_pos++ & 8191u] = pc;
+    watch_pc(cpu, pc);
 
     insn = irix_guest_read32be(rt, pc);
     if (rt->trapped)
@@ -1667,6 +1697,7 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
         if (!mapped_exec(rt, pc))
             break;
         irix_pc_ring[irix_pc_ring_pos++ & 8191u] = pc;
+        watch_pc(cpu, pc);
         {
             /* IRIX_WATCH_ENTRY=<pc>,<offset>: when execution reaches <pc>,
              * remember sp+<offset> and report the first instruction that
@@ -2036,10 +2067,15 @@ int irix_mips_interp_call(IrixGuestRuntime *rt, IrixGuestCpu *cpu,
                 if (rd == 31u && is_lazy_plt_call(rt, pc))
                     lazy_gp_push((IrixGuestAddr)(uint32_t)cpu->gpr[15],
                                  (uint32_t)caller_gp);
+                else if (rd == 31u)
+                    lazy_gp_push(pc + 8u, (uint32_t)caller_gp);
                 if (irix_guest_call(rt, cpu, target) != 0)
                     return -1;
-                if (rd == 31u && !is_lazy_plt_call(rt, pc))
+                if (rd == 31u && !is_lazy_plt_call(rt, pc)) {
+                    uint32_t unused;
+                    lazy_gp_pop(pc + 8u, &unused);
                     cpu->gpr[28] = caller_gp;
+                }
             }
             
             if (!rd)
