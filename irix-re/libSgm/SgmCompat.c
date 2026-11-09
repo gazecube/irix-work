@@ -35,7 +35,7 @@ extern WidgetClass sgZoomBarWidgetClass;
 WidgetClass sgColumnWidgetClass = (WidgetClass)0;
 WidgetClass sgOglColorChooserWidgetClass = (WidgetClass)0;
 WidgetClass sgArcWidgetClass = (WidgetClass)0;
-WidgetClass sgDialWidgetClass = (WidgetClass)0;
+extern WidgetClass sgDialWidgetClass;
 WidgetClass sgGraphWidgetClass = (WidgetClass)0;
 WidgetClass sgHorzPanedWindowWidgetClass = (WidgetClass)0;
 extern WidgetClass sgGridWidgetClass;
@@ -62,7 +62,6 @@ static void SgmCompatInitClasses(void)
     sgColumnWidgetClass = xmFormWidgetClass;
     sgOglColorChooserWidgetClass = xmFormWidgetClass;
     sgArcWidgetClass = xmDrawingAreaWidgetClass;
-    sgDialWidgetClass = xmScaleWidgetClass;
     sgGraphWidgetClass = xmBulletinBoardWidgetClass;
     sgHorzPanedWindowWidgetClass = xmPanedWindowWidgetClass;
     sgIconGadgetClass = xmLabelGadgetClass;
@@ -165,18 +164,22 @@ Widget SgCreateMediaViewer(Widget parent, char *name, ArgList args,
 
 void SgDialGetValue(Widget w, int *value)
 {
+    short v = 0;
+
     if (!value)
         return;
 
     *value = 0;
-    if (w)
-        XmScaleGetValue(w, value);
+    if (w) {
+        XtVaGetValues(w, XmNvalue, &v, NULL);
+        *value = v;
+    }
 }
 
 void SgDialSetValue(Widget w, int value)
 {
     if (w)
-        XmScaleSetValue(w, value);
+        XtVaSetValues(w, XmNvalue, (short)value, NULL);
 }
 
 void SgScrollBarGetValues(Widget w, int *value, int *slider,

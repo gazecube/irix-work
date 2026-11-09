@@ -19,7 +19,7 @@ unsigned char sgDropPocketClassRec[156];
 unsigned char sgColumnClassRec[224];
 unsigned char sgOglColorChooserClassRec[224];
 unsigned char sgArcClassRec[124];
-unsigned char SgdialClassRec[152];
+/* SgdialClassRec is now a real native class record owned by Dial.c. */
 unsigned char sgGraphClassRec[204];
 unsigned char sgHorzPanedWindowClassRec[204];
 /* sgGridClassRec is now a real native class record owned by Grid.c. */
