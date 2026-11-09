@@ -1,0 +1,29 @@
+# The 4-wide variant found in about a quarter of the original mex source: four
+# spaces per level, hard tabs for every 8 columns, if(.  Used for vlcmotif.c.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 8
+UseTab: ForContinuationAndIndentation
+ColumnLimit: 80
+SpaceBeforeParens: Never
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterStruct: false
+  AfterEnum: false
+  AfterUnion: false
+  AfterControlStatement: Never
+  BeforeElse: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+BreakBeforeBinaryOperators: All
+BreakBeforeTernaryOperators: true
+ContinuationIndentWidth: 4
+Cpp11BracedListStyle: false
+PointerAlignment: Right
+IndentCaseLabels: false
+SortIncludes: Never
+ReflowComments: false
