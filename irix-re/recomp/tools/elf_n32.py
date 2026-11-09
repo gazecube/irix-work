@@ -112,6 +112,62 @@ class Elf:
         return out
 
     # -- function boundaries from .debug_frame ----------------------------------------------
+    def xlate_table(self):
+        """The .MIPS.Xlate table of an object whose text was rearranged after linking (cord): a sorted list of
+        (new_address, old_address, size).  The DWARF sections still hold the old addresses.  Only the layout that
+        occurs in IRIX 6.5 objects is read: version 5, whole ranges moved without resizing; per block a header
+        (first new, first old, entries, old low, old high) and LEB128 pairs (size / 4, old address step / 4)."""
+        if hasattr(self, '_xlate'):
+            return self._xlate
+        self._xlate = []
+        s = self.byname.get('.MIPS.Xlate')
+        if not s:
+            return self._xlate
+        d = self.data[s['off']:s['off'] + s['size']]
+        version, kind, bsize, _, nblocks, total = struct.unpack_from('>IB3xIIII', d, 0)
+        if version != 5 or kind != 1:
+            raise ValueError('.MIPS.Xlate version %d kind %d is not supported' % (version, kind))
+        def leb(p, signed):
+            v = sh = 0
+            while True:
+                b = d[p]
+                p += 1
+                v |= (b & 0x7f) << sh
+                sh += 7
+                if not b & 0x80:
+                    if signed and b & 0x40:
+                        v -= 1 << sh
+                    return v, p
+        hdr = 0x34
+        for k in range(nblocks):
+            new, old, n, _, _ = struct.unpack_from('>5I', d, hdr + 20 * k)
+            p = hdr + 20 * nblocks + bsize * k
+            for _ in range(n):
+                size, p = leb(p, False)
+                step, p = leb(p, True)
+                old += 4 * step
+                self._xlate.append((new, old, 4 * size))
+                new += 4 * size
+        assert len(self._xlate) == total
+        self._xlate.sort()
+        return self._xlate
+
+    def old_to_new(self, a):
+        """Address in the rearranged text for an address the DWARF sections give (identity without a table)."""
+        t = self.xlate_table()
+        if not t:
+            return a
+        if not hasattr(self, '_xlate_old'):
+            self._xlate_old = sorted((o, n, z) for n, o, z in t)
+            self._xlate_keys = [o for o, _, _ in self._xlate_old]
+        import bisect
+        k = bisect.bisect_right(self._xlate_keys, a) - 1
+        if k >= 0:
+            o, n, z = self._xlate_old[k]
+            if a < o + z:
+                return n + (a - o)
+        return a
+
     def frame_functions(self):
         s = self.byname.get('.debug_frame')
         if not s:
@@ -127,7 +183,7 @@ class Elf:
             else:
                 loc, rng = struct.unpack_from('>II', d, p + 8)
                 if rng:
-                    out.append((loc, rng))
+                    out.append((self.old_to_new(loc), rng))
             p += 4 + ln
         return sorted(set(out))
 

@@ -9,6 +9,8 @@ The input is a stripped, linked ELF: no per-object relocations.  What the lifter
   * the allocated image is emitted as ONE blob (__img_NAME) at its link-time layout, so every in-image address is
     `__img + (addr - base)`; REL32 words in the blob become symbolic `.long` expressions;
   * function boundaries: exported symbols, .debug_frame pieces outside exported functions, and GOT / REL32 targets;
+    an object rearranged after linking (cord) has a .MIPS.Xlate table, which gives every procedure's start and maps
+    the DWARF addresses to where the code is now;
   * jump tables: runs of REL32 words that point into the same function.
 """
 import json
@@ -104,6 +106,10 @@ class Image:
         for tag in (12, 13):
             if e.dyn.get(tag):
                 starts.add(e.dyn[tag])
+        # text rearranged after linking: every moved range is one procedure
+        for new, _, _ in e.xlate_table():
+            if self.in_text(new):
+                starts.add(new)
         if self.is_exec:
             # functions without an unwind record: a `jr ra` and its delay slot followed by a frame setup (addiu sp,sp,-N)
             # or a gp load (lui $gp) starts a function, unless it lies inside a function that has its own record
@@ -165,6 +171,11 @@ class Image:
             sys.stderr.write('executable: %d function starts dropped (inside a delay slot)\n' % len(dropped))
             starts -= dropped
             starts = self.merge_split_functions(starts, exp)
+        table = {new for new, _, _ in e.xlate_table() if self.in_text(new)}
+        if table:
+            # the table lists every procedure: a GOT page entry or a data word pointing into one is not a start
+            keep = table | {v for v, _ in exp} | {e.dyn[t] for t in (12, 13) if e.dyn.get(t)}
+            starts = {a for a in starts if a in keep or not any(n <= a < n + z for n, _, z in e.xlate_table())}
         starts = sorted(starts)
         self.funcs = []                       # (addr, size, cname, section)
         for k, a in enumerate(starts):
