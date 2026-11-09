@@ -28,6 +28,8 @@
 #include <unistd.h>
 
 #include <Sgm/Dial.h>
+#include "icons.h"
+#include "icons_extra.h"
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <Xm/AtomMgr.h>
@@ -76,6 +78,8 @@ static int npending;
 static int pending_mode_enqueue;
 static int helper_ready;
 
+static Pixmap play_pm, pause_pm;
+static Widget volume_row_w;
 static void dial_set(Widget w, int v);
 static int dial_get(Widget w);
 
@@ -281,10 +285,7 @@ static void handle_line(char *line)
 	const char *s = f[1];
 	playing_state = !strcmp(s, "playing");
 	{
-	    XmString xs
-		= XmStringCreateLocalized(playing_state ? "Pause" : "Play");
-	    XtVaSetValues(play_btn, XmNlabelString, xs, NULL);
-	    XmStringFree(xs);
+	    XtVaSetValues(play_btn, XmNlabelPixmap, playing_state ? pause_pm : play_pm, NULL);
 	}
 	if(!strcmp(s, "error"))
 	    set_status("Error");
@@ -1020,6 +1021,69 @@ static Widget add_submenu(
     return pd;
 }
 
+/* A one colour XPM drawn into a pixmap: "None" is the background, #000000 the foreground, any other #rrggbb
+ * its own colour.  Motif 1.2 has no XPM support and the icons are tiny, so they are drawn point by point. */
+static Pixmap xpm_pixmap(Widget w, char **xpm, Pixel bg, Pixel fg)
+{
+    Display *dpy = XtDisplay(w);
+    Screen *scr = XtScreen(w);
+    int width, height, ncolors, cpp, i, x, y, depth = DefaultDepthOfScreen(scr);
+    Pixel table[256];
+    Pixmap pm;
+    GC gc;
+    sscanf(xpm[0], "%d %d %d %d", &width, &height, &ncolors, &cpp);
+    if (cpp != 1) return None;
+    for (i = 0; i < 256; i++) table[i] = bg;
+    for (i = 0; i < ncolors; i++) {
+	const char *l = xpm[1 + i];
+	unsigned int r, g, b;
+	if (!strncmp(l + 1, " c #", 4) && sscanf(l + 5, "%2x%2x%2x", &r, &g, &b) == 3) {
+	    if (!r && !g && !b) table[(unsigned char)l[0]] = fg;
+	    else {
+		XColor c;
+		c.red = r * 257; c.green = g * 257; c.blue = b * 257;
+		c.flags = DoRed | DoGreen | DoBlue;
+		if (XAllocColor(dpy, DefaultColormapOfScreen(scr), &c)) table[(unsigned char)l[0]] = c.pixel;
+	    }
+	}
+    }
+    pm = XCreatePixmap(dpy, RootWindowOfScreen(scr), width, height, depth);
+    gc = XCreateGC(dpy, pm, 0, NULL);
+    XSetForeground(dpy, gc, bg);
+    XFillRectangle(dpy, pm, gc, 0, 0, width, height);
+    for (y = 0; y < height; y++)
+	for (x = 0; x < width; x++) {
+	    Pixel p = table[(unsigned char)xpm[1 + ncolors + y][x]];
+	    if (p != bg) {
+		XSetForeground(dpy, gc, p);
+		XDrawPoint(dpy, pm, gc, x, y);
+	    }
+	}
+    XFreeGC(dpy, gc);
+    return pm;
+}
+
+/* the icon for a widget, in its own colours; armed is drawn on the arm colour */
+static Pixmap widget_icon(Widget w, char **xpm, int armed)
+{
+    Pixel bg, fg, arm;
+    XtVaGetValues(w, XmNbackground, &bg, XmNforeground, &fg, NULL);
+    if (armed) {
+	XtVaGetValues(w, XmNarmColor, &arm, NULL);
+	bg = arm;
+    }
+    return xpm_pixmap(w, xpm, bg, fg);
+}
+
+static Widget icon_button(Widget parent, char **xpm, XtCallbackProc cb, XtPointer data)
+{
+    Widget b = XtVaCreateManagedWidget("btn", xmPushButtonWidgetClass, parent, NULL);
+    XtVaSetValues(b, XmNlabelType, XmPIXMAP, XmNlabelPixmap, widget_icon(b, xpm, 0),
+	XmNarmPixmap, widget_icon(b, xpm, 1), NULL);
+    XtAddCallback(b, XmNactivateCallback, cb, data);
+    return b;
+}
+
 static Widget button(
     Widget parent, const char *label, XtCallbackProc cb, XtPointer data)
 {
@@ -1049,6 +1113,23 @@ static void center_row_cb(Widget w, XtPointer client, XEvent *ev, Boolean *cont)
 	return;
     last = off;
     XtVaSetValues(transport_row, XmNleftOffset, off, NULL);
+}
+
+/* the button row is shorter than the volume row: split the difference above and below */
+static void center_transport_cb(Widget w, XtPointer c, XEvent *ev, Boolean *cont)
+{
+    static int last = -1;
+    Dimension H = 0, h = 0;
+    int want;
+    (void)w; (void)c; (void)cont;
+    if (ev->type != ConfigureNotify || !volume_row_w || !play_btn) return;
+    XtVaGetValues(volume_row_w, XmNheight, &H, NULL);
+    XtVaGetValues(play_btn, XmNheight, &h, NULL);
+    want = ((int)H - (int)h) / 2;
+    if (want < 0) want = 0;
+    if (want == last) return;
+    last = want;
+    XtVaSetValues(transport_row, XmNmarginHeight, (Dimension)want, NULL);
 }
 
 static void build_ui(void)
@@ -1179,19 +1260,24 @@ static void build_ui(void)
 	XmNbottomWidget, status_sep, XmNleftAttachment, XmATTACH_FORM,
 	XmNrightAttachment, XmATTACH_NONE, NULL);
     transport_row = row;
+    volume_row_w = volrow;
+    XtAddEventHandler(volrow, StructureNotifyMask, False, center_transport_cb, NULL);
+    XtAddEventHandler(row, StructureNotifyMask, False, center_transport_cb, NULL);
     XtAddEventHandler(row, StructureNotifyMask, False, center_row_cb, NULL);
     XtAddEventHandler(ctlform, StructureNotifyMask, False, center_row_cb, NULL);
-    button(row, "|<", simple_cb, (XtPointer) "PREV");
-    button(row, "<<", jump_cb, (XtPointer)-10000L);
-    play_btn = button(row, "Play", toggle_cb, NULL);
-    button(row, "Stop", simple_cb, (XtPointer) "STOP");
-    button(row, ">>", jump_cb, (XtPointer)10000L);
-    button(row, ">|", simple_cb, (XtPointer) "NEXT");
+    icon_button(row, skip_back_icon_xpm, simple_cb, (XtPointer) "PREV");
+    icon_button(row, rewind_icon_xpm, jump_cb, (XtPointer)-10000L);
+    play_btn = icon_button(row, play_icon_xpm, toggle_cb, NULL);
+    play_pm = widget_icon(play_btn, play_icon_xpm, 0);
+    pause_pm = widget_icon(play_btn, pause_icon_xpm, 0);
+    icon_button(row, stop_icon_xpm, simple_cb, (XtPointer) "STOP");
+    icon_button(row, forward_icon_xpm, jump_cb, (XtPointer)10000L);
+    icon_button(row, skip_forward_icon_xpm, simple_cb, (XtPointer) "NEXT");
     mute_btn
 	= XtVaCreateManagedWidget("mute", xmToggleButtonWidgetClass, volrow, NULL);
-    xs = XmStringCreateLocalized("Mute");
-    XtVaSetValues(mute_btn, XmNlabelString, xs, NULL);
-    XmStringFree(xs);
+    XtVaSetValues(mute_btn, XmNindicatorOn, False, XmNlabelType, XmPIXMAP,
+	XmNlabelPixmap, widget_icon(mute_btn, volume_icon_xpm, 0),
+	XmNselectPixmap, widget_icon(mute_btn, muted_icon_xpm, 0), NULL);
     XtAddCallback(mute_btn, XmNvalueChangedCallback, mute_cb, NULL);
     n = 0;
     XtSetArg(a[n], XmNminimum, 0);
