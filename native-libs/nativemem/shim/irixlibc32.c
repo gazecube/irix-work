@@ -161,6 +161,33 @@ int __flsbuf(int c, struct ifile *f)
 }
 int __semputc(int c, struct ifile *f) { return __flsbuf(c, f); }
 
+/* ---- sysconf: IRIX names (sys/unistd.h) to the host's -------------------------------------------------------------- */
+long irix_sysconf(int name)
+{
+    switch (name) {
+    case 1: return sysconf(_SC_ARG_MAX);
+    case 2: return sysconf(_SC_CHILD_MAX);
+    case 3: return sysconf(_SC_CLK_TCK);
+    case 4: return sysconf(_SC_NGROUPS_MAX);
+    case 5: return sysconf(_SC_OPEN_MAX);
+    case 6: return sysconf(_SC_JOB_CONTROL);
+    case 7: return sysconf(_SC_SAVED_IDS);
+    case 8: return sysconf(_SC_VERSION);
+    case 9: return 8;                       /* _SC_PASS_MAX */
+    case 10: return 8;                      /* _SC_LOGNAME_MAX */
+    case 11: return sysconf(_SC_PAGESIZE);
+    case 12: return sysconf(_SC_XOPEN_VERSION);
+    case 14: return sysconf(_SC_NPROCESSORS_CONF);
+    case 15: return sysconf(_SC_NPROCESSORS_ONLN);
+    case 16: return sysconf(_SC_STREAM_MAX);
+    case 17: return sysconf(_SC_TZNAME_MAX);
+    case 13: case 25: case 26: case 27: case 28: case 29: case 30:
+        return 0;                           /* ACL, audit, information labels, MAC, capabilities: not installed */
+    }
+    irix_errno = 22;                        /* EINVAL */
+    return -1;
+}
+
 int irix_fgetc(struct ifile *f) { return __filbuf(f); }
 int irix_fflush(struct ifile *f) { FILE *h; int r; if (!f) return fflush(0); h = host_of(f); r = fflush(h); sync_flags(f, h); return r; }
 int irix_fputc(int c, struct ifile *f) { return __flsbuf(c, f); }

@@ -310,6 +310,14 @@ void irix_compat_syssgi(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
         return;
     }
 
+    case 74u:   /* SGI_SATREAD */
+    case 75u:   /* SGI_SATWRITE */
+    case 76u:   /* SGI_SATCTL */
+        /* The audit subsystem is not installed: what an IRIX kernel without sat answers. */
+        errno = ENOPKG;
+        compat_result(cpu, -1);
+        return;
+
     case SGI_RXEV_GET: { /* SGI_RXEV_GET */
         /*
          * SGI syssgi.c: tell libc/rld whether loader-control environment
