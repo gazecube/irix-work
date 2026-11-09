@@ -76,6 +76,7 @@ class Image:
                 self.exports.setdefault(s['value'], s['name'])
             elif s['type'] in (0, 1) and not self.in_text(s['value']):
                 self.dataexp.setdefault(s['value'], (s['name'], s['size']))
+        self.gpwidth = defaultdict(set)       # small-data address -> access widths seen in the code
         self.rel = [(o, sym, typ) for o, sym, typ in e.rel_dyn() if typ == R_MIPS_REL32]
         self.relmap = {o: sym for o, sym, _ in self.rel}
         self.is_exec = int.from_bytes(e.data[16:18], 'big') == 2
@@ -279,12 +280,13 @@ class Image:
                 self.run_of[o] = run
 
     # -- addresses as C expressions ----------------------------------------------------------
-    def addr_c(self, syms, a):
+    def addr_c(self, syms, a, page=False):
         if a in self.fstart:
             return '(%s + 0)' % syms.addr(self.fstart[a])
         if self.in_text(a) and a & 0xffff:
             raise Unsupported('address %08x is inside a function' % a)
-        if self.img_lo <= a < self.img_hi:
+        # a GOT page entry is an address near its target and may lie just past either end of the image
+        if self.img_lo <= a < self.img_hi or (page and self.img_lo - 0x10000 <= a < self.img_hi + 0x10000):
             return '(%s + %d)' % (syms.addr('__img_' + self.name), a - self.img_lo)
         return '0x%08xu' % a
 
@@ -375,6 +377,8 @@ class DsoFuncLifter(LL.FuncLifter):
                 op == 0x23 and e.pltgot <= gpa < e.pltgot + 4 * (e.local_gotno + len(e.dynsyms) - e.gotsym)):
             T = {0x20: 'int8_t', 0x21: 'int16_t', 0x23: 'uint32_t', 0x24: 'uint8_t', 0x25: 'uint16_t',
                  0x28: 'uint8_t', 0x29: 'uint16_t', 0x2b: 'uint32_t'}[op]
+            # the width this small-data object is accessed with decides how its initial bytes are laid out
+            self.img.gpwidth[gpa].add({0x20: 1, 0x24: 1, 0x28: 1, 0x21: 2, 0x25: 2, 0x29: 2, 0x23: 4, 0x2b: 4}[op])
             ref = '*(%s *)%s' % (T, self.img.addr_c(self.syms, gpa))
             if op < 0x28:
                 return '%s = (uint32_t)(%s)%s;' % (lhs(i.rt), 'int32_t' if op in (0x20, 0x21) else 'uint32_t', ref) if i.rt else None
@@ -385,7 +389,7 @@ class DsoFuncLifter(LL.FuncLifter):
             if kind == 'local':
                 self.const[i.rt] = v
                 self.note_tbl(i.rt, v)
-                return '%s = %s;' % (lhs(i.rt), self.img.addr_c(self.syms, v))
+                return '%s = %s;' % (lhs(i.rt), self.img.addr_c(self.syms, v, page=True))
             name = v['name']
             self.const.pop(i.rt, None)
             if v['shndx']:
@@ -499,7 +503,19 @@ def swap_image(img):
         i = 0
         while i + unit <= n:
             if not any(strs[i:i + unit]):
-                b[i:i + unit] = b[i:i + unit][::-1]
+                a = s['addr'] + i
+                w = [img.gpwidth.get(a + k, ()) for k in range(unit)] if unit == 4 else []
+                if unit == 4 and any(w) and 4 not in w[0]:
+                    # accessed at byte or half-word width: those stay in place (swap per half-word, none per byte)
+                    k = 0
+                    while k < 4:
+                        if 2 in w[k] and k % 2 == 0:
+                            b[i + k:i + k + 2] = b[i + k:i + k + 2][::-1]
+                            k += 2
+                        else:
+                            k += 1
+                else:
+                    b[i:i + unit] = b[i:i + unit][::-1]
             i += unit
         out[s['no']] = b
     return out
@@ -541,7 +557,13 @@ def emit_blob(img, swapped, w):
             v = e.word(a)
             sym = e.dynsyms[relat[a]] if relat[a] < len(e.dynsyms) else None
             if sym is not None and relat[a] >= e.gotsym and not sym['shndx'] and sym['name']:
-                w.write('\t.long %s + %d\n' % (sym['name'], v))
+                # a quickstarted object holds the symbol's expected address in the word: the addend is what is left
+                # (the expected address is the symbol's quickstart GOT entry)
+                exp = e.word(e.pltgot + 4 * (e.local_gotno + relat[a] - e.gotsym))
+                add = (v - exp) & 0xffffffff
+                if add & 0x80000000:
+                    add -= 1 << 32
+                w.write('\t.long %s + %d\n' % (sym['name'], add))
             else:
                 w.write('\t.long %s\n' % img.addr_s(v))
             off += 4
@@ -559,10 +581,10 @@ def emit_blob(img, swapped, w):
     for s in e.dynsyms:
         if not s['name'] or not s['shndx'] or s['name'].startswith('.'):
             continue
-        w.write('\t.globl %s\n' % s['name'])
         if s['type'] == 2 and s['value'] in img.fstart:
-            w.write('\t.set %s, %s\n\t.type %s,@function\n' % (s['name'], img.fstart[s['value']], s['name']))
-        elif img.in_text(s['value']):
+            continue                      # exported functions are aliases in code.c, next to their definitions
+        w.write('\t.globl %s\n' % s['name'])
+        if img.in_text(s['value']):
             w.write('\t.set %s, %s\n' % (s['name'], img.addr_s(s['value'])))
         else:
             w.write('\t.set %s, __img_%s + %d\n\t.type %s,@object\n' % (s['name'], img.name, s['value'] - base, s['name']))
@@ -601,6 +623,10 @@ def main():
         w.write(syms.decls())
         for c, (a, z, cn, s) in zip(bodies, img.funcs):
             w.write(c + '\n\n')
+        # exported functions: the dynamic symbol is an alias of the lifted function
+        for sym in img.elf.dynsyms:
+            if sym['name'] and sym['shndx'] and sym['type'] == 2 and sym['value'] in img.fstart and not sym['name'].startswith('.'):
+                w.write('extern uint32_t %s() __attribute__((alias("%s")));\n' % (sym['name'], img.fstart[sym['value']]))
         # DT_INIT / DT_FINI
         ini = img.elf.dyn.get(12)
         if ini in img.fstart:

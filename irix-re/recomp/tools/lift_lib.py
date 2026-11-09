@@ -547,6 +547,11 @@ class FuncLifter:
                 raise Unsupported('branch leaves the function at %08x' % t)
         # arity: liveness over the same walk the leaf lifter used, using the reloc-aware def/use
         used_args, stack_slots = self.liveness(delay_of, frame)
+        # every incoming slot the body mentions needs a declaration, also on paths the liveness walk did not take
+        stack_slots = set(stack_slots)
+        for i in insns:
+            if i.rs == 29 and i.imm >= frame and i.op in (0x20, 0x21, 0x23, 0x24, 0x25, 0x28, 0x29, 0x2b):
+                stack_slots.add((i.imm - frame) // 8)
         nstack = (max(stack_slots) + 1) if stack_slots else 0
         nargs = 8 if nstack else ((max(used_args) - 3) if used_args else 0)
         self.nargs, self.nstack = nargs, nstack
