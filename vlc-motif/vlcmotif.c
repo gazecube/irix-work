@@ -1203,7 +1203,21 @@ static void build_ui(void)
     n++;
     XtSetArg(a[n], XmNheight, 84);
     n++;
-    volume = XtCreateManagedWidget("volume", sgDialWidgetClass, row, a, n);
+    XtSetArg(a[n], XmNx, 0);
+    n++;
+    XtSetArg(a[n], XmNy, 0);
+    n++;
+    {
+        /* the stops at 7:30 and 4:30 leave the bottom of the dial empty: a container
+         * that ends just below the lowest mark clips that strip away */
+        int size = 84, e2 = size / 2 - 8 / 2;
+        int clip = size / 2 + (int)(e2 * 0.7072) + 8 / 2 + 1;
+        Widget volbox = XtVaCreateManagedWidget(
+            "volumeBox", xmFormWidgetClass, row, XmNmarginWidth, 0,
+            XmNmarginHeight, 0, XmNshadowThickness, 0, XmNresizePolicy,
+            XmRESIZE_NONE, XmNwidth, size, XmNheight, clip, NULL);
+        volume = XtCreateManagedWidget("volume", sgDialWidgetClass, volbox, a, n);
+    }
     XtAddCallback(volume, XmNvalueChangedCallback, volume_cb, NULL);
     XtAddCallback(volume, XmNdragCallback, volume_cb, NULL);
     mute_btn
