@@ -980,8 +980,10 @@ static void build_ui(void)
     XtSetArg(a[n], "startAngle", 225); n++;           /* a real volume knob: stops at 7:30 and 4:30 */
     XtSetArg(a[n], "angleRange", 270); n++;
     XtSetArg(a[n], "dialMarkers", 11); n++;
-    XtSetArg(a[n], XmNwidth, 64); n++;
-    XtSetArg(a[n], XmNheight, 64); n++;
+    XtSetArg(a[n], XmNshadowThickness, 0); n++;        /* no border: just the knob and its marks */
+    XtSetArg(a[n], XmNhighlightThickness, 0); n++;
+    XtSetArg(a[n], XmNwidth, 65); n++;
+    XtSetArg(a[n], XmNheight, 65); n++;
     volume = XtCreateManagedWidget("volume", sgDialWidgetClass, row, a, n);
     XtAddCallback(volume, XmNvalueChangedCallback, volume_cb, NULL);
     XtAddCallback(volume, XmNdragCallback, volume_cb, NULL);
