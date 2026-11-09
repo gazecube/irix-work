@@ -1053,7 +1053,7 @@ static void center_row_cb(Widget w, XtPointer client, XEvent *ev, Boolean *cont)
 
 static void build_ui(void)
 {
-    Widget form, file, play, aud, subm, nav, viewm, help, status_sep, sep, row, vol_lbl;
+    Widget form, file, play, aud, subm, nav, viewm, help, status_sep, sep, row, volrow;
     Arg a[16];
     int n;
     XmString xs;
@@ -1163,9 +1163,18 @@ static void build_ui(void)
         XmNrightAttachment, XmATTACH_FORM,
     NULL);
 
+    /* the volume group (Mute and the dial) sits at the right edge; the button row
+     * takes its height so the two line up */
+    volrow = XtVaCreateManagedWidget("volumeRow", xmRowColumnWidgetClass,
+	ctlform, XmNorientation, XmHORIZONTAL, XmNpacking, XmPACK_TIGHT,
+	XmNspacing, 4, XmNmarginHeight, 4, XmNentryVerticalAlignment,
+	XmALIGNMENT_CENTER, XmNbottomAttachment, XmATTACH_WIDGET,
+	XmNbottomWidget, status_sep, XmNrightAttachment, XmATTACH_FORM,
+	XmNleftAttachment, XmATTACH_NONE, NULL);
     row = XtVaCreateManagedWidget("transport", xmRowColumnWidgetClass, ctlform,
 	XmNorientation, XmHORIZONTAL, XmNpacking, XmPACK_TIGHT, XmNspacing, 4,
-	XmNmarginHeight, 4, XmNbottomAttachment, XmATTACH_WIDGET,
+	XmNmarginHeight, 11, XmNtopAttachment, XmATTACH_OPPOSITE_WIDGET,
+	XmNtopWidget, volrow, XmNbottomAttachment, XmATTACH_WIDGET,
 	XmNentryVerticalAlignment, XmALIGNMENT_CENTER,
 	XmNbottomWidget, status_sep, XmNleftAttachment, XmATTACH_FORM,
 	XmNrightAttachment, XmATTACH_NONE, NULL);
@@ -1178,10 +1187,12 @@ static void build_ui(void)
     button(row, "Stop", simple_cb, (XtPointer) "STOP");
     button(row, ">>", jump_cb, (XtPointer)10000L);
     button(row, ">|", simple_cb, (XtPointer) "NEXT");
-    vol_lbl = XtVaCreateManagedWidget("vol", xmLabelWidgetClass, row, NULL);
-    xs = XmStringCreateLocalized("  Volume");
-    XtVaSetValues(vol_lbl, XmNlabelString, xs, NULL);
+    mute_btn
+	= XtVaCreateManagedWidget("mute", xmToggleButtonWidgetClass, volrow, NULL);
+    xs = XmStringCreateLocalized("Mute");
+    XtVaSetValues(mute_btn, XmNlabelString, xs, NULL);
     XmStringFree(xs);
+    XtAddCallback(mute_btn, XmNvalueChangedCallback, mute_cb, NULL);
     n = 0;
     XtSetArg(a[n], XmNminimum, 0);
     n++;
@@ -1208,27 +1219,29 @@ static void build_ui(void)
     XtSetArg(a[n], XmNy, 0);
     n++;
     {
-        /* the stops at 7:30 and 4:30 leave the bottom of the dial empty: a container
-         * that ends just below the lowest mark clips that strip away */
-        int size = 84, e2 = size / 2 - 8 / 2;
-        int clip = size / 2 + (int)(e2 * 0.7072) + 8 / 2 + 1;
+        /* the stops at 7:30 and 4:30 leave the bottom of the dial empty: the label
+         * sits there, under the knob */
+        int size = 84;
         Widget volbox = XtVaCreateManagedWidget(
-            "volumeBox", xmFormWidgetClass, row, XmNmarginWidth, 0,
+            "volumeBox", xmFormWidgetClass, volrow, XmNmarginWidth, 0,
             XmNmarginHeight, 0, XmNshadowThickness, 0, XmNresizePolicy,
-            XmRESIZE_NONE, XmNwidth, size, XmNheight, clip, NULL);
+            XmRESIZE_NONE, XmNwidth, size, XmNheight, size, NULL);
+        XmString lbl = XmStringCreateLocalized("Volume");
+        XtVaCreateManagedWidget(
+            "vol", xmLabelWidgetClass, volbox, XmNlabelString, lbl,
+            XmNalignment, XmALIGNMENT_CENTER, XmNmarginHeight, 0,
+            XmNmarginTop, 0, XmNmarginBottom, 0, XmNleftAttachment,
+            XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM,
+            XmNbottomAttachment, XmATTACH_FORM, XmNtopAttachment,
+            XmATTACH_NONE, NULL);
         volume = XtCreateManagedWidget("volume", sgDialWidgetClass, volbox, a, n);
+        XmStringFree(lbl);
     }
     XtAddCallback(volume, XmNvalueChangedCallback, volume_cb, NULL);
     XtAddCallback(volume, XmNdragCallback, volume_cb, NULL);
-    mute_btn
-	= XtVaCreateManagedWidget("mute", xmToggleButtonWidgetClass, row, NULL);
-    xs = XmStringCreateLocalized("Mute");
-    XtVaSetValues(mute_btn, XmNlabelString, xs, NULL);
-    XmStringFree(xs);
-    XtAddCallback(mute_btn, XmNvalueChangedCallback, mute_cb, NULL);
 
     timelbl = XtVaCreateManagedWidget("time", xmLabelWidgetClass, ctlform,
-	XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, row,
+	XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, volrow,
 	XmNrightAttachment, XmATTACH_FORM, XmNrecomputeSize, False, XmNwidth,
 	130, XmNmarginRight, 6, NULL);
     xs = XmStringCreateLocalized("0:00 / --:--");
@@ -1246,7 +1259,7 @@ static void build_ui(void)
     n++;
     XtSetArg(a[n], XmNbottomAttachment, XmATTACH_WIDGET);
     n++;
-    XtSetArg(a[n], XmNbottomWidget, row);
+    XtSetArg(a[n], XmNbottomWidget, volrow);
     n++;
     XtSetArg(a[n], XmNleftAttachment, XmATTACH_FORM);
     n++;
