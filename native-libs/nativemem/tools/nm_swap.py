@@ -6,6 +6,7 @@ compiled from the same sources (llvm-dwarfdump text output is parsed). Bytes
 without a typed variable fall back to section-based rules.
 """
 import re
+import struct
 import subprocess
 import sys
 
@@ -146,6 +147,62 @@ class Dwarf:
                     self.leaves(et, base + i * es, out, stats)
 
 
+def string_mask(img, aligned_start=False):
+    """Mark bytes of NUL-terminated printable runs (>= 2 chars, or a lone character filling its word). MIPSpro puts string
+    literals in plain .rodata, where the word-swap default would reverse them."""
+    mask = bytearray(len(img))
+    n = len(img)
+    i = 0
+    while i < n:
+        j = i
+        while j < n and (0x20 <= img[j] < 0x7f or img[j] in (9, 10, 13)):
+            j += 1
+        # >= 2 printable characters ("OK"), or one character that fills a word on its own ("/", ":", "\n"):
+        # shorter literals are word-swapped to garbage otherwise
+        short_ok = (j - i == 1 and i % 4 == 0 and img[i + 1:i + 4] == b'\0\0\0')
+        # executables pack string literals right after other data: an aligned start of >= 4 printable characters counts too
+        start_ok = i == 0 or img[i - 1] == 0 or (aligned_start and i % 4 == 0 and j - i >= 4)
+        if (j - i >= 2 or short_ok) and j < n and img[j] == 0 and start_ok:
+            for k in range(i, min(j + 1, n)):
+                mask[k] = 1
+        i = max(j, i) + 1
+    return mask
+
+
+def typed_byte_arrays(obj, declarations):
+    """Recover explicitly audited char-array types missing from corpus DWARF.
+
+    Match the actual member, section, range and original bytes. Fail closed
+    when a profile describes another binary; never guess that writable words
+    containing printable characters are strings.
+    """
+    import hashlib
+    spans = []
+    for declaration in declarations:
+        if declaration['member'] != obj.name:
+            continue
+        if declaration['type'] not in ('char[]', 'short[]'):
+            raise ValueError('Unsupported explicit data type')
+        matches = [section for section in obj.sec
+                   if section['name'] == declaration['section']]
+        if len(matches) != 1:
+            raise ValueError('Byte-array section missing or ambiguous')
+        section = matches[0]
+        no = section['no']
+        offset, size = declaration['offset'], declaration['size']
+        if no not in obj.image or offset < 0 or size <= 0 or offset+size > len(obj.image[no]):
+            raise ValueError('Byte-array range outside allocated section')
+        value = bytes(obj.image[no][offset:offset+size])
+        if hashlib.sha256(value).hexdigest() != declaration['sha256']:
+            raise ValueError('Byte-array profile does not match original data')
+        if declaration['type'] == 'short[]':
+            if size % 2:
+                raise ValueError('short[] declaration is not a whole number of halfwords')
+            value = b''.join(value[i:i+2][::-1] for i in range(0, size, 2))
+        spans.append((no, offset, value))
+    return spans
+
+
 def swap_range(buf, off, size):
     if off < 0 or off + size > len(buf):
         return False
@@ -153,11 +210,12 @@ def swap_range(buf, off, size):
     return True
 
 
-def apply(linker, so_path, log=sys.stderr):
+def apply(linker, so_path, log=sys.stderr, byte_arrays=()):
     """Swap every section image of a laid-out StackLink in place."""
     import link_stack_n32 as L
     dw = Dwarf(so_path)
-    so = L.Obj(so_path, 'corpus', open(so_path, 'rb').read())
+    with open(so_path, 'rb') as corpus:
+        so = L.Obj(so_path, 'corpus', corpus.read())
     addr2name = {}
     for s in so.syms:
         if s['type'] == L.STT_OBJECT and s['name']:
@@ -168,8 +226,29 @@ def apply(linker, so_path, log=sys.stderr):
         if nm:
             typed[(stem, nm)] = t
     stats = {'bitfields': 0, 'unions': 0, 'big_arrays': 0, 'typed': 0, 'untyped_syms': 0, 'default_words': 0}
+    members = {obj.name for obj in linker.objs}
+    for declaration in byte_arrays:
+        if declaration['member'] not in members:
+            raise ValueError('Byte-array profile member missing: ' + declaration['member'])
     for o in linker.objs:
         stem = re.sub(r'\.[^.]*$', '', o.name)
+        byte_spans = typed_byte_arrays(o, byte_arrays)
+        # Relocations describe the actual SGI object, whereas the source corpus
+        # can have different class-record fields. Preserve resolved pointer
+        # values before applying the corpus layout and restore them as native
+        # words afterwards, even when that layout covered the slot as bytes.
+        pointers = {}
+        for rs in o.sec:
+            if rs['type'] not in (L.SHT_REL, L.SHT_RELA):
+                continue
+            no = rs['info']
+            if no not in o.image or o.sec[no]['flags'] & 4:
+                continue
+            ent = rs['entsz'] or (12 if rs['type'] == L.SHT_RELA else 8)
+            for q in range(rs['off'], rs['off'] + rs['size'], ent):
+                off, info = struct.unpack_from('>II', o.data, q)
+                if info & 255 == L.R_MIPS_32:
+                    pointers[(no, off)] = bytes(o.image[no][off:off + 4])[::-1]
         covered = {no: bytearray(len(img)) for no, img in o.image.items()}
         for s in o.syms:
             if s['type'] != L.STT_OBJECT or not s['name'] or s['shndx'] not in o.image:
@@ -197,16 +276,27 @@ def apply(linker, so_path, log=sys.stderr):
             name = sec['name']
             if name.startswith('.rodata.str') or (sec['flags'] & 0x20):
                 continue
-            unit = 8 if name.startswith('.rodata.cst8') else 4
+            unit = 8 if (name.startswith('.rodata.cst8') or name == '.lit8') else 4
             cov = covered[no]
+            strs = string_mask(img) if unit == 4 and not (sec['flags'] & 1) else bytearray(len(img))
+            stats['string_bytes'] = stats.get('string_bytes', 0) + sum(strs)
             i = 0
             while i + unit <= len(img):
-                if not any(cov[i:i + unit]):
+                if any(strs[i:i + unit]):
+                    pass
+                elif not any(cov[i:i + unit]):
                     swap_range(img, i, unit)
                     stats['default_words'] += 1
                     for j in range(i, i + unit):
                         cov[j] = 1
                 i += unit
+        for no, off, value in byte_spans:
+            if any(pno == no and poff < off+len(value) and off < poff+4
+                   for pno, poff in pointers):
+                raise ValueError('Byte-array declaration overlaps a pointer relocation')
+            o.image[no][off:off+len(value)] = value
+        for (no, off), value in pointers.items():
+            o.image[no][off:off + 4] = value
     print('nm_swap:', stats, file=log)
     return stats
 
