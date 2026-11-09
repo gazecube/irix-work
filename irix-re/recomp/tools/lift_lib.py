@@ -174,6 +174,8 @@ class FuncLifter:
             src = i.rt if i.rs == 0 else i.rs
             if src == 29 or i.rs == 29:
                 return '%s = (uint32_t)(uintptr_t)frame;' % lhs(i.rd)
+        if op == 0 and i.fn in (0x21, 0x23, 0x2d, 0x2f) and i.rd == 29 and i.rs == 29 and getattr(self, 'reg_frame', None) == i.rt:
+            return None                   # frame set-up or tear-down through a register (frames over 32K)
         if i.rt == 29 and op != 0 or (op == 0 and i.rd == 29):
             raise Unsupported('write to sp at %08x' % i.addr)
         if op == 0 and i.fn in (0x34, 0x30, 0x31, 0x32, 0x33, 0x36):   # trap-on-condition: overflow/zero-divide checks
@@ -186,8 +188,17 @@ class FuncLifter:
             return '%s = (uint32_t)((int32_t)%s >> %d);' % (lhs(i.rd), R(i.rt), i.sa)
         if op == 0 and i.fn == 0x3e:      # dsrl32
             return '%s = %s >> %d;' % (lhs(i.rd), R(i.rt), i.sa)
-        if op == 0 and i.fn == 0x38:      # dsll
-            raise Unsupported('dsll at %08x' % i.addr)
+        if op == 0 and i.fn == 0x38:      # dsll: the low word; the high word only where the register is tracked as 64-bit
+            if i.rd in self.widened:
+                return '{ uint32_t l_ = %s; h%d = (%s << %d) | (l_ >> %d); %s = l_ << %d; }' % (
+                    R(i.rt), i.rd, self.hi_of(i.rt), i.sa, 32 - i.sa, lhs(i.rd), i.sa) if i.sa else \
+                    '{ h%d = %s; %s = %s; }' % (i.rd, self.hi_of(i.rt), lhs(i.rd), R(i.rt))
+            return '%s = %s << %d;' % (lhs(i.rd), R(i.rt), i.sa)
+        if op == 0 and i.fn in (0x1e, 0x1f):      # ddiv, ddivu: lo and hi keep their low words
+            T = 'int64_t' if i.fn == 0x1e else 'uint64_t'
+            return ('{ %s n_ = (%s)(((uint64_t)%s << 32) | %s), d_ = (%s)(((uint64_t)%s << 32) | %s); '
+                    'if (d_) { lo = (uint32_t)(n_ / d_); hi = (uint32_t)(n_ %% d_); } }') % (
+                        T, T, self.hi_of(i.rs), R(i.rs), T, self.hi_of(i.rt), R(i.rt))
         return M.alu(i)
 
     def compute_hdr_regs(self):
@@ -296,6 +307,8 @@ class FuncLifter:
                 return 'f[%d] = f[%d];' % (fd, fs)
             if fn == 7:
                 return Pu % ('-%s' % a)
+            if fn == 0x09:   # trunc.l
+                return 'f[%d] = (uint64_t)(int64_t)%s;' % (fd, a)
             if fn == 0x0d:   # trunc.w
                 return 'f[%d] = (f[%d] & 0xffffffff00000000ull) | (uint32_t)(int32_t)%s;' % (fd, fd, a)
             if fn == 0x20:
@@ -506,6 +519,16 @@ class FuncLifter:
             if i.op == 0x09 and i.rs == 29 and i.rt == 29 and i.imm < 0:
                 frame = -i.imm
                 break
+        self.reg_frame = None
+        if not frame:
+            # frames over 32K: ori at,zero,N ; subu sp,sp,at
+            for k, i in enumerate(insns[1:], 1):
+                j = insns[k - 1]
+                if i.op == 0 and i.fn in (0x23, 0x2f) and i.rd == 29 and i.rs == 29 and \
+                        j.op == 0x0d and j.rs == 0 and j.rt == i.rt:
+                    frame = j.immu
+                    self.reg_frame = i.rt
+                    break
         self.frame = frame
         delay_of, targets = {}, set()
         for k, i in enumerate(insns):

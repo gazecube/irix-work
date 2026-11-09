@@ -85,6 +85,10 @@ def reads_writes(i):
     if i.w == 0:
         return set(), set()
     if op == 0:
+        if fn == 0x01 and rd == 0:        # movf/movt into $zero: 0x00000001 padding words after a function
+            return set(), set()
+        if fn in (0x1c, 0x1d, 0x1e, 0x1f):  # dmult, dmultu, ddiv, ddivu
+            return {rs, rt}, set()
         if fn in (0x00, 0x02, 0x03, 0x38, 0x3a, 0x3b, 0x3c, 0x3e, 0x3f):
             return {rt}, {rd}
         if fn in (0x04, 0x06, 0x07, 0x14, 0x16, 0x17):
@@ -131,6 +135,8 @@ def alu(i):
     if i.w == 0:
         return None
     if op == 0:
+        if fn == 0x01 and rd == 0:
+            return None
         d = lhs(rd)
         t = {
             0x00: '%s = %s << %d;' % (d, R(rt), sa),
@@ -208,6 +214,9 @@ def incoming(i, frame_size, ctype, kind):
     if within < 4:
         raise Unsupported('access to the high half of incoming slot at %08x' % i.addr)
     if kind == 'st':
+        # the callee owns its incoming slots: a word store replaces the argument
+        if ctype == 'uint32_t' and within == 4:
+            return 's%d = %s;' % (slot, R(i.rt))
         raise Unsupported('store to an incoming argument slot at %08x' % i.addr)
     # little-endian word at slot+4: a 32-bit arg; narrow reads take the low bytes of that word
     if ctype == 'uint32_t':
