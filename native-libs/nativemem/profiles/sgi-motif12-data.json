@@ -1,0 +1,22 @@
+{
+ "byte_arrays": [
+  {
+   "member": "Manager.o",
+   "section": ".data",
+   "offset": 1648,
+   "size": 129,
+   "sha256": "0b2609d12ccb5b07400523d2d2c81fb0d35f3f13b088021f1e5041235c735f0c",
+   "type": "char[]",
+   "note": "Anonymous BulletinBoard accelerator table, original Manager.o; byte array confirmed by NUL-terminated Xt accelerator syntax."
+  },
+  {
+   "member": "MessageB.o",
+   "section": ".data",
+   "offset": 672,
+   "size": 944,
+   "sha256": "8eb44eb0f3ef6a91f5d62ec08f84a12ecdaf392e523dc2c2c34559c2c03ea8fe",
+   "type": "unsigned char[]",
+   "note": "Dialog symbol bitmaps (error, information, question, warning, working and their SGI colour planes), original MessageB.o; rows of 3 bytes, no relocations in the range."
+  }
+ ]
+}
