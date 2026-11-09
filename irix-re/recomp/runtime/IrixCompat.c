@@ -5,6 +5,7 @@
 #include "IrixKernelInfo.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,18 +32,68 @@ static void compat_result(IrixGuestCpu *cpu, int64_t value)
     }
 }
 
+static int compat_range_overlaps(IrixGuestRuntime *rt,
+                                 IrixGuestAddr addr, uint32_t len);
+
+static IrixGuestAddr compat_find_mmap_addr(IrixGuestRuntime *rt, uint32_t len);
+
 static int compat_elfmap(IrixGuestRuntime *rt, int fd,
                          IrixGuestAddr phdr_addr, uint32_t count,
                          IrixGuestAddr *first_out)
 {
     uint32_t i;
     IrixGuestAddr first = 0;
+    uint32_t delta = 0;
+    uint64_t lo = ~0ull, hi = 0;
+    int taken = 0;
+
+    /*
+     * The prelinked range may belong to something else already.  Memory in use
+     * is never reused: the object goes to a free range and the new base is
+     * returned, and rld relocates by the difference.
+     */
+    for (i = 0; i < count; ++i) {
+        IrixGuestAddr p = phdr_addr + i * 32u;
+        uint32_t type = irix_guest_read32be(rt, p + 0u);
+        uint32_t vaddr = irix_guest_read32be(rt, p + 8u);
+        uint32_t memsz = irix_guest_read32be(rt, p + 20u);
+
+        if (type != 1u || !memsz)
+            continue;
+        if (compat_range_overlaps(rt, vaddr, memsz))
+            taken = 1;
+        if (vaddr < lo)
+            lo = vaddr;
+        if ((uint64_t)vaddr + memsz > hi)
+            hi = (uint64_t)vaddr + memsz;
+    }
+    if (taken && hi > lo) {
+        const uint32_t page = 16384u;
+        uint32_t lead = (uint32_t)lo & (page - 1u);
+        uint32_t span = (uint32_t)((hi - (lo - lead) + page - 1u) & ~(uint64_t)(page - 1u));
+        IrixGuestAddr base = compat_find_mmap_addr(rt, span);
+
+        if (!base) {
+            errno = ENOMEM;
+            return -1;
+        }
+        delta = base + lead - (uint32_t)lo;
+        if (getenv("IRIX_TRACE_ELF")) {
+            char link[64], name[PATH_MAX];
+            ssize_t nl;
+            snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
+            nl = readlink(link, name, sizeof(name) - 1);
+            name[nl > 0 ? nl : 0] = 0;
+            fprintf(stderr, "elfmap: 0x%08x is taken, using 0x%08x (%s)\n",
+                    (unsigned)lo, (unsigned)(lo + delta), name);
+        }
+    }
 
     for (i = 0; i < count; ++i) {
         IrixGuestAddr p = phdr_addr + i * 32u;
         uint32_t type = irix_guest_read32be(rt, p + 0u);
         uint32_t offset = irix_guest_read32be(rt, p + 4u);
-        IrixGuestAddr vaddr = irix_guest_read32be(rt, p + 8u);
+        IrixGuestAddr vaddr = irix_guest_read32be(rt, p + 8u) + delta;
         uint32_t filesz = irix_guest_read32be(rt, p + 16u);
         uint32_t memsz = irix_guest_read32be(rt, p + 20u);
         uint32_t flags = irix_guest_read32be(rt, p + 24u);
@@ -58,17 +109,23 @@ static int compat_elfmap(IrixGuestRuntime *rt, int fd,
             return -1;
         }
 
+        /* Never read into memory that is already in use; the relocation
+         * above moves whole objects, so a clash here is a real error. */
+        if (getenv("IRIX_TRACE_ELF"))
+            fprintf(stderr, "elfmap fd=%d seg %u/%u vaddr=0x%08x memsz=0x%x off=0x%x\n",
+                    fd, i, count, vaddr, memsz, offset);
+        if (compat_range_overlaps(rt, vaddr, memsz)) {
+            errno = ENOMEM;
+            return -1;
+        }
+        if (irix_guest_map(rt, vaddr, memsz, flags) != 0) {
+            errno = ENOMEM;
+            return -1;
+        }
         dst = irix_guest_ptr(rt, vaddr, memsz);
         if (!dst) {
-            if (irix_guest_map(rt, vaddr, memsz, flags) != 0) {
-                errno = ENOMEM;
-                return -1;
-            }
-            dst = irix_guest_ptr(rt, vaddr, memsz);
-            if (!dst) {
-                errno = EFAULT;
-                return -1;
-            }
+            errno = EFAULT;
+            return -1;
         }
 
         if (filesz) {

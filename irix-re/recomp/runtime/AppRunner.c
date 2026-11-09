@@ -643,6 +643,15 @@ static void report_trap_context(IrixGuestRuntime *rt, IrixGuestCpu *cpu)
     {
         IrixGuestAddr sp = (IrixGuestAddr)(uint32_t)cpu->gpr[29];
         unsigned shown = 0, words;
+        if (getenv("IRIX_PEEK")) {
+            unsigned long pa = strtoul(getenv("IRIX_PEEK"), 0, 16);
+            unsigned k;
+            fprintf(stderr, "  peek %08lx:", pa);
+            for (k = 0; k < 8u; ++k)
+                fprintf(stderr, " %08x", irix_guest_ptr(rt, (IrixGuestAddr)(pa + 4u * k), 4u)
+                        ? irix_guest_read32be(rt, (IrixGuestAddr)(pa + 4u * k)) : 0xdeadbeefu);
+            fprintf(stderr, "\n");
+        }
         fprintf(stderr, "  stack-scan (return-address candidates):\n");
         for (words = 0; words < 0x400u && shown < 16u; ++words) {
             IrixGuestAddr at = sp + words * 4u;
@@ -1048,8 +1057,10 @@ int main(int argc, char **argv)
                     "IRIX guest-exec PT_INTERP: %s entry=0x%08x gp=0x%08x\n",
                     app_elf.interp, interp_elf.entry, interp_elf.gp_value);
     }
-    if (load_elf(&rt, IRIX_RUNTIME_TREE_PATH(), "lib32/rld", &rld_elf) == 0)
-        have_rld_elf = 1;
+    /*
+     * libc maps /lib32/rld itself with SGI_ELFMAP, as on a real system; a
+     * second image here would sit on its range.
+     */
 #else
     if (load_core_image(&rt) != 0) {
         fprintf(stderr, "failed to load synthetic core image\n");
@@ -1098,7 +1109,7 @@ int main(int argc, char **argv)
                  * PT_INTERP/rld execution by selecting main explicitly below.
                  */
 #else
-                if (i != 0u && component->role == 0)
+                if (i != 0u && (component->role == 0 || component->role == 2))
                     continue;
 #endif
 
