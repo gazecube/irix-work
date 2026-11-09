@@ -29,3 +29,5 @@ Helper -> front end
   TRACK <kind> <id> <current 0|1> <name>
   PLAYLIST <count> <current>   then <count> lines: ITEM <index> <name>
   ERROR <text>
+
+RESUMED	ms   (vlcd to vlcmotif) playback of a disc or file picked up where it was left off, at this position.

@@ -1,0 +1,29 @@
+# The style of SGI's original mex source (irix-3.x-src/mex).
+BasedOnStyle: LLVM
+IndentWidth: 8
+TabWidth: 8
+UseTab: Always
+ColumnLimit: 80
+BreakAfterReturnType: AllDefinitions
+SpaceBeforeParens: ControlStatements
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+  AfterStruct: false
+  AfterEnum: false
+  AfterUnion: false
+  AfterControlStatement: Never
+  BeforeElse: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AlignAfterOpenBracket: Align
+AlignOperands: Align
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+ContinuationIndentWidth: 8
+Cpp11BracedListStyle: false
+PointerAlignment: Right
+IndentCaseLabels: false
+SortIncludes: Never
+ReflowComments: false
