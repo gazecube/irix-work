@@ -48,11 +48,12 @@
 #include <Xm/ToggleB.h>
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
+#include <Sgm/Dial.h>
 
 /* ---- state ---------------------------------------------------------------------------------------------------- */
 static XtAppContext app;
 static Widget top, mainw, menubar, video, seek, timelbl, volume, mute_btn, status, plist, plist_frame, play_btn;
-static Widget audio_menu, sub_menu, title_menu, chapter_menu, formw, transport_row;
+static Widget audio_menu, sub_menu, title_menu, chapter_menu, formw, transport_row, ctlform;
 static int fullscreen, fs_plist_managed, fs_x, fs_y, fs_w, fs_h;
 static XtIntervalId fs_timer, fs_hide_timer;
 static int fs_shown, fs_menu_open;
@@ -67,6 +68,9 @@ static char *pending[256];
 static int npending;
 static int pending_mode_enqueue;
 static int helper_ready;
+
+static void dial_set(Widget w, int v);
+static int dial_get(Widget w);
 
 /* ---- wire helpers ------------------------------------------------------------------------------------------------ */
 static void enc_to(const char *s, char *out, size_t n)
@@ -270,7 +274,7 @@ static void handle_line(char *line)
         else if (f[1][0]) set_status("%s", f[1]);
     } else if (!strcmp(f[0], "VOLUME") && n > 2) {
         updating = 1;
-        XmScaleSetValue(volume, atoi(f[1]));
+        dial_set(volume, atoi(f[1]));
         XmToggleButtonSetState(mute_btn, atoi(f[2]) != 0, False);
         updating = 0;
     } else if (!strcmp(f[0], "TRACKS") && n > 2) {
@@ -422,14 +426,26 @@ static void mute_cb(Widget w, XtPointer client, XtPointer call)
     if (!updating) send_int("MUTE", cbs->set ? 1 : 0);
 }
 
+/* the volume knob is an SgDial: its value is a short resource */
+static int dial_get(Widget w)
+{
+    short v = 0;
+    XtVaGetValues(w, XmNvalue, &v, NULL);
+    return v;
+}
+
+static void dial_set(Widget w, int v)
+{
+    XtVaSetValues(w, XmNvalue, (short)v, NULL);
+}
+
 static void volstep_cb(Widget w, XtPointer client, XtPointer call)
 {
-    int v;
-    XmScaleGetValue(volume, &v);
+    int v = dial_get(volume);
     v += (int)(long)client;
     if (v < 0) v = 0;
     if (v > 125) v = 125;
-    XmScaleSetValue(volume, v);
+    dial_set(volume, v);
 }
 
 static void playlist_sel_cb(Widget w, XtPointer client, XtPointer call)
@@ -607,15 +623,15 @@ static void video_realize_cb(Widget w, XtPointer client, XtPointer call)
  * screen; leaving restores the decorations, the controls and the saved geometry. */
 static void fs_controls(int show)
 {
-    Widget ctl[5];
+    Widget ctl[2];
     int i;
-    ctl[0] = seek; ctl[1] = timelbl; ctl[2] = transport_row; ctl[3] = status; ctl[4] = menubar;
+    ctl[0] = ctlform; ctl[1] = menubar;
     if (show) {
-        for (i = 0; i < 5; i++) XtManageChild(ctl[i]);
-        XtVaSetValues(video, XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, seek, NULL);
+        for (i = 0; i < 2; i++) XtManageChild(ctl[i]);
+        XtVaSetValues(video, XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, ctlform, NULL);
     } else {
         XtVaSetValues(video, XmNbottomAttachment, XmATTACH_FORM, NULL);
-        for (i = 0; i < 5; i++) XtUnmanageChild(ctl[i]);
+        for (i = 0; i < 2; i++) XtUnmanageChild(ctl[i]);
     }
     fs_shown = show;
 }
@@ -632,7 +648,7 @@ static void fs_hide_cb(XtPointer closure, XtIntervalId *id)
     if (!fullscreen || !fs_shown) return;
     XQueryPointer(XtDisplay(top), RootWindowOfScreen(XtScreen(top)), &root_ret, &child_ret, &rx, &ry, &wx, &wy, &mask);
     XtVaGetValues(menubar, XmNheight, &mbh, NULL);
-    XtTranslateCoords(seek, 0, 0, &sx, &sy);
+    XtTranslateCoords(ctlform, 0, 0, &sx, &sy);
     /* keep them while a menu is open or the pointer is still over the menu bar or the controls */
     if (fs_menu_open > 0 || ry < (int)mbh + 2 || ry >= sy) {
         fs_hide_timer = XtAppAddTimeOut(app, 1000, fs_hide_cb, NULL);
@@ -844,6 +860,21 @@ static Widget button(Widget parent, const char *label, XtCallbackProc cb, XtPoin
     return b;
 }
 
+static void center_row_cb(Widget w, XtPointer client, XEvent *ev, Boolean *cont)
+{
+    Dimension rw = 0, cw = 0;
+    int off;
+    static int last = -1;
+    (void)w; (void)client; (void)cont;
+    if (ev->type != ConfigureNotify) return;
+    XtVaGetValues(transport_row, XmNwidth, &rw, NULL);
+    XtVaGetValues(ctlform, XmNwidth, &cw, NULL);
+    off = (int)cw > (int)rw ? ((int)cw - (int)rw) / 2 : 0;
+    if (off == last) return;
+    last = off;
+    XtVaSetValues(transport_row, XmNleftOffset, off, NULL);
+}
+
 static void build_ui(void)
 {
     Widget form, file, play, aud, subm, nav, viewm, help, sep, row, vol_lbl;
@@ -914,19 +945,24 @@ static void build_ui(void)
     form = XmCreateForm(mainw, "form", NULL, 0);
     XtManageChild(form);
     formw = form;
+    /* one container for the seek bar, time, buttons and status line: the video sits above it, so nothing overlaps */
+    ctlform = XtVaCreateManagedWidget("controls", xmFormWidgetClass, form, XmNbottomAttachment, XmATTACH_FORM,
+                                      XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM, NULL);
 
-    status = XtVaCreateManagedWidget("status", xmLabelWidgetClass, form, XmNalignment, XmALIGNMENT_BEGINNING,
+    status = XtVaCreateManagedWidget("status", xmLabelWidgetClass, ctlform, XmNalignment, XmALIGNMENT_BEGINNING,
                                      XmNbottomAttachment, XmATTACH_FORM, XmNleftAttachment, XmATTACH_FORM,
                                      XmNrightAttachment, XmATTACH_FORM, XmNmarginLeft, 6, NULL);
     xs = XmStringCreateLocalized("Starting...");
     XtVaSetValues(status, XmNlabelString, xs, NULL);
     XmStringFree(xs);
 
-    row = XtVaCreateManagedWidget("transport", xmRowColumnWidgetClass, form, XmNorientation, XmHORIZONTAL,
+    row = XtVaCreateManagedWidget("transport", xmRowColumnWidgetClass, ctlform, XmNorientation, XmHORIZONTAL,
                                   XmNpacking, XmPACK_TIGHT, XmNspacing, 4, XmNmarginHeight, 4,
                                   XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, status,
-                                  XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM, NULL);
+                                  XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_NONE, NULL);
     transport_row = row;
+    XtAddEventHandler(row, StructureNotifyMask, False, center_row_cb, NULL);
+    XtAddEventHandler(ctlform, StructureNotifyMask, False, center_row_cb, NULL);
     button(row, "|<", simple_cb, (XtPointer)"PREV");
     button(row, "<<", jump_cb, (XtPointer)-10000L);
     play_btn = button(row, "Play", toggle_cb, NULL);
@@ -938,13 +974,15 @@ static void build_ui(void)
     XtVaSetValues(vol_lbl, XmNlabelString, xs, NULL);
     XmStringFree(xs);
     n = 0;
-    XtSetArg(a[n], XmNorientation, XmHORIZONTAL); n++;
     XtSetArg(a[n], XmNminimum, 0); n++;
     XtSetArg(a[n], XmNmaximum, 125); n++;
     XtSetArg(a[n], XmNvalue, 100); n++;
-    XtSetArg(a[n], XmNshowValue, False); n++;
-    XtSetArg(a[n], XmNwidth, 110); n++;
-    volume = XtCreateManagedWidget("volume", xmScaleWidgetClass, row, a, n);
+    XtSetArg(a[n], "startAngle", 225); n++;           /* a real volume knob: stops at 7:30 and 4:30 */
+    XtSetArg(a[n], "angleRange", 270); n++;
+    XtSetArg(a[n], "dialMarkers", 11); n++;
+    XtSetArg(a[n], XmNwidth, 64); n++;
+    XtSetArg(a[n], XmNheight, 64); n++;
+    volume = XtCreateManagedWidget("volume", sgDialWidgetClass, row, a, n);
     XtAddCallback(volume, XmNvalueChangedCallback, volume_cb, NULL);
     XtAddCallback(volume, XmNdragCallback, volume_cb, NULL);
     mute_btn = XtVaCreateManagedWidget("mute", xmToggleButtonWidgetClass, row, NULL);
@@ -953,7 +991,7 @@ static void build_ui(void)
     XmStringFree(xs);
     XtAddCallback(mute_btn, XmNvalueChangedCallback, mute_cb, NULL);
 
-    timelbl = XtVaCreateManagedWidget("time", xmLabelWidgetClass, form, XmNbottomAttachment, XmATTACH_WIDGET,
+    timelbl = XtVaCreateManagedWidget("time", xmLabelWidgetClass, ctlform, XmNbottomAttachment, XmATTACH_WIDGET,
                                       XmNbottomWidget, row, XmNrightAttachment, XmATTACH_FORM, XmNrecomputeSize, False,
                                       XmNwidth, 130, XmNmarginRight, 6, NULL);
     xs = XmStringCreateLocalized("0:00 / --:--");
@@ -970,12 +1008,12 @@ static void build_ui(void)
     XtSetArg(a[n], XmNleftAttachment, XmATTACH_FORM); n++;
     XtSetArg(a[n], XmNrightAttachment, XmATTACH_WIDGET); n++;
     XtSetArg(a[n], XmNrightWidget, timelbl); n++;
-    seek = XtCreateManagedWidget("seek", xmScaleWidgetClass, form, a, n);
+    seek = XtCreateManagedWidget("seek", xmScaleWidgetClass, ctlform, a, n);
     XtAddCallback(seek, XmNvalueChangedCallback, seek_cb, NULL);
     XtAddCallback(seek, XmNdragCallback, seek_cb, NULL);
 
     plist_frame = XtVaCreateWidget("playlistFrame", xmFrameWidgetClass, form, XmNbottomAttachment, XmATTACH_WIDGET,
-                                   XmNbottomWidget, seek, XmNleftAttachment, XmATTACH_FORM,
+                                   XmNbottomWidget, ctlform, XmNleftAttachment, XmATTACH_FORM,
                                    XmNrightAttachment, XmATTACH_FORM, NULL);
     n = 0;
     XtSetArg(a[n], XmNvisibleItemCount, 6); n++;
@@ -994,7 +1032,7 @@ static void build_ui(void)
     XtSetArg(a[n], XmNleftAttachment, XmATTACH_FORM); n++;
     XtSetArg(a[n], XmNrightAttachment, XmATTACH_FORM); n++;
     XtSetArg(a[n], XmNbottomAttachment, XmATTACH_WIDGET); n++;
-    XtSetArg(a[n], XmNbottomWidget, seek); n++;
+    XtSetArg(a[n], XmNbottomWidget, ctlform); n++;
     video = XtCreateManagedWidget("video", xmDrawingAreaWidgetClass, form, a, n);
     XtAddCallback(video, XmNexposeCallback, video_realize_cb, NULL);
     XtAddEventHandler(video, ButtonPressMask | KeyPressMask | PointerMotionMask, False, video_input_cb, NULL);
