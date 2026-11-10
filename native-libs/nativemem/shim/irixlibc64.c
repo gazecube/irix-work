@@ -14,6 +14,8 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <dirent.h>
+#include <malloc.h>
+#include <sys/mman.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <pwd.h>
@@ -28,6 +30,59 @@
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
 #include <X11/keysym.h>
+
+/* ---- width shadow: one byte per 8-byte memory cell, set while the cell holds one 64-bit value written by lifted code
+ *      (see lift_n64.py).  The whole user address space maps into 16 TB of lazily allocated memory. ------------------------- */
+#define SH_BASE ((unsigned char *)0x200000000000ull)
+#define SH(a) (SH_BASE[(uint64_t)(uintptr_t)(a) >> 3])
+
+__attribute__((constructor(101))) static void shadow_init(void)
+{
+    void *p = mmap(SH_BASE, 1ull << 44, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p != (void *)SH_BASE) {
+        fprintf(stderr, "libc.so.1: cannot map the width shadow at %p\n", (void *)SH_BASE);
+        abort();
+    }
+}
+static void sh_clear(const void *p, size_t n)
+{
+    if (p && n) memset(&SH(p), 0, ((uintptr_t)p + n + 7) / 8 - (uintptr_t)p / 8);
+}
+
+/* memory handed out to lifted code starts unmarked, and marks do not outlive the block */
+void *irix_malloc(size_t n) { void *p = malloc(n); if (p) sh_clear(p, malloc_usable_size(p)); return p; }
+void *irix_calloc(size_t a, size_t b) { void *p = calloc(a, b); if (p) sh_clear(p, malloc_usable_size(p)); return p; }
+void irix_free(void *p) { if (p) sh_clear(p, malloc_usable_size(p)); free(p); }
+void *irix_realloc(void *p, size_t n)
+{
+    size_t old = p ? malloc_usable_size(p) / 8 : 0, keep;
+    unsigned char *save = old ? malloc(old) : 0;
+    void *q;
+    if (save) { memcpy(save, &SH(p), old); memset(&SH(p), 0, old); }
+    q = realloc(p, n);
+    if (q) {
+        sh_clear(q, malloc_usable_size(q));
+        keep = malloc_usable_size(q) / 8 < old ? malloc_usable_size(q) / 8 : old;
+        if (save && !((uintptr_t)q & 7)) memcpy(&SH(q), save, keep);
+    } else if (save && n) {
+        memcpy(&SH(p), save, old);              /* the old block is still there */
+    }
+    free(save);
+    return q;
+}
+/* copies carry the marks of whole cells when source and destination are aligned alike */
+static void sh_copy(void *d, const void *s, size_t n)
+{
+    if ((((uintptr_t)d ^ (uintptr_t)s) & 7) == 0 && !((uintptr_t)d & 7))
+        memmove(&SH(d), &SH(s), (n + 7) / 8);
+    else
+        sh_clear(d, n);
+}
+void *irix_memcpy(void *d, const void *s, size_t n) { sh_copy(d, s, n); return memcpy(d, s, n); }
+void *irix_memmove(void *d, const void *s, size_t n) { sh_copy(d, s, n); return memmove(d, s, n); }
+void irix_bcopy(const void *s, void *d, size_t n) { sh_copy(d, s, n); memmove(d, s, n); }
+void *irix_memset(void *d, int c, size_t n) { sh_clear(d, n); return memset(d, c, n); }
+void irix_bzero(void *d, size_t n) { sh_clear(d, n); memset(d, 0, n); }
 
 /* ---- errno --------------------------------------------------------------------------------------------------------- */
 int irix_errno;                                     /* the `errno` variable of code that was built without threads */

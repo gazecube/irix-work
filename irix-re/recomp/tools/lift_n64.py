@@ -14,6 +14,13 @@ N64 is LP64 like x86_64, so the lifted code uses the machine's own pointers and 
   * code addresses that are not function starts (jump tables) stay as their original numbers and `jr` becomes a
     switch over the targets inside the function.
 Functions that cannot be lifted become stubs that abort(); the report counts them by reason.
+
+Mixed-width access.  Big-endian code reads and writes the same bytes at different widths (the low half of a long
+through a 32-bit load of its last four bytes, a bit field through the word that also holds a short and a char,
+structures copied eight bytes at a time).  Every load and store of lifted code goes through lift64_mem.h, which
+keeps one shadow byte per 8-byte cell saying how the cell was last written and answers a mismatching access the
+way the big-endian machine would; see that file.  Frames are cleared on entry, the initial data gets the states
+it was converted with, and the libc layer maps the shadow, clears it for freed memory and copies it in memcpy.
 """
 import json
 import re
@@ -117,6 +124,7 @@ class Image:
         self.got_lo = e.pltgot
         self.got_hi = e.pltgot + 8 * (e.local_gotno + e.symtabno - e.gotsym)
         self.width = defaultdict(set)         # link-time data address -> access widths seen in the code
+        self.arrays = defaultdict(set)        # (address of a field in row 0, row size) -> access widths
         self.rel = {}                         # offset -> symbol index, for the 64-bit pointer words
         for off, sym, types in e.rel_dyn():
             if types[0] == R_MIPS_REL32:
@@ -238,9 +246,12 @@ class Image:
         """C expression (uint64_t) for a link-time address."""
         if a in self.fstart:
             return '(uint64_t)(uintptr_t)%s' % self.fstart[a]
-        if self.data_lo - 0x10000 <= a < self.hi + 0x10000 and not self.in_text(a):
+        # Any other address of the object, code included, is the image address moved by the same distance.  A GOT
+        # page entry inside the code then still reaches the data after it when an offset is added at run time, and
+        # a code address formed that way is translated when it is called (XL).
+        if self.tlo - 0x10000 <= a < self.hi + 0x10000:
             return '(uint64_t)(uintptr_t)(IMG + %d)' % (a - self.data_lo)
-        return '0x%xull' % a                  # text that is not a function start, or a plain number
+        return '0x%xull' % a
 
     def addr_s(self, a):
         if a in self.fstart:
@@ -262,6 +273,9 @@ class Lifter:
         self.dyn = False
         self.const = {}                        # reg -> (value, is_address)
         self.symreg = {}                       # reg -> name of the imported symbol whose address it holds
+        self.shifted = {}                      # reg -> shift count of the dsll/sll that made it (an index times a row size)
+        self.rowbase = {}                      # reg -> (table address, row size): a row of a static table
+        self.tagged = {i.rt for i in self.insns if i.op in (0x37, 0x23, 0x27, 0x21, 0x25)} - {0, 28, 29}   # loaded from memory somewhere
         self.fixed = {}                        # callee-saved reg -> the one GOT load that defines it
         self.fixedsym = {}
         self.fp = any(i.op in (0x11, 0x31, 0x35, 0x39, 0x3d) or (i.op == 0 and i.fn == 1 and i.rd) for i in self.insns)
@@ -278,6 +292,8 @@ class Lifter:
 
     def setk(self, reg, val):
         self.symreg.pop(reg, None)
+        self.shifted.pop(reg, None)
+        self.rowbase.pop(reg, None)
         if reg in (0, 28, 29):
             return
         if val is None:
@@ -302,7 +318,10 @@ class Lifter:
             return None
         if reg == 29 and not self.dyn:
             raise Unsupported('write to sp')
-        return 'r%d = %s;' % (reg, expr)
+        return 'r%d = %s;%s' % (reg, expr, ' t%d = 0;' % reg if reg in self.tagged else '')
+
+    def T(self, reg):
+        return 't%d' % reg if reg in self.tagged else '0'
 
     def args(self):
         return ['r%d' % n for n in range(4, 12)] + [self.outarg(k) for k in range(self.out_slots)]
@@ -340,6 +359,9 @@ class Lifter:
             'int64_t' if r[0] == 'i' else 'uint64_t', CTYPE[r])
 
     def call(self, target, name=None):
+        return self.call1(target, name) + (' t2 = 0;' if 2 in self.tagged else '')
+
+    def call1(self, target, name=None):
         proto = self.img.protos.get(name) if name else None
         if proto and self.fp and (proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
             st = self.typed_call(target, proto)
@@ -384,6 +406,10 @@ class Lifter:
             if 0 <= i.imm < self.fsize:
                 return '(frame + %d)' % i.imm
             return None                        # incoming argument slot
+        if i.rs in self.rowbase:
+            base, row = self.rowbase[i.rs]
+            if row >= 8 and 0 <= i.imm:
+                self.img.arrays[(base + i.imm, row)].add(width)
         if k and k[1]:
             a = k[0] + i.imm
             if self.img.data_lo <= a < self.img.hi:
@@ -421,18 +447,29 @@ class Lifter:
             a = self.ea(i, width)
             if a is None:
                 return self.incoming(i, ctype, width, False)
-            v = '*(%s *)%s' % (ctype, a)
-            return self.W(i.rt, '(uint64_t)(int64_t)%s' % v if ctype[0] == 'i' else '(uint64_t)%s' % v)
+            a = '(uintptr_t)%s' % a
+            tg = '&t%d' % i.rt if i.rt in self.tagged else '&tx'
+            if width == 1:
+                v = 'LD1(%s)' % a
+            else:
+                v = 'LD%d(%s, %s)' % (width, a, tg)
+            st = self.W(i.rt, '(uint64_t)(int64_t)(%s)%s' % (ctype, v) if ctype[0] == 'i' else '(uint64_t)%s' % v)
+            if st and width > 1:
+                st = st.replace(' t%d = 0;' % i.rt, '')      # the load set the tag
+            return st
         ctype, width = self.ST[op]
         if i.rt == 28 and i.rs == 29:
             return None                        # saving $gp: it is a constant here
         if i.rs == 29 and width < 8 and 0 <= i.imm < 64 and i.imm // 8 in self.outargs and i.imm % 8 + width == 8:
             v = self.R(i.rt)
-            return '*(uint64_t *)(frame + %d) = %s;' % (i.imm - i.imm % 8, S32(v) if width == 4 else '(uint64_t)(%s)%s' % (ctype, v))
+            return '*(uint64_t *)(frame + %d) = %s; SH(frame + %d) = ST_Q;' % (
+                i.imm - i.imm % 8, S32(v) if width == 4 else '(uint64_t)(%s)%s' % (ctype, v), i.imm - i.imm % 8)
         a = self.ea(i, width)
         if a is None:
             return self.incoming(i, ctype, width, True)
-        return '*(%s *)%s = (%s)%s;' % (ctype, a, ctype, self.R(i.rt))
+        if width == 1:
+            return 'ST1((uintptr_t)%s, (uint8_t)%s);' % (a, self.R(i.rt))
+        return 'ST%d((uintptr_t)%s, (%s)%s, %s);' % (width, a, ctype, self.R(i.rt), self.T(i.rt))
 
     def got(self, i, idx):
         e = self.img.elf
@@ -469,12 +506,30 @@ class Lifter:
                 st = W(rd, R(src) if fn != 0x21 else S32(R(src)), self.K(src) if fn != 0x21 else None)
                 if name and fn != 0x21 and rd not in (0, 28, 29):
                     self.symreg[rd] = name
+                if st and fn != 0x21 and rd in self.tagged and src in self.tagged and rd != src:
+                    st = st.replace(' t%d = 0;' % rd, ' t%d = t%d;' % (rd, src))
                 return st
             if fn in (0x2d, 0x2f) and rd == 29 and rs == 29 and getattr(self, 'reg_frame', None) == rt:
                 return None                    # frame set-up or tear-down through a register
             if fn == 0x2d and ka and kb and (ka[1] or kb[1]):            # daddu of two known values: an address
                 v = (ka[0] + kb[0]) & 0xffffffffffffffff
                 return W(rd, self.img.addr_c(v), (v, True))
+            if fn in (0x2d, 0x21):                                       # table address + index * row size
+                row = None
+                for x, y, kx in ((rs, rt, ka), (rt, rs, kb)):
+                    if kx and kx[1] and y in self.shifted and self.img.data_lo <= kx[0] < self.img.hi:
+                        row = (kx[0], 1 << self.shifted[y])
+                    elif x in self.rowbase and y not in self.rowbase and not (self.K(y) and self.K(y)[1]):
+                        row = row or self.rowbase[x]
+                if row:
+                    st = W(rd, '%s + %s' % (a, b) if fn == 0x2d else S32('(uint32_t)%s + (uint32_t)%s' % (a, b)))
+                    if rd not in (0, 28, 29):
+                        self.rowbase[rd] = row
+                    return st
+            if fn in (0x38, 0x00) and sa and rd not in (0, 28, 29):      # dsll / sll: remember the scale
+                st = W(rd, '%s << %d' % (b, sa) if fn == 0x38 else S32('(uint32_t)%s << %d' % (b, sa)))
+                self.shifted[rd] = sa
+                return st
             t = {
                 0x00: S32('(uint32_t)%s << %d' % (b, sa)), 0x02: S32('(uint32_t)%s >> %d' % (b, sa)),
                 0x03: S32('(int32_t)%s >> %d' % (b, sa)),
@@ -493,13 +548,16 @@ class Lifter:
                 0x10: 'hi', 0x12: 'lo',
             }
             if fn in t:
-                return W(rd, t[fn])
+                st = W(rd, t[fn])
+                if st and fn in (0x24, 0x25, 0x26, 0x27) and rd in self.tagged and (rs in self.tagged or rt in self.tagged):
+                    st = st.replace(' t%d = 0;' % rd, ' t%d = lm_bits(%s, %s);' % (rd, self.T(rs), self.T(rt)))
+                return st
             if fn == 0x0a:
                 self.setk(rd, None)
-                return 'if (%s == 0) r%d = %s;' % (b, rd, a) if rd else None
+                return 'if (%s == 0) r%d = %s;%s' % (b, rd, a, ' t%d = 0;' % rd if rd in self.tagged else '') if rd else None
             if fn == 0x0b:
                 self.setk(rd, None)
-                return 'if (%s != 0) r%d = %s;' % (b, rd, a) if rd else None
+                return 'if (%s != 0) r%d = %s;%s' % (b, rd, a, ' t%d = 0;' % rd if rd in self.tagged else '') if rd else None
             if fn == 0x11:
                 return 'hi = %s;' % a
             if fn == 0x13:
@@ -553,12 +611,12 @@ class Lifter:
         if op == 0x0b:
             return W(rt, '%s < (uint64_t)(int64_t)%d' % (R(rs), i.imm))
         if op == 0x0c:
-            return W(rt, '%s & 0x%xull' % (R(rs), i.immu))
+            return self.bitop(i, W(rt, '%s & 0x%xull' % (R(rs), i.immu)))
         if op == 0x0d:
             k = self.K(rs)
-            return W(rt, '%s | 0x%xull' % (R(rs), i.immu), (k[0] | i.immu, False) if k and not k[1] else None)
+            return self.bitop(i, W(rt, '%s | 0x%xull' % (R(rs), i.immu), (k[0] | i.immu, False) if k and not k[1] else None))
         if op == 0x0e:
-            return W(rt, '%s ^ 0x%xull' % (R(rs), i.immu))
+            return self.bitop(i, W(rt, '%s ^ 0x%xull' % (R(rs), i.immu)))
         if op == 0x0f:
             v = (i.immu << 16)
             if v & 0x80000000:
@@ -579,6 +637,14 @@ class Lifter:
         if op in (0x2f, 0x33):
             return None
         raise Unsupported('op 0x%x' % op)
+
+    def bitop(self, i, st):
+        """andi / ori / xori of a value that came from memory keep its layout tag (a bit field being updated)."""
+        if st and i.rt in self.tagged and i.rs in self.tagged and i.rt != i.rs:
+            st = st.replace(' t%d = 0;' % i.rt, ' t%d = t%d;' % (i.rt, i.rs))
+        elif st and i.rt in self.tagged and i.rt == i.rs:
+            st = st.replace(' t%d = 0;' % i.rt, '')
+        return st
 
     def sp_addr(self, i):
         if i.rt == 29:
@@ -601,13 +667,14 @@ class Lifter:
             if a is None:
                 raise Unsupported('fp access of an incoming slot')
             ft = i.rt
+            a = '(uintptr_t)%s' % a
             if op == 0x31:
-                return 'f[%d] = *(uint32_t *)%s;' % (ft, a)
+                return 'f[%d] = LD4(%s, &tx);' % (ft, a)
             if op == 0x35:
-                return 'f[%d] = *(uint64_t *)%s;' % (ft, a)
+                return 'f[%d] = LD8(%s, &tx);' % (ft, a)
             if op == 0x39:
-                return '*(uint32_t *)%s = (uint32_t)f[%d];' % (a, ft)
-            return '*(uint64_t *)%s = f[%d];' % (a, ft)
+                return 'ST4(%s, (uint32_t)f[%d], 0);' % (a, ft)
+            return 'ST8(%s, f[%d], 0);' % (a, ft)
         fmt, ft, fs, fd, fn = i.rs, i.rt, i.rd, i.sa, i.fn
         if fmt == 0:
             return self.W(i.rt, S32('(uint32_t)f[%d]' % fs))
@@ -756,6 +823,7 @@ class Lifter:
                 self.fixedsym[reg] = v['name']
             elif v['shndx'] and not img.in_text(v['value']):
                 self.fixed[reg] = (v['value'], True)
+        self.defs = defs
         self.labels = set(img.inner.get(self.addr, ()))
         for k, i in enumerate(insns):
             if is_control(i) and k + 1 >= len(insns):
@@ -767,11 +835,24 @@ class Lifter:
         # PIC entry convention: $t9 holds the function's own address, from which a function without a frame
         # computes the GOT pointer into any register
         self.const = {} if self.addr in self.labels else {25: (self.addr, True)}
+        entry_done = self.addr in self.labels
         while k < len(insns):
             i = insns[k]
             if i.addr in self.labels:
+                if not entry_done:
+                    # the code before the first label runs once, in order: what it leaves in a callee-saved
+                    # register that nothing later writes holds for the rest of the function
+                    entry_done = True
+                    for reg in (16, 17, 18, 19, 20, 21, 22, 23, 30):
+                        if all(x.addr < i.addr for x in self.defs.get(reg, ())):
+                            if reg in self.const:
+                                self.fixed[reg] = self.const[reg]
+                            if reg in self.symreg:
+                                self.fixedsym[reg] = self.symreg[reg]
                 self.const = {}
                 self.symreg = {}
+                self.shifted = {}
+                self.rowbase = {}
                 body.append('L_%x:;' % i.addr)
             if not is_control(i):
                 s = self.stmt(i)
@@ -820,7 +901,7 @@ class Lifter:
                 else:
                     name = self.symbol_in(i.rs)
                     cases = ''.join(' case 0x%xull: goto L_%x;' % (t, t) for t in sorted(img.inner.get(self.addr, ())))
-                    body.append('    { uint64_t t_ = %s; %s switch (t_) {%s default: %s } }' % (
+                    body.append('    { uint64_t t_ = %s; %s switch (XO(t_)) {%s default: %s } }' % (
                         self.R(i.rs), ds, cases, self.tail('t_' if name else 'XL(t_)', name)))
             else:
                 raise Unsupported('j/jal')
@@ -843,8 +924,10 @@ class Lifter:
                 DYN_RESERVE + max(self.fsize, 16), DYN_RESERVE))
         else:
             out.append('    uint8_t frame[%d] __attribute__((aligned(16))); (void)frame;' % max(self.fsize, 16))
+        out.append('    __builtin_memset(&SH(frame), 0, %d);' % ((max(self.fsize, 16) + 7) // 8))
+        out.append('    lift_tag tx = 0' + ''.join(', t%d = 0' % n for n in sorted(self.tagged)) + '; (void)tx;')
         if self.va:
-            out.append('    ' + ' '.join('*(uint64_t *)(frame + %d) = s%d;' % (F + 8 * k, k) for k in range(VA_SLOTS)))
+            out.append('    ' + ' '.join('*(uint64_t *)(frame + %d) = s%d; SH(frame + %d) = ST_Q;' % (F + 8 * k, k, F + 8 * k) for k in range(VA_SLOTS)))
         if self.fp:
             out.append('    uint64_t f[32] = {0}; int fcc[8] = {0}; (void)fcc; ' +
                        ' '.join('f[%d] = lift_fpa[%d];' % (12 + k, k) for k in range(8)))
@@ -866,6 +949,31 @@ def swap_data(img):
     32-bit words, 64-bit in .lit8."""
     e = img.elf
     blob = bytearray(img.hi - img.data_lo)
+    img.states = bytearray((img.hi - img.data_lo + 7) // 8)       # shadow byte of every cell of the initial data
+
+    def state(a, unit):
+        c, o = (a - img.data_lo) // 8, (a - img.data_lo) % 8
+        h = o // 4
+        if unit == 8:
+            img.states[c] = 0x0f
+        elif unit == 4:
+            img.states[c] = (img.states[c] & ~(3 << (2 * h)) & ~(3 << (4 + 2 * h))) | (1 << (2 * h))
+        else:                                 # narrower units: a 16-bit value, or single bytes
+            img.states[c] = (img.states[c] & ~(3 << (2 * h))) | (2 << (2 * h)) | ((0x10 << (o // 2)) if unit == 2 else 0)
+    # Tables indexed by row: the field seen in the code repeats every row.  The table ends where something else is
+    # known to start: an exported symbol, typed data, or the end of the section.
+    bounds = sorted({s_['value'] for s_ in e.dynsyms if s_['shndx'] and img.data_lo <= s_['value'] < img.hi} |
+                    {s_['addr'] + s_['size'] for s_ in img.datasecs})
+    import bisect
+    for (a0, row), ws in sorted(img.arrays.items()):
+        if not (img.data_lo <= a0 < img.hi):
+            continue
+        end = bounds[bisect.bisect_right(bounds, a0)] if bisect.bisect_right(bounds, a0) < len(bounds) else img.hi
+        a = a0
+        while a < end and a not in img.typed and (a - a % 8) not in img.covered and (a - a0) // row < 8192:
+            if not img.width.get(a) or a == a0:
+                img.width[a] |= ws
+            a += row
     for s in img.datasecs:
         if s['type'] == 8:
             continue
@@ -877,6 +985,7 @@ def swap_data(img):
         while i < n:
             a = base + i
             if a in img.rel and i + 8 <= n:
+                state(a, 8)
                 i += 8
                 continue
             w = img.width.get(a, ())
@@ -888,13 +997,17 @@ def swap_data(img):
                 unit = 8                          # a small negative 64-bit value (FAST_QUARKS names are stored like this)
             else:
                 unit = 8 if (8 in w or s['name'] == '.lit8') else 4 if 4 in w else 2 if 2 in w else 1 if 1 in w else 4
+                if not w and unit == 4 and any(img.width.get(a + k) for k in (1, 2, 3)):
+                    unit = 1                      # something narrower starts inside this word: not a 32-bit value
             unit = min(unit, 8 - (a % 8) if a % 8 else 8)
             if unit == 4 and a % 4:
                 unit = 1
             if unit > 1 and i + unit <= n and not any(strs[i:i + unit]) and not any((a + k) in img.rel for k in range(1, unit)):
                 b[i:i + unit] = b[i:i + unit][::-1]
+                state(a, unit if a % unit == 0 else 1)
                 i += unit
             else:
+                state(a, 1)
                 i += 1
         blob[base - img.data_lo:base - img.data_lo + n] = b
     return blob
@@ -903,7 +1016,17 @@ def swap_data(img):
 def emit_data(img, blob, w):
     e = img.elf
     name = img.name
-    w.write('\t.data\n\t.balign 4096\n\t.globl __img_%s\n\t.hidden __img_%s\n__img_%s:\n' % (name, name, name))
+    # Code addresses of the original are image-relative too (addr_c): the range below the image stands for the
+    # original code.  It holds a jump to the lifted function at the place of every function start, so a function
+    # address that the code forms at run time (GOT page plus offset) is a real, callable address for everyone,
+    # native code included.  One section, so the distance to the image is exact; the libc layer's loader hook is
+    # not needed, the constructor in code.c makes the jump area read-only.
+    lead = -(img.data_lo - img.tlo) % 4096
+    pad = lead + img.data_lo - img.tlo
+    w.write('\t.section .lift_%s,"awx",@progbits\n\t.balign 4096\n\t.globl __tramp_%s\n\t.hidden __tramp_%s\n__tramp_%s:\n' % (name, name, name, name))
+    for a, _ in img.funcs:
+        w.write('\t.org %d, 0xcc\n\tjmp %s\n' % (lead + a - img.tlo, img.fstart[a]))
+    w.write('\t.org %d, 0xcc\n\t.globl __img_%s\n\t.hidden __img_%s\n__img_%s:\n' % (pad, name, name, name))
     off, total = 0, len(blob)
     while off < total:
         a = img.data_lo + off
@@ -944,6 +1067,7 @@ def main():
     path, out = args[0], Path(args[1])
     name = args[args.index('--name') + 1] if '--name' in args else re.sub(r'[^A-Za-z0-9]', '_', Path(path).name)
     out.mkdir(parents=True, exist_ok=True)
+    (out / 'lift64_mem.h').write_text((here / 'lift64_mem.h').read_text())
     img = Image(path, name)
     if '--protos' in args:
         img.protos.update(json.loads(Path(args[args.index('--protos') + 1]).read_text()))
@@ -966,6 +1090,7 @@ def main():
         w.write('static inline uint64_t DF(double v) { union { uint64_t u; double d; } x; x.d = v; return x.u; }\n')
         w.write('__thread uint64_t lift_fpa[8] __attribute__((weak)); __thread uint64_t lift_fpr __attribute__((weak));\n')
         w.write('extern char __img_%s[] __attribute__((visibility("hidden")));\n#define IMG __img_%s\n' % (name, name))
+        w.write('#include "lift64_mem.h"\n')
         for n_, c in sorted(img.syms.items(), key=lambda kv: int(kv[1][1:])):
             w.write('extern char %s[] __asm__("%s");\n' % (c, n_))
         for a, _ in img.funcs:
@@ -979,7 +1104,13 @@ def main():
                 '    unsigned lo = 0, hi = sizeof xl_tab / sizeof xl_tab[0];\n'
                 '    while (lo < hi) { unsigned m = (lo + hi) / 2; if (xl_tab[m].a == t) return (uint64_t)(uintptr_t)xl_tab[m].f;'
                 ' if (xl_tab[m].a < t) lo = m + 1; else hi = m; }\n    abort();\n}\n')
+        w.write('/* a code address formed from an image-relative page: as an address of the original object */\n'
+                'static inline uint64_t XO(uint64_t t) { uint64_t o = t - (uint64_t)(uintptr_t)IMG + 0x%xull; return o - 0x%xull < 0x%xull ? o : t; }\n' % (
+                    img.data_lo, img.tlo, img.thi - img.tlo))
         w.write('static inline uint64_t XL(uint64_t t) { return t - 0x%xull < 0x%xull ? xl_find(t) : t; }\n' % (img.tlo, img.thi - img.tlo))
+        w.write('extern char __tramp_%s[] __attribute__((visibility("hidden")));\n' % name)
+        w.write('extern int mprotect(void *, unsigned long, int);\n'
+                'static void __attribute__((constructor(102))) lift_tramp_%s(void) { mprotect(__tramp_%s, (unsigned long)(IMG - __tramp_%s), 5); }\n' % (name, name, name))
         for b in bodies:
             w.write(b + '\n\n')
         for s in e.dynsyms:
@@ -993,6 +1124,10 @@ def main():
     blob = swap_data(img)
     with open(out / 'data.s', 'w') as w:
         emit_data(img, blob, w)
+    with open(out / 'code.c', 'a') as w:
+        # the shadow of the initial data, in place before any lifted code runs
+        w.write('static const uint8_t sh_init[] = {%s};\n' % ','.join(str(x) for x in img.states))
+        w.write('static void __attribute__((constructor(102))) lift_shadow_%s(void) { __builtin_memcpy(&SH(IMG), sh_init, sizeof sh_init); }\n' % name)
     undef = sorted({s['name'] for s in e.dynsyms if s['name'] and not s['shndx']})
     (out / 'needed.json').write_text(json.dumps({'needed': e.needed, 'undef': undef, 'failed': failed}, indent=1))
     print('functions=%d lifted=%d unsupported=%d  needed=%s' % (len(img.funcs), len(img.funcs) - len(failed), len(failed), e.needed))
