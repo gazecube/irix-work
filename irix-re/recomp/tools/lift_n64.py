@@ -35,6 +35,23 @@ PROTO = 'uint64_t %s(' + ', '.join('uint64_t a%d' % k for k in range(NARGS)) + '
 CALLT = '((uint64_t (*)(uint64_t, ...))(uintptr_t)(%s))'
 
 
+# functions of the libc / SGI Xlib layer that no host header declares
+SHIM_PROTOS = {n: {'ret': 'i4', 'args': ['p']} for n in (
+    '_XQstrcmp', '_XrmBufferToQuark', 'SgiGetNumLockModifiers', '__filbuf', '__semgetc', '__flsbuf', '__semputc',
+    'BSDclosedir', 'setoserror', 'oserror')}
+CTYPE = {'i4': 'int32_t', 'u4': 'uint32_t', 'i2': 'int16_t', 'u2': 'uint16_t', 'i1': 'int8_t', 'u1': 'uint8_t'}
+
+# CoreClassPart and XtResource in LP64, for class records that no header declares
+CORE_CLASS = {
+    'size': 224,
+    'fields': [(0, 8), (8, 8), (16, 4), (24, 8), (32, 8), (48, 8), (56, 8), (64, 8), (72, 8), (80, 4), (88, 8), (96, 4), (104, 4)] +
+              [(o, 8) for o in range(112, 224, 8)],
+    'follow': [{'ptr': 88, 'count': 96, 'count_size': 4, 'elem_size': 48,
+                'fields': [(0, 8), (8, 8), (16, 8), (24, 4), (28, 4), (32, 8), (40, 8)]}],
+    'ext': [216],
+}
+
+
 class Unsupported(Exception):
     pass
 
@@ -128,6 +145,80 @@ class Image:
                 if k >= 0:
                     self.inner[order[k]].add(v)
         self.syms = {}                        # external name -> C identifier
+        self.protos = dict(SHIM_PROTOS)       # imported function -> {'ret': class, 'args': [classes]}
+        self.typed = {}                       # data address -> size of the scalar field that starts there
+        self.covered = set()                  # 8-byte-aligned chunks that lie inside typed data
+
+    def load_types(self, path, like=()):
+        """Field layouts from n64_types.py: exported records, and the counted tables they point to.  `like` gives
+        records that no header declares the layout of a declared one (NAME=OTHER)."""
+        e = self.elf
+        types = json.loads(Path(path).read_text())
+        for pair in like:
+            a, b = pair.split('=')
+            types[a] = types[b]
+        n = 0
+        todo = []                             # class records reached through a superclass or class pointer
+
+        def mark(base, size, fields):
+            for a in range(base - base % 8, base + size, 8):
+                self.covered.add(a)
+            for off, sz in fields:
+                self.typed[base + off] = sz
+        for sym in e.dynsyms:
+            t = types.get(sym['name'])
+            if not t and sym['name'].endswith('ClassRec') and sym['size'] >= 224:
+                t = CORE_CLASS                    # a class record the headers do not declare: its Core part at least
+            if not t or sym['type'] != 1 or not sym['shndx'] or not (self.data_lo <= sym['value'] < self.hi):
+                continue
+            base = sym['value']
+            if sym['size'] == 8 and sym['name'].endswith('Class') and base in self.rel:
+                todo.append(e.dword(base))        # widgetClass and friends: a pointer to a class record
+            mark(base, min(t['size'], sym['size'] or t['size']), [f for f in t['fields'] if not sym['size'] or f[0] < sym['size']])
+            n += 1
+            if sym['name'].endswith('ClassRec') and base in self.rel:
+                todo.append(e.dword(base))        # the superclass
+            for f in t['follow']:
+                tgt = e.dword(base + f['ptr'])
+                cnt = int.from_bytes(e.bytes_at(base + f['count'], f['count_size']), 'big')
+                if self.data_lo <= tgt < self.hi and 0 < cnt < 4096:
+                    for k in range(cnt):
+                        mark(tgt + k * f['elem_size'], f['elem_size'], f['fields'])
+            # class extension records all start with: next_extension, record_type (quark), version (long),
+            # record_size (Cardinal); the rest differs per class and stays untyped
+            for off in t.get('ext', ()):
+                tgt = e.dword(base + off)
+                for _ in range(8):
+                    if not (self.data_lo <= tgt < self.hi) or tgt in self.typed:
+                        break
+                    mark(tgt, 32, [(0, 8), (8, 4), (16, 8), (24, 4)])
+                    tgt = e.dword(tgt)
+        # class records that are not exported: their Core part, their resources, their extension, their superclass
+        for sym in e.dynsyms:
+            if sym['type'] == 1 and sym['shndx'] and sym['size'] == 8 and sym['name'].endswith('Class') and sym['value'] in self.rel:
+                todo.append(e.dword(sym['value']))
+        t = CORE_CLASS
+        while todo:
+            base = todo.pop()
+            if not (self.data_lo <= base < self.hi) or base in self.typed:
+                continue
+            mark(base, t['size'], t['fields'])
+            n += 1
+            f = t['follow'][0]
+            tgt = e.dword(base + f['ptr'])
+            cnt = int.from_bytes(e.bytes_at(base + f['count'], 4), 'big')
+            if self.data_lo <= tgt < self.hi and 0 < cnt < 4096:
+                for k in range(cnt):
+                    mark(tgt + k * f['elem_size'], f['elem_size'], f['fields'])
+            tgt = e.dword(base + 216)
+            for _ in range(8):
+                if not (self.data_lo <= tgt < self.hi) or tgt in self.typed:
+                    break
+                mark(tgt, 32, [(0, 8), (8, 4), (16, 8), (24, 4)])
+                tgt = e.dword(tgt)
+            if base in self.rel:
+                todo.append(e.dword(base))
+        return n
 
     def in_text(self, a):
         return any(s['addr'] <= a < s['addr'] + s['size'] for s in self.text)
@@ -170,6 +261,9 @@ class Lifter:
         self.name = img.fstart[addr]
         self.dyn = False
         self.const = {}                        # reg -> (value, is_address)
+        self.symreg = {}                       # reg -> name of the imported symbol whose address it holds
+        self.fixed = {}                        # callee-saved reg -> the one GOT load that defines it
+        self.fixedsym = {}
         self.fp = any(i.op in (0x11, 0x31, 0x35, 0x39, 0x3d) or (i.op == 0 and i.fn == 1 and i.rd) for i in self.insns)
 
     # ---- helpers ---------------------------------------------------------------------------
@@ -183,6 +277,7 @@ class Lifter:
         return 'r%d' % n
 
     def setk(self, reg, val):
+        self.symreg.pop(reg, None)
         if reg in (0, 28, 29):
             return
         if val is None:
@@ -195,7 +290,10 @@ class Lifter:
             return (0, False)
         if reg == 28:
             return (self.img.elf.gp, True)
-        return self.const.get(reg)
+        return self.const.get(reg) or self.fixed.get(reg)
+
+    def symbol_in(self, reg):
+        return self.symreg.get(reg) or self.fixedsym.get(reg)
 
     def W(self, reg, expr, k=None):
         """Assignment to a register (writes to $zero, $gp and $sp are dropped)."""
@@ -206,22 +304,63 @@ class Lifter:
             raise Unsupported('write to sp')
         return 'r%d = %s;' % (reg, expr)
 
-    def call(self, target):
-        args = ['r%d' % n for n in range(4, 12)] + [self.outarg(k) for k in range(self.out_slots)]
+    def args(self):
+        return ['r%d' % n for n in range(4, 12)] + [self.outarg(k) for k in range(self.out_slots)]
+
+    def typed_call(self, target, proto):
+        """A call to a native function that takes or returns floating point: built with its own C type, the
+        arguments taken from the N64 positions (integer register k or FP register 12 + k)."""
+        ct = {'f': 'float', 'd': 'double', 'v': 'void'}
+        types, vals = [], []
+        for k, a in enumerate(proto['args']):
+            if a == '...' or k >= NARGS:
+                return None
+            if a in ('f', 'd'):
+                types.append(ct[a])
+                vals.append(('FS(f[%d])' if a == 'f' else 'FD(f[%d])') % (12 + k))
+            else:
+                types.append('uint64_t')
+                vals.append('r%d' % (4 + k))
+        r = proto['ret']
+        fn = '((%s (*)(%s))(uintptr_t)(%s))(%s)' % (ct.get(r, 'uint64_t'), ', '.join(types) or 'void', target, ', '.join(vals))
+        if r == 'd':
+            return 'f[0] = DF(%s);' % fn
+        if r == 'f':
+            return 'f[0] = SF(0, %s);' % fn
+        if r == 'v':
+            return '%s;' % fn
+        return 'r2 = %s;%s' % (fn, self.narrow(r))
+
+    def narrow(self, r):
+        """A native function returns a narrow integer with the rest of the register undefined."""
+        if r not in CTYPE:
+            return ''
+        # 32-bit values are kept sign-extended whatever their C type; unsigned char and short are zero-extended
+        return ' r2 = (uint64_t)(int64_t)(int32_t)r2;' if r in ('i4', 'u4') else ' r2 = (uint64_t)(%s)(%s)r2;' % (
+            'int64_t' if r[0] == 'i' else 'uint64_t', CTYPE[r])
+
+    def call(self, target, name=None):
+        proto = self.img.protos.get(name) if name else None
+        if proto and self.fp and (proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
+            st = self.typed_call(target, proto)
+            if st:
+                return st
         pre = ' '.join('lift_fpa[%d] = f[%d];' % (k, 12 + k) for k in range(8)) + ' ' if self.fp else ''
         post = ' f[0] = lift_fpr;' if self.fp else ''
-        return '%sr2 = %s(%s);%s' % (pre, CALLT % target, ', '.join(args), post)
+        return '%sr2 = %s(%s);%s%s' % (pre, CALLT % target, ', '.join(self.args()), post, self.narrow(proto['ret']) if proto else '')
+
+    def tail(self, target, name=None):
+        proto = self.img.protos.get(name) if name else None
+        if proto and (proto['ret'] in CTYPE or proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
+            return '{ %s %s }' % (self.call(target, name), self.ret())
+        pre = ' '.join('lift_fpa[%d] = f[%d];' % (k, 12 + k) for k in range(8)) + ' ' if self.fp else ''
+        return '{ %sreturn %s(%s); }' % (pre, CALLT % target, ', '.join(self.args()))
 
     def outarg(self, k):
         return '*(uint64_t *)(uintptr_t)(r29 + %d)' % (8 * k) if self.dyn else '*(uint64_t *)(frame + %d)' % (8 * k)
 
     def ret(self):
         return ('lift_fpr = f[0]; ' if self.fp else '') + 'return r2;'
-
-    def tail(self, target):
-        args = ['r%d' % n for n in range(4, 12)] + [self.outarg(k) for k in range(self.out_slots)]
-        pre = ' '.join('lift_fpa[%d] = f[%d];' % (k, 12 + k) for k in range(8)) + ' ' if self.fp else ''
-        return '{ %sreturn %s(%s); }' % (pre, CALLT % target, ', '.join(args))
 
     def goto(self, t):
         if self.addr <= t < self.end:
@@ -262,6 +401,8 @@ class Lifter:
         if store:
             if width == 8 and within == 0:
                 return 's%d = %s;' % (slot, self.R(i.rt))
+            if within + width == 8:            # an int argument rewritten in its lane: the slot holds that value now
+                return 's%d = %s;' % (slot, S32(self.R(i.rt)) if width == 4 else '(uint64_t)(%s)%s' % (ctype, self.R(i.rt)))
             raise Unsupported('narrow store to an incoming slot')
         if within + width > 8:
             raise Unsupported('incoming slot access crosses a slot')
@@ -285,6 +426,9 @@ class Lifter:
         ctype, width = self.ST[op]
         if i.rt == 28 and i.rs == 29:
             return None                        # saving $gp: it is a constant here
+        if i.rs == 29 and width < 8 and 0 <= i.imm < 64 and i.imm // 8 in self.outargs and i.imm % 8 + width == 8:
+            v = self.R(i.rt)
+            return '*(uint64_t *)(frame + %d) = %s;' % (i.imm - i.imm % 8, S32(v) if width == 4 else '(uint64_t)(%s)%s' % (ctype, v))
         a = self.ea(i, width)
         if a is None:
             return self.incoming(i, ctype, width, True)
@@ -301,7 +445,10 @@ class Lifter:
         if not name:
             raise Unsupported('unnamed global GOT entry')
         k = (v['value'], True) if v['shndx'] and not self.img.in_text(v['value']) else None
-        return self.W(i.rt, '(uint64_t)(uintptr_t)%s' % self.img.sym(name), k)
+        st = self.W(i.rt, '(uint64_t)(uintptr_t)%s' % self.img.sym(name), k)
+        if not v['shndx'] and i.rt not in (0, 28, 29):
+            self.symreg[i.rt] = name
+        return st
 
     # ---- one non-control instruction -------------------------------------------------------
     def stmt(self, i):
@@ -318,7 +465,11 @@ class Lifter:
             ka, kb = self.K(rs), self.K(rt)
             if fn in (0x21, 0x2d, 0x25) and (rt == 0 or rs == 0):        # move
                 src = rs if rt == 0 else rt
-                return W(rd, R(src) if fn != 0x21 else S32(R(src)), self.K(src) if fn != 0x21 else None)
+                name = self.symbol_in(src)
+                st = W(rd, R(src) if fn != 0x21 else S32(R(src)), self.K(src) if fn != 0x21 else None)
+                if name and fn != 0x21 and rd not in (0, 28, 29):
+                    self.symreg[rd] = name
+                return st
             if fn in (0x2d, 0x2f) and rd == 29 and rs == 29 and getattr(self, 'reg_frame', None) == rt:
                 return None                    # frame set-up or tear-down through a register
             if fn == 0x2d and ka and kb and (ka[1] or kb[1]):            # daddu of two known values: an address
@@ -559,11 +710,52 @@ class Lifter:
             self.va = F > 0
         self.fsize = F + 8 * VA_SLOTS if self.va else F
         self.nstack = 0
-        slots = 0
+        # Outgoing stack arguments are the slots at the bottom of the frame that the function only stores to: it
+        # never loads them back and never takes their address.  A narrow store there (an int written to the last
+        # four bytes of its slot, the big-endian lane) is widened to the whole slot, which is what the callee reads.
+        stored, used = set(), set()
+        lim = min(64, F)
         for i in insns:
-            if i.rs == 29 and i.op in self.ST and 0 <= i.imm < min(64, F) and i.rt != 28:
-                slots = max(slots, i.imm // 8 + 1)
-        self.out_slots = slots
+            if i.rs != 29 or not 0 <= i.imm < lim:
+                continue
+            if i.op in self.ST and i.rt != 28:
+                stored.add(i.imm // 8)
+            elif i.op in self.LD or i.op in (0x31, 0x35, 0x39, 0x3d, 0x1a, 0x1b, 0x2c, 0x2d):
+                used.add(i.imm // 8)
+            elif i.op in (0x19, 0x09) and i.rt != 29:
+                used.update(range(i.imm // 8, 8))
+        self.outargs = set() if self.dyn else stored - used
+        self.out_slots = max(stored) + 1 if stored else 0
+        # A callee-saved register that the function sets once, from the GOT, holds that address for the whole
+        # function (a function pointer or a table base kept across a loop); reloading it from the frame on the way
+        # out does not count.
+        defs = defaultdict(list)
+        for i in insns:
+            if is_control(i) or not i.w:
+                continue
+            if i.op in self.LD or i.op in (0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x18, 0x19, 0x1a):
+                dst = i.rt
+            elif i.op == 0 and i.fn not in (0x08, 0x09, 0x11, 0x13, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f) and i.fn < 0x30 or \
+                    (i.op == 0 and i.fn >= 0x38):
+                dst = i.rd
+            elif i.op == 0x11 and i.rs in (0, 1, 2):
+                dst = i.rt
+            else:
+                continue
+            if dst in (16, 17, 18, 19, 20, 21, 22, 23, 30) and not (i.op == 0x37 and i.rs == 29):
+                defs[dst].append(i)
+        e = img.elf
+        for reg, dl in defs.items():
+            i = dl[0]
+            if len(dl) != 1 or i.op != 0x37 or i.rs != 28 or not (img.got_lo <= e.gp + i.imm < img.got_hi):
+                continue
+            kind, v = e.got_entry((e.gp + i.imm - img.got_lo) // 8)
+            if kind == 'local':
+                self.fixed[reg] = (v, True)
+            elif not v['shndx'] and v['name']:
+                self.fixedsym[reg] = v['name']
+            elif v['shndx'] and not img.in_text(v['value']):
+                self.fixed[reg] = (v['value'], True)
         self.labels = set(img.inner.get(self.addr, ()))
         for k, i in enumerate(insns):
             if is_control(i) and k + 1 >= len(insns):
@@ -572,10 +764,14 @@ class Lifter:
                 self.labels.add(btarget(i))
         body = []
         k = 0
+        # PIC entry convention: $t9 holds the function's own address, from which a function without a frame
+        # computes the GOT pointer into any register
+        self.const = {} if self.addr in self.labels else {25: (self.addr, True)}
         while k < len(insns):
             i = insns[k]
             if i.addr in self.labels:
                 self.const = {}
+                self.symreg = {}
                 body.append('L_%x:;' % i.addr)
             if not is_control(i):
                 s = self.stmt(i)
@@ -608,23 +804,30 @@ class Lifter:
                 ds = self.stmt(d) or ''
                 body.append('    %s %s' % (ds, self.call(img.addr_c(t))))
                 self.const = {}
+                self.symreg = {}
             elif i.op == 0 and i.fn == 9:        # jalr
+                name = self.symbol_in(i.rs)
+                kk = self.K(i.rs)
+                tv = self.R(i.rs) if name or (kk and kk[1] and kk[0] in img.fstart) else 'XL(%s)' % self.R(i.rs)
                 ds = self.stmt(d) or ''
-                body.append('    { uint64_t t_ = %s; %s %s }' % (self.R(i.rs), ds, self.call('t_')))
+                body.append('    { uint64_t t_ = %s; %s %s }' % (tv, ds, self.call('t_', name)))
                 self.const = {}
+                self.symreg = {}
             elif i.op == 0 and i.fn == 8:        # jr
                 ds = self.stmt(d) or ''
                 if i.rs == 31:
                     body.append('    %s %s' % (ds, self.ret()))
                 else:
+                    name = self.symbol_in(i.rs)
                     cases = ''.join(' case 0x%xull: goto L_%x;' % (t, t) for t in sorted(img.inner.get(self.addr, ())))
                     body.append('    { uint64_t t_ = %s; %s switch (t_) {%s default: %s } }' % (
-                        self.R(i.rs), ds, cases, self.tail('t_')))
+                        self.R(i.rs), ds, cases, self.tail('t_' if name else 'XL(t_)', name)))
             else:
                 raise Unsupported('j/jal')
             k += 2
             if d.addr in self.labels:            # something branches to the delay slot itself
                 self.const = {}
+                self.symreg = {}
                 s = self.stmt(d)
                 body.append('    goto N_%x; L_%x:; %s N_%x:;' % (d.addr, d.addr, s or '', d.addr))
         body.append('    ' + self.ret())
@@ -677,7 +880,14 @@ def swap_data(img):
                 i += 8
                 continue
             w = img.width.get(a, ())
-            unit = 8 if (8 in w or s['name'] == '.lit8') else 4 if 4 in w else 2 if 2 in w else 1 if 1 in w else 4
+            if a in img.typed:
+                unit = img.typed[a]
+            elif (a - a % 8) in img.covered:
+                unit = 1                          # inside a typed record, not the start of a field wider than a byte
+            elif a % 8 == 0 and i + 8 <= n and b[i:i + 4] == b'\xff\xff\xff\xff' and b[i + 4] & 0x80 and not w:
+                unit = 8                          # a small negative 64-bit value (FAST_QUARKS names are stored like this)
+            else:
+                unit = 8 if (8 in w or s['name'] == '.lit8') else 4 if 4 in w else 2 if 2 in w else 1 if 1 in w else 4
             unit = min(unit, 8 - (a % 8) if a % 8 else 8)
             if unit == 4 and a % 4:
                 unit = 1
@@ -735,6 +945,10 @@ def main():
     name = args[args.index('--name') + 1] if '--name' in args else re.sub(r'[^A-Za-z0-9]', '_', Path(path).name)
     out.mkdir(parents=True, exist_ok=True)
     img = Image(path, name)
+    if '--protos' in args:
+        img.protos.update(json.loads(Path(args[args.index('--protos') + 1]).read_text()))
+    if '--types' in args:
+        print('typed records: %d' % img.load_types(args[args.index('--types') + 1], [args[i + 1] for i, a in enumerate(args) if a == '--like']))
     bodies, failed = [], []
     for addr, size in img.funcs:
         try:
@@ -756,6 +970,16 @@ def main():
             w.write('extern char %s[] __asm__("%s");\n' % (c, n_))
         for a, _ in img.funcs:
             w.write(PROTO % img.fstart[a] + ';\n')
+        # an original code address that reaches a call (a pointer the lifter could not turn into a label)
+        w.write('static const struct { uint64_t a; void *f; } xl_tab[] = {\n')
+        for a, _ in img.funcs:
+            w.write('    { 0x%xull, %s },\n' % (a, img.fstart[a]))
+        w.write('};\n')
+        w.write('static __attribute__((noinline)) uint64_t xl_find(uint64_t t)\n{\n'
+                '    unsigned lo = 0, hi = sizeof xl_tab / sizeof xl_tab[0];\n'
+                '    while (lo < hi) { unsigned m = (lo + hi) / 2; if (xl_tab[m].a == t) return (uint64_t)(uintptr_t)xl_tab[m].f;'
+                ' if (xl_tab[m].a < t) lo = m + 1; else hi = m; }\n    abort();\n}\n')
+        w.write('static inline uint64_t XL(uint64_t t) { return t - 0x%xull < 0x%xull ? xl_find(t) : t; }\n' % (img.tlo, img.thi - img.tlo))
         for b in bodies:
             w.write(b + '\n\n')
         for s in e.dynsyms:
