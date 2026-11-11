@@ -496,6 +496,10 @@ static struct ipasswd *conv_pw(struct ipasswd *o, const struct passwd *p)
 }
 struct ipasswd *irix_getpwnam(const char *n) { static __thread struct ipasswd o; return conv_pw(&o, getpwnam(n)); }
 struct ipasswd *irix_getpwuid(int u) { static __thread struct ipasswd o; return conv_pw(&o, getpwuid((uid_t)u)); }
+struct ipasswd *irix_getpwent(void) { static __thread struct ipasswd o; return conv_pw(&o, getpwent()); }
+void irix_setpwent(void) { setpwent(); }
+void irix_endpwent(void) { endpwent(); }
+int _getpwent_no_shadow, _getpwent_no_yp, _pw_stayopen;     /* switches of the IRIX getpwent; nothing to switch here */
 int irix_getpwnam_r(const char *n, struct ipasswd *o, char *buf, size_t len, struct ipasswd **res)
 {
     struct passwd p, *r = 0;
@@ -678,9 +682,9 @@ static void lm_event(XEvent *ev)
     int t = ev->type & 0x7f;
     if (getenv("LIFT_NOEV")) return;
     memset(&SH(ev), 0, sizeof *ev / 8);
-    lm_mark((uintptr_t)ev, t < 36 ? ev_fields[t] : ev_fields[0]);
+    lm_mark((uintptr_t)ev, t < 36 ? ev_fields[t] : ev_fields[0], 0, 1);
     if (t == ClientMessage && ev->xclient.format != 8)
-        lm_mark((uintptr_t)ev, ev->xclient.format == 32 ? l5 : s10);
+        lm_mark((uintptr_t)ev, ev->xclient.format == 32 ? l5 : s10, 0, 1);
 }
 int irix_XNextEvent(Display *d, XEvent *ev) { int r = XNextEvent(d, ev); lm_event(ev); return r; }
 int irix_XPeekEvent(Display *d, XEvent *ev) { int r = XPeekEvent(d, ev); lm_event(ev); return r; }
@@ -725,7 +729,7 @@ void lift_native_class(uint64_t wc)
         char *tab = *(char **)(rec + f->ptr);
         unsigned n = f->count_size == 4 ? *(unsigned *)(rec + f->count) : *(unsigned short *)(rec + f->count);
         if (!tab || n >= 4096 || SH(tab)) continue;
-        for (k = 0; k < n; k++) lm_mark((uintptr_t)(tab + k * f->elem_size), f->fields);
+        lm_mark((uintptr_t)tab, f->fields, f->elem_size, n);
     }
     me = *sc;
     me.rec = rec;

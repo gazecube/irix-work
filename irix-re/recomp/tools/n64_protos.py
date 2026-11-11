@@ -13,8 +13,10 @@ For every imported function the headers declare, the probe takes its type; the D
 and a trailing '...' in the argument list for a variadic function.  'ptr' lists [argument, size] for the arguments
 that point to a writable object of known size (XEvent *, int *, Window **): the callee reads and writes it with
 native widths, so the lifter brings that memory to its native layout before the call (lm_native).  A third element
-lists the object's scalar fields as [offset, size] (unions left out); the lifter records those widths after the call
-(lm_mark), because lifted code also reads parts of fields: the low 16 bits of an int by a 16-bit load.
+lists the object's scalar fields as [offset, size] (unions left out) and a fourth the argument that counts the
+elements when the pointer is an array (XPoint, XRectangle, XColor and the like: the int that follows it), or -1.  The lifter stores
+each field with its own width before the call (lm_conv) and records those widths after it (lm_mark): lifted code
+writes two shorts with one store and reads the low 16 bits of an int by a 16-bit load.
 """
 import json
 import re
@@ -48,7 +50,7 @@ def klass(d, t):
 
 
 def scalars(d, t, base, out):
-    """Scalar fields wider than a byte, outside unions and bit fields."""
+    """Scalar fields outside unions and bit fields."""
     t = d.strip(t)
     if t is None or len(out) > 64:
         return
@@ -57,7 +59,7 @@ def scalars(d, t, base, out):
     if tag in ('pointer_type', 'reference_type'):
         out.append([base, 8])
     elif tag in ('base_type', 'enumeration_type'):
-        if d.size(t) in (2, 4, 8):
+        if d.size(t) in (1, 2, 4, 8):
             out.append([base, d.size(t)])
     elif tag in ('structure_type', 'class_type'):
         for k in n['kids']:
@@ -67,6 +69,26 @@ def scalars(d, t, base, out):
         et = d.ref(n['a']['type'])
         for i in range(min(d.count(n), 64)):
             scalars(d, et, base + i * d.size(et), out)
+
+
+ARRAYS = {'XPoint', 'XSegment', 'XRectangle', 'XArc', 'XColor', 'XTextItem', 'XTextItem16', 'XChar2b'}
+
+
+def array_type(d, t):
+    """True for a pointer to one of the Xlib types that are passed as counted arrays."""
+    t = d.strip(t)
+    if t is None or d.nodes[t]['tag'] != 'pointer_type' or 'type' not in d.nodes[t]['a']:
+        return False
+    t = d.ref(d.nodes[t]['a']['type'])
+    while t is not None and t in d.nodes:
+        n = d.nodes[t]
+        m = re.search(r'"([^"]*)"', n['a'].get('name', ''))
+        if m and m.group(1) in ARRAYS:
+            return True
+        if n['tag'] not in ('typedef', 'const_type', 'volatile_type') or 'type' not in n['a']:
+            return False
+        t = d.ref(n['a']['type'])
+    return False
 
 
 def pointee(d, t):
@@ -81,7 +103,12 @@ def pointee(d, t):
     if t is None or t not in d.nodes:
         return None, 0
     n = d.nodes[t]
-    if n['tag'] in ('const_type', 'subroutine_type') or 'declaration' in n['a']:
+    if n['tag'] == 'const_type':             # the callee only reads it; a structure still has to be in its layout
+        t = d.strip(t)
+        if t is None or t not in d.nodes or d.nodes[t]['tag'] not in ('structure_type', 'class_type'):
+            return None, 0
+        n = d.nodes[t]
+    if n['tag'] == 'subroutine_type' or 'declaration' in n['a']:
         return None, 0
     if n['tag'] in ('pointer_type', 'reference_type'):
         return t, 8
@@ -135,15 +162,21 @@ def main():
         fn = d.nodes[f]
         ret = klass(d, d.ref(fn['a']['type'])) if 'type' in fn['a'] else 'v'
         params, ptr = [], []
-        for k in fn['kids']:
+        formals = [k for k in fn['kids'] if k['tag'] in ('formal_parameter', 'unspecified_parameters')]
+        for j, k in enumerate(formals):
             if k['tag'] == 'formal_parameter':
                 params.append(klass(d, d.ref(k['a']['type'])) if 'type' in k['a'] else 'p')
                 pt, size = pointee(d, d.ref(k['a']['type'])) if 'type' in k['a'] else (None, 0)
                 if size:
                     fields = []
                     scalars(d, pt, 0, fields)
-                    ptr.append([len(params) - 1, size, fields if len(fields) <= 64 else []])
-            elif k['tag'] == 'unspecified_parameters':
+                    # an array of drawing primitives or colours: the int that follows is the element count
+                    cnt = -1
+                    if array_type(d, d.ref(k['a']['type'])) and j + 1 < len(formals) and formals[j + 1]['tag'] == 'formal_parameter' and 'type' in formals[j + 1]['a']:
+                        if klass(d, d.ref(formals[j + 1]['a']['type'])) in ('i4', 'u4'):
+                            cnt = j + 1
+                    ptr.append([j, size, fields if 0 < len(fields) <= 64 else [], cnt])
+            else:
                 params.append('...')
         out[nm.group(1)] = {'ret': ret, 'args': params}
         if ptr:

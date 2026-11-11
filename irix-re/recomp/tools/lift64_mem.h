@@ -255,22 +255,45 @@ static inline void lm_native(uintptr_t a, uint64_t n)
     }
 }
 
-/* After a native function wrote an object of a known type: record the widths of its fields (pairs of offset and
- * size, ended by 0xffff), so that lifted code reading part of a field gets the part the big-endian machine would.
- * The memory is not touched.  lm_native has gone over the object before the call. */
-static inline void lm_mark(uintptr_t a, const uint16_t *f)
+/* Objects handed to a native function through a typed pointer.  f lists the scalar fields of one element (pairs of
+ * offset and size, ended by 0xffff); there are n elements of `size` bytes.
+ *
+ * lm_conv, before the call: every field is read the way lifted code would read it and stored as one native value
+ * of its type, so the callee finds the layout its compiler expects whatever widths lifted code used to fill it in
+ * (two shorts written by one 32-bit store, a structure cleared eight bytes at a time).
+ * lm_mark, after the call: the same widths are recorded again without touching memory, for what the callee wrote. */
+static inline void lm_conv(uintptr_t a, const uint16_t *f0, unsigned size, uint64_t n)
 {
+    const uint16_t *f;
+    lift_tag t;
     if (!a) return;
-    for (; f[0] != 0xffff; f += 2) {
-        uintptr_t p = a + f[0], c = p & ~(uintptr_t)7;
-        unsigned h = (p >> 2) & 1, q = (p >> 1) & 3, s = SH(c);
-        if (f[1] == 8 && !(p & 7))
-            SH(c) = ST_Q;
-        else if (f[1] == 4 && !(p & 3) && (s & 0x0f) != ST_Q)
-            SH(c) = (uint8_t)((s & ~((3u << (2 * h)) | (3u << (4 + 2 * h)))) | (ST_W << (2 * h)));
-        else if (f[1] == 2 && !(p & 1) && (s & 0x0f) != ST_Q && ((s >> (2 * h)) & 3) != ST_W)
-            SH(c) = (uint8_t)((s & ~(3u << (2 * h))) | (ST_N << (2 * h)) | (0x10u << q));
-    }
+    if (n > 65536) n = 65536;
+    for (; n; n--, a += size)
+        for (f = f0; f[0] != 0xffff; f += 2) {
+            uintptr_t p = a + f[0];
+            if (!SH(p)) continue;                            /* never written by lifted code: native already */
+            if (f[1] == 8) { if (!(p & 7)) ST8(p, LD8(p, &t), 0); }
+            else if (f[1] == 4) { if (!(p & 3)) ST4(p, LD4(p, &t), 0); }
+            else if (f[1] == 2) { if (!(p & 1)) ST2(p, LD2(p, &t), 0); }
+            else ST1(p, LD1(p));
+        }
+}
+static inline void lm_mark(uintptr_t a, const uint16_t *f0, unsigned size, uint64_t n)
+{
+    const uint16_t *f;
+    if (!a) return;
+    if (n > 65536) n = 65536;
+    for (; n; n--, a += size)
+        for (f = f0; f[0] != 0xffff; f += 2) {
+            uintptr_t p = a + f[0], c = p & ~(uintptr_t)7;
+            unsigned h = (p >> 2) & 1, q = (p >> 1) & 3, s = SH(c);
+            if (f[1] == 8 && !(p & 7))
+                SH(c) = ST_Q;
+            else if (f[1] == 4 && !(p & 3) && (s & 0x0f) != ST_Q)
+                SH(c) = (uint8_t)((s & ~((3u << (2 * h)) | (3u << (4 + 2 * h)))) | (ST_W << (2 * h)));
+            else if (f[1] == 2 && !(p & 1) && (s & 0x0f) != ST_Q && ((s >> (2 * h)) & 3) != ST_W)
+                SH(c) = (uint8_t)((s & ~(3u << (2 * h))) | (ST_N << (2 * h)) | (0x10u << q));
+        }
 }
 
 /* A typed class record of a lifted library, and the counted tables it points to.  A class record that native code

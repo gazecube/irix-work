@@ -55,6 +55,7 @@ CALLT = '((uint64_t (*)(uint64_t, ...))(uintptr_t)(%s))'
 SHIM_PROTOS = {n: {'ret': 'i4', 'args': ['p']} for n in (
     '_XQstrcmp', '_XrmBufferToQuark', 'SgiGetNumLockModifiers', '__filbuf', '__semgetc', '__flsbuf', '__semputc',
     'BSDclosedir', 'setoserror', 'oserror')}
+SHIM_PROTOS['__dcis'] = {'ret': 'cis', 'args': ['d']}     # libm: cos in $f0 and sin in $f2 of the double in $f12
 CTYPE = {'i4': 'int32_t', 'u4': 'uint32_t', 'i2': 'int16_t', 'u2': 'uint16_t', 'i1': 'int8_t', 'u1': 'uint8_t'}
 
 # CoreClassPart and XtResource in LP64, for class records that no header declares
@@ -387,18 +388,22 @@ class Lifter:
         proto = self.img.protos.get(name) if name else None
         if proto and proto.get('ptr'):
             pre, post = [], []
-            for k, size, fields in proto['ptr']:
+            for k, size, fields, cnt in proto['ptr']:
                 # an object without a field list (a union such as XEvent) is left alone: the libc layer wraps the
                 # functions that fill one in
-                if k >= 8 + self.out_slots or not fields:
+                if k >= 8 + self.out_slots or not fields or cnt >= 8 + self.out_slots:
                     continue
-                a = 'r%d' % (4 + k) if k < 8 else self.outarg(k - 8)
-                pre.append('lm_native((uintptr_t)%s, %d); uintptr_t p%d_ = (uintptr_t)%s;' % (a, size, k, a))
-                post.append('lm_mark((uintptr_t)p%d_, %s);' % (k, self.img.mark_table(fields)))
+                arg = lambda j: 'r%d' % (4 + j) if j < 8 else self.outarg(j - 8)
+                tab = self.img.mark_table(fields)
+                pre.append('uintptr_t p%d_ = (uintptr_t)%s; uint64_t n%d_ = %s; lm_conv(p%d_, %s, %d, n%d_);' % (
+                    k, arg(k), k, '(uint32_t)%s' % arg(cnt) if cnt >= 0 else '1', k, tab, size, k))
+                post.append('lm_mark(p%d_, %s, %d, n%d_);' % (k, tab, size, k))
             return '{ %s %s %s }' % (' '.join(pre), self.call2(target, proto), ' '.join(post))
         return self.call2(target, proto)
 
     def call2(self, target, proto):
+        if proto and proto['ret'] == 'cis':
+            return '{ double s_, c_; sincos(FD(f[12]), &s_, &c_); f[0] = DF(c_); f[2] = DF(s_); }'
         if proto and self.fp and (proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
             st = self.typed_call(target, proto)
             if st:
@@ -700,9 +705,21 @@ class Lifter:
         if op in (0x31, 0x35, 0x39, 0x3d):
             width = 4 if op in (0x31, 0x39) else 8
             a = self.ea(Insn2(i), width)
-            if a is None:
-                raise Unsupported('fp access of an incoming slot')
             ft = i.rt
+            if a is None:                      # a floating-point argument the caller passed on the stack
+                off = i.imm - self.frame
+                slot, within = off // 8, off % 8
+                if off < 0 or within + width > 8:
+                    raise Unsupported('fp access of an incoming slot')
+                self.nstack = max(self.nstack, slot + 1)
+                sh = (8 - within - width) * 8
+                if op == 0x35:
+                    return 'f[%d] = s%d;' % (ft, slot)
+                if op == 0x31:
+                    return 'f[%d] = (uint32_t)(s%d >> %d);' % (ft, slot, sh)
+                if op == 0x3d:
+                    return 's%d = f[%d];' % (slot, ft)
+                raise Unsupported('fp access of an incoming slot')
             a = '(uintptr_t)%s' % a
             if op == 0x31:
                 return 'f[%d] = LD4(%s, &tx);' % (ft, a)
@@ -1143,6 +1160,7 @@ def main():
     with open(out / 'code.c', 'w') as w:
         w.write('#include <stdint.h>\n#include <stdarg.h>\n#include <math.h>\n')
         w.write('extern void abort(void);\n')
+        w.write('extern void sincos(double, double *, double *);\n')
         w.write('static inline float FS(uint64_t v) { union { uint32_t u; float f; } x; x.u = (uint32_t)v; return x.f; }\n')
         w.write('static inline double FD(uint64_t v) { union { uint64_t u; double d; } x; x.u = v; return x.d; }\n')
         w.write('static inline uint64_t SF(uint64_t o, float v) { union { uint32_t u; float f; } x; x.f = v; return x.u; }\n')
