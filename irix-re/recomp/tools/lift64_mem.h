@@ -26,7 +26,12 @@
 #define LIFT64_MEM_H
 #include <stdint.h>
 
+#if __SIZEOF_POINTER__ == 8
 #define SH_BASE ((uint8_t *)0x200000000000ull)
+#else
+extern uint8_t *lift_sh_base;                 /* 32-bit process: the libc layer maps 512 MB for it where there is room */
+#define SH_BASE lift_sh_base
+#endif
 #define SH(a) (SH_BASE[(uint64_t)(uintptr_t)(a) >> 3])
 
 #define ST_U 0u

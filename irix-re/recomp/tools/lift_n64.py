@@ -41,7 +41,33 @@ from pathlib import Path
 here = Path(__file__).resolve().parent
 sys.path.insert(0, str(here))
 sys.path.insert(0, str(here.parents[2] / 'native-libs' / 'nativemem' / 'tools'))
-from elf_n64 import Elf, R_MIPS_REL32                    # noqa: E402
+from elf_n64 import Elf as Elf64, R_MIPS_REL32          # noqa: E402
+from elf_n32 import Elf as Elf32                          # noqa: E402
+
+# Pointer width of the object being lifted: 8 for N64 (to x86_64), 4 for N32 (to i386).  Registers are 64 bits
+# wide in both ABIs; what differs is the size of an address in memory (GOT slots, relocated data words) and the
+# load that fetches one (ld or lw).
+PW = 8
+
+
+def Elf(path):
+    """Reader for the object's ELF class; sets the pointer width."""
+    global PW
+    with open(path, 'rb') as f:
+        cls = f.read(5)[4]
+    PW = 8 if cls == 2 else 4
+    e = Elf64(path) if cls == 2 else Elf32(path)
+    e.ptr = e.dword if cls == 2 else e.word
+    if cls != 2:                              # same shape as the ELF64 reader: (offset, symbol, [types])
+        rd = e.rel_dyn
+        e.rel_dyn = lambda: [(o, k, [t]) for o, k, t in rd()]
+    return e
+
+
+def ldp():
+    """Opcode of the load that fetches a pointer."""
+    return 0x37 if PW == 8 else 0x23
+
 import nm_swap                                           # noqa: E402
 
 NARGS = 8
@@ -65,6 +91,7 @@ for _n, _o in (('eq', '=='), ('ge', '>='), ('gt', '>'), ('le', '<='), ('lt', '<'
 SHIM_PROTOS['atold'] = {'ret': 'qstr', 'args': []}
 QUAD_ARGS = "long double a_ = (long double)FD(f[12]) + FD(f[13]), b_ = (long double)FD(f[14]) + FD(f[15]);"
 QUAD_RET = "double h_ = (double)r_; f[0] = DF(h_); f[2] = DF((double)(r_ - h_));"
+ADDR = '(uint64_t)(uintptr_t)%s'              # set by main() for N32: '(uint64_t)(int64_t)(int32_t)(uintptr_t)%s'
 CTYPE = {'i4': 'int32_t', 'u4': 'uint32_t', 'i2': 'int16_t', 'u2': 'uint16_t', 'i1': 'int8_t', 'u1': 'uint8_t'}
 
 # CoreClassPart and XtResource in LP64, for class records that no header declares
@@ -146,7 +173,7 @@ class Image:
         self.hi = max(s['addr'] + s['size'] for s in data)
         self.datasecs = data
         self.got_lo = e.pltgot
-        self.got_hi = e.pltgot + 8 * (e.local_gotno + e.symtabno - e.gotsym)
+        self.got_hi = e.pltgot + PW * (e.local_gotno + e.symtabno - e.gotsym)
         self.width = defaultdict(set)         # link-time data address -> access widths seen in the code
         self.arrays = defaultdict(set)        # (address of a field in row 0, row size) -> access widths
         self.rel = {}                         # offset -> symbol index, for the 64-bit pointer words
@@ -173,15 +200,15 @@ class Image:
             for sec in data:
                 if sec['type'] == 8:              # no contents (bss)
                     continue
-                for a in range((sec['addr'] + 7) & ~7, sec['addr'] + sec['size'] - 7, 8):
-                    v = e.dword(a)
+                for a in range((sec['addr'] + PW - 1) & -PW, sec['addr'] + sec['size'] - PW + 1, PW):
+                    v = e.ptr(a)
                     if self.data_lo <= v < self.hi or (v % 4 == 0 and self.in_text(v)):
                         self.rel.setdefault(a, 0)
         # words in the data that point into the middle of a function: jump table targets
         self.inner = defaultdict(set)         # function start -> target addresses
         import bisect
         for off in self.rel:
-            v = e.dword(off)
+            v = e.ptr(off)
             if self.in_text(v) and v not in self.fstart:
                 k = bisect.bisect_right(order, v) - 1
                 if k >= 0:
@@ -191,8 +218,8 @@ class Image:
         self.marks = {}                       # field layout -> name of its lm_mark table
         # The GOT itself is data too: code built with large-GOT addressing loads its entries through a computed
         # address.  Every slot becomes a pointer word (key -1 - index); the two reserved slots stay as they are.
-        for idx in range(2, (self.got_hi - self.got_lo) // 8):
-            self.rel.setdefault(self.got_lo + 8 * idx, -1 - idx)
+        for idx in range(2, (self.got_hi - self.got_lo) // PW):
+            self.rel.setdefault(self.got_lo + PW * idx, -1 - idx)
         self.class_recs = []                  # typed class records: (address, size, follow list)
         self.hooks = {}                       # function address -> native function called on entry with a0
         self.typed = {}                       # data address -> size of the scalar field that starts there
@@ -229,15 +256,15 @@ class Image:
                 continue
             base = sym['value']
             if sym['size'] == 8 and sym['name'].endswith('Class') and base in self.rel:
-                todo.append(e.dword(base))        # widgetClass and friends: a pointer to a class record
+                todo.append(e.ptr(base))        # widgetClass and friends: a pointer to a class record
             mark(base, min(t['size'], sym['size'] or t['size']), [f for f in t['fields'] if not sym['size'] or f[0] < sym['size']])
             n += 1
             if sym['name'].endswith('ClassRec'):
                 self.class_recs.append((base, min(t['size'], sym['size'] or t['size']), t['follow']))
             if sym['name'].endswith('ClassRec') and base in self.rel:
-                todo.append(e.dword(base))        # the superclass
+                todo.append(e.ptr(base))        # the superclass
             for f in t['follow']:
-                tgt = e.dword(base + f['ptr'])
+                tgt = e.ptr(base + f['ptr'])
                 cnt = int.from_bytes(e.bytes_at(base + f['count'], f['count_size']), 'big')
                 if self.data_lo <= tgt < self.hi and 0 < cnt < 4096:
                     for k in range(cnt):
@@ -245,16 +272,16 @@ class Image:
             # class extension records all start with: next_extension, record_type (quark), version (long),
             # record_size (Cardinal); the rest differs per class and stays untyped
             for off in t.get('ext', ()):
-                tgt = e.dword(base + off)
+                tgt = e.ptr(base + off)
                 for _ in range(8):
                     if not (self.data_lo <= tgt < self.hi) or tgt in self.typed:
                         break
                     mark(tgt, 32, [(0, 8), (8, 4), (16, 8), (24, 4)])
-                    tgt = e.dword(tgt)
+                    tgt = e.ptr(tgt)
         # class records that are not exported: their Core part, their resources, their extension, their superclass
         for sym in e.dynsyms:
             if sym['type'] == 1 and sym['shndx'] and sym['size'] == 8 and sym['name'].endswith('Class') and sym['value'] in self.rel:
-                todo.append(e.dword(sym['value']))
+                todo.append(e.ptr(sym['value']))
         t = CORE_CLASS
         while todo:
             base = todo.pop()
@@ -264,19 +291,19 @@ class Image:
             self.class_recs.append((base, t['size'], t['follow']))
             n += 1
             f = t['follow'][0]
-            tgt = e.dword(base + f['ptr'])
+            tgt = e.ptr(base + f['ptr'])
             cnt = int.from_bytes(e.bytes_at(base + f['count'], 4), 'big')
             if self.data_lo <= tgt < self.hi and 0 < cnt < 4096:
                 for k in range(cnt):
                     mark(tgt + k * f['elem_size'], f['elem_size'], f['fields'])
-            tgt = e.dword(base + 216)
+            tgt = e.ptr(base + 216)
             for _ in range(8):
                 if not (self.data_lo <= tgt < self.hi) or tgt in self.typed:
                     break
                 mark(tgt, 32, [(0, 8), (8, 4), (16, 8), (24, 4)])
-                tgt = e.dword(tgt)
+                tgt = e.ptr(tgt)
             if base in self.rel:
-                todo.append(e.dword(base))
+                todo.append(e.ptr(base))
         return n
 
     def in_text(self, a):
@@ -296,12 +323,12 @@ class Image:
     def addr_c(self, a):
         """C expression (uint64_t) for a link-time address."""
         if a in self.fstart:
-            return '(uint64_t)(uintptr_t)%s' % self.fstart[a]
+            return ADDR % self.fstart[a]
         # Any other address of the object, code included, is the image address moved by the same distance.  A GOT
         # page entry inside the code then still reaches the data after it when an offset is added at run time, and
         # a code address formed that way is translated when it is called (XL).
         if self.tlo - 0x10000 <= a < self.hi + 0x10000:
-            return '(uint64_t)(uintptr_t)(IMG + %d)' % (a - self.data_lo)
+            return ADDR % ('(IMG + %d)' % (a - self.data_lo))
         return '0x%xull' % a
 
     def addr_s(self, a):
@@ -338,7 +365,7 @@ class Lifter:
         if n == 28:
             return self.img.addr_c(self.img.elf.gp)
         if n == 29:
-            return 'r29' if self.dyn else '(uint64_t)(uintptr_t)frame'
+            return 'r29' if self.dyn else ADDR % 'frame'
         return 'r%d' % n
 
     def setk(self, reg, val):
@@ -517,8 +544,8 @@ class Lifter:
             ctype, width = self.LD[op]
             # GOT load: the slot address is a link-time constant
             k = self.K(i.rs)
-            if op == 0x37 and k and k[1] and self.img.got_lo <= k[0] + i.imm < self.img.got_hi:
-                return self.got(i, (k[0] + i.imm - self.img.got_lo) // 8)
+            if op == ldp() and k and k[1] and self.img.got_lo <= k[0] + i.imm < self.img.got_hi:
+                return self.got(i, (k[0] + i.imm - self.img.got_lo) // PW)
             a = self.ea(i, width)
             if a is None:
                 return self.incoming(i, ctype, width, False)
@@ -557,7 +584,7 @@ class Lifter:
         if not name:
             raise Unsupported('unnamed global GOT entry')
         k = (v['value'], True) if v['shndx'] and not self.img.in_text(v['value']) else None
-        st = self.W(i.rt, '(uint64_t)(uintptr_t)%s' % self.img.sym(name), k)
+        st = self.W(i.rt, ADDR % self.img.sym(name), k)
         if not v['shndx'] and i.rt not in (0, 28, 29):
             self.symreg[i.rt] = name
         return st
@@ -707,6 +734,12 @@ class Lifter:
             return '{ uint64_t v_ = %s; __builtin_memcpy((void *)(uintptr_t)(%s + %d), &v_, 8); }' % (R(rt), R(rs), i.imm)
         if op == 0x2d:
             return None
+        if op == 0x22:                          # lwl: with the lwr that follows, an unaligned word
+            return W(rt, '({ int32_t v_; __builtin_memcpy(&v_, (void *)(uintptr_t)(%s + %d), 4); (uint64_t)(int64_t)v_; })' % (R(rs), i.imm))
+        if op == 0x2a:
+            return '{ uint32_t v_ = (uint32_t)%s; __builtin_memcpy((void *)(uintptr_t)(%s + %d), &v_, 4); }' % (R(rt), R(rs), i.imm)
+        if op in (0x26, 0x2e):
+            return None
         if op in (0x11, 0x31, 0x35, 0x39, 0x3d):
             return self.fpu(i)
         if op in (0x2f, 0x33):
@@ -731,7 +764,7 @@ class Lifter:
         if self.dyn:
             return self.W(i.rt, 'r29 + %d' % i.imm)
         if 0 <= i.imm <= self.fsize:
-            return self.W(i.rt, '(uint64_t)(uintptr_t)(frame + %d)' % i.imm)
+            return self.W(i.rt, ADDR % ('(frame + %d)' % i.imm))
         raise Unsupported('address of an incoming slot')
 
     def fpu(self, i):
@@ -901,9 +934,9 @@ class Lifter:
         e = img.elf
         for reg, dl in defs.items():
             i = dl[0]
-            if len(dl) != 1 or i.op != 0x37 or i.rs != 28 or not (img.got_lo <= e.gp + i.imm < img.got_hi):
+            if len(dl) != 1 or i.op != ldp() or i.rs != 28 or not (img.got_lo <= e.gp + i.imm < img.got_hi):
                 continue
-            kind, v = e.got_entry((e.gp + i.imm - img.got_lo) // 8)
+            kind, v = e.got_entry((e.gp + i.imm - img.got_lo) // PW)
             if kind == 'local':
                 self.fixed[reg] = (v, True)
             elif not v['shndx'] and v['name']:
@@ -1020,8 +1053,8 @@ class Lifter:
             out.append('    uint64_t ' + ', '.join('s%d' % k for k in range(nst)) + ';')
             out.append('    { va_list ap_; va_start(ap_, a7); ' + ' '.join('s%d = va_arg(ap_, uint64_t);' % k for k in range(nst)) + ' va_end(ap_); }')
         if self.dyn:
-            out.append('    uint8_t fbuf_[%d] __attribute__((aligned(16))); uint8_t *frame = fbuf_ + %d; uint64_t r29 = (uint64_t)(uintptr_t)frame;' % (
-                DYN_RESERVE + max(self.fsize, 16), DYN_RESERVE))
+            out.append('    uint8_t fbuf_[%d] __attribute__((aligned(16))); uint8_t *frame = fbuf_ + %d; uint64_t r29 = ' % (
+                DYN_RESERVE + max(self.fsize, 16), DYN_RESERVE) + ADDR % 'frame' + ';')
         else:
             out.append('    uint8_t frame[%d] __attribute__((aligned(16))); (void)frame;' % max(self.fsize, 16))
         out.append('    __builtin_memset(&SH(frame), 0, %d);' % ((max(self.fsize, 16) + 7) // 8))
@@ -1089,16 +1122,16 @@ def swap_data(img):
         i = 0
         while i < n:
             a = base + i
-            if a in img.rel and i + 8 <= n:
-                state(a, 8)
-                i += 8
+            if a in img.rel and i + PW <= n:
+                state(a, PW)
+                i += PW
                 continue
             w = img.width.get(a, ())
             if a in img.typed:
                 unit = img.typed[a]
             elif (a - a % 8) in img.covered:
                 unit = 1                          # inside a typed record, not the start of a field wider than a byte
-            elif a % 8 == 0 and i + 8 <= n and b[i:i + 4] == b'\xff\xff\xff\xff' and b[i + 4] & 0x80 and not w:
+            elif PW == 8 and a % 8 == 0 and i + 8 <= n and b[i:i + 4] == b'\xff\xff\xff\xff' and b[i + 4] & 0x80 and not w:
                 unit = 8                          # a small negative 64-bit value (FAST_QUARKS names are stored like this)
             else:
                 unit = 8 if (8 in w or s['name'] == '.lit8') else 4 if 4 in w else 2 if 2 in w else 1 if 1 in w else 4
@@ -1121,6 +1154,7 @@ def swap_data(img):
 def emit_data(img, blob, w):
     e = img.elf
     name = img.name
+    PTR = '\t.quad ' if PW == 8 else '\t.long '
     # Code addresses of the original are image-relative too (addr_c): the range below the image stands for the
     # original code.  It holds a jump to the lifted function at the place of every function start, so a function
     # address that the code forms at run time (GOT page plus offset) is a real, callable address for everyone,
@@ -1135,33 +1169,33 @@ def emit_data(img, blob, w):
     off, total = 0, len(blob)
     while off < total:
         a = img.data_lo + off
-        if a in img.rel and off + 8 <= total:
-            v = e.dword(a)
+        if a in img.rel and off + PW <= total:
+            v = e.ptr(a)
             k = img.rel[a]
             if k < 0:                              # a GOT slot
                 kind, g = e.got_entry(-1 - k)
                 if kind == 'global' and not g['shndx']:
-                    w.write('\t.quad %s\n' % (g['name'] or '0'))
+                    w.write(PTR + '%s\n' % (g['name'] or '0'))
                 else:
                     t = g if kind == 'local' else g['value']
                     if t in img.fstart:
-                        w.write('\t.quad %s\n' % img.fstart[t])
+                        w.write(PTR + '%s\n' % img.fstart[t])
                     elif img.tlo - 0x10000 <= t < img.hi + 0x10000:
-                        w.write('\t.quad __img_%s + %d\n' % (name, t - img.data_lo))
+                        w.write(PTR + '__img_%s + %d\n' % (name, t - img.data_lo))
                     else:
-                        w.write('\t.quad 0x%x\n' % t)
-                off += 8
+                        w.write(PTR + '0x%x\n' % t)
+                off += PW
                 continue
             sym = e.dynsyms[k] if k < len(e.dynsyms) else None
             if sym is not None and k >= e.gotsym and not sym['shndx'] and sym['name']:
                 # the word holds the address the symbol had when the object was quickstarted
-                add = (v - e.dword(e.pltgot + 8 * (e.local_gotno + k - e.gotsym))) & 0xffffffffffffffff
-                if add & (1 << 63):
-                    add -= 1 << 64
-                w.write('\t.quad %s + %d\n' % (sym['name'], add))
+                add = (v - e.ptr(e.pltgot + PW * (e.local_gotno + k - e.gotsym))) & ((1 << 8 * PW) - 1)
+                if add & (1 << (8 * PW - 1)):
+                    add -= 1 << 8 * PW
+                w.write(PTR + '%s + %d\n' % (sym['name'], add))
             else:
-                w.write('\t.quad %s\n' % img.addr_s(v))
-            off += 8
+                w.write(PTR + '%s\n' % img.addr_s(v))
+            off += PW
             continue
         n = 0
         while off + n < total and (img.data_lo + off + n) not in img.rel and n < 16:
@@ -1199,6 +1233,9 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / 'lift64_mem.h').write_text((here / 'lift64_mem.h').read_text())
     img = Image(path, name)
+    if PW == 4:
+        global ADDR
+        ADDR = '(uint64_t)(int64_t)(int32_t)(uintptr_t)%s'
     if '--protos' in args:
         img.protos.update(json.loads(Path(args[args.index('--protos') + 1]).read_text()))
     for i, a in enumerate(args):
