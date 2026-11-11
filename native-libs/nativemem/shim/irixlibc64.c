@@ -466,6 +466,11 @@ static void put_timeval(struct itimeval *o, const struct timeval *h)
     SH(&o->tv_usec) = 0x0f;                         /* one 64-bit value */
 #endif
 }
+static void fdset_native(fd_set *s, int n)
+{
+    static const uint16_t word[] = {0, 4, 0xffff};
+    if (s && n > 0) lm_conv((uintptr_t)s, word, 4, (unsigned)(n + 31) / 32);
+}
 int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct itimeval *t)
 {
     struct timeval h;
@@ -475,6 +480,8 @@ int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct itimeval *t)
         h.tv_sec = (int)LD4((uintptr_t)&t->tv_sec, &tg);
         h.tv_usec = (long)LDP(&t->tv_usec, &tg);
     }
+    /* the descriptor sets are arrays of 32-bit words; lifted code may have set a bit with a byte store */
+    fdset_native(r, n); fdset_native(w, n); fdset_native(e, n);
     x = select(n, r, w, e, t ? &h : 0);
     SETERR();
     return x;
