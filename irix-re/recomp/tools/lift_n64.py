@@ -1152,6 +1152,17 @@ def emit_data(img, blob, w):
                 s['name'], s['name'], name, s['value'] - img.data_lo, s['name']))
             if s['size']:
                 w.write('\t.size %s,%d\n' % (s['name'], s['size']))
+    # __elf_size_NAME and __elf_vaddr_NAME: the IRIX linker's symbols for the section NAME (the C++ start-up code
+    # walks __cplinit with them).  An object without that section has an empty one.
+    for s in e.dynsyms:
+        m = re.fullmatch(r'__elf_(size|vaddr)_(\w+)', s['name'] or '')
+        if not m or s['shndx']:
+            continue
+        sec = e.byname.get(m.group(2))
+        if m.group(1) == 'size':
+            w.write('\t.globl %s\n\t.hidden %s\n\t.set %s, %d\n' % (s['name'], s['name'], s['name'], sec['size'] if sec else 0))
+        elif sec and img.data_lo <= sec['addr'] < img.hi:
+            w.write('\t.globl %s\n\t.hidden %s\n\t.set %s, __img_%s + %d\n' % (s['name'], s['name'], s['name'], name, sec['addr'] - img.data_lo))
     w.write('\t.section .note.GNU-stack,"",@progbits\n')
 
 

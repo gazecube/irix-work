@@ -19,6 +19,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <pwd.h>
+#include <sched.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -788,3 +789,7 @@ void *__rld_obj_head;
  * slots only, for a call through a pointer, which nothing is known to make */
 NOT_HERE(__q_add) NOT_HERE(__q_sub) NOT_HERE(__q_mul) NOT_HERE(__q_div) NOT_HERE(__q_eq) NOT_HERE(__q_ge)
 NOT_HERE(__q_gt) NOT_HERE(__q_le) NOT_HERE(__q_lt) NOT_HERE(atold) NOT_HERE(__dcis)
+
+/* sgidladd: dlopen that adds the object's symbols to the global scope; sginap: sleep for a number of clock ticks */
+void *sgidladd(const char *path, int mode) { return dlopen(path, mode | RTLD_GLOBAL); }
+long sginap(long ticks) { if (ticks > 0) usleep((useconds_t)ticks * 10000); else sched_yield(); return 0; }
