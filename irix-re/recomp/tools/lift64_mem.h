@@ -309,4 +309,21 @@ struct lift_class { const char *rec; uint32_t size; const struct lift_follow *fo
 /* the frame of a lifted function: its states are cleared when the function returns */
 struct lift_fr { void *p; unsigned long cells; };
 static inline void lift_fr_done(struct lift_fr *f) { __builtin_memset(&SH(f->p), 0, f->cells); }
+
+/* dmult / dmultu: the low half of the 128-bit product is returned, the high half stored */
+static inline uint64_t lift_mul64(uint64_t a, uint64_t b, int sign, uint64_t *hi)
+{
+#ifdef __SIZEOF_INT128__
+    if (sign) { __int128 p = (__int128)(int64_t)a * (int64_t)b; *hi = (uint64_t)(p >> 64); return (uint64_t)p; }
+    { unsigned __int128 p = (unsigned __int128)a * b; *hi = (uint64_t)(p >> 64); return (uint64_t)p; }
+#else
+    uint64_t al = (uint32_t)a, ah = a >> 32, bl = (uint32_t)b, bh = b >> 32;
+    uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    uint64_t mid = (ll >> 32) + (uint32_t)lh + (uint32_t)hl;
+    uint64_t h = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+    if (sign) { if ((int64_t)a < 0) h -= b; if ((int64_t)b < 0) h -= a; }
+    *hi = h;
+    return (mid << 32) | (uint32_t)ll;
+#endif
+}
 #endif

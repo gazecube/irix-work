@@ -27,8 +27,8 @@ from pathlib import Path
 
 here = Path(__file__).resolve().parent
 sys.path.insert(0, str(here))
-from elf_n64 import Elf                                   # noqa: E402
-from n64_types import Layout                              # noqa: E402
+from lift_n64 import Elf                                  # noqa: E402
+from n64_types import Layout, Layout32                    # noqa: E402
 
 
 def klass(d, t):
@@ -43,7 +43,7 @@ def klass(d, t):
     if 'float' in enc:
         return 'f' if size == 4 else 'd' if size == 8 else 'q'      # q: long double, not the IRIX format
     if size >= 8:
-        return 'p'
+        return 'q8' if d.size_of_pointer == 4 else 'p'      # a 64-bit integer where pointers are 4 bytes
     if n['tag'] == 'enumeration_type':
         return 'u4' if size == 4 else 'u%d' % size
     return ('u' if 'unsigned' in enc or 'boolean' in enc or enc.endswith('_UTF)') else 'i') + str(size)
@@ -57,7 +57,7 @@ def scalars(d, t, base, out):
     n = d.nodes[t]
     tag = n['tag']
     if tag in ('pointer_type', 'reference_type'):
-        out.append([base, 8])
+        out.append([base, d.size(t)])
     elif tag in ('base_type', 'enumeration_type'):
         if d.size(t) in (1, 2, 4, 8):
             out.append([base, d.size(t)])
@@ -127,7 +127,9 @@ def main():
     names = sorted({s['name'] for s in e.dynsyms if not s['shndx'] and s['name'] and re.fullmatch(r'[A-Za-z_]\w*', s['name'])})
     tmp = Path(tempfile.mkdtemp(prefix='n64protos', dir=str(Path(outp).resolve().parent)))
     src, obj = tmp / 'probe.c', tmp / 'probe.o'
-    cc = ['gcc', '-m64', '-g', '-O0', '-w', '-fmax-errors=0', '-D_GNU_SOURCE', '-c', str(src), '-o', str(obj)] + ['-I' + i for i in incs]
+    m32 = '--m32' in args
+    cc = ['gcc', '-m32', '-malign-double'] if m32 else ['gcc', '-m64']
+    cc += ['-g', '-O0', '-w', '-fmax-errors=0', '-D_GNU_SOURCE', '-c', str(src), '-o', str(obj)] + ['-I' + i for i in incs]
     for _ in range(8):
         src.write_text(''.join('#include <%s>\n' % h for h in hdrs) +
                        ''.join('__typeof__(&(%s)) P_%s;\n' % (n, n) for n in names))
@@ -145,7 +147,7 @@ def main():
                 sys.stderr.write(r.stderr[:3000])
                 sys.exit('probe does not compile')
         names = [n for n in names if n not in bad]
-    d = Layout(str(obj))
+    d = Layout32(str(obj)) if m32 else Layout(str(obj))
     out = {}
     for n in d.nodes.values():
         if n['tag'] != 'variable' or 'type' not in n['a']:

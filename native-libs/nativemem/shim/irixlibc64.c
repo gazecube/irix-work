@@ -18,6 +18,7 @@
 #include <sys/mman.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pwd.h>
 #include <sched.h>
 #include <stdarg.h>
@@ -39,9 +40,27 @@
  *      (see lift_n64.py).  The whole user address space maps into 16 TB of lazily allocated memory. ------------------------- */
 #include "../../../irix-re/recomp/tools/lift64_mem.h"
 
+/* This file serves both ABIs: built for x86_64 it is the libc of lifted N64 code, built with -m32 that of lifted
+ * N32 code.  Layouts that differ between the two are under ILP32. */
+#if __SIZEOF_POINTER__ == 4
+#define ILP32 1
+uint8_t *lift_sh_base;                              /* 512 MB of lazily allocated memory, wherever there is room */
+#define STP(p, v) ST4((uintptr_t)(p), (uint32_t)(v), 0)     /* store a long or a pointer */
+#define LDP(p, t) LD4((uintptr_t)(p), t)
+#else
+#define ILP32 0
+#define STP(p, v) ST8((uintptr_t)(p), (uint64_t)(v), 0)
+#define LDP(p, t) LD8((uintptr_t)(p), t)
+#endif
+
 __attribute__((constructor(101))) static void shadow_init(void)
 {
+#if ILP32
+    void *p = mmap(0, 1u << 29, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    lift_sh_base = p == MAP_FAILED ? 0 : p;
+#else
     void *p = mmap(SH_BASE, 1ull << 44, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+#endif
     if (p != (void *)SH_BASE) {
         fprintf(stderr, "libc.so.1: cannot map the width shadow at %p\n", (void *)SH_BASE);
         abort();
@@ -429,14 +448,23 @@ int irix_unlink(const char *p) { int r = unlink(p); SETERR(); return r; }
 
 /* ---- struct timeval (N64): 32 bits of padding, the 32-bit tv_sec, then the 64-bit tv_usec.  Sixteen bytes like the
  *      host's, but the seconds are an int in the second half of the first cell. ------------------------------------------- */
+#if ILP32
+struct itimeval { long tv_sec; long tv_usec; };     /* N32: two longs, as on the host */
+#else
 struct itimeval { int pad; int tv_sec; long tv_usec; };
+#endif
 static void put_timeval(struct itimeval *o, const struct timeval *h)
 {
+#if ILP32
+    STP(&o->tv_sec, h->tv_sec);
+    STP(&o->tv_usec, h->tv_usec);
+#else
     o->pad = 0;
     o->tv_sec = (int)h->tv_sec;
     o->tv_usec = h->tv_usec;
     SH(o) = 0x05;                                   /* two 32-bit values */
     SH(&o->tv_usec) = 0x0f;                         /* one 64-bit value */
+#endif
 }
 int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct itimeval *t)
 {
@@ -445,7 +473,7 @@ int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct itimeval *t)
     lift_tag tg;
     if (t) {                                        /* read the way lifted code would: it may have written wider units */
         h.tv_sec = (int)LD4((uintptr_t)&t->tv_sec, &tg);
-        h.tv_usec = (long)LD8((uintptr_t)&t->tv_usec, &tg);
+        h.tv_usec = (long)LDP(&t->tv_usec, &tg);
     }
     x = select(n, r, w, e, t ? &h : 0);
     SETERR();
@@ -462,6 +490,32 @@ int irix_gettimeofday(struct itimeval *t, void *tz)
 
 /* ---- struct stat (N64): dev 0, ino 32, mode 40, nlink 44, uid 48, gid 52, rdev 56, size 80, atim 96, mtim 112, ctim 128,
  *      blksize 144, blocks 152, fstype 160; 240 bytes ------------------------------------------------------------------------ */
+#if ILP32
+/* struct stat (N32): dev 0, ino 16 (64 bits), mode 24, nlink 28, uid 32, gid 36, rdev 40, size 56 (64 bits),
+ * atim 68, mtim 76, ctim 84, blksize 92, blocks 96 (64 bits), fstype 104; 152 bytes */
+static int fill_stat(unsigned char *o, const struct stat *st)
+{
+    static const uint16_t f[] = {0,4, 16,8, 24,4, 28,4, 32,4, 36,4, 40,4, 56,8, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4, 92,4, 96,8, 0xffff};
+    memset(o, 0, 152);
+    sh_clear(o, 152);
+    *(uint32_t *)(o + 0) = (uint32_t)st->st_dev;
+    *(uint64_t *)(o + 16) = st->st_ino;
+    *(uint32_t *)(o + 24) = st->st_mode;
+    *(uint32_t *)(o + 28) = st->st_nlink;
+    *(uint32_t *)(o + 32) = st->st_uid;
+    *(uint32_t *)(o + 36) = st->st_gid;
+    *(uint32_t *)(o + 40) = (uint32_t)st->st_rdev;
+    *(uint64_t *)(o + 56) = (uint64_t)st->st_size;
+    *(uint32_t *)(o + 68) = (uint32_t)st->st_atim.tv_sec; *(uint32_t *)(o + 72) = (uint32_t)st->st_atim.tv_nsec;
+    *(uint32_t *)(o + 76) = (uint32_t)st->st_mtim.tv_sec; *(uint32_t *)(o + 80) = (uint32_t)st->st_mtim.tv_nsec;
+    *(uint32_t *)(o + 84) = (uint32_t)st->st_ctim.tv_sec; *(uint32_t *)(o + 88) = (uint32_t)st->st_ctim.tv_nsec;
+    *(uint32_t *)(o + 92) = (uint32_t)st->st_blksize;
+    *(uint64_t *)(o + 96) = (uint64_t)st->st_blocks;
+    memcpy(o + 104, "xfs", 4);
+    lm_mark((uintptr_t)o, f, 0, 1);               /* 64-bit fields are read in halves too */
+    return 0;
+}
+#else
 static int fill_stat(unsigned char *b, const struct stat *st)
 {
     memset(b, 0, 240);
@@ -481,6 +535,7 @@ static int fill_stat(unsigned char *b, const struct stat *st)
     strcpy((char *)b + 160, "xfs");
     return 0;
 }
+#endif
 int irix_stat(const char *p, unsigned char *buf) { struct stat st; int r = stat(p, &st); SETERR(); return r ? r : fill_stat(buf, &st); }
 int irix_lstat(const char *p, unsigned char *buf) { struct stat st; int r = lstat(p, &st); SETERR(); return r ? r : fill_stat(buf, &st); }
 int irix_fstat(int fd, unsigned char *buf) { struct stat st; int r = fstat(fd, &st); SETERR(); return r ? r : fill_stat(buf, &st); }
@@ -541,8 +596,8 @@ struct irix_direct *BSDreaddir(void *d)
 
 static const char *fq(const char *s)
 {
-    uint64_t v = (uint64_t)(uintptr_t)s;
-    if ((int64_t)v < 0 && ~v < FQ_COUNT)
+    uintptr_t v = (uintptr_t)s;                 /* the top bit marks one: bit 63 in N64, bit 31 in N32 */
+    if ((intptr_t)v < 0 && ~v < FQ_COUNT)
         return irix_fast_quark_names[~v];
     return s;
 }
@@ -617,11 +672,11 @@ int irix_XGetWindowProperty(Display *dpy, Window w, Atom prop, long off, long le
     r = XGetWindowProperty(dpy, w, prop, off, len, del, req, &t, &f, &n, &a, &p);
     if (r == Success && f == 8 && p && !((uintptr_t)p & 7))
         memset(&SH(p), ST_N | (ST_N << 2), malloc_usable_size(p) / 8);
-    if (type) ST8((uintptr_t)type, t, 0);
+    if (type) STP(type, t);
     if (format) ST4((uintptr_t)format, (uint32_t)f, 0);
-    if (nitems) ST8((uintptr_t)nitems, n, 0);
-    if (after) ST8((uintptr_t)after, a, 0);
-    if (data) ST8((uintptr_t)data, (uint64_t)(uintptr_t)p, 0);
+    if (nitems) STP(nitems, n);
+    if (after) STP(after, a);
+    if (data) STP(data, (uintptr_t)p);
     return r;
 }
 int irix_XFree(void *p)
@@ -659,7 +714,7 @@ int irix_XLookupString(XKeyEvent *ev, char *b, int n, KeySym *ks, XComposeStatus
     KeySym k = 0;
     int r = XLookupString(ev, b, n, &k, cs);
     lm_raw(b, r);
-    if (ks) ST8((uintptr_t)ks, k, 0);
+    if (ks) STP(ks, k);
     return r;
 }
 int irix_XmbLookupString(XIC ic, XKeyPressedEvent *ev, char *b, int n, KeySym *ks, Status *st)
@@ -668,18 +723,27 @@ int irix_XmbLookupString(XIC ic, XKeyPressedEvent *ev, char *b, int n, KeySym *k
     Status t = 0;
     int r = XmbLookupString(ic, ev, b, n, &k, &t);
     if (t == XLookupChars || t == XLookupBoth) lm_raw(b, r);
-    if (ks) ST8((uintptr_t)ks, k, 0);
+    if (ks) STP(ks, k);
     if (st) ST4((uintptr_t)st, (uint32_t)t, 0);
     return r;
 }
 
 /* ---- Events.  Xlib fills in the event; its fields get their widths recorded by event type, because lifted code
  *      reads parts of them (the low 16 bits of x and y by 16-bit loads). ------------------------------------------- */
+#if ILP32
+#include "xevent_fields32.inc"
+#else
 #include "xevent_fields.inc"
+#endif
 static void lm_event(XEvent *ev)
 {
+#if ILP32                                           /* the data union starts at 28: five longs or ten shorts */
+    static const uint16_t l5[] = {28,4, 32,4, 36,4, 40,4, 44,4, 0xffff};
+    static const uint16_t s10[] = {28,2, 30,2, 32,2, 34,2, 36,2, 38,2, 40,2, 42,2, 44,2, 46,2, 0xffff};
+#else
     static const uint16_t l5[] = {56,8, 64,8, 72,8, 80,8, 88,8, 0xffff};
     static const uint16_t s10[] = {56,2, 58,2, 60,2, 62,2, 64,2, 66,2, 68,2, 70,2, 72,2, 74,2, 0xffff};
+#endif
     int t = ev->type & 0x7f;
     if (getenv("LIFT_NOEV")) return;
     memset(&SH(ev), 0, sizeof *ev / 8);
@@ -772,8 +836,8 @@ static void __attribute__((constructor)) ctype_init(void)
 static unsigned long tas(unsigned long *p, unsigned long v)
 {
     lift_tag t;
-    unsigned long old = LD8((uintptr_t)p, &t);
-    ST8((uintptr_t)p, v, 0);
+    unsigned long old = LDP(p, &t);
+    STP(p, v);
     return old;
 }
 unsigned long (*__test_and_set)(unsigned long *, unsigned long) = tas;
@@ -806,9 +870,10 @@ char *gettxt(const char *id, const char *dflt) { (void)id; return (char *)dflt; 
 int _doscan(struct ifile *f, const char *fmt, va_list ap) { FILE *h = host_of(f); int r = vfscanf(h, fmt, ap); sync_flags(f, h); return r; }
 int _daemonize(int flags, int fd1, int fd2, int fd3) { (void)flags; (void)fd1; (void)fd2; (void)fd3; return daemon(1, 1); }
 /* sys_errlist: the host's messages; the numbers are not translated yet (IRIX and Linux agree up to 34) */
-char *sys_errlist[152];
-int sys_nerr = 152;
-static void __attribute__((constructor)) errlist_init(void) { int i; for (i = 0; i < 152; i++) sys_errlist[i] = strdup(strerror(i)); }
+/* (under irix_ names: the host libc still carries symbols of the plain names) */
+char *irix_sys_errlist[152];
+int irix_sys_nerr = 152;
+static void __attribute__((constructor)) errlist_init(void) { int i; for (i = 0; i < 152; i++) irix_sys_errlist[i] = strdup(strerror(i)); }
 /* the hardware inventory: empty until it is read from the kernel */
 void *getinvent(void) { return 0; }
 int setinvent(void) { return 0; }
@@ -816,3 +881,22 @@ void endinvent(void) { }
 /* IRIX system calls that belong in the kernel (irix-on-gentoo): not there yet, so they fail with ENOSYS */
 #define TO_KERNEL(name) long name(long a, long b, long c, long d) { static int said; if (!said++) fprintf(stderr, "libc.so.1: %s(%ld, ...) needs the kernel's IRIX call; returning ENOSYS\n", #name, a); (void)b; (void)c; (void)d; errno = ENOSYS; return -1; }
 TO_KERNEL(syssgi) TO_KERNEL(sysmp) TO_KERNEL(schedctl) TO_KERNEL(sysctl)
+
+/* getdtablehi: one more than the highest open descriptor; mkdirp (libgen): mkdir with the missing parents */
+int getdtablehi(void)
+{
+    int fd, hi = 0, n = getdtablesize();
+    if (n > 4096) n = 4096;
+    for (fd = 0; fd < n; fd++) if (fcntl(fd, F_GETFD) != -1) hi = fd + 1;
+    return hi;
+}
+int mkdirp(const char *path, int mode)
+{
+    char buf[4096], *p;
+    size_t n = strlen(path);
+    if (n >= sizeof buf) { errno = ENAMETOOLONG; return -1; }
+    memcpy(buf, path, n + 1);
+    for (p = buf + 1; *p; p++)
+        if (*p == '/') { *p = 0; if (mkdir(buf, (mode_t)mode) && errno != EEXIST) return -1; *p = '/'; }
+    return mkdir(buf, (mode_t)mode) && errno != EEXIST ? -1 : 0;
+}

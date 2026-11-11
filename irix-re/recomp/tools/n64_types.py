@@ -23,12 +23,13 @@ from pathlib import Path
 here = Path(__file__).resolve().parent
 sys.path.insert(0, str(here))
 sys.path.insert(0, str(here.parents[2] / 'native-libs' / 'nativemem' / 'tools'))
-from elf_n64 import Elf                                   # noqa: E402
+from lift_n64 import Elf                                  # noqa: E402  (either ELF class)
 import nm_swap                                            # noqa: E402
 
 
 class Layout(nm_swap.Dwarf):
     """LP64 view of the type tree (the base class was written for N32)."""
+    size_of_pointer = 8
     def size(self, t):
         t = self.strip(t)
         if t is None:
@@ -119,6 +120,23 @@ class Layout(nm_swap.Dwarf):
                     out.append((off, base + self.num(cnt, 'data_member_location', 0), self.size(self.ref(cnt['a']['type'])), pt))
 
 
+class Layout32(Layout):
+    """ILP32 view: pointers are 4 bytes."""
+    size_of_pointer = 4
+    def size(self, t):
+        t = self.strip(t)
+        if t is not None and self.nodes[t]['tag'] in ('pointer_type', 'reference_type', 'subroutine_type'):
+            return 4
+        return Layout.size(self, t)
+
+    def fields(self, t, base, out):
+        k = len(out)
+        Layout.fields(self, t, base, out)
+        st = self.strip(t)
+        if st is not None and self.nodes[st]['tag'] in ('pointer_type', 'reference_type'):
+            out[k:] = [(base, 4)]
+
+
 def main():
     args = sys.argv[1:]
     lib, outp = args[0], args[1]
@@ -129,7 +147,9 @@ def main():
     names = sorted({s['name'] for s in e.dynsyms if s['type'] == 1 and s['shndx'] and re.fullmatch(r'[A-Za-z_]\w*', s['name'])})
     tmp = Path(tempfile.mkdtemp(prefix='n64types', dir=str(Path(outp).resolve().parent)))
     src, obj = tmp / 'probe.c', tmp / 'probe.o'
-    cc = ['gcc', '-m64', '-g', '-O0', '-w', '-fmax-errors=0', '-c', str(src), '-o', str(obj)] + ['-I' + i for i in incs]
+    m32 = '--m32' in args                     # N32 objects: the ILP32 layout of gcc -m32 with 8-byte alignment of doubles
+    cc = ['gcc', '-m32', '-malign-double'] if m32 else ['gcc', '-m64']
+    cc += ['-g', '-O0', '-w', '-fmax-errors=0', '-c', str(src), '-o', str(obj)] + ['-I' + i for i in incs]
     for _ in range(6):
         src.write_text(''.join('#include <%s>\n' % h for h in hdrs) +
                        ''.join('__typeof__(%s) T_%s;\n' % (like.get(n, n), n) for n in names))
@@ -142,7 +162,7 @@ def main():
             sys.stderr.write(r.stderr[:3000])
             sys.exit('probe does not compile')
         names = [n for n in names if n not in bad]
-    d = Layout(str(obj))
+    d = Layout32(str(obj)) if m32 else Layout(str(obj))
     out = {}
     for n in d.nodes.values():
         if n['tag'] != 'variable' or 'type' not in n['a']:
