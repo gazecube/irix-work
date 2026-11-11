@@ -793,3 +793,26 @@ NOT_HERE(__q_gt) NOT_HERE(__q_le) NOT_HERE(__q_lt) NOT_HERE(atold) NOT_HERE(__dc
 /* sgidladd: dlopen that adds the object's symbols to the global scope; sginap: sleep for a number of clock ticks */
 void *sgidladd(const char *path, int mode) { return dlopen(path, mode | RTLD_GLOBAL); }
 long sginap(long ticks) { if (ticks > 0) usleep((useconds_t)ticks * 10000); else sched_yield(); return 0; }
+
+/* what the start-up code of a program asks for: floating-point trap setup from the environment (none here), and
+ * the rest of the BSD directory functions */
+void __readenv_sigfpe(void) { }
+void BSDseekdir(void *d, long pos) { seekdir(d, pos); }
+long BSDtelldir(void *d) { return telldir(d); }
+
+/* ---- Smaller pieces programs ask for ----------------------------------------------------------------------------- */
+int _mplib_get_thread_type(void) { return 0; }                 /* not an MP library thread */
+char *gettxt(const char *id, const char *dflt) { (void)id; return (char *)dflt; }   /* no message catalogues */
+int _doscan(struct ifile *f, const char *fmt, va_list ap) { FILE *h = host_of(f); int r = vfscanf(h, fmt, ap); sync_flags(f, h); return r; }
+int _daemonize(int flags, int fd1, int fd2, int fd3) { (void)flags; (void)fd1; (void)fd2; (void)fd3; return daemon(1, 1); }
+/* sys_errlist: the host's messages; the numbers are not translated yet (IRIX and Linux agree up to 34) */
+char *sys_errlist[152];
+int sys_nerr = 152;
+static void __attribute__((constructor)) errlist_init(void) { int i; for (i = 0; i < 152; i++) sys_errlist[i] = strdup(strerror(i)); }
+/* the hardware inventory: empty until it is read from the kernel */
+void *getinvent(void) { return 0; }
+int setinvent(void) { return 0; }
+void endinvent(void) { }
+/* IRIX system calls that belong in the kernel (irix-on-gentoo): not there yet, so they fail with ENOSYS */
+#define TO_KERNEL(name) long name(long a, long b, long c, long d) { static int said; if (!said++) fprintf(stderr, "libc.so.1: %s(%ld, ...) needs the kernel's IRIX call; returning ENOSYS\n", #name, a); (void)b; (void)c; (void)d; errno = ENOSYS; return -1; }
+TO_KERNEL(syssgi) TO_KERNEL(sysmp) TO_KERNEL(schedctl) TO_KERNEL(sysctl)

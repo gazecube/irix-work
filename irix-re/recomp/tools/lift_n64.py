@@ -125,6 +125,11 @@ def btarget(i):
     return i.addr + 4 + (i.imm << 2)
 
 
+def jtarget(i):
+    """Target of j / jal: 26 bits of word address inside the 256 MB region of the delay slot."""
+    return ((i.addr + 4) & ~0x0fffffff) | ((i.w & 0x03ffffff) << 2)
+
+
 def S32(x):
     return '(uint64_t)(int64_t)(int32_t)(%s)' % x
 
@@ -162,6 +167,16 @@ class Image:
             end = min(order[k + 1] if k + 1 < len(order) else self.thi, sec['addr'] + sec['size'])
             self.funcs.append((a, end - a))
         self.fstart = {a: 'f_%08x' % a for a, _ in self.funcs}
+        # A program is linked at a fixed address, so its data pointers carry no relocations.  Every aligned word
+        # of the initialised data that holds an address of the program is taken for a pointer.
+        if e.etype == 2:
+            for sec in data:
+                if sec['type'] == 8:              # no contents (bss)
+                    continue
+                for a in range((sec['addr'] + 7) & ~7, sec['addr'] + sec['size'] - 7, 8):
+                    v = e.dword(a)
+                    if self.data_lo <= v < self.hi or (v % 4 == 0 and self.in_text(v)):
+                        self.rel.setdefault(a, 0)
         # words in the data that point into the middle of a function: jump table targets
         self.inner = defaultdict(set)         # function start -> target addresses
         import bisect
@@ -902,6 +917,8 @@ class Lifter:
                 raise Unsupported('control transfer without delay slot')
             if is_branch(i) and self.addr <= btarget(i) < self.end:
                 self.labels.add(btarget(i))
+            if i.op == 2 and self.addr <= jtarget(i) < self.end:
+                self.labels.add(jtarget(i))
         body = []
         k = 0
         # PIC entry convention: $t9 holds the function's own address, from which a function without a frame
@@ -975,8 +992,17 @@ class Lifter:
                     cases = ''.join(' case 0x%xull: goto L_%x;' % (t, t) for t in sorted(img.inner.get(self.addr, ())))
                     body.append('    { uint64_t t_ = %s; %s switch (XO(t_)) {%s default: %s } }' % (
                         self.R(i.rs), ds, cases, self.tail('t_' if name else 'XL(t_)', name)))
-            else:
-                raise Unsupported('j/jal')
+            elif i.op == 3:                      # jal: programs call their own functions this way
+                t = jtarget(i)
+                if t not in img.fstart:
+                    raise Unsupported('jal into a function')
+                ds = self.stmt(d) or ''
+                body.append('    %s %s' % (ds, self.call(img.addr_c(t))))
+                self.const = {}
+                self.symreg = {}
+            else:                                # j
+                ds = self.stmt(d) or ''
+                body.append('    %s %s' % (ds, self.goto(jtarget(i))))
             k += 2
             if d.addr in self.labels:            # something branches to the delay slot itself
                 self.const = {}
