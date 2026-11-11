@@ -26,6 +26,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
@@ -33,8 +34,7 @@
 
 /* ---- width shadow: one byte per 8-byte memory cell, set while the cell holds one 64-bit value written by lifted code
  *      (see lift_n64.py).  The whole user address space maps into 16 TB of lazily allocated memory. ------------------------- */
-#define SH_BASE ((unsigned char *)0x200000000000ull)
-#define SH(a) (SH_BASE[(uint64_t)(uintptr_t)(a) >> 3])
+#include "../../../irix-re/recomp/tools/lift64_mem.h"
 
 __attribute__((constructor(101))) static void shadow_init(void)
 {
@@ -70,19 +70,138 @@ void *irix_realloc(void *p, size_t n)
     free(save);
     return q;
 }
-/* copies carry the marks of whole cells when source and destination are aligned alike */
-static void sh_copy(void *d, const void *s, size_t n)
+/* Block operations follow the states.  Whole cells move with their shadow when source and destination are aligned
+ * alike (a structure keeps its native layout); anything else goes byte by byte through the state-aware accessors,
+ * which is what the big-endian machine's memcpy does.  Memory that lifted code never wrote takes the native path. */
+static int sh_clean(const void *p, size_t n)
 {
-    if ((((uintptr_t)d ^ (uintptr_t)s) & 7) == 0 && !((uintptr_t)d & 7))
-        memmove(&SH(d), &SH(s), (n + 7) / 8);
-    else
-        sh_clear(d, n);
+    const unsigned char *a = &SH(p), *e = &SH((const char *)p + n - 1) + 1;
+    if (!n) return 1;
+    if (e - a <= 16) { while (a < e) if (*a++) return 0; return 1; }
+    return a[0] == 0 && !memcmp(a, a + 1, (size_t)(e - a) - 1);
 }
-void *irix_memcpy(void *d, const void *s, size_t n) { sh_copy(d, s, n); return memcpy(d, s, n); }
-void *irix_memmove(void *d, const void *s, size_t n) { sh_copy(d, s, n); return memmove(d, s, n); }
-void irix_bcopy(const void *s, void *d, size_t n) { sh_copy(d, s, n); memmove(d, s, n); }
-void *irix_memset(void *d, int c, size_t n) { sh_clear(d, n); return memset(d, c, n); }
-void irix_bzero(void *d, size_t n) { sh_clear(d, n); memset(d, 0, n); }
+static void bytes_fwd(unsigned char *d, const unsigned char *s, size_t n) { size_t i; for (i = 0; i < n; i++) ST1((uintptr_t)(d + i), LD1((uintptr_t)(s + i))); }
+static void bytes_back(unsigned char *d, const unsigned char *s, size_t n) { while (n--) ST1((uintptr_t)(d + n), LD1((uintptr_t)(s + n))); }
+static void *lm_move(void *dv, const void *sv, size_t n)
+{
+    unsigned char *d = dv;
+    const unsigned char *s = sv;
+    size_t head, mid;
+    if (!n || d == s) return dv;
+    if (sh_clean(s, n) && sh_clean(d, n)) return memmove(dv, sv, n);
+    if ((((uintptr_t)d ^ (uintptr_t)s) & 7) || n < 8) {
+        if (d < s || d >= s + n) bytes_fwd(d, s, n); else bytes_back(d, s, n);
+        return dv;
+    }
+    head = (size_t)(-(uintptr_t)d & 7);
+    if (head > n) head = n;
+    mid = (n - head) & ~(size_t)7;
+    if (d < s || d >= s + n) {
+        bytes_fwd(d, s, head);
+        memmove(d + head, s + head, mid);
+        memmove(&SH(d + head), &SH(s + head), mid / 8);
+        bytes_fwd(d + head + mid, s + head + mid, n - head - mid);
+    } else {
+        bytes_back(d + head + mid, s + head + mid, n - head - mid);
+        memmove(d + head, s + head, mid);
+        memmove(&SH(d + head), &SH(s + head), mid / 8);
+        bytes_back(d, s, head);
+    }
+    return dv;
+}
+void *irix_memcpy(void *d, const void *s, size_t n) { return lm_move(d, s, n); }
+void *irix_memmove(void *d, const void *s, size_t n) { return lm_move(d, s, n); }
+void irix_bcopy(const void *s, void *d, size_t n) { lm_move(d, s, n); }
+void *irix_memset(void *dv, int c, size_t n)
+{
+    unsigned char *d = dv;
+    size_t head, mid, i;
+    if (sh_clean(d, n)) return memset(dv, c, n);
+    head = (size_t)(-(uintptr_t)d & 7);
+    if (head > n) head = n;
+    mid = (n - head) & ~(size_t)7;
+    for (i = 0; i < head; i++) ST1((uintptr_t)(d + i), (uint8_t)c);
+    memset(d + head, c, mid);
+    memset(&SH(d + head), 0, mid / 8);
+    for (i = head + mid; i < n; i++) ST1((uintptr_t)(d + i), (uint8_t)c);
+    return dv;
+}
+void irix_bzero(void *d, size_t n) { irix_memset(d, 0, n); }
+int irix_memcmp(const void *av, const void *bv, size_t n)
+{
+    const unsigned char *a = av, *b = bv;
+    size_t i;
+    if (sh_clean(a, n) && sh_clean(b, n)) return memcmp(av, bv, n);
+    for (i = 0; i < n; i++) {
+        int x = LD1((uintptr_t)(a + i)), y = LD1((uintptr_t)(b + i));
+        if (x != y) return x - y;
+    }
+    return 0;
+}
+int irix_bcmp(const void *a, const void *b, size_t n) { return irix_memcmp(a, b, n) != 0; }
+
+/* String functions: a string is bytes, but its storage may have been written in wider units (a byte table that the
+ * data conversion took for words, a buffer filled by word stores).  Read through the states when the shadow says so. */
+static size_t lm_strlen(const char *p)
+{
+    size_t n = 0;
+    for (;;) {
+        if (SH(p + n) == 0) {                       /* the rest of this cell is plain bytes */
+            do { if (!p[n]) return n; n++; } while ((uintptr_t)(p + n) & 7);
+        } else {
+            if (!LD1((uintptr_t)(p + n))) return n;
+            n++;
+        }
+    }
+}
+static const char *lm_plain(const char *p, size_t n, char **tmp)      /* n bytes of p as plain bytes */
+{
+    size_t i;
+    *tmp = 0;
+    if (sh_clean(p, n)) return p;
+    *tmp = malloc(n + 1);
+    for (i = 0; i < n; i++) (*tmp)[i] = (char)LD1((uintptr_t)(p + i));
+    (*tmp)[n] = 0;
+    return *tmp;
+}
+size_t irix_strlen(const char *p) { return lm_strlen(p); }
+int irix_strcmp(const char *a, const char *b)
+{
+    char *ta, *tb;
+    int r = strcmp(lm_plain(a, lm_strlen(a) + 1, &ta), lm_plain(b, lm_strlen(b) + 1, &tb));
+    free(ta); free(tb);
+    return r;
+}
+int irix_strncmp(const char *a, const char *b, size_t n)
+{
+    char *ta, *tb;
+    size_t la = lm_strlen(a) + 1, lb = lm_strlen(b) + 1;
+    int r = strncmp(lm_plain(a, la < n ? la : n, &ta), lm_plain(b, lb < n ? lb : n, &tb), n);
+    free(ta); free(tb);
+    return r;
+}
+char *irix_strcpy(char *d, const char *s) { lm_move(d, s, lm_strlen(s) + 1); return d; }
+char *irix_strcat(char *d, const char *s) { lm_move(d + lm_strlen(d), s, lm_strlen(s) + 1); return d; }
+char *irix_strncpy(char *d, const char *s, size_t n)
+{
+    size_t l = lm_strlen(s);
+    if (l >= n) { lm_move(d, s, n); return d; }
+    lm_move(d, s, l + 1);
+    irix_memset(d + l + 1, 0, n - l - 1);
+    return d;
+}
+char *irix_strchr(const char *p, int c)
+{
+    size_t i, n = lm_strlen(p);
+    for (i = 0; i <= n; i++) if (LD1((uintptr_t)(p + i)) == (uint8_t)c) return (char *)p + i;
+    return 0;
+}
+char *irix_strrchr(const char *p, int c)
+{
+    size_t n = lm_strlen(p) + 1;
+    while (n--) if (LD1((uintptr_t)(p + n)) == (uint8_t)c) return (char *)p + n;
+    return 0;
+}
 
 /* ---- errno --------------------------------------------------------------------------------------------------------- */
 int irix_errno;                                     /* the `errno` variable of code that was built without threads */
@@ -237,7 +356,39 @@ long irix_write(int fd, const void *b, size_t n) { long r = write(fd, b, n); SET
 int irix_close(int fd) { int r = close(fd); SETERR(); return r; }
 int irix_access(const char *p, int m) { int r = access(p, m); SETERR(); return r; }
 int irix_unlink(const char *p) { int r = unlink(p); SETERR(); return r; }
-int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) { int x = select(n, r, w, e, t); SETERR(); return x; }
+
+/* ---- struct timeval (N64): 32 bits of padding, the 32-bit tv_sec, then the 64-bit tv_usec.  Sixteen bytes like the
+ *      host's, but the seconds are an int in the second half of the first cell. ------------------------------------------- */
+struct itimeval { int pad; int tv_sec; long tv_usec; };
+static void put_timeval(struct itimeval *o, const struct timeval *h)
+{
+    o->pad = 0;
+    o->tv_sec = (int)h->tv_sec;
+    o->tv_usec = h->tv_usec;
+    SH(o) = 0x05;                                   /* two 32-bit values */
+    SH(&o->tv_usec) = 0x0f;                         /* one 64-bit value */
+}
+int irix_select(int n, fd_set *r, fd_set *w, fd_set *e, struct itimeval *t)
+{
+    struct timeval h;
+    int x;
+    lift_tag tg;
+    if (t) {                                        /* read the way lifted code would: it may have written wider units */
+        h.tv_sec = (int)LD4((uintptr_t)&t->tv_sec, &tg);
+        h.tv_usec = (long)LD8((uintptr_t)&t->tv_usec, &tg);
+    }
+    x = select(n, r, w, e, t ? &h : 0);
+    SETERR();
+    return x;
+}
+int irix_gettimeofday(struct itimeval *t, void *tz)
+{
+    struct timeval h;
+    int x = gettimeofday(&h, 0);
+    (void)tz;
+    if (t) put_timeval(t, &h);
+    return x;
+}
 
 /* ---- struct stat (N64): dev 0, ino 32, mode 40, nlink 44, uid 48, gid 52, rdev 56, size 80, atim 96, mtim 112, ctim 128,
  *      blksize 144, blocks 152, fstype 160; 240 bytes ------------------------------------------------------------------------ */
