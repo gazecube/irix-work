@@ -272,4 +272,13 @@ static inline void lm_mark(uintptr_t a, const uint16_t *f)
             SH(c) = (uint8_t)((s & ~(3u << (2 * h))) | (ST_N << (2 * h)) | (0x10u << q));
     }
 }
+
+/* A typed class record of a lifted library, and the counted tables it points to.  A class record that native code
+ * defines starts with the layout of its superclass's record; lift_native_class (libc layer) gives it those widths. */
+struct lift_follow { uint16_t ptr, count, count_size, elem_size; const uint16_t *fields; };
+struct lift_class { const char *rec; uint32_t size; const struct lift_follow *follow; uint32_t nfollow; };
+
+/* the frame of a lifted function: its states are cleared when the function returns */
+struct lift_fr { void *p; unsigned long cells; };
+static inline void lift_fr_done(struct lift_fr *f) { __builtin_memset(&SH(f->p), 0, f->cells); }
 #endif

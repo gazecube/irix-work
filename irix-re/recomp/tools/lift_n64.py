@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """Lift a linked IRIX N64 shared library to native x86_64 C + assembler.
 
-    lift_n64.py LIB.so OUTDIR [--name NAME]
+    lift_n64.py LIB.so OUTDIR [--name NAME] [--types FILE] [--like A=B] [--protos FILE] [--wrapped FILE]
+                              [--lifted OTHER.so] [--hook FUNCTION=NATIVE]
+
+    --types    field layouts of the exported data (n64_types.py)
+    --protos   prototypes of the imported functions (n64_protos.py): native functions get narrow results extended,
+               floating point passed their way, and the objects their pointer arguments name prepared and marked
+    --wrapped  names the libc layer provides itself; it looks after their arguments
+    --lifted   another IRIX library that is lifted as well: its functions are lifted functions, not native ones
+    --hook     call NATIVE(a0) on entry to the exported FUNCTION
 
 N64 is LP64 like x86_64, so the lifted code uses the machine's own pointers and struct layouts:
   * every register is a uint64_t local; 32-bit instructions sign-extend their result as on MIPS;
@@ -21,6 +29,7 @@ structures copied eight bytes at a time).  Every load and store of lifted code g
 keeps one shadow byte per 8-byte cell saying how the cell was last written and answers a mismatching access the
 way the big-endian machine would; see that file.  Frames are cleared on entry, the initial data gets the states
 it was converted with, and the libc layer maps the shadow, clears it for freed memory and copies it in memcpy.
+Frames are cleared again on return: native frames use the same stack and pass pointers into it.
 """
 import json
 import re
@@ -155,6 +164,8 @@ class Image:
         self.syms = {}                        # external name -> C identifier
         self.protos = dict(SHIM_PROTOS)       # imported function -> {'ret': class, 'args': [classes]}
         self.marks = {}                       # field layout -> name of its lm_mark table
+        self.class_recs = []                  # typed class records: (address, size, follow list)
+        self.hooks = {}                       # function address -> native function called on entry with a0
         self.typed = {}                       # data address -> size of the scalar field that starts there
         self.covered = set()                  # 8-byte-aligned chunks that lie inside typed data
 
@@ -192,6 +203,8 @@ class Image:
                 todo.append(e.dword(base))        # widgetClass and friends: a pointer to a class record
             mark(base, min(t['size'], sym['size'] or t['size']), [f for f in t['fields'] if not sym['size'] or f[0] < sym['size']])
             n += 1
+            if sym['name'].endswith('ClassRec'):
+                self.class_recs.append((base, min(t['size'], sym['size'] or t['size']), t['follow']))
             if sym['name'].endswith('ClassRec') and base in self.rel:
                 todo.append(e.dword(base))        # the superclass
             for f in t['follow']:
@@ -219,6 +232,7 @@ class Image:
             if not (self.data_lo <= base < self.hi) or base in self.typed:
                 continue
             mark(base, t['size'], t['fields'])
+            self.class_recs.append((base, t['size'], t['follow']))
             n += 1
             f = t['follow'][0]
             tgt = e.dword(base + f['ptr'])
@@ -937,6 +951,8 @@ class Lifter:
         out = [PROTO % self.name, '{']
         out.append('    uint64_t ' + ', '.join('r%d = 0' % n for n in range(1, 32) if n not in (28, 29)) + ', lo = 0, hi = 0;')
         out.append('    (void)lo; (void)hi; ' + ' '.join('r%d = a%d;' % (4 + k, k) for k in range(NARGS)))
+        if self.addr in self.img.hooks:
+            out.append('    %s(a0);' % self.img.hooks[self.addr])
         nst = VA_SLOTS if self.va else self.nstack
         if nst:
             out.append('    uint64_t ' + ', '.join('s%d' % k for k in range(nst)) + ';')
@@ -947,6 +963,11 @@ class Lifter:
         else:
             out.append('    uint8_t frame[%d] __attribute__((aligned(16))); (void)frame;' % max(self.fsize, 16))
         out.append('    __builtin_memset(&SH(frame), 0, %d);' % ((max(self.fsize, 16) + 7) // 8))
+        # and no states left behind: native frames use the same stack and hand out pointers into it
+        if self.dyn:
+            out.append('    struct lift_fr fr_ __attribute__((cleanup(lift_fr_done))) = {fbuf_, %d}; (void)fr_;' % ((DYN_RESERVE + max(self.fsize, 16) + 7) // 8))
+        else:
+            out.append('    struct lift_fr fr_ __attribute__((cleanup(lift_fr_done))) = {frame, %d}; (void)fr_;' % ((max(self.fsize, 16) + 7) // 8))
         out.append('    lift_tag tx = 0' + ''.join(', t%d = 0' % n for n in sorted(self.tagged)) + '; (void)tx;')
         if self.va:
             out.append('    ' + ' '.join('*(uint64_t *)(frame + %d) = s%d; SH(frame + %d) = ST_Q;' % (F + 8 * k, k, F + 8 * k) for k in range(VA_SLOTS)))
@@ -1093,10 +1114,22 @@ def main():
     img = Image(path, name)
     if '--protos' in args:
         img.protos.update(json.loads(Path(args[args.index('--protos') + 1]).read_text()))
+    for i, a in enumerate(args):
+        if a == '--lifted':                   # --lifted LIB.so: an IRIX library that is lifted too; its functions are
+            for x in Elf(args[i + 1]).dynsyms:    # called like any lifted function, not like native ones
+                if x['shndx'] and x['name']:
+                    img.protos.pop(x['name'], None)
     if '--wrapped' in args:
         # functions the libc layer provides itself take IRIX layouts and look after the memory states themselves
         for n in Path(args[args.index('--wrapped') + 1]).read_text().split():
             img.protos.get(n, {}).pop('ptr', None)
+    for i, a in enumerate(args):
+        if a == '--hook':                     # --hook FUNCTION=NATIVE: call NATIVE(a0) on entry to the exported FUNCTION
+            fn, native = args[i + 1].split('=')
+            hit = [x['value'] for x in img.elf.dynsyms if x['name'] == fn and x['shndx']]
+            if not hit or hit[0] not in img.fstart:
+                sys.exit('--hook: %s is not a function of this object' % fn)
+            img.hooks[hit[0]] = native
     if '--types' in args:
         print('typed records: %d' % img.load_types(args[args.index('--types') + 1], [args[i + 1] for i, a in enumerate(args) if a == '--like']))
     bodies, failed = [], []
@@ -1137,8 +1170,25 @@ def main():
         w.write('extern char __tramp_%s[] __attribute__((visibility("hidden")));\n' % name)
         w.write('extern int mprotect(void *, unsigned long, int);\n'
                 'static void __attribute__((constructor(102))) lift_tramp_%s(void) { mprotect(__tramp_%s, (unsigned long)(IMG - __tramp_%s), 5); }\n' % (name, name, name))
+        # the typed class records, for native classes derived from them (lift_native_class in the libc layer)
+        rows = []
+        for k, (base, size, follow) in enumerate(sorted(img.class_recs)):
+            fl = ', '.join('{%d, %d, %d, %d, %s}' % (f['ptr'], f['count'], f['count_size'], f['elem_size'],
+                                                      img.mark_table([x for x in f['fields'] if x[1] > 1])) for f in follow)
+            rows.append((k, base, size, len(follow), fl))
+        for h in sorted(set(img.hooks.values())):
+            w.write('extern void %s(uint64_t);\n' % h)
         for key, nm in img.marks.items():
             w.write('static const uint16_t %s[] = {%s 0xffff};\n' % (nm, ''.join('%d,%d, ' % f for f in key)))
+        for k, base, size, nf, fl in rows:
+            if nf:
+                w.write('static const struct lift_follow lcf_%d[] = {%s};\n' % (k, fl))
+        w.write('static const struct lift_class lc_tab[] = {\n')
+        for k, base, size, nf, fl in rows:
+            w.write('    {(const char *)(uintptr_t)%s, %d, %s, %d},\n' % (img.addr_c(base), size, 'lcf_%d' % k if nf else '0', nf))
+        w.write('    {0, 0, 0, 0}\n};\n')
+        w.write('extern void lift_class_register(const struct lift_class *, unsigned) __attribute__((weak));\n'
+                'static void __attribute__((constructor(103))) lift_classes_%s(void) { if (lift_class_register) lift_class_register(lc_tab, %d); }\n' % (name, len(rows)))
         for b in bodies:
             w.write(b + '\n\n')
         for s in e.dynsyms:

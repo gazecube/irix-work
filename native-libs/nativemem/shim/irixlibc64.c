@@ -73,8 +73,8 @@ void *irix_realloc(void *p, size_t n)
     return q;
 }
 /* Block operations follow the states.  Whole cells move with their shadow when source and destination are aligned
- * alike (a structure keeps its native layout); anything else goes byte by byte through the state-aware accessors,
- * which is what the big-endian machine's memcpy does.  Memory that lifted code never wrote takes the native path. */
+ * alike (a structure keeps its native layout); anything else is copied unit by unit (units_fwd).  Memory that lifted
+ * code never wrote takes the native path. */
 static int sh_clean(const void *p, size_t n)
 {
     const unsigned char *a = &SH(p), *e = &SH((const char *)p + n - 1) + 1;
@@ -82,8 +82,60 @@ static int sh_clean(const void *p, size_t n)
     if (e - a <= 16) { while (a < e) if (*a++) return 0; return 1; }
     return a[0] == 0 && !memcmp(a, a + 1, (size_t)(e - a) - 1);
 }
-static void bytes_fwd(unsigned char *d, const unsigned char *s, size_t n) { size_t i; for (i = 0; i < n; i++) ST1((uintptr_t)(d + i), LD1((uintptr_t)(s + i))); }
-static void bytes_back(unsigned char *d, const unsigned char *s, size_t n) { while (n--) ST1((uintptr_t)(d + n), LD1((uintptr_t)(s + n))); }
+/* Copy unit by unit: a native 64-, 32- or 16-bit value of the source stays one in the destination when the
+ * destination is aligned for it, memory lifted code never wrote is copied as it is and stays unmarked, and the rest
+ * goes byte by byte through the accessors (the big-endian machine's view). */
+static void units_fwd(unsigned char *d, const unsigned char *s, size_t n)
+{
+    while (n) {
+        uintptr_t sa = (uintptr_t)s, da = (uintptr_t)d;
+        unsigned st = SH(sa), h = (sa >> 2) & 1, code = (st >> (2 * h)) & 3, u = 1;
+        if (!(sa & 7) && n >= 8 && (st == 0 || (st & 0x0f) == ST_Q)) {
+            if (!(da & 7)) {
+                LM64(da) = LM64(sa);
+                SH(da) = (uint8_t)st;
+                u = 8;
+            } else if (st == 0 && !(da & 3)) {
+                code = ST_U;                                   /* as two unmarked halves, below */
+            }
+        }
+        if (u == 1 && !(sa & 3) && n >= 4 && !(da & 3) && (st & 0x0f) != ST_Q && code != ST_N) {
+            uintptr_t c = da & ~(uintptr_t)7;
+            unsigned dh = (da >> 2) & 1;
+            if (code == ST_W) {
+                ST4(da, LM32(sa), 0);
+            } else {
+                if ((SH(c) & 0x0f) == ST_Q) lm_split_q(c);
+                LM32(da) = LM32(sa);
+                SH(c) = (uint8_t)(SH(c) & ~((3u << (2 * dh)) | (3u << (4 + 2 * dh))));
+            }
+            u = 4;
+        }
+        if (u == 1 && !(sa & 1) && n >= 2 && !(da & 1) && (st & 0x0f) != ST_Q && code == ST_N && (st & (0x10u << ((sa >> 1) & 3)))) {
+            ST2(da, LM16(sa), 0);
+            u = 2;
+        }
+        if (u == 1)
+            ST1(da, LD1(sa));
+        d += u; s += u; n -= u;
+    }
+}
+static void units_move(unsigned char *d, const unsigned char *s, size_t n)
+{
+    if (d < s || d >= s + n) {
+        units_fwd(d, s, n);
+    } else {                                                   /* overlapping upwards: through a copy laid out like the source */
+        size_t lead = (uintptr_t)s & 7, cells = (lead + n + 7) / 8;
+        unsigned char *raw = 0, *t;
+        if (posix_memalign((void **)&raw, 8, cells * 8)) abort();
+        t = raw + lead;
+        memcpy(raw, s - lead, cells * 8);
+        memcpy(&SH(raw), &SH(s), cells);
+        units_fwd(d, t, n);
+        memset(&SH(raw), 0, cells);
+        free(raw);
+    }
+}
 static void *lm_move(void *dv, const void *sv, size_t n)
 {
     unsigned char *d = dv;
@@ -92,22 +144,22 @@ static void *lm_move(void *dv, const void *sv, size_t n)
     if (!n || d == s) return dv;
     if (sh_clean(s, n) && sh_clean(d, n)) return memmove(dv, sv, n);
     if ((((uintptr_t)d ^ (uintptr_t)s) & 7) || n < 8) {
-        if (d < s || d >= s + n) bytes_fwd(d, s, n); else bytes_back(d, s, n);
+        units_move(d, s, n);
         return dv;
     }
+    /* aligned alike: whole cells move with their shadow */
     head = (size_t)(-(uintptr_t)d & 7);
-    if (head > n) head = n;
     mid = (n - head) & ~(size_t)7;
     if (d < s || d >= s + n) {
-        bytes_fwd(d, s, head);
+        units_fwd(d, s, head);
         memmove(d + head, s + head, mid);
         memmove(&SH(d + head), &SH(s + head), mid / 8);
-        bytes_fwd(d + head + mid, s + head + mid, n - head - mid);
+        units_fwd(d + head + mid, s + head + mid, n - head - mid);
     } else {
-        bytes_back(d + head + mid, s + head + mid, n - head - mid);
+        units_move(d + head + mid, s + head + mid, n - head - mid);
         memmove(d + head, s + head, mid);
         memmove(&SH(d + head), &SH(s + head), mid / 8);
-        bytes_back(d, s, head);
+        units_move(d, s, head);
     }
     return dv;
 }
@@ -460,19 +512,20 @@ int irix_getpwuid_r(int u, struct ipasswd *o, char *buf, size_t len, struct ipas
 }
 
 /* ---- BSD directory reading: ino 8, off 8, reclen 2, name at 18 --------------------------------------------------------------- */
-struct irix_dirent { uint64_t d_ino; int64_t d_off; unsigned short d_reclen; char d_name[256]; };
+/* struct direct of <sys/dir.h> (BSD): inode, record length, name length, name */
+struct irix_direct { uint64_t d_ino; unsigned short d_reclen, d_namlen; char d_name[256]; };
 void *BSDopendir(const char *p) { return opendir(p); }
 int BSDclosedir(void *d) { return closedir(d); }
-struct irix_dirent *BSDreaddir(void *d)
+struct irix_direct *BSDreaddir(void *d)
 {
-    static __thread struct irix_dirent e;
+    static __thread struct irix_direct e;
     struct dirent *h = readdir(d);
     if (!h) return 0;
     e.d_ino = h->d_ino;
-    e.d_off = h->d_off;
     strncpy(e.d_name, h->d_name, sizeof e.d_name - 1);
     e.d_name[sizeof e.d_name - 1] = 0;
-    e.d_reclen = (unsigned short)(18 + strlen(e.d_name) + 1);
+    e.d_namlen = (unsigned short)strlen(e.d_name);
+    e.d_reclen = (unsigned short)((12 + e.d_namlen + 1 + 7) & ~7);
     return &e;
 }
 
@@ -635,3 +688,46 @@ int irix_XWindowEvent(Display *d, Window w, long m, XEvent *ev) { int r = XWindo
 int irix_XIfEvent(Display *d, XEvent *ev, Bool (*p)(Display *, XEvent *, XPointer), XPointer a) { int r = XIfEvent(d, ev, p, a); lm_event(ev); return r; }
 Bool irix_XCheckIfEvent(Display *d, XEvent *ev, Bool (*p)(Display *, XEvent *, XPointer), XPointer a) { Bool r = XCheckIfEvent(d, ev, p, a); if (r) lm_event(ev); return r; }
 Bool irix_XCheckMaskEvent(Display *d, long m, XEvent *ev) { Bool r = XCheckMaskEvent(d, m, ev); if (r) lm_event(ev); return r; }
+
+/* ---- Class records that native code defines (a widget class compiled from source and linked with the lifted Xt).
+ *      Lifted code reads parts of their fields (the low half of num_actions by a 16-bit load), so they need the
+ *      field widths that the lifted libraries' own records have from their typed initial data.  A class record starts
+ *      with the layout of its superclass's record: the widths are copied from there, and the resource tables get
+ *      theirs.  The lifted XtInitializeWidgetClass calls this on entry (lift_n64.py --hook). ------------------------ */
+static struct lift_class *lc_all;
+static unsigned lc_n, lc_cap;
+static void lc_add(const struct lift_class *c)
+{
+    if (lc_n == lc_cap) lc_all = realloc(lc_all, (lc_cap = lc_cap ? 2 * lc_cap : 512) * sizeof *lc_all);
+    lc_all[lc_n++] = *c;
+}
+void lift_class_register(const struct lift_class *t, unsigned n) { while (n--) lc_add(t++); }
+static const struct lift_class *lc_find(const char *rec)
+{
+    unsigned i;
+    for (i = 0; i < lc_n; i++) if (lc_all[i].rec == rec) return &lc_all[i];
+    return 0;
+}
+void lift_native_class(uint64_t wc)
+{
+    char *rec = (char *)(uintptr_t)wc, *super;
+    const struct lift_class *sc;
+    struct lift_class me;
+    unsigned i, k;
+    if (!rec || ((uintptr_t)rec & 7) || SH(rec) || lc_find(rec)) return;
+    super = *(char **)rec;
+    if (!super) return;
+    if (!lc_find(super)) lift_native_class((uint64_t)(uintptr_t)super);
+    if (!(sc = lc_find(super))) return;
+    memcpy(&SH(rec), &SH(super), sc->size / 8);
+    for (i = 0; i < sc->nfollow; i++) {
+        const struct lift_follow *f = &sc->follow[i];
+        char *tab = *(char **)(rec + f->ptr);
+        unsigned n = f->count_size == 4 ? *(unsigned *)(rec + f->count) : *(unsigned short *)(rec + f->count);
+        if (!tab || n >= 4096 || SH(tab)) continue;
+        for (k = 0; k < n; k++) lm_mark((uintptr_t)(tab + k * f->elem_size), f->fields);
+    }
+    me = *sc;
+    me.rec = rec;
+    lc_add(&me);
+}
