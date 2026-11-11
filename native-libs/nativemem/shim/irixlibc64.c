@@ -735,3 +735,19 @@ void lift_native_class(uint64_t wc)
     me.rec = rec;
     lc_add(&me);
 }
+
+/* ---- Bitmap data is a byte stream: taken through the states like a format 8 property ---------------------------- */
+Pixmap irix_XCreateBitmapFromData(Display *d, Drawable w, const char *data, unsigned wd, unsigned ht)
+{
+    char *tmp;
+    Pixmap p = XCreateBitmapFromData(d, w, lm_plain(data, (size_t)((wd + 7) / 8) * ht, &tmp), wd, ht);
+    free(tmp);
+    return p;
+}
+Pixmap irix_XCreatePixmapFromBitmapData(Display *d, Drawable w, char *data, unsigned wd, unsigned ht, unsigned long fg, unsigned long bg, unsigned depth)
+{
+    char *tmp;
+    Pixmap p = XCreatePixmapFromBitmapData(d, w, (char *)lm_plain(data, (size_t)((wd + 7) / 8) * ht, &tmp), wd, ht, fg, bg, depth);
+    free(tmp);
+    return p;
+}
