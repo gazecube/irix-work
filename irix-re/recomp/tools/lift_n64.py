@@ -154,8 +154,16 @@ class Image:
                     self.inner[order[k]].add(v)
         self.syms = {}                        # external name -> C identifier
         self.protos = dict(SHIM_PROTOS)       # imported function -> {'ret': class, 'args': [classes]}
+        self.marks = {}                       # field layout -> name of its lm_mark table
         self.typed = {}                       # data address -> size of the scalar field that starts there
         self.covered = set()                  # 8-byte-aligned chunks that lie inside typed data
+
+    def mark_table(self, fields):
+        """Name of the field-width table for lm_mark (emitted once per distinct layout)."""
+        key = tuple(tuple(f) for f in fields)
+        if key not in self.marks:
+            self.marks[key] = 'lmf_%d' % len(self.marks)
+        return self.marks[key]
 
     def load_types(self, path, like=()):
         """Field layouts from n64_types.py: exported records, and the counted tables they point to.  `like` gives
@@ -363,6 +371,20 @@ class Lifter:
 
     def call1(self, target, name=None):
         proto = self.img.protos.get(name) if name else None
+        if proto and proto.get('ptr'):
+            pre, post = [], []
+            for k, size, fields in proto['ptr']:
+                # an object without a field list (a union such as XEvent) is left alone: the libc layer wraps the
+                # functions that fill one in
+                if k >= 8 + self.out_slots or not fields:
+                    continue
+                a = 'r%d' % (4 + k) if k < 8 else self.outarg(k - 8)
+                pre.append('lm_native((uintptr_t)%s, %d); uintptr_t p%d_ = (uintptr_t)%s;' % (a, size, k, a))
+                post.append('lm_mark((uintptr_t)p%d_, %s);' % (k, self.img.mark_table(fields)))
+            return '{ %s %s %s }' % (' '.join(pre), self.call2(target, proto), ' '.join(post))
+        return self.call2(target, proto)
+
+    def call2(self, target, proto):
         if proto and self.fp and (proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
             st = self.typed_call(target, proto)
             if st:
@@ -373,7 +395,7 @@ class Lifter:
 
     def tail(self, target, name=None):
         proto = self.img.protos.get(name) if name else None
-        if proto and (proto['ret'] in CTYPE or proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
+        if proto and (proto.get('ptr') or proto['ret'] in CTYPE or proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
             return '{ %s %s }' % (self.call(target, name), self.ret())
         pre = ' '.join('lift_fpa[%d] = f[%d];' % (k, 12 + k) for k in range(8)) + ' ' if self.fp else ''
         return '{ %sreturn %s(%s); }' % (pre, CALLT % target, ', '.join(self.args()))
@@ -1071,6 +1093,10 @@ def main():
     img = Image(path, name)
     if '--protos' in args:
         img.protos.update(json.loads(Path(args[args.index('--protos') + 1]).read_text()))
+    if '--wrapped' in args:
+        # functions the libc layer provides itself take IRIX layouts and look after the memory states themselves
+        for n in Path(args[args.index('--wrapped') + 1]).read_text().split():
+            img.protos.get(n, {}).pop('ptr', None)
     if '--types' in args:
         print('typed records: %d' % img.load_types(args[args.index('--types') + 1], [args[i + 1] for i, a in enumerate(args) if a == '--like']))
     bodies, failed = [], []
@@ -1111,6 +1137,8 @@ def main():
         w.write('extern char __tramp_%s[] __attribute__((visibility("hidden")));\n' % name)
         w.write('extern int mprotect(void *, unsigned long, int);\n'
                 'static void __attribute__((constructor(102))) lift_tramp_%s(void) { mprotect(__tramp_%s, (unsigned long)(IMG - __tramp_%s), 5); }\n' % (name, name, name))
+        for key, nm in img.marks.items():
+            w.write('static const uint16_t %s[] = {%s 0xffff};\n' % (nm, ''.join('%d,%d, ' % f for f in key)))
         for b in bodies:
             w.write(b + '\n\n')
         for s in e.dynsyms:

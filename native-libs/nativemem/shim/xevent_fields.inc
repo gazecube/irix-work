@@ -1,0 +1,40 @@
+/* Field widths of the Xlib event structures (LP64), by event type, for lm_mark: pairs of offset and size.
+ * Generated from <X11/Xlib.h>; types that share a structure repeat it.  The data of a client message is left out
+ * (its width is the format field). */
+static const uint16_t ev_fields_0[] = {0,4, 8,8, 16,4, 24,8, 32,8,  0xffff};
+static const uint16_t ev_fields_1[] = {0,4, 8,8, 16,4, 24,8, 32,8,  0xffff};
+static const uint16_t ev_fields_2[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4,  0xffff};
+static const uint16_t ev_fields_3[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4,  0xffff};
+static const uint16_t ev_fields_4[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4,  0xffff};
+static const uint16_t ev_fields_5[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4,  0xffff};
+static const uint16_t ev_fields_6[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 88,4,  0xffff};
+static const uint16_t ev_fields_7[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4, 92,4, 96,4,  0xffff};
+static const uint16_t ev_fields_8[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,4, 68,4, 72,4, 76,4, 80,4, 84,4, 88,4, 92,4, 96,4,  0xffff};
+static const uint16_t ev_fields_9[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4,  0xffff};
+static const uint16_t ev_fields_10[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4,  0xffff};
+static const uint16_t ev_fields_11[] = {0,4, 8,8, 16,4, 24,8, 32,8,  0xffff};
+static const uint16_t ev_fields_12[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4, 48,4, 52,4, 56,4,  0xffff};
+static const uint16_t ev_fields_13[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4, 48,4, 52,4, 56,4, 60,4, 64,4,  0xffff};
+static const uint16_t ev_fields_14[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4,  0xffff};
+static const uint16_t ev_fields_15[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4,  0xffff};
+static const uint16_t ev_fields_16[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4, 52,4, 56,4, 60,4, 64,4, 68,4,  0xffff};
+static const uint16_t ev_fields_17[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8,  0xffff};
+static const uint16_t ev_fields_18[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4,  0xffff};
+static const uint16_t ev_fields_19[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4,  0xffff};
+static const uint16_t ev_fields_20[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8,  0xffff};
+static const uint16_t ev_fields_21[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,4, 60,4, 64,4,  0xffff};
+static const uint16_t ev_fields_22[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4, 52,4, 56,4, 60,4, 64,4, 72,8, 80,4,  0xffff};
+static const uint16_t ev_fields_23[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4, 52,4, 56,4, 60,4, 64,4, 72,8, 80,4, 88,8,  0xffff};
+static const uint16_t ev_fields_24[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4, 52,4,  0xffff};
+static const uint16_t ev_fields_25[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4,  0xffff};
+static const uint16_t ev_fields_26[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4,  0xffff};
+static const uint16_t ev_fields_27[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4,  0xffff};
+static const uint16_t ev_fields_28[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,4,  0xffff};
+static const uint16_t ev_fields_29[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8,  0xffff};
+static const uint16_t ev_fields_30[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,8, 72,8,  0xffff};
+static const uint16_t ev_fields_31[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,8, 56,8, 64,8,  0xffff};
+static const uint16_t ev_fields_32[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4, 52,4,  0xffff};
+static const uint16_t ev_fields_33[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,8, 48,4,  0xffff};
+static const uint16_t ev_fields_34[] = {0,4, 8,8, 16,4, 24,8, 32,8, 40,4, 44,4, 48,4,  0xffff};
+static const uint16_t ev_fields_35[] = {0,4, 8,8, 16,4, 24,8, 32,8,  0xffff};
+static const uint16_t *const ev_fields[36] = {ev_fields_0, ev_fields_1, ev_fields_2, ev_fields_3, ev_fields_4, ev_fields_5, ev_fields_6, ev_fields_7, ev_fields_8, ev_fields_9, ev_fields_10, ev_fields_11, ev_fields_12, ev_fields_13, ev_fields_14, ev_fields_15, ev_fields_16, ev_fields_17, ev_fields_18, ev_fields_19, ev_fields_20, ev_fields_21, ev_fields_22, ev_fields_23, ev_fields_24, ev_fields_25, ev_fields_26, ev_fields_27, ev_fields_28, ev_fields_29, ev_fields_30, ev_fields_31, ev_fields_32, ev_fields_33, ev_fields_34, ev_fields_35};

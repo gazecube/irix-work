@@ -10,7 +10,11 @@ callee's prototype:
   * floating-point arguments and results travel in xmm registers, not in the integer argument positions.
 For every imported function the headers declare, the probe takes its type; the DWARF gives the classes:
     v void, p pointer or 64-bit integer, i4 u4 i2 u2 i1 u1 narrower integers, f float, d double,
-and a trailing '...' in the argument list for a variadic function.
+and a trailing '...' in the argument list for a variadic function.  'ptr' lists [argument, size] for the arguments
+that point to a writable object of known size (XEvent *, int *, Window **): the callee reads and writes it with
+native widths, so the lifter brings that memory to its native layout before the call (lm_native).  A third element
+lists the object's scalar fields as [offset, size] (unions left out); the lifter records those widths after the call
+(lm_mark), because lifted code also reads parts of fields: the low 16 bits of an int by a 16-bit load.
 """
 import json
 import re
@@ -41,6 +45,50 @@ def klass(d, t):
     if n['tag'] == 'enumeration_type':
         return 'u4' if size == 4 else 'u%d' % size
     return ('u' if 'unsigned' in enc or 'boolean' in enc or enc.endswith('_UTF)') else 'i') + str(size)
+
+
+def scalars(d, t, base, out):
+    """Scalar fields wider than a byte, outside unions and bit fields."""
+    t = d.strip(t)
+    if t is None or len(out) > 64:
+        return
+    n = d.nodes[t]
+    tag = n['tag']
+    if tag in ('pointer_type', 'reference_type'):
+        out.append([base, 8])
+    elif tag in ('base_type', 'enumeration_type'):
+        if d.size(t) in (2, 4, 8):
+            out.append([base, d.size(t)])
+    elif tag in ('structure_type', 'class_type'):
+        for k in n['kids']:
+            if k['tag'] == 'member' and 'bit_size' not in k['a'] and 'type' in k['a']:
+                scalars(d, d.ref(k['a']['type']), base + d.num(k, 'data_member_location', 0), out)
+    elif tag == 'array_type':
+        et = d.ref(n['a']['type'])
+        for i in range(min(d.count(n), 64)):
+            scalars(d, et, base + i * d.size(et), out)
+
+
+def pointee(d, t):
+    """Type and size of the object a pointer parameter points to; size 0 for const, char, void, function and
+    incomplete types."""
+    t = d.strip(t)
+    if t is None or d.nodes[t]['tag'] != 'pointer_type' or 'type' not in d.nodes[t]['a']:
+        return None, 0
+    t = d.ref(d.nodes[t]['a']['type'])
+    while t is not None and t in d.nodes and d.nodes[t]['tag'] in ('typedef', 'volatile_type', 'restrict_type'):
+        t = d.ref(d.nodes[t]['a']['type']) if 'type' in d.nodes[t]['a'] else None
+    if t is None or t not in d.nodes:
+        return None, 0
+    n = d.nodes[t]
+    if n['tag'] in ('const_type', 'subroutine_type') or 'declaration' in n['a']:
+        return None, 0
+    if n['tag'] in ('pointer_type', 'reference_type'):
+        return t, 8
+    size = d.size(t)
+    if n['tag'] == 'base_type' and size == 1:
+        return None, 0
+    return t, (size if 1 < size <= 4096 else 0)
 
 
 def main():
@@ -86,13 +134,20 @@ def main():
             continue
         fn = d.nodes[f]
         ret = klass(d, d.ref(fn['a']['type'])) if 'type' in fn['a'] else 'v'
-        params = []
+        params, ptr = [], []
         for k in fn['kids']:
             if k['tag'] == 'formal_parameter':
                 params.append(klass(d, d.ref(k['a']['type'])) if 'type' in k['a'] else 'p')
+                pt, size = pointee(d, d.ref(k['a']['type'])) if 'type' in k['a'] else (None, 0)
+                if size:
+                    fields = []
+                    scalars(d, pt, 0, fields)
+                    ptr.append([len(params) - 1, size, fields if len(fields) <= 64 else []])
             elif k['tag'] == 'unspecified_parameters':
                 params.append('...')
         out[nm.group(1)] = {'ret': ret, 'args': params}
+        if ptr:
+            out[nm.group(1)]['ptr'] = ptr
     Path(outp).write_text(json.dumps(out))
     funcs = [s['name'] for s in e.dynsyms if not s['shndx'] and s['type'] == 2 and s['name']]
     print('%d imported functions, %d with a prototype; narrow results: %d, floating point: %d' % (

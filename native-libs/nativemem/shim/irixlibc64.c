@@ -30,6 +30,8 @@
 #include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/Xresource.h>
+#include <X11/Xutil.h>
+#include <wchar.h>
 #include <X11/keysym.h>
 
 /* ---- width shadow: one byte per 8-byte memory cell, set while the cell holds one 64-bit value written by lifted code
@@ -108,6 +110,21 @@ static void *lm_move(void *dv, const void *sv, size_t n)
         bytes_back(d, s, head);
     }
     return dv;
+}
+/* A native function has just written n plain bytes at p (sprintf, read): say so in the states.  The bytes around
+ * them in the first and last cell keep their values. */
+static void lm_raw(void *p, long n)
+{
+    unsigned char keep[16], *b = p;
+    long head, tail;
+    if (!p || n <= 0 || sh_clean(p, (size_t)n)) return;
+    head = n < 8 ? n : 8;
+    tail = n < 16 ? n - head : 8;
+    memcpy(keep, b, (size_t)head);
+    memcpy(keep + 8, b + n - tail, (size_t)tail);
+    lm_native((uintptr_t)p, (uint64_t)n);
+    memcpy(b, keep, (size_t)head);
+    memcpy(b + n - tail, keep + 8, (size_t)tail);
 }
 void *irix_memcpy(void *d, const void *s, size_t n) { return lm_move(d, s, n); }
 void *irix_memmove(void *d, const void *s, size_t n) { return lm_move(d, s, n); }
@@ -314,10 +331,10 @@ int irix_getc(struct ifile *f) { return __filbuf(f); }
 int irix_fputc(int c, struct ifile *f) { return __flsbuf(c, f); }
 int irix_putc(int c, struct ifile *f) { return __flsbuf(c, f); }
 int irix_ungetc(int c, struct ifile *f) { FILE *h = host_of(f); int r = ungetc(c, h); sync_flags(f, h); return r; }
-char *irix_fgets(char *b, int n, struct ifile *f) { FILE *h = host_of(f); char *r = fgets(b, n, h); sync_flags(f, h); return r; }
+char *irix_fgets(char *b, int n, struct ifile *f) { FILE *h = host_of(f); char *r = fgets(b, n, h); sync_flags(f, h); if (r) lm_raw(b, (long)strlen(b) + 1); return r; }
 int irix_fputs(const char *s, struct ifile *f) { FILE *h = host_of(f); int r = fputs(s, h); sync_flags(f, h); return r; }
 int irix_fflush(struct ifile *f) { FILE *h; int r; if (!f) return fflush(0); h = host_of(f); r = fflush(h); sync_flags(f, h); return r; }
-size_t irix_fread(void *b, size_t sz, size_t n, struct ifile *f) { FILE *h = host_of(f); size_t r = fread(b, sz, n, h); sync_flags(f, h); return r; }
+size_t irix_fread(void *b, size_t sz, size_t n, struct ifile *f) { FILE *h = host_of(f); size_t r = fread(b, sz, n, h); sync_flags(f, h); lm_raw(b, (long)(r * sz)); return r; }
 size_t irix_fwrite(const void *b, size_t sz, size_t n, struct ifile *f) { FILE *h = host_of(f); size_t r = fwrite(b, sz, n, h); sync_flags(f, h); return r; }
 int irix_fseek(struct ifile *f, long off, int wh) { FILE *h = host_of(f); int r = fseek(h, off, wh); sync_flags(f, h); return r; }
 long irix_ftell(struct ifile *f) { return ftell(host_of(f)); }
@@ -351,7 +368,7 @@ int irix_fscanf(struct ifile *f, const char *fmt, ...)
 void irix_perror(const char *s) { errno = irix_errno ? irix_errno : errno; perror(s); }
 
 /* ---- calls after which the program looks at the errno variable ----------------------------------------------------------- */
-long irix_read(int fd, void *b, size_t n) { long r = read(fd, b, n); SETERR(); return r; }
+long irix_read(int fd, void *b, size_t n) { long r = read(fd, b, n); SETERR(); lm_raw(b, r); return r; }
 long irix_write(int fd, const void *b, size_t n) { long r = write(fd, b, n); SETERR(); return r; }
 int irix_close(int fd) { int r = close(fd); SETERR(); return r; }
 int irix_access(const char *p, int m) { int r = access(p, m); SETERR(); return r; }
@@ -516,3 +533,105 @@ unsigned int SgiGetNumLockModifiers(Display *dpy)
     if (map) XFreeModifiermap(map);
     return mask;
 }
+
+/* ---- Property data.  Format 8 is a byte stream: what lifted code built from wider units goes out in the byte order
+ *      the big-endian machine would have sent, and what comes back is marked as single bytes, so that a 16- or 32-bit
+ *      value copied out of it reads the way that machine read it.  (Motif's drag and drop tables carry their own byte
+ *      order mark and are built and parsed this way.)  Results are stored through the accessors: the cells the caller
+ *      passes may hold other values of its own. ------------------------------------------------------------------- */
+int irix_XChangeProperty(Display *dpy, Window w, Atom prop, Atom type, int format, int mode, const unsigned char *data, int n)
+{
+    char *tmp = 0;
+    int r;
+    if (format == 8 && data && n > 0)
+        data = (const unsigned char *)lm_plain((const char *)data, (size_t)n, &tmp);
+    r = XChangeProperty(dpy, w, prop, type, format, mode, data, n);
+    free(tmp);
+    return r;
+}
+int irix_XGetWindowProperty(Display *dpy, Window w, Atom prop, long off, long len, Bool del, Atom req, Atom *type, int *format,
+                            unsigned long *nitems, unsigned long *after, unsigned char **data)
+{
+    Atom t = 0;
+    int f = 0, r;
+    unsigned long n = 0, a = 0;
+    unsigned char *p = 0;
+    r = XGetWindowProperty(dpy, w, prop, off, len, del, req, &t, &f, &n, &a, &p);
+    if (r == Success && f == 8 && p && !((uintptr_t)p & 7))
+        memset(&SH(p), ST_N | (ST_N << 2), malloc_usable_size(p) / 8);
+    if (type) ST8((uintptr_t)type, t, 0);
+    if (format) ST4((uintptr_t)format, (uint32_t)f, 0);
+    if (nitems) ST8((uintptr_t)nitems, n, 0);
+    if (after) ST8((uintptr_t)after, a, 0);
+    if (data) ST8((uintptr_t)data, (uint64_t)(uintptr_t)p, 0);
+    return r;
+}
+int irix_XFree(void *p)
+{
+    if (p && !((uintptr_t)p & 7) && !sh_clean(p, 8)) sh_clear(p, malloc_usable_size(p));
+    return XFree(p);
+}
+
+/* ---- Native functions that fill a caller's buffer with bytes ---------------------------------------------------- */
+int irix_sprintf(char *b, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+    va_start(ap, fmt);
+    r = vsprintf(b, fmt, ap);
+    va_end(ap);
+    lm_raw(b, (long)r + 1);
+    return r;
+}
+int irix_snprintf(char *b, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+    va_start(ap, fmt);
+    r = vsnprintf(b, n, fmt, ap);
+    va_end(ap);
+    if (n) lm_raw(b, (long)strlen(b) + 1);
+    return r;
+}
+char *irix_getcwd(char *b, size_t n) { char *r = getcwd(b, n); if (r && b) lm_raw(b, (long)strlen(b) + 1); return r; }
+int irix_gethostname(char *b, size_t n) { int r = gethostname(b, n); if (!r) lm_raw(b, (long)strnlen(b, n) + 1); return r; }
+size_t irix_wcstombs(char *b, const wchar_t *w, size_t n) { size_t r = wcstombs(b, w, n); if (b && r != (size_t)-1) lm_raw(b, (long)(r < n ? r + 1 : n)); return r; }
+int irix_XLookupString(XKeyEvent *ev, char *b, int n, KeySym *ks, XComposeStatus *cs)
+{
+    KeySym k = 0;
+    int r = XLookupString(ev, b, n, &k, cs);
+    lm_raw(b, r);
+    if (ks) ST8((uintptr_t)ks, k, 0);
+    return r;
+}
+int irix_XmbLookupString(XIC ic, XKeyPressedEvent *ev, char *b, int n, KeySym *ks, Status *st)
+{
+    KeySym k = 0;
+    Status t = 0;
+    int r = XmbLookupString(ic, ev, b, n, &k, &t);
+    if (t == XLookupChars || t == XLookupBoth) lm_raw(b, r);
+    if (ks) ST8((uintptr_t)ks, k, 0);
+    if (st) ST4((uintptr_t)st, (uint32_t)t, 0);
+    return r;
+}
+
+/* ---- Events.  Xlib fills in the event; its fields get their widths recorded by event type, because lifted code
+ *      reads parts of them (the low 16 bits of x and y by 16-bit loads). ------------------------------------------- */
+#include "xevent_fields.inc"
+static void lm_event(XEvent *ev)
+{
+    static const uint16_t l5[] = {56,8, 64,8, 72,8, 80,8, 88,8, 0xffff};
+    static const uint16_t s10[] = {56,2, 58,2, 60,2, 62,2, 64,2, 66,2, 68,2, 70,2, 72,2, 74,2, 0xffff};
+    int t = ev->type & 0x7f;
+    if (getenv("LIFT_NOEV")) return;
+    memset(&SH(ev), 0, sizeof *ev / 8);
+    lm_mark((uintptr_t)ev, t < 36 ? ev_fields[t] : ev_fields[0]);
+    if (t == ClientMessage && ev->xclient.format != 8)
+        lm_mark((uintptr_t)ev, ev->xclient.format == 32 ? l5 : s10);
+}
+int irix_XNextEvent(Display *d, XEvent *ev) { int r = XNextEvent(d, ev); lm_event(ev); return r; }
+int irix_XPeekEvent(Display *d, XEvent *ev) { int r = XPeekEvent(d, ev); lm_event(ev); return r; }
+int irix_XWindowEvent(Display *d, Window w, long m, XEvent *ev) { int r = XWindowEvent(d, w, m, ev); lm_event(ev); return r; }
+int irix_XIfEvent(Display *d, XEvent *ev, Bool (*p)(Display *, XEvent *, XPointer), XPointer a) { int r = XIfEvent(d, ev, p, a); lm_event(ev); return r; }
+Bool irix_XCheckIfEvent(Display *d, XEvent *ev, Bool (*p)(Display *, XEvent *, XPointer), XPointer a) { Bool r = XCheckIfEvent(d, ev, p, a); if (r) lm_event(ev); return r; }
+Bool irix_XCheckMaskEvent(Display *d, long m, XEvent *ev) { Bool r = XCheckMaskEvent(d, m, ev); if (r) lm_event(ev); return r; }

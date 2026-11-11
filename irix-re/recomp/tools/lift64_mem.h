@@ -213,4 +213,63 @@ static inline void ST1(uintptr_t a, uint8_t v)
 
 /* result tag of a bit operation: the layout of the operand that came from memory */
 static inline lift_tag lm_bits(lift_tag a, lift_tag b) { return (a & (T4 | T2)) ? a : (b & (T4 | T2)) ? b : 0; }
+
+/* Before a native function gets [a, a+n) through a typed pointer: it will read and write there with native widths
+ * and knows nothing of the states.  Cells it covers whole become "unknown" as they are (lifted code wrote their fields
+ * with the widths of the type).  In a cell it covers in part, the covered piece is rewritten as one native value of
+ * its size and the rest keeps its value. */
+static inline void lm_native(uintptr_t a, uint64_t n)
+{
+    uintptr_t c, e = a + n;
+    if (!a) return;
+    for (c = a & ~(uintptr_t)7; c < e; c += 8) {
+        unsigned s = SH(c), h, q;
+        uintptr_t lo = a > c ? a : c, hi = e < c + 8 ? e : c + 8;
+        if (!s) continue;
+        if (lo == c && hi == c + 8) { SH(c) = 0; continue; }
+        if ((s & 0x0f) == ST_Q) lm_split_q(c);
+        for (h = 0; h < 2; h++) {
+            uintptr_t p = c + 4 * h;
+            unsigned code;
+            if (hi <= p || lo >= p + 4) continue;
+            s = SH(c);
+            code = (s >> (2 * h)) & 3;
+            if (code == ST_U) continue;
+            if (lo <= p && hi >= p + 4) {                    /* the whole half: one native 32-bit value */
+                LM32(p) = lm_half_get(p, code, (s >> (4 + 2 * h)) & 3);
+                SH(c) = (uint8_t)(s & ~((3u << (2 * h)) | (3u << (4 + 2 * h))));
+                continue;
+            }
+            if (code == ST_W) lm_split_w(c, h);
+            for (q = 2 * h; q < 2 * h + 2; q++) {
+                uintptr_t w = c + 2 * q;
+                int whole = lo <= w && hi >= w + 2, isw;
+                if (hi <= w || lo >= w + 2) continue;
+                isw = (SH(c) >> (4 + q)) & 1;
+                if (whole != isw) {                          /* 16-bit value <-> two bytes */
+                    LM16(w) = lm_bs16(LM16(w));
+                    SH(c) ^= (uint8_t)(0x10u << q);
+                }
+            }
+        }
+    }
+}
+
+/* After a native function wrote an object of a known type: record the widths of its fields (pairs of offset and
+ * size, ended by 0xffff), so that lifted code reading part of a field gets the part the big-endian machine would.
+ * The memory is not touched.  lm_native has gone over the object before the call. */
+static inline void lm_mark(uintptr_t a, const uint16_t *f)
+{
+    if (!a) return;
+    for (; f[0] != 0xffff; f += 2) {
+        uintptr_t p = a + f[0], c = p & ~(uintptr_t)7;
+        unsigned h = (p >> 2) & 1, q = (p >> 1) & 3, s = SH(c);
+        if (f[1] == 8 && !(p & 7))
+            SH(c) = ST_Q;
+        else if (f[1] == 4 && !(p & 3) && (s & 0x0f) != ST_Q)
+            SH(c) = (uint8_t)((s & ~((3u << (2 * h)) | (3u << (4 + 2 * h)))) | (ST_W << (2 * h)));
+        else if (f[1] == 2 && !(p & 1) && (s & 0x0f) != ST_Q && ((s >> (2 * h)) & 3) != ST_W)
+            SH(c) = (uint8_t)((s & ~(3u << (2 * h))) | (ST_N << (2 * h)) | (0x10u << q));
+    }
+}
 #endif
