@@ -56,6 +56,15 @@ SHIM_PROTOS = {n: {'ret': 'i4', 'args': ['p']} for n in (
     '_XQstrcmp', '_XrmBufferToQuark', 'SgiGetNumLockModifiers', '__filbuf', '__semgetc', '__flsbuf', '__semputc',
     'BSDclosedir', 'setoserror', 'oserror')}
 SHIM_PROTOS['__dcis'] = {'ret': 'cis', 'args': ['d']}     # libm: cos in $f0 and sin in $f2 of the double in $f12
+# long double of the MIPSpro compilers is a pair of doubles (high part, low part): arguments in $f12/$f13 and
+# $f14/$f15, result in $f0/$f2.  The libc helpers for it are computed in the host's long double.
+for _n, _o in (('add', '+'), ('sub', '-'), ('mul', '*'), ('div', '/')):
+    SHIM_PROTOS['__q_' + _n] = {'ret': 'quad', 'op': _o, 'args': []}
+for _n, _o in (('eq', '=='), ('ge', '>='), ('gt', '>'), ('le', '<='), ('lt', '<')):
+    SHIM_PROTOS['__q_' + _n] = {'ret': 'qcmp', 'op': _o, 'args': []}
+SHIM_PROTOS['atold'] = {'ret': 'qstr', 'args': []}
+QUAD_ARGS = "long double a_ = (long double)FD(f[12]) + FD(f[13]), b_ = (long double)FD(f[14]) + FD(f[15]);"
+QUAD_RET = "double h_ = (double)r_; f[0] = DF(h_); f[2] = DF((double)(r_ - h_));"
 CTYPE = {'i4': 'int32_t', 'u4': 'uint32_t', 'i2': 'int16_t', 'u2': 'uint16_t', 'i1': 'int8_t', 'u1': 'uint8_t'}
 
 # CoreClassPart and XtResource in LP64, for class records that no header declares
@@ -165,6 +174,10 @@ class Image:
         self.syms = {}                        # external name -> C identifier
         self.protos = dict(SHIM_PROTOS)       # imported function -> {'ret': class, 'args': [classes]}
         self.marks = {}                       # field layout -> name of its lm_mark table
+        # The GOT itself is data too: code built with large-GOT addressing loads its entries through a computed
+        # address.  Every slot becomes a pointer word (key -1 - index); the two reserved slots stay as they are.
+        for idx in range(2, (self.got_hi - self.got_lo) // 8):
+            self.rel.setdefault(self.got_lo + 8 * idx, -1 - idx)
         self.class_recs = []                  # typed class records: (address, size, follow list)
         self.hooks = {}                       # function address -> native function called on entry with a0
         self.typed = {}                       # data address -> size of the scalar field that starts there
@@ -402,6 +415,12 @@ class Lifter:
         return self.call2(target, proto)
 
     def call2(self, target, proto):
+        if proto and proto['ret'] == 'quad':
+            return '{ %s long double r_ = a_ %s b_; %s }' % (QUAD_ARGS, proto['op'], QUAD_RET)
+        if proto and proto['ret'] == 'qcmp':
+            return '{ %s r2 = a_ %s b_; }' % (QUAD_ARGS, proto['op'])
+        if proto and proto['ret'] == 'qstr':
+            return '{ long double r_ = strtold((const char *)(uintptr_t)r4, 0); %s }' % QUAD_RET
         if proto and proto['ret'] == 'cis':
             return '{ double s_, c_; sincos(FD(f[12]), &s_, &c_); f[0] = DF(c_); f[2] = DF(s_); }'
         if proto and self.fp and (proto['ret'] in ('f', 'd') or 'f' in proto['args'] or 'd' in proto['args']):
@@ -1093,6 +1112,20 @@ def emit_data(img, blob, w):
         if a in img.rel and off + 8 <= total:
             v = e.dword(a)
             k = img.rel[a]
+            if k < 0:                              # a GOT slot
+                kind, g = e.got_entry(-1 - k)
+                if kind == 'global' and not g['shndx']:
+                    w.write('\t.quad %s\n' % (g['name'] or '0'))
+                else:
+                    t = g if kind == 'local' else g['value']
+                    if t in img.fstart:
+                        w.write('\t.quad %s\n' % img.fstart[t])
+                    elif img.tlo - 0x10000 <= t < img.hi + 0x10000:
+                        w.write('\t.quad __img_%s + %d\n' % (name, t - img.data_lo))
+                    else:
+                        w.write('\t.quad 0x%x\n' % t)
+                off += 8
+                continue
             sym = e.dynsyms[k] if k < len(e.dynsyms) else None
             if sym is not None and k >= e.gotsym and not sym['shndx'] and sym['name']:
                 # the word holds the address the symbol had when the object was quickstarted
@@ -1161,6 +1194,7 @@ def main():
         w.write('#include <stdint.h>\n#include <stdarg.h>\n#include <math.h>\n')
         w.write('extern void abort(void);\n')
         w.write('extern void sincos(double, double *, double *);\n')
+        w.write('extern long double strtold(const char *, char **);\n')
         w.write('static inline float FS(uint64_t v) { union { uint32_t u; float f; } x; x.u = (uint32_t)v; return x.f; }\n')
         w.write('static inline double FD(uint64_t v) { union { uint64_t u; double d; } x; x.u = v; return x.d; }\n')
         w.write('static inline uint64_t SF(uint64_t o, float v) { union { uint32_t u; float f; } x; x.f = v; return x.u; }\n')
@@ -1210,7 +1244,7 @@ def main():
         for b in bodies:
             w.write(b + '\n\n')
         for s in e.dynsyms:
-            if s['name'] and s['shndx'] and s['type'] == 2 and s['value'] in img.fstart and re.fullmatch(r'[A-Za-z_$][\w$]*', s['name']):
+            if s['name'] not in ('_init', '_fini') and s['name'] and s['shndx'] and s['type'] == 2 and s['value'] in img.fstart and re.fullmatch(r'[A-Za-z_$][\w$]*', s['name']):
                 w.write('extern __typeof(%s) %s __attribute__((alias("%s")));\n' % (img.fstart[s['value']], s['name'], img.fstart[s['value']]))
         ini, fin = e.dyn.get(12), e.dyn.get(13)
         if ini in img.fstart:

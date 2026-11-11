@@ -751,3 +751,40 @@ Pixmap irix_XCreatePixmapFromBitmapData(Display *d, Drawable w, char *data, unsi
     free(tmp);
     return p;
 }
+
+/* ---- What the C++ runtime (libC.so.2) takes from libc ------------------------------------------------------------ */
+/* the SVR4 character table: [0] EOF, [1..256] class bits, [257] EOF, [258..513] the other case, then the code set
+ * widths (irix/lib/libc/src/locale/_ctype.c) */
+unsigned char __ctype[521];
+static void __attribute__((constructor)) ctype_init(void)
+{
+    static const unsigned char widths[7] = {1, 0, 0, 1, 0, 0, 1};
+    int c;
+    for (c = 0; c < 256; c++) {
+        int ascii = c < 128;
+        __ctype[1 + c] = (unsigned char)(!ascii ? 0 : (isupper(c) ? 01 : 0) | (islower(c) ? 02 : 0) | (isdigit(c) ? 04 : 0) | (isspace(c) ? 010 : 0) |
+                         (ispunct(c) ? 020 : 0) | (iscntrl(c) ? 040 : 0) | (c == ' ' ? 0100 : 0) | (isxdigit(c) ? 0200 : 0));
+        __ctype[258 + c] = (unsigned char)(!ascii ? c : isupper(c) ? tolower(c) : islower(c) ? toupper(c) : c);
+    }
+    memcpy(__ctype + 514, widths, 7);
+}
+static unsigned long tas(unsigned long *p, unsigned long v)
+{
+    lift_tag t;
+    unsigned long old = LD8((uintptr_t)p, &t);
+    ST8((uintptr_t)p, v, 0);
+    return old;
+}
+unsigned long (*__test_and_set)(unsigned long *, unsigned long) = tas;
+/* sproc threads, the MP runtime and the rld interface: not provided; a program that gets here says so and stops */
+#define NOT_HERE(name) long name(void) { fprintf(stderr, "libc.so.1: %s is not provided\n", #name); abort(); }
+NOT_HERE(sproc) NOT_HERE(_sproc) NOT_HERE(sprocsp) NOT_HERE(_sprocsp) NOT_HERE(nsproc) NOT_HERE(_nsproc)
+NOT_HERE(__mp_parallel_do) NOT_HERE(__mp_parallel_do_64) NOT_HERE(__mp_region) NOT_HERE(_mplib_get_thread_id)
+void _dsm_crt_init(void) { }                 /* start-up hook of distributed shared memory: nothing to set up */
+NOT_HERE(_rld_new_interface) NOT_HERE(_sigtramp)
+void _exithandle(void) { }
+void *__rld_obj_head;
+/* the long double helpers: the lifter computes direct calls in place (lift_n64.py); these stand behind the GOT
+ * slots only, for a call through a pointer, which nothing is known to make */
+NOT_HERE(__q_add) NOT_HERE(__q_sub) NOT_HERE(__q_mul) NOT_HERE(__q_div) NOT_HERE(__q_eq) NOT_HERE(__q_ge)
+NOT_HERE(__q_gt) NOT_HERE(__q_le) NOT_HERE(__q_lt) NOT_HERE(atold) NOT_HERE(__dcis)

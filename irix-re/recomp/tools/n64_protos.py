@@ -41,7 +41,7 @@ def klass(d, t):
     size = d.size(t)
     enc = n['a'].get('encoding', '')
     if 'float' in enc:
-        return 'f' if size == 4 else 'd'
+        return 'f' if size == 4 else 'd' if size == 8 else 'q'      # q: long double, not the IRIX format
     if size >= 8:
         return 'p'
     if n['tag'] == 'enumeration_type':
@@ -178,6 +178,8 @@ def main():
                     ptr.append([j, size, fields if 0 < len(fields) <= 64 else [], cnt])
             else:
                 params.append('...')
+        if ret == 'q' or 'q' in params:
+            continue                          # called without a prototype; its results are not usable
         out[nm.group(1)] = {'ret': ret, 'args': params}
         if ptr:
             out[nm.group(1)]['ptr'] = ptr
