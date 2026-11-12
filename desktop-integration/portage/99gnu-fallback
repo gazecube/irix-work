@@ -1,0 +1,3 @@
+# /etc/env.d/99gnu-fallback: GNU tools the IRIX userland replaced or lacks, found after everything else
+PATH="/usr/lib/gnu/bin"
+ROOTPATH="/usr/lib/gnu/bin"

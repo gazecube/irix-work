@@ -1,0 +1,15 @@
+Portage side of replacing the userland with the IRIX one.  Nothing here is installed yet.
+
+gnu-private.bashrc   source from /etc/portage/bashrc: builds see GNU tools first; GNU commands that the IRIX
+                     userland replaces are installed into /usr/lib/gnu/bin instead of /bin and /usr/bin
+99gnu-fallback       copy to /etc/env.d/ and run env-update: /usr/lib/gnu/bin last on the system PATH
+
+Order when switching over:
+1. install 99gnu-fallback, env-update, and the hook (no effect yet: there is no irix-userland.list)
+2. emerge the irix-userland package: it writes /etc/portage/irix-userland.list and installs its commands into a
+   staging place first
+3. re-emerge the GNU packages (emerge -1 coreutils sed findutils grep diffutils tar patch util-linux): their
+   overlapping commands move to /usr/lib/gnu/bin, and stay reachable through the fallback PATH meanwhile
+4. irix-userland then moves its commands into /bin, /usr/bin, /sbin, /usr/sbin
+Never moved: mount, umount, fsck, mkfs, su, sulogin, login, kill, ps, top, getopt, env (see the keep list).
+/bin/sh stays bash.
