@@ -20,6 +20,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <signal.h>
+#include <time.h>
+#include <wchar.h>
+#include <sys/sysmacros.h>
 #include <sched.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -343,7 +347,11 @@ void __assert(const char *expr, const char *file, int line)
 }
 
 /* ---- stdio: the N64 FILE ---------------------------------------------------------------------------------------------- */
+#if ILP32                                       /* N32: 16 bytes */
+struct ifile { int _cnt; unsigned char *_ptr; unsigned char *_base; unsigned char _flag; unsigned char _o_file; unsigned short _file; };
+#else                                           /* N64: 32 bytes */
 struct ifile { long _cnt; unsigned char *_ptr; unsigned char *_base; unsigned char _reserved[2]; unsigned short _flag; unsigned int _file; };
+#endif
 #define I_READ 0001
 #define I_WRT 0002
 #define I_EOF 0020
@@ -881,13 +889,27 @@ int _daemonize(int flags, int fd1, int fd2, int fd3) { (void)flags; (void)fd1; (
 char *irix_sys_errlist[152];
 int irix_sys_nerr = 152;
 static void __attribute__((constructor)) errlist_init(void) { int i; for (i = 0; i < 152; i++) irix_sys_errlist[i] = strdup(strerror(i)); }
-/* the hardware inventory: empty until it is read from the kernel */
-void *getinvent(void) { return 0; }
-int setinvent(void) { return 0; }
-void endinvent(void) { }
-/* IRIX system calls that belong in the kernel (irix-on-gentoo): not there yet, so they fail with ENOSYS */
-#define TO_KERNEL(name) long name(long a, long b, long c, long d) { static int said; if (!said++) fprintf(stderr, "libc.so.1: %s(%ld, ...) needs the kernel's IRIX call; returning ENOSYS\n", #name, a); (void)b; (void)c; (void)d; errno = ENOSYS; return -1; }
-TO_KERNEL(syssgi) TO_KERNEL(sysmp) TO_KERNEL(schedctl) TO_KERNEL(sysctl)
+/* IRIX system calls that the kernel provides (irix-on-gentoo, numbers in irix_syscalls.h).  Until the running kernel
+ * has one it fails with ENOSYS; IRIX_KTRACE=1 in the environment reports each such call once.  The hardware
+ * inventory (getinvent, scaninvent) is IRIX's own libc source on top of syssgi (../irixsrc). */
+#include "irix_syscalls.h"
+#include <sys/syscall.h>
+static long kcall(int nr, const char *name, long a, long b, long c, long d, long e, long f)
+{
+    long r = syscall(nr, a, b, c, d, e, f);
+    if (r == -1 && errno == ENOSYS && getenv("IRIX_KTRACE")) {
+        static unsigned said;
+        unsigned bit = 1u << (nr - IRIX_NR_syssgi);
+        if (!(said & bit)) { said |= bit; fprintf(stderr, "libc.so.1: %s(%ld, ...): the kernel has no IRIX %s yet\n", name, a, name); }
+    }
+    return r;
+}
+long syssgi(long a, long b, long c, long d, long e, long f) { return kcall(IRIX_NR_syssgi, "syssgi", a, b, c, d, e, f); }
+long _syssgi(long a, long b, long c, long d, long e, long f) __attribute__((alias("syssgi")));
+long sysmp(long a, long b, long c, long d, long e, long f) { return kcall(IRIX_NR_sysmp, "sysmp", a, b, c, d, e, f); }
+long schedctl(long a, long b, long c, long d, long e, long f) { return kcall(IRIX_NR_schedctl, "schedctl", a, b, c, d, e, f); }
+long prctl(long a, long b, long c, long d, long e, long f) { return kcall(IRIX_NR_prctl, "prctl", a, b, c, d, e, f); }
+long sysctl(long a, long b, long c, long d) { (void)a; (void)b; (void)c; (void)d; errno = ENOSYS; return -1; }
 
 /* getdtablehi: one more than the highest open descriptor; mkdirp (libgen): mkdir with the missing parents */
 int getdtablehi(void)
@@ -907,3 +929,238 @@ int mkdirp(const char *path, int mode)
         if (*p == '/') { *p = 0; if (mkdir(buf, (mode_t)mode) && errno != EEXIST) return -1; *p = '/'; }
     return mkdir(buf, (mode_t)mode) && errno != EEXIST ? -1 : 0;
 }
+
+/* ---- More of stdio: buffering, error state, reopening, positions ------------------------------------------------- */
+void irix_setbuf(struct ifile *f, char *b) { setbuf(host_of(f), b); }
+void irix_setbuffer(struct ifile *f, char *b, int n) { setbuffer(host_of(f), b, (size_t)n); }
+void irix_setlinebuf(struct ifile *f) { setlinebuf(host_of(f)); }
+int irix_setvbuf(struct ifile *f, char *b, int mode, size_t n)
+{
+    /* IRIX _IOFBF 0, _IOLBF 0100, _IONBF 04 */
+    int m = mode == 0100 ? _IOLBF : mode == 04 ? _IONBF : _IOFBF;
+    return setvbuf(host_of(f), b, m, n);
+}
+void irix_clearerr(struct ifile *f) { FILE *h = host_of(f); clearerr(h); sync_flags(f, h); }
+struct ifile *irix_freopen(const char *path, const char *mode, struct ifile *f)
+{
+    FILE *h = freopen(path, mode, host_of(f));
+    if (!h) { SETERR(); return 0; }
+    if (!(f >= __iob && f < __iob + 3)) ((struct ifile_x *)f)->host = h;
+    f->_file = (unsigned short)fileno(h);
+    f->_flag = (unsigned char)(mode[0] == 'r' ? I_READ : I_WRT);
+    return f;
+}
+struct ifile *irix_tmpfile(void) { return wrap(tmpfile(), "w+"); }
+int irix_fgetpos(struct ifile *f, long long *pos) { long long p = ftello(host_of(f)); if (p < 0) return -1; *pos = p; return 0; }
+int irix_fsetpos(struct ifile *f, const long long *pos) { return fseeko(host_of(f), (off_t)*pos, SEEK_SET); }
+int irix_vfscanf(struct ifile *f, const char *fmt, va_list ap) { FILE *h = host_of(f); int r = vfscanf(h, fmt, ap); sync_flags(f, h); return r; }
+int irix_getw(struct ifile *f) { FILE *h = host_of(f); int r = getw(h); sync_flags(f, h); return r; }
+int irix_putw(int w, struct ifile *f) { return putw(w, host_of(f)); }
+
+/* ---- Directories: IRIX DIR and struct dirent (d_ino 64 bits, d_off 64 bits, d_reclen, d_name at 18 in both ABIs) */
+struct idir { int dd_fd; int dd_loc; int dd_size; int dd_pad; DIR *host; unsigned char ent[8 + 8 + 2 + 256 + 6] __attribute__((aligned(8))); };
+struct idir *irix_opendir(const char *p)
+{
+    DIR *h = opendir(p);
+    struct idir *d;
+    if (!h) { SETERR(); return 0; }
+    d = calloc(1, sizeof *d);
+    d->host = h;
+    d->dd_fd = dirfd(h);
+    return d;
+}
+void *irix_readdir(struct idir *d)
+{
+    static const uint16_t f[] = {0,8, 8,8, 16,2, 0xffff};
+    struct dirent *h = readdir(d->host);
+    size_t n;
+    if (!h) return 0;
+    n = strlen(h->d_name);
+    if (n > 255) n = 255;
+    *(uint64_t *)d->ent = h->d_ino;
+    *(int64_t *)(d->ent + 8) = (int64_t)h->d_off;
+    *(uint16_t *)(d->ent + 16) = (uint16_t)((18 + n + 1 + 7) & ~7u);
+    memcpy(d->ent + 18, h->d_name, n);
+    d->ent[18 + n] = 0;
+    memset(&SH(d->ent), 0, sizeof d->ent / 8);
+    lm_mark((uintptr_t)d->ent, f, 0, 1);
+    return d->ent;
+}
+int irix_closedir(struct idir *d) { int r = closedir(d->host); free(d); return r; }
+void irix_rewinddir(struct idir *d) { rewinddir(d->host); }
+long irix_telldir(struct idir *d) { return telldir(d->host); }
+void irix_seekdir(struct idir *d, long pos) { seekdir(d->host, pos); }
+
+/* ---- Message catalogues and labelled messages (pfmt): no catalogues, so the default text is used ---------------- */
+static char pfmt_label[64];
+char *setcat(const char *cat) { static char c[64]; if (cat) snprintf(c, sizeof c, "%s", cat); return c; }
+int setlabel(const char *label) { snprintf(pfmt_label, sizeof pfmt_label, "%s", label ? label : ""); return 0; }
+static const char *msgtext(const char *fmt)
+{
+    /* "catalog:number:text" -> text */
+    const char *a = strchr(fmt, ':'), *b = a ? strchr(a + 1, ':') : 0;
+    if (a && b && a > fmt && b > a + 1 && strspn(a + 1, "0123456789") == (size_t)(b - a - 1)) return b + 1;
+    return fmt;
+}
+int pfmt(struct ifile *f, long flags, const char *fmt, ...)
+{
+    static const char *sev[] = {"", "HALT", "ERROR", "WARNING", "INFO"};
+    FILE *h = host_of(f);
+    va_list ap;
+    int n = 0, s = (int)(flags & 0xf);
+    if (!(flags & 0x100) && pfmt_label[0]) n += fprintf(h, "%s: ", pfmt_label);       /* MM_NOSTD 0x100 */
+    if (s > 0 && s < 5) n += fprintf(h, "%s: ", sev[s]);
+    va_start(ap, fmt);
+    n += vfprintf(h, msgtext(fmt), ap);
+    va_end(ap);
+    return n;
+}
+char *gettxt_irix_unused(void) { return 0; }
+
+/* ---- Time ---------------------------------------------------------------------------------------------------------- */
+int cftime(char *buf, const char *fmt, const long *clock)
+{
+    time_t t = (time_t)*clock;
+    const char *e = getenv("CFTIME");
+    return (int)strftime(buf, 128, fmt && *fmt ? fmt : e && *e ? e : "%a %b %e %H:%M:%S %Z %Y", localtime(&t));
+}
+int ascftime(char *buf, const char *fmt, const struct tm *tm) { return (int)strftime(buf, 128, fmt, tm); }
+long irix_timezone;
+static void __attribute__((constructor)) tz_init(void) { tzset(); irix_timezone = timezone; }
+int BSDgettimeofday(void *t, void *tz) { return irix_gettimeofday(t, tz); }
+
+/* ---- Wide strings (IRIX ws* = wcs*; wchar_t is 4 bytes on both sides) ------------------------------------------- */
+wchar_t *wscpy(wchar_t *d, const wchar_t *s) { return wcscpy(d, s); }
+wchar_t *wsncpy(wchar_t *d, const wchar_t *s, size_t n) { return wcsncpy(d, s, n); }
+wchar_t *wscat(wchar_t *d, const wchar_t *s) { return wcscat(d, s); }
+size_t wslen(const wchar_t *s) { return wcslen(s); }
+int wscmp(const wchar_t *a, const wchar_t *b) { return wcscmp(a, b); }
+int wsncmp(const wchar_t *a, const wchar_t *b, size_t n) { return wcsncmp(a, b, n); }
+wchar_t *wspbrk(const wchar_t *s, const wchar_t *a) { return wcspbrk(s, a); }
+size_t wsspn(const wchar_t *s, const wchar_t *a) { return wcsspn(s, a); }
+size_t wscspn(const wchar_t *s, const wchar_t *a) { return wcscspn(s, a); }
+wchar_t *wschr(const wchar_t *s, wchar_t c) { return wcschr(s, c); }
+wchar_t *wsrchr(const wchar_t *s, wchar_t c) { return wcsrchr(s, c); }
+
+/* ---- Capabilities: the state handed back is opaque to the program ----------------------------------------------- */
+void *cap_acquire(int n, const void *caps) { (void)n; (void)caps; return calloc(1, 16); }
+void cap_surrender(void *c) { free(c); }
+
+/* ---- glob (IRIX glob_t: gl_pathc, gl_pathv, gl_offs, 8 pad words) ----------------------------------------------- */
+#include <glob.h>
+struct iglob { size_t gl_pathc; char **gl_pathv; size_t gl_offs; void *gl_pad[8]; };
+int __nglob(const char *pat, int flags, int (*err)(const char *, int), struct iglob *g)
+{
+    glob_t h;
+    int r, i;
+    /* IRIX GLOB_APPEND 01? its flag values follow X/Open: ERR 1, MARK 2, NOSORT 4, DOOFFS 8, NOCHECK 16, APPEND 32, NOESCAPE 64 */
+    int hf = (flags & 1 ? GLOB_ERR : 0) | (flags & 2 ? GLOB_MARK : 0) | (flags & 4 ? GLOB_NOSORT : 0) | (flags & 8 ? GLOB_DOOFFS : 0) |
+             (flags & 16 ? GLOB_NOCHECK : 0) | (flags & 64 ? GLOB_NOESCAPE : 0);
+    memset(&h, 0, sizeof h);
+    h.gl_offs = flags & 8 ? g->gl_offs : 0;
+    r = glob(pat, hf, err, &h);
+    if (r == 0 || r == GLOB_NOMATCH) {
+        STP(&g->gl_pathc, h.gl_pathc);
+        STP(&g->gl_pathv, (uintptr_t)h.gl_pathv);
+        for (i = 0; i < 8; i++) g->gl_pad[i] = 0;
+    }
+    return r == 0 ? 0 : r == GLOB_NOMATCH ? 3 : r == GLOB_NOSPACE ? 1 : 2;     /* IRIX: NOSPACE 1, ABORTED 2, NOMATCH 3 */
+}
+void __nglobfree(struct iglob *g)
+{
+    glob_t h;
+    memset(&h, 0, sizeof h);
+    h.gl_pathc = g->gl_pathc; h.gl_pathv = g->gl_pathv; h.gl_offs = g->gl_offs;
+    globfree(&h);
+    g->gl_pathv = 0;
+}
+
+/* ---- Odds and ends ---------------------------------------------------------------------------------------------- */
+void irix_cfree(void *p) { irix_free(p); }
+char *pathfind(const char *path, const char *name, const char *mode)
+{
+    static char buf[4096];
+    const char *p = path ? path : "";
+    if (strchr(name, '/')) return access(name, F_OK) ? 0 : (char *)name;
+    while (1) {
+        const char *e = strchr(p, ':');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        struct stat st;
+        snprintf(buf, sizeof buf, "%.*s%s%s", (int)n, n ? p : ".", "/", name);
+        if (!stat(buf, &st)) {
+            const char *m = mode ? mode : "";
+            int ok = 1;
+            if (strchr(m, 'r') && access(buf, R_OK)) ok = 0;
+            if (strchr(m, 'w') && access(buf, W_OK)) ok = 0;
+            if (strchr(m, 'x') && access(buf, X_OK)) ok = 0;
+            if (strchr(m, 'f') && !S_ISREG(st.st_mode)) ok = 0;
+            if (strchr(m, 'd') && !S_ISDIR(st.st_mode)) ok = 0;
+            if (ok) return buf;
+        }
+        if (!e) return 0;
+        p = e + 1;
+    }
+}
+void *sgidlopen_version(const char *name, int mode, const char *version, int flags) { (void)version; (void)flags; return dlopen(name, mode); }
+int attr_get(const char *path, const char *name, char *value, int *len, int flags) { (void)path; (void)name; (void)value; (void)len; (void)flags; errno = ENODATA; return -1; }
+char *_getpty(int *fd, int oflag, int mode, int nofork)
+{
+    int m = posix_openpt(oflag | O_RDWR | O_NOCTTY);
+    (void)mode; (void)nofork;
+    if (m < 0 || grantpt(m) || unlockpt(m)) { SETERR(); if (m >= 0) close(m); return 0; }
+    *fd = m;
+    return ptsname(m);
+}
+char *irix_crypt(const char *key, const char *salt)
+{
+    static char *(*c)(const char *, const char *);
+    if (!c) { void *h = dlopen("libcrypt.so.2", RTLD_NOW); if (!h) h = dlopen("libcrypt.so.1", RTLD_NOW); if (h) c = (char *(*)(const char *, const char *))dlsym(h, "crypt"); }
+    return c ? c(key, salt) : 0;
+}
+const char *irix_sys_siglist[65];
+static void __attribute__((constructor)) siglist_init(void) { int i; for (i = 1; i < 65; i++) irix_sys_siglist[i] = strsignal(i); }
+int irix_h_errno;
+int __major(int ver, unsigned long dev) { (void)ver; return (int)major(dev); }
+int __minor(int ver, unsigned long dev) { (void)ver; return (int)minor(dev); }
+unsigned get_fpc_csr(void) { return 0; }
+unsigned set_fpc_csr(unsigned v) { (void)v; return 0; }
+int plock(int op) { (void)op; return 0; }
+
+/* ---- Signals.  IRIX and Linux agree on 1-6, 9, 11, 13-15; the rest are numbered differently.  The program's handler
+ *      is called with the IRIX number. ------------------------------------------------------------------------------- */
+static const int sig_i2h[33] = {
+    0, SIGHUP, SIGINT, SIGQUIT, SIGILL, SIGTRAP, SIGABRT, 0 /* EMT */, SIGFPE, SIGKILL, SIGBUS, SIGSEGV, SIGSYS, SIGPIPE,
+    SIGALRM, SIGTERM, SIGUSR1, SIGUSR2, SIGCHLD, SIGPWR, SIGWINCH, SIGURG, SIGIO, SIGSTOP, SIGTSTP, SIGCONT, SIGTTIN,
+    SIGTTOU, SIGVTALRM, SIGPROF, SIGXCPU, SIGXFSZ, 0 };
+static int sig_h2i(int h) { int i; for (i = 1; i < 33; i++) if (sig_i2h[i] == h) return i; return h; }
+static int sig_host(int i) { return i > 0 && i < 33 ? sig_i2h[i] : -1; }
+static void (*sig_prog[65])(int);
+static void sig_relay(int h) { void (*f)(int) = sig_prog[h]; if (f) f(sig_h2i(h)); }
+/* IRIX SIG_DFL 0, SIG_IGN 1, SIG_ERR -1, SIG_HOLD 2 */
+static void (*sig_set(int i, void (*fn)(int), int restart))(int)
+{
+    int h = sig_host(i);
+    struct sigaction a, o;
+    void (*old)(int);
+    if (h <= 0) { errno = EINVAL; return (void (*)(int))-1L; }
+    memset(&a, 0, sizeof a);
+    sigemptyset(&a.sa_mask);
+    a.sa_flags = restart ? SA_RESTART : SA_RESETHAND | SA_NODEFER;
+    if ((uintptr_t)fn == 0) a.sa_handler = SIG_DFL;
+    else if ((uintptr_t)fn == 1 || (uintptr_t)fn == 2) a.sa_handler = SIG_IGN;
+    else a.sa_handler = sig_relay;
+    old = sig_prog[h];
+    if (sigaction(h, &a, &o)) { SETERR(); return (void (*)(int))-1L; }
+    sig_prog[h] = a.sa_handler == sig_relay ? fn : 0;
+    if (o.sa_handler == SIG_IGN) return (void (*)(int))1L;
+    return o.sa_handler == sig_relay ? old : 0;
+}
+void (*irix_signal(int i, void (*fn)(int)))(int) { return sig_set(i, fn, 0); }
+void (*irix_sigset(int i, void (*fn)(int)))(int) { return sig_set(i, fn, 1); }
+void (*BSDsignal(int i, void (*fn)(int)))(int) { return sig_set(i, fn, 1); }
+int irix_kill(int pid, int i) { int r = kill(pid, i ? sig_host(i) : 0); SETERR(); return r; }
+int irix_raise(int i) { return raise(sig_host(i)); }
+int irix_sighold(int i) { sigset_t s; sigemptyset(&s); sigaddset(&s, sig_host(i)); return sigprocmask(SIG_BLOCK, &s, 0); }
+int irix_sigrelse(int i) { sigset_t s; sigemptyset(&s); sigaddset(&s, sig_host(i)); return sigprocmask(SIG_UNBLOCK, &s, 0); }
+int irix_sigignore(int i) { return sig_set(i, (void (*)(int))1L, 1) == (void (*)(int))-1L ? -1 : 0; }
+int irix_killpg(int pg, int i) { return killpg(pg, sig_host(i)); }

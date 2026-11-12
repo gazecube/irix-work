@@ -1,0 +1,6 @@
+IRIX libc pieces built from the IRIX 6.5.7m source (~/Projects/irix-657m-src) instead of being written again.
+build.sh copies the listed source files unchanged into src/ and compiles them for the libc layer with the small
+headers in include/: synonyms.h (copied from libc: name -> _name, the plain names are weak aliases) and sys/syssgi.h (the few syssgi
+commands these files use; syssgi itself goes to the kernel, see ../shim/irix_syscalls.h).
+
+The copied IRIX files are not committed (see .gitignore): build.sh copies them from the source tree each time.

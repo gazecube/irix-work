@@ -335,7 +335,10 @@ def stop(signum, frame):
 
 
 if __name__ == '__main__':
-    os.setpgrp()
+    try:
+        os.setpgrp()                              # (already a group of its own when started with setsid)
+    except PermissionError:
+        pass
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     what = sys.argv[1] if len(sys.argv) > 1 else 'all'
