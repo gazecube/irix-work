@@ -6,6 +6,13 @@
 /* what SGI's compilers predefine about the system (not the MIPS ones: the code is for x86 now) */
 #define sgi 1
 #define __sgi 1
+/* and what it predefines about the language in an ordinary (-xansi) compile */
+#define _LONGLONG 1
+#define _LANGUAGE_C 1
+#define _SGI_SOURCE 1
+#define __EXTENSIONS__ 1
+/* and not what gcc predefines for i386: SGI's sources still carry x86 paths from System V (sysi86) */
+#undef i386
 /* environ: old programs declare it themselves, with their own type; keep the host's declaration out of the way */
 #define environ irix_host_environ_decl
 #include <sys/types.h>
@@ -22,6 +29,10 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/statvfs.h>
+#include <sys/ioctl.h>
+#include <sys/param.h>
+#include <paths.h>
+#include <irix_paths.h>                         /* IRIX's _PATH_ names the host lacks (fetch.sh) */
 #include <sgidefs.h>
 #include <irix_types.h>                         /* IRIX type names the host lacks (uchar_t, ulong_t, prid_t, ...) */
 #include <standards.h>                         /* IRIX feature macros (_SGIAPI, ...), as cc gives every compile */
@@ -32,6 +43,25 @@ typedef struct dirent dirent_t;                 /* (incomplete here: <dirent.h> 
 typedef struct dirent64 dirent64_t;
 typedef struct timespec timespec_t;
 typedef struct statvfs64 statvfs64_t;
+#include <sys/stat.h>
+/* IRIX <sys/stat.h> additions (the other S_ values are the same on both) */
+#ifndef S_IAMB
+#define S_IAMB 0x1FF                            /* access mode bits */
+#endif
+#ifndef S_IFNAM
+#define S_IFNAM 0x5000                          /* XENIX special named file; Linux has none, so never matches */
+#define S_INSEM 0x1
+#define S_INSHD 0x2
+#endif
+/* IRIX <limits.h> names for the long long limits */
+#ifndef LONGLONG_MAX
+#define LONGLONG_MAX LLONG_MAX
+#define LONGLONG_MIN LLONG_MIN
+#define ULONGLONG_MAX ULLONG_MAX
+#endif
+#ifndef NGROUPS_UMAX
+#define NGROUPS_UMAX NGROUPS_MAX               /* IRIX <sys/param.h> */
+#endif
 #ifndef __NBBY
 #define __NBBY 8                                /* bits per byte (IRIX <sys/types.h>) */
 #endif
@@ -74,6 +104,26 @@ extern void *irix_k_malloc(size_t), *irix_k_calloc(size_t, size_t), *irix_k_real
  * through irix_compat.c. */
 #define setenv irix_k_setenv
 #define getline irix_k_getline
+/* basename, dirname: IRIX's (libgen, POSIX), not glibc's GNU basename; old programs also declare them K&R */
+/* getopt: IRIX's (libc source in libirixc), with its own optind & co.  GNU getopt reads a leading '-' in the option
+ * string as "return operands in order", which IRIX ls's "-RadC1..." relies on not happening */
+#define getopt _getopt
+#define optind _optind
+#define optarg _optarg
+#define opterr _opterr
+#define optopt _optopt
+extern int _getopt(int, char *const *, const char *);
+extern int _optind, _opterr, _optopt;
+extern char *_optarg;
+#define basename _basename
+#define dirname _dirname
+/* sysinfo: IRIX's (command, buffer, count) call, not Linux's statistics call */
+#define sysinfo irix_k_sysinfo
+extern int irix_k_sysinfo(int, char *, long);
+/* sysconf: IRIX-only names (irix_sysconf.h, numbered from 0x4000) go to the kernel like IRIX's sysconf sends them */
+#include <irix_sysconf.h>
+#define sysconf irix_k_sysconf
+extern long irix_k_sysconf(int);
 
 /* union wait, from BSD: the host C library no longer has it (little-endian field order) */
 union wait {

@@ -40,6 +40,17 @@ def low():
 
 def one(item):
     d, targets = item
+    # recorded source fixes (patches/cmd/NAME or patches/lib/NAME), applied once to the work copy
+    pdir = Path('/home/nekron/Projects/irix-work/userland/patches') / d.parent.name / d.name
+    if pdir.is_dir():
+        for pf in sorted(pdir.glob('*.patch')):
+            mark = d / ('.applied-' + pf.name)
+            if not mark.exists():
+                r = subprocess.run(['patch', '-s', '-p1', '-i', str(pf)], cwd=d, capture_output=True, text=True)
+                if r.returncode:
+                    return {'dir': d.name, 'rc': 'patch', 'headers': [], 'symbols': [], 'first_error': '',
+                            'status': 'patch failed: %s %s' % (pf.name, (r.stdout + r.stderr).strip()[:80])}
+                mark.write_text('')
     name = d.name if d.parent.name == 'cmd' else d.parent.name + '_' + d.name
     env = dict(os.environ, ROOT=str(ROOT), TOOLROOT=T, IRIX_DESTROOT=str(ROOT), PRODUCT='4DACE1_N32', STYLES_TO_BUILD='N32', PATH=T + '/usr/bin:' + os.environ['PATH'])
     cmd = SANDBOX + ['--chdir', str(d), 'ionice', '-c3', T + '/usr/sbin/smake', 'HOST_CC=' + T + '/usr/bin/hostcc'] + targets

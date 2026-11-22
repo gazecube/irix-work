@@ -1,0 +1,13 @@
+Glibc base only: struct stat has no st_projid (IRIX's project ID) on Linux.  ls reports project 0 until the kernel
+personality hands IRIX programs IRIX's struct stat; then this patch goes.
+--- a/ls.c	2026-11-22 04:53:32.094940600 -0700
++++ b/ls.c	2026-11-22 04:53:32.154940599 -0700
+@@ -1397,7 +1397,7 @@
+ 	
+ 		rep->luid = statb.st_uid;
+ 		rep->lgid = statb.st_gid;
+-		rep->lprojid = statb.st_projid;
++		rep->lprojid = 0;	/* no st_projid in the host's struct stat */
+ 		rep->lnl = statb.st_nlink;
+ 		if (do_lnl_len)
+ 			rep->lnl_len = numlen(rep->lnl, DFL_NL_LEN);
