@@ -1,0 +1,7 @@
+The IRIX userland built from source (~/Projects/irix-657m-src, eoe/cmd first) for x86: N32 commands become i386
+programs, 64-bit ones x86_64, on top of the host C library plus the compatibility layer in compat/.
+
+compat/include/      headers written here: prelude.h (forced into every compile), bstring.h, sgidefs.h, ...
+compat/irix-include/ IRIX headers the host lacks, copied from the source tree by compat/fetch.sh (git-ignored:
+                     SGI's files are never committed to this repository)
+bootstrap-smake.sh   builds SGI's smake (eoe/cmd/pmake) natively; the IRIX Makefiles need it (#if, :S/ ...)
