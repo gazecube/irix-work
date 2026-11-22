@@ -13,7 +13,7 @@ import sys
 U = '/home/nekron/Projects/irix-work/userland'
 TOOLROOT = U + '/toolroot'
 ROOT = '/home/nekron/opt/claude-work/eoe/root'             # the staging root (setup-root.sh)
-DROP = {'-fullwarn', '-cckr', '-xansi', '-ansi', '-ansiposix', '-KPIC', '-elf', '-call_shared', '-non_shared', '-nokpicopt',
+DROP = {'-fullwarn', '-cckr', '-xansi', '-xgot', '-ansi', '-ansiposix', '-KPIC', '-elf', '-call_shared', '-non_shared', '-nokpicopt',
         '-nostdinc', '-nostdlib', '-quickstart_info', '-no_unresolved', '-Xcpluscomm', '-prototypes', '-dollar', '-common', '-use_readonly_const',
         '-wlint', '-show', '-n32', '-32', '-o32', '-mips1', '-mips2', '-mips3', '-mips4', '-r4000', '-r5000', '-r8000',
         '-r10000', '-shared_rpath', '-ignore_unresolved', '-transitive_link', '-no_transitive_link', '-demangle', '-cfront',

@@ -17,6 +17,8 @@ while i < len(args):
     elif a == '-x':
         excl.append(re.compile(args[i]))
         i += 1
+    elif a.startswith('-x'):                 # SGI's attached form: -x'^name$'
+        excl.append(re.compile(a[2:]))
     elif a in ('-v', '-q'):
         pass
     else:

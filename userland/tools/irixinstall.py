@@ -10,7 +10,45 @@ installs the staging tree can apply them.  Device nodes and FIFOs are only recor
 """
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+
+
+def plain_aliases(archive):
+    """IRIX libraries define their functions under libc-internal names (_makekey); IRIX's libc naming layer gave
+    programs the plain ones.  Add a weak plain-name alias for every global _name of the archive whose plain name
+    the archive does not define."""
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(archive)) as tmp:
+        names = subprocess.run(['ar', 't', archive], capture_output=True, text=True).stdout.split()
+        if not names:
+            return
+        subprocess.run(['ar', 'x', archive], cwd=tmp, check=True)
+        defined = set()
+        syms = {}
+        for n in set(names):
+            out = subprocess.run(['objdump', '-t', n], cwd=tmp, capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                # "00000000 g     F .text  00000123 _makekey": global (g) or weak (w) definitions only
+                if len(parts) < 5 or not (' g ' in line or ' w ' in line) or parts[-3] == '*UND*':
+                    continue
+                sym, sec, val = parts[-1], parts[-3], parts[0]
+                defined.add(sym)
+                syms.setdefault(n, []).append((sym, sec, val, 'function' if ' F ' in line else 'object'))
+        changed = False
+        for n, lst in syms.items():
+            adds = []
+            for sym, sec, val, kind in lst:
+                if sym.startswith('_') and not sym.startswith('__') and sym[1:] not in defined:
+                    adds += ['--add-symbol', '%s=%s:0x%s,weak,%s' % (sym[1:], sec, val, kind)]
+                    defined.add(sym[1:])
+            if adds:
+                subprocess.run(['objcopy'] + adds + [n], cwd=tmp, check=True)
+                changed = True
+        if changed:
+            os.remove(archive)
+            subprocess.run(['ar', 'rcs', archive] + names, cwd=tmp, check=True)
 
 
 def main():
@@ -80,6 +118,8 @@ def main():
                 os.remove(target)
             shutil.copy2(s, target)
             os.chmod(target, int(mode, 8) if mode else 0o755)
+            if target.endswith('.a') and '/lib' in rel:
+                plain_aliases(target)
         man.write('%s\t%s\t%s\t%s\t%s\t%s\n' % (rel, kind, mode or '', user, group, idb))
     man.close()
 

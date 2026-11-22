@@ -30,6 +30,13 @@
 #include <sys/time.h>
 #include <sys/statvfs.h>
 #include <sys/ioctl.h>
+#include <termio.h>                             /* (compat: struct termio, the SysV interface) */
+#include <utime.h>
+#include <utmp.h>
+#include <mntent.h>
+#include <irix_mntent.h>                        /* IRIX's MNTTYPE_/MNTOPT_ names the host lacks (fetch.sh) */
+#include <irix_utmp.h>
+#include <irix_statvfs.h>
 #include <sys/param.h>
 #include <paths.h>
 #include <irix_paths.h>                         /* IRIX's _PATH_ names the host lacks (fetch.sh) */
@@ -38,11 +45,22 @@
 #include <standards.h>                         /* IRIX feature macros (_SGIAPI, ...), as cc gives every compile */
 
 #undef environ
+/* stdin, stdout, stderr as the addresses of glibc's three FILE objects (stdin always points at
+ * _IO_2_1_stdin_), so old code's static "FILE *f = stdin;" is a constant initializer as it was on IRIX */
+extern FILE _IO_2_1_stdin_, _IO_2_1_stdout_, _IO_2_1_stderr_;
+#undef stdin
+#undef stdout
+#undef stderr
+#define stdin (&_IO_2_1_stdin_)
+#define stdout (&_IO_2_1_stdout_)
+#define stderr (&_IO_2_1_stderr_)
+
 typedef struct dirent dirent_t;                 /* (incomplete here: <dirent.h> is not forced in, programs name
                                                    variables DIR) */
 typedef struct dirent64 dirent64_t;
 typedef struct timespec timespec_t;
 typedef struct statvfs64 statvfs64_t;
+typedef struct flock64 flock64_t;
 #include <sys/stat.h>
 /* IRIX <sys/stat.h> additions (the other S_ values are the same on both) */
 #ifndef S_IAMB
@@ -104,6 +122,13 @@ extern void *irix_k_malloc(size_t), *irix_k_calloc(size_t, size_t), *irix_k_real
  * through irix_compat.c. */
 #define setenv irix_k_setenv
 #define getline irix_k_getline
+/* functions old programs define for themselves under libc names (chmod's abs, awk's asprintf) or declare K&R with
+ * another type (sort's char *sbrk()); a program that only calls one reaches the host's (compat/lib/irix_k.c) */
+#define abs irix_k_abs
+#define asprintf irix_k_asprintf
+#define sbrk irix_k_sbrk
+#define index irix_k_index
+#define rindex irix_k_rindex
 /* basename, dirname: IRIX's (libgen, POSIX), not glibc's GNU basename; old programs also declare them K&R */
 /* getopt: IRIX's (libc source in libirixc), with its own optind & co.  GNU getopt reads a leading '-' in the option
  * string as "return operands in order", which IRIX ls's "-RadC1..." relies on not happening */

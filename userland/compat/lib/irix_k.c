@@ -136,3 +136,20 @@ int attr_set(const char *p, const char *n, const char *v, int l, int f) __attrib
 int attr_setf(int d, const char *n, const char *v, int l, int f) __attribute__((weak, alias("_attr_setf")));
 int attr_remove(const char *p, const char *n, int f) __attribute__((weak, alias("_attr_remove")));
 int attr_removef(int d, const char *n, int f) __attribute__((weak, alias("_attr_removef")));
+#include <stdarg.h>
+__attribute__((weak)) int irix_k_abs(int v) { return v < 0 ? -v : v; }
+__attribute__((weak)) int irix_k_asprintf(char **out, const char *fmt, ...) { va_list ap; int r; va_start(ap, fmt); r = vasprintf(out, fmt, ap); va_end(ap); return r; }
+__attribute__((weak)) char *irix_k_sbrk(long n) { return (char *)sbrk(n); }
+#include <fcntl.h>
+/* getdtablehi: one more than the highest open descriptor */
+int getdtablehi(void)
+{
+    int fd, hi = 0, n = getdtablesize();
+    if (n > 4096) n = 4096;
+    for (fd = 0; fd < n; fd++) if (fcntl(fd, F_GETFD) != -1) hi = fd + 1;
+    return hi;
+}
+__attribute__((weak)) char *irix_k_index(const char *s, int c) { return strchr(s, c); }
+__attribute__((weak)) char *irix_k_rindex(const char *s, int c) { return strrchr(s, c); }
+/* cfree: the old name of free (glibc dropped it) */
+void cfree(void *p) { free(p); }

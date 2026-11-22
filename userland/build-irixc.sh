@@ -13,7 +13,7 @@ FILES="locale/nl_error.c locale/nl_usage.c locale/nl_query.c locale/sgi_dofmt.c 
 	locale/sgi_ffmtmsg.c locale/pfmt.c locale/vpfmt.c locale/lfmt.c locale/setlabel.c locale/gettxt.c locale/gtxt.c locale/pfmt_data.c locale/_loc_data.c locale/_ctype.c locale/pfmt_print.c locale/vlfmt.c
 	strings/wscat.c strings/wschr.c strings/wscmp.c strings/wscpy.c strings/wscspn.c strings/wslen.c strings/wsncat.c
 	strings/wsncmp.c strings/wsncpy.c strings/wspbrk.c strings/wsrchr.c strings/wsspn.c strings/wstostr.c
-	gen/cftime.c gen/mkdev.c gen/devname.c gen/getprent.c gen/getopt.c gen/opt_data.c
+	gen/cftime.c gen/mkdev.c gen/devname.c gen/getprent.c gen/getopt.c gen/opt_data.c gen/getinvent.c gen/scaninvent.c
 	mls/acl_posix.c mls/cap_acquire.c mls/cap_env.c mls/cap_posix.c mls/getcapabilitybyname.c mls/mac_cleared.c mls/mac_dup.c
 	mls/mac_label.c mls/mac_lbldevs.c mls/mac_posix.c mls/mac_util.c"
 # libc's synonyms.h renames public names to libc-internal ones (munmap -> _munmap).  A wrapper of the same name, found
