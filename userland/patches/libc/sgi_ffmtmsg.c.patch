@@ -1,0 +1,13 @@
+Source defect: missing semicolon after the _sgi_dofmt call.  MIPSpro accepted it because its va_end expanded to
+something that ended the expression; gcc's va_end does not.
+--- a/sgi_ffmtmsg.c
++++ b/sgi_ffmtmsg.c
+@@ -20,7 +20,7 @@
+ 	char lmsgbuf[LMSGBUF];
+ 
+ 	va_start(ap, fmt);
+-	(void)_sgi_dofmt(lmsgbuf, class, label, sev, fmt, ap)
++	(void)_sgi_dofmt(lmsgbuf, class, label, sev, fmt, ap);
+ 	va_end(ap);
+ 
+ 	return(fputs(lmsgbuf, stream));

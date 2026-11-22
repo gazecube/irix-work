@@ -11,9 +11,17 @@ R=/home/nekron/opt/claude-work/eoe/root
 mkdir -p $R/usr/include $R/usr/lib32 $R/usr/lib64 $R/usr/lib
 cp -a /home/nekron/Projects/irix-work/holyshit/usr/include/. $R/usr/include/
 cp -n /home/nekron/Projects/irix-657m-src/irix/kern/sys/*.h $R/usr/include/sys/ 2>/dev/null || true
+# headers the installed tree lacks, from the source tree's eoe/include (standards.h, ...)
+(cd /home/nekron/Projects/irix-657m-src/eoe/include && find . -name '*.h' | while read -r f; do if [ ! -e "$R/usr/include/$f" ]; then mkdir -p "$R/usr/include/$(dirname "$f")"; cp "$f" "$R/usr/include/$f"; fi; done)
 # only the IRIX-only headers stay: where the host has a header of the same name, its version is used everywhere,
 # also when an IRIX header includes it with quotes
-rm -f $R/usr/include/sys/procset.h      # the host has idtype_t in <sys/wait.h>; compat/include/sys/procset.h
+# libc's internal headers, installed the way libc's own build does (irix/lib/libc/Makefile): libraries built from
+# source include them
+L=/home/nekron/Projects/irix-657m-src/irix/lib/libc/inc
+cp $L/synonyms.h $R/usr/include/libc_synonyms.h
+cp $L/_wchar.h $L/_locale.h $L/priv_extern.h $L/mplib.h $L/widec.h $L/wctype.h $R/usr/include/ 2>/dev/null || true
+# IRIX headers whose job the host's versions do (compat/include has small stand-ins that include those)
+for h in $(cd /home/nekron/Projects/irix-work/userland/compat/include && find . -name '*.h'); do rm -f "$R/usr/include/$h"; done   # every header compat/include replaces      # the host has idtype_t in <sys/wait.h>; compat/include/sys/procset.h
 (cd $R/usr/include && find . -name '*.h' | while read -r f; do if [ -e "/usr/include/$f" ]; then rm -f "$f"; fi; done)
 rm -rf $R/usr/include/make
 cp -a /home/nekron/Projects/irix-work/userland/toolroot/usr/include/make $R/usr/include/make

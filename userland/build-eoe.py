@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build every command directory of eoe/cmd with SGI's own Makefiles and smake, and tally what stops them.
 
-    build-eoe.py [DIR ...]       (no names: every directory of eoe/cmd that has a Makefile; lib/NAME for eoe/lib)
+    build-eoe.py [DIR[:TARGET,...] ...]   (no names: every directory of eoe/cmd that has a Makefile; lib/NAME for
+                                        eoe/lib; the targets default to default,install)
 
 Works on a copy of eoe/cmd (~/opt/claude-work/eoe/src/cmd; the source tree stays untouched) and installs into a
 staging root (~/opt/claude-work/eoe/dest, with a .manifest of every installed path).  Each directory runs
@@ -37,10 +38,11 @@ def low():
     resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))
 
 
-def one(d):
+def one(item):
+    d, targets = item
     name = d.name if d.parent.name == 'cmd' else d.parent.name + '_' + d.name
     env = dict(os.environ, ROOT=str(ROOT), TOOLROOT=T, IRIX_DESTROOT=str(ROOT), PRODUCT='4DACE1_N32', STYLES_TO_BUILD='N32', PATH=T + '/usr/bin:' + os.environ['PATH'])
-    cmd = SANDBOX + ['--chdir', str(d), 'ionice', '-c3', T + '/usr/sbin/smake', 'default', 'install']
+    cmd = SANDBOX + ['--chdir', str(d), 'ionice', '-c3', T + '/usr/sbin/smake', 'HOST_CC=' + T + '/usr/bin/hostcc'] + targets
     try:
         r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=1200, preexec_fn=low, errors='replace')
         text, rc = r.stdout + r.stderr, r.returncode
@@ -68,7 +70,11 @@ def one(d):
 def main():
     LOG.mkdir(parents=True, exist_ok=True)
     # names are relative to SRC (cmd/ls, lib/libgen); a bare name means cmd/NAME
-    dirs = [SRC / (x if '/' in x else 'cmd/' + x) for x in sys.argv[1:]] or sorted(p for p in (SRC / 'cmd').iterdir() if (p / 'Makefile').is_file())
+    # NAME[:target,target]; the default targets are default and install
+    def item(x):
+        n, _, t = x.partition(':')
+        return (SRC / (n if '/' in n else 'cmd/' + n), t.split(',') if t else ['default', 'install'])
+    dirs = [item(x) for x in sys.argv[1:]] or [(p, ['default', 'install']) for p in sorted((SRC / 'cmd').iterdir()) if (p / 'Makefile').is_file()]
     print('%d directories' % len(dirs), flush=True)
     recs = []
     with ThreadPoolExecutor(max_workers=JOBS) as ex:

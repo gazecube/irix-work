@@ -18,11 +18,31 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <malloc.h>
-#include <dirent.h>
+#include <time.h>
+#include <signal.h>
+#include <sys/time.h>
+#include <sys/statvfs.h>
 #include <sgidefs.h>
+#include <irix_types.h>                         /* IRIX type names the host lacks (uchar_t, ulong_t, prid_t, ...) */
+#include <standards.h>                         /* IRIX feature macros (_SGIAPI, ...), as cc gives every compile */
 
 #undef environ
-typedef struct dirent dirent_t;                 /* IRIX names for host types */
+typedef struct dirent dirent_t;                 /* (incomplete here: <dirent.h> is not forced in, programs name
+                                                   variables DIR) */
+typedef struct dirent64 dirent64_t;
+typedef struct timespec timespec_t;
+typedef struct statvfs64 statvfs64_t;
+#ifndef __NBBY
+#define __NBBY 8                                /* bits per byte (IRIX <sys/types.h>) */
+#endif
+
+/* IRIX's error message table and errno accessors (compat/lib/irix_k.c) */
+#define sys_errlist _sys_errlist
+#define sys_nerr _sys_nerr
+extern char *_sys_errlist[];
+extern int _sys_nerr;
+extern int oserror(void);
+extern int setoserror(int);                 /* IRIX names for host types */
 
 /* K&R declarations such as "char *malloc();" clash with the host's prototypes.  After the host headers are in, these
  * names become function-like macros: the old declaration then declares a different name, and calls still reach the
@@ -53,6 +73,7 @@ extern void *irix_k_malloc(size_t), *irix_k_calloc(size_t, size_t), *irix_k_real
  * program's own definition does not clash with the host's; a program that only calls one reaches the host function
  * through irix_compat.c. */
 #define setenv irix_k_setenv
+#define getline irix_k_getline
 
 /* union wait, from BSD: the host C library no longer has it (little-endian field order) */
 union wait {

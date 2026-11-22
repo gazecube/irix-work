@@ -15,10 +15,10 @@ TOOLROOT = U + '/toolroot'
 ROOT = '/home/nekron/opt/claude-work/eoe/root'             # the staging root (setup-root.sh)
 DROP = {'-fullwarn', '-cckr', '-xansi', '-ansi', '-ansiposix', '-KPIC', '-elf', '-call_shared', '-non_shared', '-nokpicopt',
         '-nostdinc', '-nostdlib', '-quickstart_info', '-no_unresolved', '-Xcpluscomm', '-prototypes', '-dollar', '-common', '-use_readonly_const',
-        '-wlint', '-show', '-all', '-n32', '-32', '-o32', '-mips1', '-mips2', '-mips3', '-mips4', '-r4000', '-r5000', '-r8000',
+        '-wlint', '-show', '-n32', '-32', '-o32', '-mips1', '-mips2', '-mips3', '-mips4', '-r4000', '-r5000', '-r8000',
         '-r10000', '-shared_rpath', '-ignore_unresolved', '-transitive_link', '-no_transitive_link', '-demangle', '-cfront',
         '-ptused', '-ptnone', '-pta', '-LD_MSG:off=85', '-nocpp', '-signed', '-unsigned', '-woff_all', '-Wf,-XNl8192'}
-DROP_ARG = {'-woff', '-MDupdate', '-G', '-set_version', '-exports_file', '-hiddens_file', '-update_registry', '-check_registry',
+DROP_ARG = {'-woff', '-MDupdate', '-MDtarget', '-G', '-set_version', '-exports_file', '-hiddens_file', '-update_registry', '-check_registry',
             '-delay_load', '-rdata_shared', '-rpath_link', '-Wl,-I'}
 DROP_PREFIX = ('-OPT:', '-LNO:', '-TARG:', '-TENV:', '-IPA', '-LANG:', '-diag_', '-Wf,', '-Wb,', '-Wc,', '-Wl,-woff',
                '-Wl,-I,', '-Wl,-rdata_shared', '-Wl,-x', '-Wl,-set_version', '-Wl,-exports_file', '-Wl,-no_unresolved',
@@ -41,6 +41,7 @@ def main():
     out = []
     i = 0
     link = True
+    whole = False
     while i < len(args):
         a = args[i]
         i += 1
@@ -81,22 +82,36 @@ def main():
                 if n:
                     out.append('-l' + n)
             continue
+        if a in ('-soname', '-rpath') and i < len(args):         # linker options MIPSpro took directly
+            out.append('-Wl,%s,%s' % (a, args[i]))
+            i += 1
+            continue
+        if a == '-all':                                          # the archives that follow go in whole (a DSO from .a)
+            out.append('-Wl,--whole-archive')
+            whole = True
+            continue
+        if a == '-none':
+            out.append('-Wl,--no-whole-archive')
+            whole = False
+            continue
         if a == '-g3':
             a = '-g'
         out.append(a)
+    if whole:
+        out.append('-Wl,--no-whole-archive')
     arch = '-m64' if m64 else '-m32'
     if tool == 'ld':
         if '-r' in out:
             os.execvp('ld', ['ld', '-m', 'elf_x86_64' if m64 else 'elf_i386'] + out)
         tool = 'cc'
     cc = 'g++' if tool == 'CC' else 'gcc'
-    flags = [arch, '-fcommon', '-fno-strict-aliasing', '-w', '-I' + U + '/compat/include', '-I' + U + '/compat/irix-include']
+    flags = [arch, '-fPIC', '-fcommon', '-fno-strict-aliasing', '-w', '-I' + U + '/compat/include', '-I' + U + '/compat/irix-include']
     if tool != 'CC':
         flags += ['-std=gnu89', '-include', U + '/compat/include/prelude.h']
     else:
         flags += ['-fpermissive']
     if link:
-        out += ['-L%s/usr/%s' % (ROOT, 'lib64' if m64 else 'lib32'), '-L' + U + '/compat/lib/' + ('64' if m64 else '32'), '-lirixcompat']
+        out += ['-L%s/usr/%s' % (ROOT, 'lib64' if m64 else 'lib32'), '-L' + U + '/compat/lib/' + ('64' if m64 else '32'), '-lirixc', '-lirixcompat']
     os.execvp(cc, [cc] + flags + out)
 
 
