@@ -111,7 +111,7 @@ def main():
     else:
         flags += ['-fpermissive']
     if link:
-        out += ['-L%s/usr/%s' % (ROOT, 'lib64' if m64 else 'lib32'), '-L' + U + '/compat/lib/' + ('64' if m64 else '32'), '-lirixc', '-lirixcompat']
+        out += ['-L%s/usr/%s' % (ROOT, 'lib64' if m64 else 'lib32'), U + '/libc/lib/' + ('64' if m64 else '32') + '/libc.a']      # IRIX libc pieces, by path: ahead of the host's libc
     os.execvp(cc, [cc] + flags + out)
 
 

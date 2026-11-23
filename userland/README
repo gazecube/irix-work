@@ -5,3 +5,5 @@ compat/include/      headers written here: prelude.h (forced into every compile)
 compat/irix-include/ IRIX headers the host lacks, copied from the source tree by compat/fetch.sh (git-ignored:
                      SGI's files are never committed to this repository)
 bootstrap-smake.sh   builds SGI's smake (eoe/cmd/pmake) natively; the IRIX Makefiles need it (#if, :S/ ...)
+libc/                libc.a for the build: the parts of IRIX's libc (and libgen) the host lacks, built from the source tree
+                     with recorded fixes (libc/patches), plus IRIX functions written for the host (libc/host)

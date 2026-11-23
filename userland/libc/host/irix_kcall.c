@@ -27,5 +27,5 @@ static long kcall_first(int nr, const char *name, int cmd, va_list ap)
 long syssgi(int cmd, ...) { va_list ap; long r; va_start(ap, cmd); r = kcall_first(IRIX_NR_syssgi, "syssgi", cmd, ap); va_end(ap); return r; }
 long sysmp(int cmd, ...) { va_list ap; long r; va_start(ap, cmd); r = kcall_first(IRIX_NR_sysmp, "sysmp", cmd, ap); va_end(ap); return r; }
 long schedctl(int cmd, ...) { va_list ap; long r; va_start(ap, cmd); r = kcall_first(IRIX_NR_schedctl, "schedctl", cmd, ap); va_end(ap); return r; }
-/* libc-internal spelling, used by IRIX libc sources built into libirixc */
+/* libc-internal spelling, used by the IRIX libc sources built into libc.a */
 long _syssgi(int cmd, ...) { va_list ap; long r; va_start(ap, cmd); r = kcall_first(IRIX_NR_syssgi, "syssgi", cmd, ap); va_end(ap); return r; }

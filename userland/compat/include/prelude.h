@@ -84,7 +84,7 @@ typedef struct flock64 flock64_t;
 #define __NBBY 8                                /* bits per byte (IRIX <sys/types.h>) */
 #endif
 
-/* IRIX's error message table and errno accessors (compat/lib/irix_k.c) */
+/* IRIX's error message table and errno accessors (libc/host/irix_k.c) */
 #define sys_errlist _sys_errlist
 #define sys_nerr _sys_nerr
 extern char *_sys_errlist[];
@@ -123,14 +123,14 @@ extern void *irix_k_malloc(size_t), *irix_k_calloc(size_t, size_t), *irix_k_real
 #define setenv irix_k_setenv
 #define getline irix_k_getline
 /* functions old programs define for themselves under libc names (chmod's abs, awk's asprintf) or declare K&R with
- * another type (sort's char *sbrk()); a program that only calls one reaches the host's (compat/lib/irix_k.c) */
+ * another type (sort's char *sbrk()); a program that only calls one reaches the host's (libc/host/irix_k.c) */
 #define abs irix_k_abs
 #define asprintf irix_k_asprintf
 #define sbrk irix_k_sbrk
 #define index irix_k_index
 #define rindex irix_k_rindex
 /* basename, dirname: IRIX's (libgen, POSIX), not glibc's GNU basename; old programs also declare them K&R */
-/* getopt: IRIX's (libc source in libirixc), with its own optind & co.  GNU getopt reads a leading '-' in the option
+/* getopt: IRIX's (libc source, in libc/libc.a), with its own optind & co.  GNU getopt reads a leading '-' in the option
  * string as "return operands in order", which IRIX ls's "-RadC1..." relies on not happening */
 #define getopt _getopt
 #define optind _optind

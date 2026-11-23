@@ -4,7 +4,7 @@
 #                               pmake's system.mk)
 #   toolroot/usr/bin, sbin, etc the tools the rules name: cc/CC/ld -> tools/irixcc.py, install ->
 #                               tools/irixinstall.py, yacc/lex -> bison/flex, the rest host tools or no-ops
-#   compat/lib/32, compat/lib/64 libirixcompat.a
+#   libc/lib/32, libc/lib/64    libc.a (libc/build.sh)
 set -e
 S=/home/nekron/Projects/irix-657m-src
 U=/home/nekron/Projects/irix-work/userland
@@ -19,7 +19,7 @@ ln -sf $U/tools/irixinstall.py $T/etc/install
 for t in nm size strip lorder bison flex; do ln -sf /usr/bin/$t $T/usr/bin/$t; done
 ln -sf /usr/bin/m4 $T/usr/bin/gnum4
 printf '#!/bin/sh\n# ar: SGI'"'"'s key letters (crl, ccrl) without l, which GNU ar reads as "record dependencies" and which then\n# swallows the next argument\nk=$(printf %%s "$1" | tr -d l)\nshift\nexec /usr/bin/ar "$k" "$@"\n' > $T/usr/bin/ar
-printf '#!/bin/sh\n# hostcc: tools the build runs on this machine (HOST_CC), old C as for the targets\nexec gcc -std=gnu89 -w -fcommon -fno-strict-aliasing -include /home/nekron/Projects/irix-work/userland/compat/include/prelude.h -I/home/nekron/Projects/irix-work/userland/compat/include -I/home/nekron/Projects/irix-work/userland/compat/irix-include "$@" -L/home/nekron/Projects/irix-work/userland/compat/lib/64 -lirixc -lirixcompat\n' > $T/usr/bin/hostcc
+printf '#!/bin/sh\n# hostcc: tools the build runs on this machine (HOST_CC), old C as for the targets\nexec gcc -std=gnu89 -w -fcommon -fno-strict-aliasing -include /home/nekron/Projects/irix-work/userland/compat/include/prelude.h -I/home/nekron/Projects/irix-work/userland/compat/include -I/home/nekron/Projects/irix-work/userland/compat/irix-include "$@" /home/nekron/Projects/irix-work/userland/libc/lib/64/libc.a\n' > $T/usr/bin/hostcc
 # yacc: IRIX's own, once eoe/cmd/yacc and eoe/lib/liby (yaccpar) are built into the staging root; bison -y until then
 printf '#!/bin/sh\n# yacc: IRIX'"'"'s yacc from the staging root when it is built, else bison -y (without IRIX'"'"'s -P skeleton option)\nR=/home/nekron/opt/claude-work/eoe/root\nif [ -x $R/usr/bin/yacc ] && [ -r $R/usr/lib/yaccpar ]; then exec $R/usr/bin/yacc "$@"; fi\nwhile [ $# -gt 0 ]; do case "$1" in -P) shift 2;; *) break;; esac; done\nexec bison -y "$@"\n' > $T/usr/bin/yacc
 # lex: IRIX's own once eoe/cmd/lex and eoe/lib/libl (ncform) are built into the staging root; flex -l until then
@@ -32,14 +32,7 @@ for t in lint mkshlib mkf2c; do printf '#!/bin/sh\n# %s: not available\nexit 0\n
 printf '#!/bin/sh\n# as: IRIX assembly is MIPS code\necho "as: MIPS assembly cannot be assembled for x86: $*" >&2\nexit 1\n' > $T/usr/bin/as
 find $T/usr/bin $T/usr/sbin -maxdepth 1 -type f -exec chmod +x {} +   # (not the symlinks: they point at host tools)
 ln -sf /home/nekron/opt/claude-work/eoe/bootstrap/pmake/pmake $T/usr/sbin/smake
-for m in 32 64; do
-	mkdir -p $U/compat/lib/$m
-	gcc -m$m -O1 -w -fPIC -c $U/compat/lib/irix_k.c -o $U/compat/lib/$m/irix_k.o
-	gcc -m$m -O1 -w -fPIC -c $U/compat/lib/irix_kcall.c -o $U/compat/lib/$m/irix_kcall.o
-	rm -f $U/compat/lib/$m/libirixcompat.a
-	ar rcs $U/compat/lib/$m/libirixcompat.a $U/compat/lib/$m/*.o
-done
-$U/build-irixc.sh
+$U/libc/build.sh
 # build-host tools from the IRIX source that the build runs
 $T/usr/bin/hostcc -O -idirafter /home/nekron/opt/claude-work/eoe/root/usr/include -o $T/usr/bin/mkmsgs $S/eoe/cmd/mkmsgs/mkmsgs.c
 echo "toolroot ready"
